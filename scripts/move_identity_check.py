@@ -737,6 +737,79 @@ def macro_ranges(source, recorded=()):
     return ranges
 
 
+def macro_definition_lines(before, after, old_resolve, new_resolve, rewrites):
+    """Prove complete definitions by mapped paths only; retain every other byte.
+
+    This does not open opaque macro payloads to the ordinary line matcher.
+    Even whitespace, comments, matcher tokens and nested invocation arguments
+    must remain identical outside the individually authorized path tokens.
+    """
+    def definitions(source):
+        tokens = list(rust_tokens(source))
+        ends = {a: b for a, b, _ in macro_ranges(source)}
+        result = []
+        for i, (start, token, _) in enumerate(tokens[:-3]):
+            if token != 'macro_rules' or tokens[i + 1][1] != '!':
+                continue
+            opening = tokens[i + 3][0]
+            if opening in ends:
+                result.append((start, ends[opening]))
+        return result
+
+    roots = {'crate', '$crate'} | {a.split('::', 1)[0] for a, _ in rewrites}
+    proved = {'-': set(), '+': set()}
+    stale = False
+    left, right = definitions(before), definitions(after)
+    if len(left) != len(right):
+        return proved, stale
+    for (a, b), (c, d) in zip(left, right):
+        x, y = before[a:b], after[c:d]
+        xt, yt = list(rust_tokens(x)), list(rust_tokens(y))
+        if len(xt) != len(yt):
+            continue
+        old_partial, new_partial = partial_path_offsets(xt), partial_path_offsets(yt)
+        px = py = 0
+        valid, mapped_any = True, False
+        for i, ((u, t, path), (v, other, other_path)) in enumerate(zip(xt, yt)):
+            if x[px:u] != y[py:v]:
+                valid = False
+                break
+            macro = i + 1 < len(xt) and xt[i + 1][1] == '!'
+            # Grouped/glob prefixes cannot bypass the use-leaf proof.
+            # Generic arguments and macro-variable suffixes remain exact;
+            # only their preceding, mapped path segments may change.
+            suffix = xt[i + 1][1] if i + 1 < len(xt) else ''
+            path_suffix = suffix == '<' or bool(re.fullmatch(r'\$[A-Za-z_]\w*', suffix))
+            eligible = (path and other_path and '::' in t
+                        and (not t.endswith('::') or path_suffix)
+                        and t.removeprefix('::').split('::', 1)[0] in roots
+                        and u not in old_partial and v not in new_partial)
+            canonical, mapped = old_resolve(t, macro=macro) if eligible else (t, False)
+            if mapped:
+                mapped_any = True
+                if canonical != new_resolve(other, macro=macro)[0]:
+                    stale |= t == other and t.startswith(('crate::', '$crate::'))
+                    valid = False
+                    break
+            elif t != other or (eligible and t.startswith(('crate::', '$crate::'))
+                                 and canonical != new_resolve(other, macro=macro)[0]):
+                stale |= t == other and t.startswith(('crate::', '$crate::'))
+                valid = False
+                break
+            px, py = u + len(t), v + len(other)
+        if not valid or not mapped_any or x[px:] != y[py:]:
+            continue
+        # Never donate a whole diff line to a change beside the definition.
+        if before[before.rfind('\n', 0, a) + 1:a] != after[after.rfind('\n', 0, c) + 1:c]:
+            continue
+        old_end, new_end = before.find('\n', b), after.find('\n', d)
+        if before[b:old_end if old_end >= 0 else len(before)] != after[d:new_end if new_end >= 0 else len(after)]:
+            continue
+        proved['-'].update(range(before.count('\n', 0, a) + 1, before.count('\n', 0, b) + 2))
+        proved['+'].update(range(after.count('\n', 0, c) + 1, after.count('\n', 0, d) + 2))
+    return proved, stale
+
+
 def opaque_macro_offsets(source, recorded=()):
     return [(a, b) for a, b, permitted in macro_ranges(source, recorded) if not permitted]
 
@@ -1840,8 +1913,15 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
         protected = {'-': set(), '+': set()}
         attribute_protected = {'-': set(), '+': set()}
         macro_protected = {'-': set(), '+': set()}
+        macro_proved = {'-': set(), '+': set()}
         if path and path.endswith('.rs') and old_path != '/dev/null' and new_path != '/dev/null':
             before, after = read_old(old_path), read_new(new_path)
+            if plan and rewrites:
+                macro_proved, stale_macro = macro_definition_lines(before, after,
+                    rust_path_resolver(old_path, read_old, rewrites, new_path, read_new, renames),
+                    rust_path_resolver(new_path, read_new, []), rewrites)
+                if stale_macro:
+                    claims[offset] = 'blocked'
             recorded = recorded_macro_names(before,
                 rust_path_resolver(old_path, read_old, rewrites, new_path, read_new), rewrites)
             new_recorded = recorded_macro_names(after, rust_path_resolver(new_path, read_new, []), rewrites)
@@ -1950,7 +2030,9 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
                 sign = line[0]
                 absolute = offset + index
                 import_line = numbers[sign] in import_lines[sign]
-                if numbers[sign] in attribute_protected[sign] or numbers[sign] in macro_protected[sign] or (
+                if numbers[sign] in macro_proved[sign] and numbers[sign] not in attribute_protected[sign]:
+                    claims[absolute] = 'rewrites'
+                elif numbers[sign] in attribute_protected[sign] or numbers[sign] in macro_protected[sign] or (
                         numbers[sign] in protected[sign]):
                     claims[absolute] = 'blocked'
                 elif path and not path.endswith(('.rs', 'Cargo.toml', 'Cargo.lock')):

@@ -1729,8 +1729,52 @@ def case_plan_rewrite(repo: Path, mode='moved') -> tuple[bool, str]:
         **templates,
     }
     moves = [(old, new)]
-    positive = {'moved', 'super', 'include', 'template', 'explicit-module'}
-    if mode == 'super':
+    positive = {'moved', 'super', 'include', 'template', 'explicit-module', 'macro', 'macro-map', 'macro-crate', 'macro-turbofish', 'macro-metavar'}
+    macro_modes = ('macro', 'macro-map', 'macro-body', 'macro-literal', 'macro-comment',
+                   'macro-space', 'macro-matcher', 'macro-wrong-crate', 'macro-unmoved',
+                   'macro-stale', 'macro-hygiene', 'macro-adjacent', 'macro-alias',
+                   'macro-crate', 'macro-map-nearmiss', 'macro-relative', 'macro-glob', 'macro-turbofish', 'macro-turbofish-body',
+                   'macro-metavar', 'macro-metavar-body')
+    if mode in macro_modes:
+        before[old] = HELPER + 'macro_rules! make {\n    ($x:expr) => { $crate::graph::accept($x, 42, "keep"); /* keep */ };\n}\n'
+        after[new] = before[old].replace('$crate::graph::', '$crate::engine::')
+        if mode in {'macro-map', 'macro-map-nearmiss'}:
+            before[old] = before[old].replace('$crate::graph::accept(', '$crate::helper!(')
+            after[new] = after[new].replace('$crate::engine::accept(', '$crate::helper!(')
+            if mode == 'macro-map-nearmiss':
+                before[old] = before[old].replace('helper!', 'helperExtra!')
+                after[new] = after[new].replace('helper!', 'helperExtra!')
+        elif mode == 'macro-crate':
+            before[old] = before[old].replace('$crate::', 'crate::')
+            after[new] = after[new].replace('$crate::', 'crate::')
+        elif mode in {'macro-turbofish', 'macro-turbofish-body'}:
+            before[old] = before[old].replace('accept(', 'accept::<u32>(')
+            after[new] = after[new].replace('accept(', 'accept::<u32>(')
+            if mode == 'macro-turbofish-body': after[new] = after[new].replace('u32', 'u64')
+        elif mode in {'macro-metavar', 'macro-metavar-body'}:
+            before[old] = HELPER + 'macro_rules! make { ($ty:ident) => { $crate::graph::$ty(42); }; }\n'
+            after[new] = before[old].replace('graph::', 'engine::')
+            if mode == 'macro-metavar-body': after[new] = after[new].replace('::$ty', '::$other')
+        elif mode == 'macro-glob':
+            before[old] = HELPER + 'macro_rules! make { () => { use $crate::untouched::*; }; }\n'
+            after[new] = before[old].replace('untouched::', 'destination::')
+        elif mode == 'macro-relative': before[old] = before[old].replace('$crate::graph::', 'self::')
+        elif mode == 'macro-body': after[new] = after[new].replace('42', '99')
+        elif mode == 'macro-literal': after[new] = after[new].replace('"keep"', '"changed"')
+        elif mode == 'macro-comment': after[new] = after[new].replace('/* keep */', '/* changed */')
+        elif mode == 'macro-space': after[new] = after[new].replace('42,', '42 ,')
+        elif mode == 'macro-matcher': after[new] = after[new].replace('$x:expr', '$x:tt')
+        elif mode == 'macro-wrong-crate': before[old] = before[old].replace('$crate::', 'app::')
+        elif mode == 'macro-unmoved': before[old] = before[old].replace('graph::', 'untouched::')
+        elif mode == 'macro-stale': after[new] = before[old]
+        elif mode == 'macro-hygiene': after[new] = after[new].replace('$crate::', 'crate::')
+        elif mode == 'macro-adjacent':
+            before[old] = before[old].replace('}\n', '} const SIDE: u8 = 42;\n')
+            after[new] = after[new].replace('}\n', '} const SIDE: u8 = 99;\n')
+        elif mode == 'macro-alias':
+            before[old] += 'use crate::graph::Thing as Alias;\n'
+            after[new] += 'use crate::engine::Thing as Different;\n'
+    elif mode == 'super':
         before[old] = HELPER + 'mod nested { fn run(x: super::Thing) { super::accept(x, 42); } }\n'
         after[new] = before[old]
     elif mode == 'wrong-crate':
@@ -1782,7 +1826,9 @@ def case_plan_rewrite(repo: Path, mode='moved') -> tuple[bool, str]:
         'version': 1, 'source_crate': 'crates/old', 'destination_crate': 'crates/new',
         'rewrite_roots': ['crates/old', 'crates/new', 'crates/app'], 'aliases': {}}))
     (plan / 'moves.tsv').write_text(''.join(a + '\t' + b + '\n' for a, b in moves))
-    (plan / 'rewrites.tsv').write_text('old::graph\tnew::engine\n' if mode == 'explicit-module' else '')
+    (plan / 'rewrites.tsv').write_text('old::graph\tnew::engine\n' if mode == 'explicit-module' else
+                                       'old::helper!\tnew::helper!\n' if mode in {'macro-map', 'macro-map-nearmiss'} else
+                                       'old::untouched::\tnew::destination::\n' if mode == 'macro-glob' else '')
     for path, body in templates.items():
         p = plan / 'templates' / path
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -2112,7 +2158,12 @@ def review_cases():
 
 CASES = review_cases() + [
     (f'plan rewrite {mode}', lambda repo, mode=mode: case_plan_rewrite(repo, mode))
-    for mode in ('moved', 'explicit-module', 'super', 'wrong-crate', 'outside-root', 'unmoved-path', 'stale-crate',
+    for mode in ('macro', 'macro-map', 'macro-body', 'macro-literal', 'macro-comment',
+                 'macro-space', 'macro-matcher', 'macro-wrong-crate', 'macro-unmoved',
+                 'macro-stale', 'macro-hygiene', 'macro-adjacent', 'macro-alias',
+                 'macro-crate', 'macro-map-nearmiss', 'macro-relative', 'macro-glob', 'macro-turbofish', 'macro-turbofish-body',
+                 'macro-metavar', 'macro-metavar-body',
+                 'moved', 'explicit-module', 'super', 'wrong-crate', 'outside-root', 'unmoved-path', 'stale-crate',
                  'alias', 'body', 'include', 'include-body', 'include-alias', 'include-literal',
                  'template', 'template-drift', 'template-existing', 'template-existing-unchanged', 'template-steal')
 ] + [
