@@ -41,7 +41,7 @@ crate::primitive! {
     wgsl_body: include_str!("shaders/surface_mesh_normals_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     derived_uniforms: ["strength:f32", "max_capacity:u32", "brick_pass:u32", "indexed:u32"],
-    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl"), include_str!("shaders/surface_mesh_adjacency.wgsl")],
+    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl"), super::relax_surface_mesh::SURFACE_MESH_ADJACENCY_WGSL],
     owned_outputs: ["out"],
     buffer_index: "liquid_cell_brick_index",
     extra_fields: {

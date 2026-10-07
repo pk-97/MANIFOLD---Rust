@@ -12,6 +12,8 @@
 
 use std::borrow::Cow;
 
+pub const SURFACE_MESH_ADJACENCY_WGSL: &str = include_str!("shaders/surface_mesh_adjacency.wgsl");
+
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use super::count_surface_triangles::MARCHING_CUBES_COMMON;
@@ -73,7 +75,7 @@ crate::primitive! {
     wgsl_body: include_str!("shaders/relax_surface_mesh_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     derived_uniforms: ["max_capacity:u32", "brick_pass:u32", "indexed:u32"],
-    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl"), include_str!("shaders/surface_mesh_adjacency.wgsl")],
+    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl"), SURFACE_MESH_ADJACENCY_WGSL],
     owned_outputs: ["relaxed"],
     buffer_index: "liquid_cell_brick_index",
     extra_fields: {
@@ -352,5 +354,15 @@ mod tests {
         assert!(source.contains("if brick_pass == 2u"));
         assert!(source.contains("buf_relaxed[idx] = zero"));
         assert!(!source.contains("buf_relaxed[idx] = body"));
+    }
+}
+
+#[cfg(test)]
+mod shared_shader_tests {
+    #[test]
+    fn surface_mesh_adjacency_bytes_unchanged() {
+        use sha2::{Digest, Sha256};
+        assert_eq!(format!("{:x}", Sha256::digest(super::SURFACE_MESH_ADJACENCY_WGSL.as_bytes())),
+            "32f3b339a2e09d8229b860138cb66127d2d963b8318576b4d79b2fd6cd7ca302");
     }
 }
