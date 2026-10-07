@@ -5,7 +5,7 @@
 use super::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
 use super::parameters::ParamDef;
 use super::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use std::borrow::Cow;
 
 pub struct MeshInput {

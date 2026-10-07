@@ -31,7 +31,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
-use crate::generators::mesh_common::{EdgePair, CurvePoint};
+use crate::mesh::{EdgePair, CurvePoint};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;

@@ -1,10 +1,7 @@
 pub mod bundled_generator_presets;
 pub mod clip_trigger;
-pub mod compute_common;
 pub mod generator_math;
 pub mod line_pipeline;
-pub mod mesh_common;
-pub mod mesh_pipeline;
 pub mod registry;
 pub mod stateful_base;
 

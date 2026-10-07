@@ -32,7 +32,7 @@
 //! `shadow_resolution`) are always present on the struct; `cast_shadows ==
 //! false` means renderers skip the depth pass entirely.
 
-use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, ortho_rh, perspective_rh};
+use crate::mesh::pipeline::{look_at_rh, mat4_mul, ortho_rh, perspective_rh};
 
 /// Discriminator for the light's geometric kind. All modes share the same
 /// `pos` / `aim` / `colour` / `range` / shadow fields on [`Light`] — only

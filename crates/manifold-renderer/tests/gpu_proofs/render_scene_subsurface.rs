@@ -8,7 +8,7 @@ use half::f16;
 use manifold_core::NodeId;
 use manifold_gpu::{GpuBuffer, GpuTexture, GpuTextureFormat};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::generators::mesh_common::MeshVertex;
+use manifold_renderer::mesh::MeshVertex;
 use manifold_renderer::node_graph::depth_rule::DepthRule;
 use manifold_renderer::node_graph::{
     ArrayType, EffectNode, EffectNodeContext, EffectNodeType, NodeInput, NodeOutput, NodePort,

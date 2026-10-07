@@ -587,7 +587,7 @@ The pattern follows the existing `BeatDivision` custom deserializer (which accep
 
 **Hardcoded `align_to_definition` removed.** WireframeDepth 14→12 becomes a data-driven migration entry: `[("OldName1", "newName1"), ("OldName2", null /* dropped */), ...]`. Lives next to the effect definition. Other effects gain similar declarative migration tables as needed; the `align_to_definition` function disappears.
 
-**Fixture round-trips.** Three test fixtures (`Burn V5.manifold`, `Burn V4.manifold`, `WAYPOINTS.manifold`) round-trip through load → serialize → load with assertions on driver counts, beat divisions, param values. Migration must keep these green at every commit.
+**Fixture round-trips.** Two test fixtures (`Burn V5.manifold`, `Burn V4.manifold`) round-trip through load → serialize → load with assertions on driver counts, beat divisions, param values. Migration must keep these green at every commit.
 
 ### 7.6 V2 user-exposed params
 
@@ -811,7 +811,7 @@ This is the largest and most invasive phase. It touches data model, serializatio
 17. **Generic `apply_param_bindings` shim** in `manifold-renderer`. Migrated effects use it. Retrofit `MirrorFX`, `SoftFocusGraphFX`, `StylizedFeedbackFX` to use it instead of their hand-rolled routing.
 
 **Gates to Phase 3:**
-- All three project file fixtures (`Burn V5`, `Burn V4`, `WAYPOINTS`) round-trip cleanly under new format.
+- Both project file fixtures (`Burn V5`, `Burn V4`) round-trip cleanly under new format.
 - Save → load → save produces byte-identical output (modulo new `projectVersion`).
 - Driver / Ableton / macro / OSC mapping tests still pass.
 - No regression in any visual A/B test.

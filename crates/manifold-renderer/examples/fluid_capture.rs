@@ -43,7 +43,7 @@ use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, is_liquid_domain};
 use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_renderer::frame_status::FrameRenderStatus;
-use manifold_renderer::generators::mesh_common::MeshVertex;
+use manifold_renderer::mesh::MeshVertex;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::{
     encode_rgba8_png, readback_srgb_rgba8, readback_tonemapped_rgba8,

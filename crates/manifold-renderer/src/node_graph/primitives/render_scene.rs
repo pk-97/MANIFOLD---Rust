@@ -128,7 +128,7 @@ use manifold_gpu::GpuBinding;
 use manifold_gpu::raytrace::ShadowRayTracer;
 use manifold_gpu::denoiser::denoiser_available;
 
-use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
+use crate::mesh::{InstanceTransform, MeshVertex};
 use crate::node_graph::atmosphere::Atmosphere;
 use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::{
@@ -8783,7 +8783,7 @@ fn euler_xyz_columns(rot: [f32; 3]) -> [[f32; 3]; 3] {
 }
 
 /// Multiply two 3×3 column-major matrices: result = A * B. Mirrors
-/// `generators::mesh_pipeline::mat4_mul`'s convention one dimension down.
+/// `mesh::pipeline::mat4_mul`'s convention one dimension down.
 fn mat3_mul(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
     let mut out = [[0.0f32; 3]; 3];
     for col in 0..3 {
@@ -9063,9 +9063,9 @@ impl EffectNode for RenderScene {
         &RENDER_SCENE_OUTPUTS
     }
 
-    #[cfg(feature = "gpu-proofs")]
-    fn rt_probe_scene(&self) -> Option<&rt_proof::RtProbeScene> {
-        self.rt_probe.as_ref()
+    /// Return a fresh pass with its own renderer and render history, never this node's own state.
+    fn viewport_pass(&self) -> Option<Box<dyn crate::node_graph::scene_viewport::ViewportPass>> {
+        Some(Box::new(scene_viewport::SceneViewportPass::new()))
     }
 
     #[cfg(feature = "gpu-proofs")]
@@ -9653,3 +9653,12 @@ mod tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
 mod subsurface;
+
+mod scene_viewport;
+
+#[cfg(feature = "gpu-proofs")]
+impl RenderScene {
+    fn rt_probe_scene(&self) -> Option<&rt_proof::RtProbeScene> {
+        self.rt_probe.as_ref()
+    }
+}

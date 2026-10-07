@@ -95,7 +95,7 @@ pub(super) fn run<P: Primitive>(
 mod gpu_tests {
     use super::super::taper_mesh::TaperMesh;
     use crate::TestDevice;
-    use crate::generators::mesh_common::{MeshVertex, Vec4Vertex};
+    use crate::mesh::{MeshVertex, Vec4Vertex};
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::backend::Backend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};

@@ -240,8 +240,8 @@ impl KnownItem for [f32; 3] {
 ///
 /// The shader on either side owns the per-byte interpretation —
 /// canonical struct layouts live in
-/// [`crate::generators::compute_common`](../generators/compute_common/index.html)
-/// (`Particle`) and [`crate::generators::mesh_common`](../generators/mesh_common/index.html)
+/// [`crate::particles`](../generators/compute_common/index.html)
+/// (`Particle`) and [`crate::mesh`](../generators/mesh_common/index.html)
 /// (`CurvePoint`, `MeshVertex`, `EdgePair`, …) with `#[repr(C)]` and
 /// `bytemuck::Pod` and a [`KnownItem`] impl. The `primitive!` macro
 /// provides `Array<Particle>` syntactic sugar that expands to

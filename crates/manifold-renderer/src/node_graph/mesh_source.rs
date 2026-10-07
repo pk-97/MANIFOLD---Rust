@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::generators::mesh_common::{MeshVertex, PLATONIC_SHAPES};
+use crate::mesh::{MeshVertex, PLATONIC_SHAPES};
 use crate::generators::platonic_geometry::platonic_mesh;
 use crate::node_graph::physics_mesh::MeshSelection;
 

@@ -3,7 +3,7 @@
 use manifold_gpu::GpuBinding;
 
 use super::standalone_pipeline::standalone_pipeline;
-use crate::generators::mesh_common::{InstanceTransform, Vec4Vertex};
+use crate::mesh::{InstanceTransform, Vec4Vertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::primitive::Primitive;
 

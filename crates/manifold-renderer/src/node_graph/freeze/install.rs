@@ -1712,7 +1712,7 @@ fn compose_region_mesh_rules(
             continue;
         };
         let PortType::Array(arr) = &spec.ty else { continue };
-        if arr.specs != <crate::generators::mesh_common::MeshVertex as crate::node_graph::ports::KnownItem>::SPECS {
+        if arr.specs != <crate::mesh::MeshVertex as crate::node_graph::ports::KnownItem>::SPECS {
             continue;
         }
         let declared = node.mesh_output_rule(out_port);

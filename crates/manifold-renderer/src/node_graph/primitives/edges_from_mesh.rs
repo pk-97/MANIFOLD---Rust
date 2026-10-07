@@ -12,7 +12,7 @@
 //! CPU-write into shared MTLBuffer, sentinel-padded inactive tail —
 //! same family as `node.grid_edges` / `node.platonic_solid_edges`.
 
-use crate::generators::mesh_common::{EdgePair, MeshVertex};
+use crate::mesh::{EdgePair, MeshVertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::primitive::Primitive;
 

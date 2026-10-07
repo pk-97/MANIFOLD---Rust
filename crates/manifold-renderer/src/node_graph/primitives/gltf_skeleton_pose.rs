@@ -44,7 +44,7 @@ use std::sync::{Arc, mpsc};
 use super::gltf_anim_shared::{
     LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_quat_slice, sample_vec3_slice,
 };
-use crate::generators::mesh_common::JointMatrix;
+use crate::mesh::JointMatrix;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_anim_cache::{AnimClip, GltfAnimSet, LoadedAnimSet, spawn_load};
 use crate::node_graph::gltf_load::{Mat4, MAT4_IDENTITY, mat4_from_trs, mat4_mul};

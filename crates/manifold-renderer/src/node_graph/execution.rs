@@ -219,7 +219,7 @@ pub struct Executor {
     scene_viewport: Option<(
         NodeInstanceId,
         super::scene_viewport::SceneViewportConfig,
-        super::scene_viewport::SceneViewportPass,
+        Box<dyn super::scene_viewport::ViewportPass>,
     )>,
     scene_viewport_captured: bool,
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — resolved per-frame values from
@@ -923,15 +923,18 @@ impl Executor {
         &mut self,
         node: NodeInstanceId,
         config: super::scene_viewport::SceneViewportConfig,
-    ) {
+        make: impl FnOnce() -> Option<Box<dyn super::scene_viewport::ViewportPass>>,
+    ) -> bool {
         if let Some((target, current, _)) = self.scene_viewport.as_mut()
             && *target == node
         {
             *current = config;
         } else {
-            self.scene_viewport = Some((node, config, super::scene_viewport::SceneViewportPass::new()));
+            let Some(pass) = make() else { return false; };
+            self.scene_viewport = Some((node, config, pass));
         }
         self.scene_viewport_captured = false;
+        true
     }
 
     pub(crate) fn clear_scene_viewport(&mut self) {
@@ -3032,6 +3035,54 @@ mod tests {
         NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
     };
 
+    use crate::node_graph::scene_viewport::{SceneViewportConfig, ViewportPass};
+    use crate::node_graph::viewport_camera::ViewportCamera;
+
+    struct CpuViewportPass;
+
+    impl ViewportPass for CpuViewportPass {
+        fn render(&mut self, _: &mut EffectNodeContext<'_, '_>, _: SceneViewportConfig) {}
+        fn texture(&self) -> Option<&manifold_gpu::GpuTexture> { None }
+        fn status(&self) -> crate::frame_status::FrameRenderStatus { crate::frame_status::FrameRenderStatus::Complete }
+        fn errors(&self) -> &[String] { &[] }
+        fn clear_state(&mut self) {}
+    }
+
+    #[test]
+    fn scene_viewport_constructs_only_when_target_changes() {
+        let mut executor = Executor::new(Box::new(crate::node_graph::MockBackend::new()));
+        let mut config = SceneViewportConfig {
+            camera: ViewportCamera::default(),
+            width: 320,
+            height: 200,
+        };
+        let calls = std::cell::Cell::new(0);
+        let make = || {
+            calls.set(calls.get() + 1);
+            Some(Box::new(CpuViewportPass) as Box<dyn ViewportPass>)
+        };
+        assert!(executor.set_scene_viewport(NodeInstanceId(1), config, make));
+        config.width = 640;
+        executor.scene_viewport_captured = true;
+        assert!(executor.set_scene_viewport(NodeInstanceId(1), config, || panic!("same target must reuse its pass")));
+        assert_eq!(executor.scene_viewport.as_ref().unwrap().1.width, 640);
+        assert!(!executor.scene_viewport_captured);
+        assert!(executor.set_scene_viewport(NodeInstanceId(2), config, make));
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn scene_viewport_reports_missing_constructor() {
+        let mut executor = Executor::new(Box::new(crate::node_graph::MockBackend::new()));
+        let config = SceneViewportConfig {
+            camera: ViewportCamera::default(),
+            width: 320,
+            height: 200,
+        };
+        assert!(!executor.set_scene_viewport(NodeInstanceId(1), config, || None));
+        assert!(executor.scene_viewport.is_none());
+    }
+
     thread_local! {
         static PHYSICS_SAMPLE_SCALAR_VALUES: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
     }
@@ -3205,7 +3256,7 @@ mod tests {
         use manifold_gpu::GpuTextureFormat;
 
         let device = crate::gpu::test_gpu_device("execution tests");
-        let particle_layout = ArrayType::of_known::<crate::generators::compute_common::Particle>();
+        let particle_layout = ArrayType::of_known::<crate::particles::Particle>();
 
         let mut g = Graph::new();
         g.add_node(Box::new(SilentAliasedNode::new(particle_layout)));
@@ -3583,7 +3634,7 @@ mod tests {
     #[test]
     fn dump_array_set_holds_only_listed_arrays() {
         use crate::node_graph::ports::ArrayType;
-        let array = || PortType::Array(ArrayType::of_known::<crate::generators::mesh_common::Vec4Vertex>());
+        let array = || PortType::Array(ArrayType::of_known::<crate::mesh::Vec4Vertex>());
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut g = Graph::new();
         let a = g.add_node(Box::new(RecordingNode::new("a", vec![], vec![output("out", array())], log.clone())));
@@ -5055,7 +5106,7 @@ mod tests {
     /// (gltf_mesh_source and friends) use.
     mod mesh_revision_tests {
         use super::*;
-        use crate::generators::mesh_common::MeshVertex;
+        use crate::mesh::MeshVertex;
         use crate::node_graph::mesh_change::{MeshOutputRule, MeshRevisionRule};
         use crate::node_graph::ports::ArrayType;
 
@@ -5367,7 +5418,7 @@ mod tests {
                 input: std::borrow::Cow::Borrowed("in"),
                 aspect: MeshAspect::Content,
             }];
-            let map_ty = PortType::Array(ArrayType::of_known::<crate::generators::mesh_common::Vec4Vertex>());
+            let map_ty = PortType::Array(ArrayType::of_known::<crate::mesh::Vec4Vertex>());
             let (mut source, (unchanged, _, _)) = MeshNode::producer(None);
             source.outputs = vec![output("out", map_ty)];
             let (mut remap, _, _) = MeshNode::consumer(Some(MeshOutputRule {

@@ -1577,7 +1577,7 @@ struct Push {
 /// iterations, capped solves (the `SOLVER_WORDS` tail of the capped array).
 fn solver_words(run: &LiquidRun) -> [u32; 3] {
     let words: Vec<u32> = run.read("node.gpu_flip_step", "capped");
-    let tail = &words[words.len() - manifold_renderer::node_graph::SOLVER_WORDS as usize..];
+    let tail = &words[words.len() - manifold_renderer::node_graph::primitives::liquid_stats::SOLVER_WORDS as usize..];
     [tail[0], tail[1], tail[2]]
 }
 

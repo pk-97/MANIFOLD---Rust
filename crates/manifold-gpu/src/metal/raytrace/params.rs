@@ -594,7 +594,7 @@ const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_matrix) == 236)
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_handedness) == 272);
 
 /// RT_INSTANCING_DESIGN.md D1/P0: manual mirror of the renderer's
-/// `generators::mesh_common::InstanceTransform` (32 bytes,
+/// `mesh::InstanceTransform` (32 bytes,
 /// `pos_scale` xyz position + w uniform scale, `rot_pad` xyz XYZ Euler +
 /// w mirror marker) — manifold-gpu cannot depend on manifold-renderer, so
 /// the layout is mirrored by hand and tied to the MSL `RtInstanceTransform`

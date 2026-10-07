@@ -23,7 +23,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID, is_liquid_domain};
 use manifold_core::{Beats, Seconds};
 
-use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
+use crate::mesh::{InstanceTransform, MeshVertex};
 use crate::node_graph::physics::MAX_COPIES;
 use crate::node_graph::fluid_particles::{
     CellRange, FluidBlob, FluidParticle, MAX_BINS, bin_counts, bin_total, searched_bins,
@@ -131,8 +131,9 @@ impl std::fmt::Display for ExtentError {
     }
 }
 
-/// A checked graph: the nodes ruled on, and the device bytes the scene holds
-/// once every array has grown to what the walk reached.
+/// A checked graph: the nodes ruled on, and array storage plus rule-declared
+/// private device storage once every array has grown to what the walk reached.
+/// Texture memory and driver-owned allocations are not included.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExtentReport {
     pub checked: usize,
@@ -545,6 +546,12 @@ impl LiquidPreset {
 
 /// Every node type a liquid preset may hold that touches an array or the GPU.
 pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
+    ExtentRule { type_id: "node.ocean_spectrum", check: ocean_spectrum },
+    ExtentRule { type_id: "node.inverse_fft_2d", check: inverse_fft_2d },
+    ExtentRule { type_id: "node.ocean_displace", check: ocean_displace },
+    ExtentRule { type_id: "node.make_triangles", check: make_triangles },
+    // active_elements clamps columns × rows to the bound MeshVertex capacity.
+    ExtentRule { type_id: "node.projected_grid", check: size_bounded },
     ExtentRule { type_id: "node.interpolate_particle_frames", check: interpolate_particle_frames },
     ExtentRule { type_id: "node.push_out_of_solid", check: push_out_of_solid },
     ExtentRule { type_id: "node.mix_arrays", check: mix_arrays },
@@ -592,9 +599,17 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.physics_world", check: physics_world },
     ExtentRule { type_id: "node.cube_mesh", check: size_bounded },
     ExtentRule { type_id: "node.platonic_solid_mesh", check: size_bounded },
+    ExtentRule { type_id: "node.gltf_mesh_source", check: gltf_mesh_source },
     ExtentRule { type_id: "node.bake_environment", check: texture_only },
     ExtentRule { type_id: "node.exposure", check: texture_only },
     ExtentRule { type_id: "node.hdri_source", check: texture_only },
+    ExtentRule { type_id: "node.gltf_texture_source", check: texture_only },
+    ExtentRule { type_id: "node.sea_horizon_env", check: texture_only },
+    ExtentRule { type_id: "node.camera_sky", check: texture_only },
+    ExtentRule { type_id: "node.over", check: texture_only },
+    ExtentRule { type_id: "node.coc_from_depth", check: texture_only },
+    ExtentRule { type_id: "node.bokeh_gather", check: texture_only },
+    ExtentRule { type_id: "node.motion_blur", check: texture_only },
     ExtentRule { type_id: "node.switch_texture", check: texture_only },
     ExtentRule { type_id: "node.tone_map", check: texture_only },
     ExtentRule { type_id: "node.surface_crossings", check: surface_crossings },
@@ -630,6 +645,72 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     } },
     ExtentRule { type_id: "node.particles_to_copies", check: particles_to_copies },
 ];
+
+fn ocean_spectrum(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let size = x.param("size", 256.0);
+    let n = size.round() as u32;
+    if !(16.0..=1024.0).contains(&size) || !n.is_power_of_two() {
+        return Err(Verdict::Refused(format!("Ocean Spectrum: Size must be a power of two in 16..1024 (got {size})")));
+    }
+    // Six N × (N/2+1) half spectra, with one complex f32 pair per entry.
+    let count = crate::node_graph::primitives::ocean_spectrum::spectrum_len(n);
+    x.covers("spectrum", u64::from(count) * 8)
+}
+
+fn inverse_fft_2d(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let size = x.param("size", 256.0).round();
+    let batch = x.param("batch", 6.0).round();
+    let n = size as u32;
+    if !(16.0..=1024.0).contains(&size) || !n.is_power_of_two() || !(1.0..=16.0).contains(&batch) {
+        return Err(Verdict::Refused(format!("Inverse FFT 2D: Size must be a power of two in 16..1024 and Batch 1..16 (got {size}, {batch})")));
+    }
+    let (n, batch) = (u64::from(n), batch as u64);
+    // The MPSGraph transform reads B half spectra and writes B real fields.
+    x.covers("spectrum", batch * n * (n / 2 + 1) * 8)?;
+    x.covers("field", batch * n * n * 4)?;
+    // metal/fft.rs keeps four BoundPairs, retaining whole buffers. On a
+    // cache miss the new pair is retained before the old cache is truncated:
+    // four old pairs can coexist with the current arrays already counted.
+    x.hold(4 * (x.bytes("spectrum").expect("covered") + x.bytes("field").expect("covered")));
+    Ok(())
+}
+
+fn ocean_displace(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    for (param, port) in [("size_0", "field_0"), ("size_1", "field_1"), ("size_2", "field_2")] {
+        let size = x.param(param, 256.0).round();
+        let n = size as u32;
+        if !(16.0..=1024.0).contains(&size) || !n.is_power_of_two() {
+            return Err(Verdict::Refused(format!("Ocean Displace: {param} must be a power of two in 16..1024 (got {size})")));
+        }
+        let n = u64::from(n);
+        // Wrapped gathers reach all six N × N real fields of each cascade.
+        x.covers(port, 6 * n * n * 4)?;
+    }
+    // The vertex dispatch clamps to min(mesh.size, out.size).
+    size_bounded(x)
+}
+
+fn make_triangles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let cols = u64::from(whole_param(x, "src_cols", 256.0).max(2));
+    let rows = u64::from(whole_param(x, "src_rows", 256.0).max(2));
+    let bytes = (cols * rows).checked_mul(size_of::<MeshVertex>() as u64)
+        .ok_or_else(|| x.uncovered("source grid byte size overflows u64".into()))?;
+    // Quad corners and finite-difference neighbours gather across the grid.
+    x.covers("in", bytes)?;
+    // Writes use dst capacity as their guard; excess slots are degenerate padding.
+    size_bounded(x)
+}
+
+fn gltf_mesh_source(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    // The asset's decoded vertex count is unknown here. Uploads truncate to
+    // the bound output capacity and copies clamp to dst.size; reserve the
+    // largest retained staging buffer that upload can create (at least 1 byte).
+    // An unbound vertices port only publishes the CPU source descriptor.
+    if let Some(bytes) = x.bytes("vertices") {
+        x.hold(bytes.max(1));
+    }
+    size_bounded(x)
+}
 
 fn interpolate_particle_frames(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // Output follows B's capacity, never A+B. Count tails are explicitly zeroed.
@@ -679,6 +760,8 @@ fn whole(x: &AtomExtent<'_>, name: &str, default: f32) -> u32 {
 
 /// Texture-only GPU work: no array extent to prove. A node of these types
 /// that grows an array port needs a real rule.
+/// Asset sources size their source textures from decoded images and bound
+/// writes by the destination texture; this does not account texture memory.
 fn texture_only(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let array = |ty: &PortType| matches!(ty, PortType::Array(_));
     if x.node.node.inputs().iter().any(|p| array(&p.ty)) || x.node.node.outputs().iter().any(|p| array(&p.ty)) {
@@ -1931,6 +2014,65 @@ mod tests {
 
     fn particle_blend_preset() -> EffectGraphDef {
         serde_json::from_str(include_str!("../../../assets/generator-presets/WaterDamBreakParticles.json")).unwrap()
+    }
+
+    #[test]
+    fn ocean_cliff_authored_extent_checked() {
+        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
+        let mut preset = LiquidPreset::build(def).unwrap();
+        let report = preset.check_authored().unwrap();
+        println!("OceanCliff authored {:?}: {} nodes checked, {} array/private bytes", preset.domains(), report.checked, report.scene_bytes);
+    }
+
+    #[test]
+    fn inverse_fft_extent_counts_retained_full_buffers_at_rebind_peak() {
+        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
+        let preset = LiquidPreset::build(def).unwrap();
+        let step = preset.plan.steps().iter().find(|step| {
+            preset.graph.get_node(step.node).unwrap().node.type_id().as_str() == "node.inverse_fft_2d"
+        }).expect("FFT step");
+        let node = preset.graph.get_node(step.node).unwrap();
+        let wires = AHashMap::default();
+        let bytes = AHashMap::default();
+        let mut atom = AtomExtent {
+            node, step, plan: &preset.plan, wires: &wires, bytes: &bytes,
+            unresolved: RefCell::new(None), provided: Vec::new(), published: Vec::new(), held: 0,
+        };
+        let n = atom.param("size", 256.0).round() as u64;
+        let batch = atom.param("batch", 6.0).round() as u64;
+        for padding in [0, 4096] {
+            let spectrum = batch * n * (n / 2 + 1) * 8 + padding;
+            let field = batch * n * n * 4 + padding;
+            atom.provided = vec![("spectrum", spectrum), ("field", field)];
+            atom.held = 0;
+            inverse_fft_2d(&mut atom).unwrap();
+            // Four cached pairs plus a distinct incoming pair before eviction.
+            assert_eq!(spectrum + field + atom.held, 5 * (spectrum + field));
+        }
+    }
+
+    #[test]
+    fn ocean_gathers_reject_undersized_inputs() {
+        use manifold_core::effect_graph_def::SerializedParamValue;
+        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
+        for (type_id, param, value, port) in [
+            ("node.inverse_fft_2d", "size", 512.0, "spectrum"),
+            ("node.ocean_displace", "size_0", 512.0, "field_0"),
+            ("node.make_triangles", "src_cols", 4096.0, "in"),
+        ] {
+            let mut flat = manifold_core::flatten::flatten_groups(def).expect("preset flattens");
+            // Keep the producer's capacity unchanged while the consumer's
+            // gather footprint grows; a size-bounded exemption would miss it.
+            let node = flat.nodes.iter_mut().find(|node| node.type_id == type_id).expect("consumer");
+            node.params.insert(param.into(), SerializedParamValue::Float { value });
+            match check_preset_extents(&flat, 8) {
+                Err(ExtentError::Uncovered { node, detail }) => {
+                    assert!(node.contains(type_id), "{node}");
+                    assert!(detail.starts_with(&format!("{port} holds ")), "{detail}");
+                }
+                other => panic!("{type_id}.{param}: expected uncovered {port}, got {other:?}"),
+            }
+        }
     }
 
     #[test]

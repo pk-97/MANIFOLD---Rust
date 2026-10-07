@@ -23,7 +23,7 @@
 
 use std::borrow::Cow;
 
-use crate::generators::mesh_common::CurvePoint;
+use crate::mesh::CurvePoint;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
