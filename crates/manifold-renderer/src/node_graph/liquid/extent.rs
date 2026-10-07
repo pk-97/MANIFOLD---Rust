@@ -667,7 +667,12 @@ fn inverse_fft_2d(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (n, batch) = (u64::from(n), batch as u64);
     // The MPSGraph transform reads B half spectra and writes B real fields.
     x.covers("spectrum", batch * n * (n / 2 + 1) * 8)?;
-    x.covers("field", batch * n * n * 4)
+    x.covers("field", batch * n * n * 4)?;
+    // metal/fft.rs keeps four BoundPairs, retaining whole buffers. On a
+    // cache miss the new pair is retained before the old cache is truncated:
+    // four old pairs can coexist with the current arrays already counted.
+    x.hold(4 * (x.bytes("spectrum").expect("covered") + x.bytes("field").expect("covered")));
+    Ok(())
 }
 
 fn ocean_displace(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -2017,6 +2022,33 @@ mod tests {
         let mut preset = LiquidPreset::build(def).unwrap();
         let report = preset.check_authored().unwrap();
         println!("OceanCliff authored {:?}: {} nodes checked, {} array/private bytes", preset.domains(), report.checked, report.scene_bytes);
+    }
+
+    #[test]
+    fn inverse_fft_extent_counts_retained_full_buffers_at_rebind_peak() {
+        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
+        let preset = LiquidPreset::build(def).unwrap();
+        let step = preset.plan.steps().iter().find(|step| {
+            preset.graph.get_node(step.node).unwrap().node.type_id().as_str() == "node.inverse_fft_2d"
+        }).expect("FFT step");
+        let node = preset.graph.get_node(step.node).unwrap();
+        let wires = AHashMap::default();
+        let bytes = AHashMap::default();
+        let mut atom = AtomExtent {
+            node, step, plan: &preset.plan, wires: &wires, bytes: &bytes,
+            unresolved: RefCell::new(None), provided: Vec::new(), published: Vec::new(), held: 0,
+        };
+        let n = atom.param("size", 256.0).round() as u64;
+        let batch = atom.param("batch", 6.0).round() as u64;
+        for padding in [0, 4096] {
+            let spectrum = batch * n * (n / 2 + 1) * 8 + padding;
+            let field = batch * n * n * 4 + padding;
+            atom.provided = vec![("spectrum", spectrum), ("field", field)];
+            atom.held = 0;
+            inverse_fft_2d(&mut atom).unwrap();
+            // Four cached pairs plus a distinct incoming pair before eviction.
+            assert_eq!(spectrum + field + atom.held, 5 * (spectrum + field));
+        }
     }
 
     #[test]
