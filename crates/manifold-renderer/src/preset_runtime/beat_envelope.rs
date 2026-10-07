@@ -95,4 +95,3 @@ impl BeatEnvelopeState {
         *self = Self::default();
     }
 }
-
