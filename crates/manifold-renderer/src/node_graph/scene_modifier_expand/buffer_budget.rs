@@ -412,6 +412,10 @@ mod tests {
 
     #[test]
     fn cut_budget_includes_private_scan_scratch_and_readbacks() {
+        fn fixture_scratch_bytes(records: u64) -> Option<u64> {
+            assert_eq!(records, 196_608 + 3 * 257);
+            Some(2_136)
+        }
         let scene = SceneNodeRef {
             scope: Vec::new(),
             node: NodeId::new("scene"),
@@ -419,7 +423,7 @@ mod tests {
         let cutter = NodeInstanceId(7);
         let budget = PreparedModifierBufferBudget {
             scenes: BTreeMap::from([(scene.clone(), AHashSet::from_iter([cutter]))]),
-            cutters: AHashMap::from_iter([(cutter, crate::node_graph::resource_allocation::array_scratch("node.cut_mesh_bands").unwrap())]),
+            cutters: AHashMap::from_iter([(cutter, fixture_scratch_bytes as fn(u64) -> Option<u64>)]),
         };
         let map_bytes = (196_608 + 3 * 257) * 16;
         let private_bytes = (257 + 2) * 4 * 2 + 16 + 48;
