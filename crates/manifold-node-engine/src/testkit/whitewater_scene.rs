@@ -356,7 +356,7 @@ impl Show {
         Self::new_with_emitter_oracle(def, size, frozen, held, None)
     }
 
-    pub(crate) fn new_with_emitter_oracle(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String], reference: Option<bool>) -> Self {
+    pub fn new_with_emitter_oracle(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String], reference: Option<bool>) -> Self {
         let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
         if let Some(reference) = reference {
             registry.register("node.whitewater_step", if reference {

@@ -15,11 +15,7 @@ mod tests {
 
     #[test]
     fn missing_stock_root_lists_bundle_and_registered_assets_candidates() {
-        let dirs = KindDirs {
-            label: "missing test kind",
-            bundle_subdir: "missing-preset-loader-test-kind",
-            dev_subdir: "missing-preset-loader-test-kind",
-        };
+        let dirs = KindDirs::for_test("missing test kind", "missing-preset-loader-test-kind", "missing-preset-loader-test-kind");
         let (root, tried) = resolve_stock_root(&dirs);
         assert!(root.is_none());
         let exe = std::env::current_exe().unwrap();
@@ -27,8 +23,8 @@ mod tests {
             inventory::iter::<PresetAssetsRoot>.into_iter().map(|root| root.dir).collect(),
         ).expect("renderer must register its assets");
         assert_eq!(tried, vec![
-            exe.parent().unwrap().join("../Resources/presets").join(dirs.bundle_subdir),
-            Path::new(assets).join(dirs.dev_subdir),
+            exe.parent().unwrap().join("../Resources/presets").join(dirs.bundle_subdir_for_test()),
+            Path::new(assets).join(dirs.dev_subdir_for_test()),
         ]);
         let error = try_load_catalog(&dirs).err().expect("missing stock must fail loudly");
         for candidate in tried {
@@ -267,6 +263,7 @@ mod tests {
         let snapshot_catalog =
             build_catalog_with_overlays("effect", &stock, None, &snapshot, &OverlayEntries::new())
                 .unwrap();
+        assert!(snapshot_catalog.is_browser_visible("MaskBlob"));
         let derived_snapshot = snapshot_catalog.json("MaskBlob").unwrap();
         assert!(derived_snapshot.contains("detection_mode"));
         assert!(!derived_snapshot.contains("snapshot"));

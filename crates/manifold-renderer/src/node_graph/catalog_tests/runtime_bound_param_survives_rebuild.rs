@@ -139,23 +139,16 @@
         // A binding whose declared default differs from the primitive's —
         // SoftFocus's 6.0-over-4.0 shape.
         let declared_default = primitive_default + 3.0;
-        let binding = ResolvedBinding {
-            id: std::borrow::Cow::Borrowed("intensity"),
-            label: std::borrow::Cow::Borrowed("Intensity"),
-            default_value: declared_default,
-            target: ResolvedTarget::Node {
-                node: inst,
-                param: std::borrow::Cow::Borrowed("intensity"),
-            },
-            convert: manifold_node_engine::param_binding::ParamConvert::Float,
-            source: BindingSource::Static,
-            source_id: std::borrow::Cow::Borrowed("intensity"),
-            reshape: None,
-            wraps_angle: false,
-            // AUTHORED — the preset case. This default is a chosen resting
-            // value, so it must land.
-            default_mirrors_node_param: false,
-        };
+        let binding = ResolvedBinding::assemble(
+            std::borrow::Cow::Borrowed("intensity"),
+            std::borrow::Cow::Borrowed("Intensity"),
+            declared_default,
+            ResolvedTarget::Node { node: inst, param: std::borrow::Cow::Borrowed("intensity") },
+            manifold_node_engine::param_binding::ParamConvert::Float,
+            BindingSource::Static,
+            std::borrow::Cow::Borrowed("intensity"),
+            None, false, false,
+        );
         let bound = manifold_node_engine::exec::bound_graph::BoundGraph::new(vec![binding], &mut graph, Some(&def));
         assert!(
             bound.shadowed_def_params.is_empty(),
@@ -225,21 +218,16 @@
             "sanity: instantiate_def alone (no BoundGraph) preserves the write"
         );
 
-        let binding = ResolvedBinding {
-            id: std::borrow::Cow::Borrowed("intensity"),
-            label: std::borrow::Cow::Borrowed("Intensity"),
-            default_value: frozen_default,
-            target: ResolvedTarget::Node {
-                node: rebuilt_inst,
-                param: std::borrow::Cow::Borrowed("intensity"),
-            },
-            convert: manifold_node_engine::param_binding::ParamConvert::Float,
-            source: BindingSource::Static,
-            source_id: std::borrow::Cow::Borrowed("intensity"),
-            reshape: None,
-            wraps_angle: false,
-            default_mirrors_node_param: stamped_binding.default_mirrors_node_param,
-        };
+        let binding = ResolvedBinding::assemble(
+            std::borrow::Cow::Borrowed("intensity"),
+            std::borrow::Cow::Borrowed("Intensity"),
+            frozen_default,
+            ResolvedTarget::Node { node: rebuilt_inst, param: std::borrow::Cow::Borrowed("intensity") },
+            manifold_node_engine::param_binding::ParamConvert::Float,
+            BindingSource::Static,
+            std::borrow::Cow::Borrowed("intensity"),
+            None, false, stamped_binding.default_mirrors_node_param,
+        );
         // This is the call every effect/generator rebuild makes:
         // `BoundGraph::new` → `apply_binding_defaults`. The def goes in so the
         // silent-revert detector (BUG-1l7f) runs on exactly the shape BUG-ji6q

@@ -8,24 +8,24 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 
 #[cfg(test)]
-use super::gpu_flip_preset::{DAM_COLUMN, DAM_FILL_HEIGHT, REST_PER_CELL, DAM_OBSTACLE};
+use manifold_node_engine::water::primitives::gpu_flip_preset::{DAM_COLUMN, DAM_FILL_HEIGHT, REST_PER_CELL, DAM_OBSTACLE};
 #[cfg(test)]
-use super::gpu_flip_volume::VolumeDrift;
+use manifold_node_engine::water::primitives::gpu_flip_volume::VolumeDrift;
 #[cfg(test)]
-use super::liquid_stats::SOLVER_WORDS;
+use manifold_node_engine::water::primitives::liquid_stats::SOLVER_WORDS;
 
-use super::gpu_flip_preset::{FACE_NODES, STEP_NODE, WaterScene, water_def};
-use crate::water::liquid::grid::face_len;
+use manifold_node_engine::water::primitives::gpu_flip_preset::{FACE_NODES, STEP_NODE, WaterScene, water_def};
+use manifold_node_engine::water::liquid::grid::face_len;
 #[cfg(test)]
-use super::gpu_flip_volume::volume_and_area;
+use manifold_node_engine::water::primitives::gpu_flip_volume::volume_and_area;
 #[cfg(test)]
-use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
-use crate::gpu::gpu_encoder::GpuEncoder;
-use crate::water::fluid_particles::FluidParticle;
+use manifold_node_engine::water::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::water::fluid_particles::FluidParticle;
 #[cfg(test)]
-use crate::water::fluid_particles::FaceSample;
-use crate::testkit::substep_nodes::register_substep_test_nodes;
-use crate::{persistence::EffectGraphDefExt, exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, persistence::PrimitiveRegistry, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
+use manifold_node_engine::water::fluid_particles::FaceSample;
+use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
+use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, persistence::PrimitiveRegistry, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
 #[cfg(test)]
 const G: f64 = 9.81;
@@ -72,7 +72,7 @@ impl FrameGpuTime {
 
 /// The node whose id ends with `name`: the flattened surface group's nodes
 /// carry the group's path before their own id.
-fn node_ending(graph: &Graph, name: &str) -> crate::exec::effect_node::NodeInstanceId {
+fn node_ending(graph: &Graph, name: &str) -> manifold_node_engine::exec::effect_node::NodeInstanceId {
     let mut found = graph.nodes().filter(|n| n.node_id.as_str().ends_with(name));
     let node = found.next().unwrap_or_else(|| panic!("no node ending {name}"));
     assert!(found.next().is_none(), "two nodes end {name}");
@@ -113,7 +113,7 @@ impl Run {
         let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
         for &(node, name, value) in params {
             let node = node_named(&graph, node);
-            graph.set_param(node, name, crate::parameters::ParamValue::Float(value as f32)).expect(name);
+            graph.set_param(node, name, manifold_node_engine::parameters::ParamValue::Float(value as f32)).expect(name);
         }
         Self::with_graph(scene, graph)
     }
@@ -164,7 +164,7 @@ impl Run {
             (0..count as u32).collect()
         };
         let vertex_count = indices.iter().max().map_or(0, |&index| index as usize + 1);
-        let vertices: Vec<crate::mesh::MeshVertex> =
+        let vertices: Vec<manifold_node_engine::mesh::MeshVertex> =
             self.read_at(node_ending(&self.graph, "liquid_normals"), "out", vertex_count);
         indices.chunks_exact(3).map(|triangle| [0, 1, 2].map(|i| vertices[triangle[i] as usize].position)).collect()
     }
@@ -309,7 +309,7 @@ impl Run {
         self.read_at(node_named(&self.graph, node), port, len)
     }
 
-    fn read_at<T: bytemuck::Pod>(&self, node: crate::exec::effect_node::NodeInstanceId, port: &str, len: usize) -> Vec<T> {
+    fn read_at<T: bytemuck::Pod>(&self, node: manifold_node_engine::exec::effect_node::NodeInstanceId, port: &str, len: usize) -> Vec<T> {
         let resource = output_of(&self.plan, node, port);
         let buffer = self
             .exec
@@ -325,9 +325,9 @@ impl Run {
         self.solver_grid().cells()[0] as usize
     }
 
-    fn solver_grid(&self) -> crate::water::liquid::lattice::FlipSolverGrid {
-        crate::water::liquid::lattice::FlipSolverGrid::from_lattice(
-            crate::water::liquid::lattice::LiquidLattice::from_layout(&self.scene.layout()),
+    fn solver_grid(&self) -> manifold_node_engine::water::liquid::lattice::FlipSolverGrid {
+        manifold_node_engine::water::liquid::lattice::FlipSolverGrid::from_lattice(
+            manifold_node_engine::water::liquid::lattice::LiquidLattice::from_layout(&self.scene.layout()),
         )
     }
 
@@ -337,8 +337,8 @@ impl Run {
     #[cfg(test)]
     pub(super) fn set_gravity(&mut self, x: f64, y: f64) {
         let domain = node_named(&self.graph, "domain");
-        self.graph.set_param(domain, "gravity_x", crate::parameters::ParamValue::Float(x as f32)).expect("gravity_x");
-        self.graph.set_param(domain, "gravity", crate::parameters::ParamValue::Float(y as f32)).expect("gravity");
+        self.graph.set_param(domain, "gravity_x", manifold_node_engine::parameters::ParamValue::Float(x as f32)).expect("gravity_x");
+        self.graph.set_param(domain, "gravity", manifold_node_engine::parameters::ParamValue::Float(y as f32)).expect("gravity");
     }
 
     /// The project frame rate from the next frame on: the tick's dt is one
@@ -547,7 +547,7 @@ fn gpu_flip_face_grid_is_the_last_ticks_faces() {
         let differ = state.iter().zip(&last).filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b)).count();
         let moving = state.iter().filter(|s| s.velocity.iter().any(|v| *v != 0.0)).count();
         let grid = run.face_grid();
-        let expected = crate::water::liquid::conformance::gpu_flip_faces(bytemuck::cast_slice(&state), run.solver_grid().cells());
+        let expected = manifold_node_engine::water::liquid::conformance::gpu_flip_faces(bytemuck::cast_slice(&state), run.solver_grid().cells());
         let gathered = (0..3)
             .map(|axis| grid[axis].iter().zip(&expected[axis]).filter(|(a, b)| a.to_bits() != b.to_bits()).count())
             .sum::<usize>();
@@ -1245,7 +1245,7 @@ fn moving_obstacle_pushes(steps: usize) {
     let mut ahead_speed = 0.0;
     for frame in 1..=30 {
         let pos = [start[0] + speed * f64::from(frame) / 60.0, start[1], start[2]];
-        run.graph.set_param(transform, "pos_x", crate::parameters::ParamValue::Float(pos[0] as f32)).expect("pos_x");
+        run.graph.set_param(transform, "pos_x", manifold_node_engine::parameters::ParamValue::Float(pos[0] as f32)).expect("pos_x");
         run.frame();
         let particles = run.particles();
         let stats = particle_stats(&particles);
@@ -1385,13 +1385,13 @@ mod native_reference {
             let (particles, solid, nodes) = snapshot(&mut native, offset);
             let got = seed_sites(scene, &particles);
             let geometry = scene.geometry();
-            let column = geometry.setup.box_sites;
+            let column = geometry.setup_for_test().box_sites_for_test();
             let mut expected = Vec::new();
             for x in 0..2 * n as u32 {
                 for y in 0..2 * n as u32 {
                     for z in 0..2 * n as u32 {
                         let site = [x, y, z];
-                        if y < geometry.setup.pool_sites || (0..3).all(|a| (column[a][0]..column[a][1]).contains(&site[a])) {
+                        if y < geometry.setup_for_test().pool_sites_for_test() || (0..3).all(|a| (column[a][0]..column[a][1]).contains(&site[a])) {
                             expected.push(site);
                         }
                     }
@@ -1849,7 +1849,7 @@ fn gpu_flip_surface_readback_matches_triangle_list() {
     assert!(volume > 0.0 && area > 0.0);
     assert!((volume - plain_volume).abs() < 1e-5);
     assert!((area - plain_area).abs() < 1e-5);
-    let raw: Vec<crate::mesh::MeshVertex> =
+    let raw: Vec<manifold_node_engine::mesh::MeshVertex> =
         plain.read_at(node_ending(&plain.graph, "liquid_mesh"), "vertices", 3 * b.len());
     assert!(raw.iter().zip(b.iter().flatten()).any(|(raw, smoothed)| raw.position != *smoothed),
         "fixture must distinguish raw and smoothed positions");
@@ -1925,7 +1925,7 @@ fn lid_pressed_into_pool(mask: u32) -> (f64, f64, f64) {
     let mut squeezed = false;
     for frame in 1..=30 {
         let y = start - LID_SPEED * f64::from(frame) / 60.0;
-        run.graph.set_param(transform, "pos_y", crate::parameters::ParamValue::Float(y as f32)).expect("pos_y");
+        run.graph.set_param(transform, "pos_y", manifold_node_engine::parameters::ParamValue::Float(y as f32)).expect("pos_y");
         run.frame();
         let stats = run.liquid_stats();
         println!(
@@ -2215,11 +2215,11 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
     struct ForceSolidVelocity;
     impl Drop for ForceSolidVelocity {
         fn drop(&mut self) {
-            super::gpu_flip_step::set_force_solid_velocity(false);
+            manifold_node_engine::water::primitives::gpu_flip_step::set_force_solid_velocity(false);
         }
     }
     fn original_frame(run: &mut Run) -> (f64, f64) {
-        super::gpu_flip_step::set_force_solid_velocity(true);
+        manifold_node_engine::water::primitives::gpu_flip_step::set_force_solid_velocity(true);
         let _reset = ForceSolidVelocity;
         run.timed_frame()
     }
@@ -2227,7 +2227,7 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
         values.sort_by(f64::total_cmp);
         (values[values.len() / 2 - 1] + values[values.len() / 2]) * 0.5
     }
-    super::gpu_flip_step::set_force_solid_velocity(false);
+    manifold_node_engine::water::primitives::gpu_flip_step::set_force_solid_velocity(false);
     for (n, fresh) in [(16, true), (16, false), (64, true)] {
         let scene = WaterScene::still_pool(n).with_steps(1);
         let mut optimized = run_with_retired_speed(scene, fresh);
@@ -2315,11 +2315,11 @@ fn gpu_flip_pocket_segments_match_indirect_sweeps() {
     struct ForceIndirectPockets;
     impl Drop for ForceIndirectPockets {
         fn drop(&mut self) {
-            super::gpu_flip_step::set_force_indirect_pockets(false);
+            manifold_node_engine::water::primitives::gpu_flip_step::set_force_indirect_pockets(false);
         }
     }
     fn original_frame(run: &mut Run) {
-        super::gpu_flip_step::set_force_indirect_pockets(true);
+        manifold_node_engine::water::primitives::gpu_flip_step::set_force_indirect_pockets(true);
         let _reset = ForceIndirectPockets;
         run.frame();
     }
@@ -2353,7 +2353,7 @@ fn gpu_flip_pocket_segments_match_indirect_sweeps() {
             assert_eq!(segmented.read::<u32>(node, port, words), indirect.read::<u32>(node, port, words), "frame{frame}: {port}");
         }
     }
-    super::gpu_flip_step::set_force_indirect_pockets(false);
+    manifold_node_engine::water::primitives::gpu_flip_step::set_force_indirect_pockets(false);
     let scene = WaterScene::still_pool(16).with_steps(2);
     // Unwired retired speed keeps all six numerical slots: each interval
     // records active work, an inactive tail, then active work next interval.
@@ -2367,7 +2367,7 @@ fn gpu_flip_pocket_segments_match_indirect_sweeps() {
         if frame == 10 {
             for run in [&mut segmented, &mut indirect] {
                 let step = node_named(&run.graph, STEP_NODE);
-                run.graph.set_param(step, "steps", crate::parameters::ParamValue::Float(1.0)).expect("steps");
+                run.graph.set_param(step, "steps", manifold_node_engine::parameters::ParamValue::Float(1.0)).expect("steps");
             }
         }
         if frame % 2 == 0 {
@@ -2412,11 +2412,11 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
     struct ForceDenseExtend;
     impl Drop for ForceDenseExtend {
         fn drop(&mut self) {
-            super::gpu_flip_step::set_force_dense_extend(false);
+            manifold_node_engine::water::primitives::gpu_flip_step::set_force_dense_extend(false);
         }
     }
     fn original_frame(run: &mut Run) -> (f64, f64) {
-        super::gpu_flip_step::set_force_dense_extend(true);
+        manifold_node_engine::water::primitives::gpu_flip_step::set_force_dense_extend(true);
         let _reset = ForceDenseExtend;
         run.timed_frame()
     }
@@ -2459,7 +2459,7 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
         let b: Vec<u32> = original.read(STEP_NODE, "capped", capped_words);
         assert!(a == b, "{at}: full capped words differ");
     }
-    super::gpu_flip_step::set_force_dense_extend(false);
+    manifold_node_engine::water::primitives::gpu_flip_step::set_force_dense_extend(false);
     for (n, steps, fresh) in [(16, 1, true), (16, 2, false), (64, 1, false)] {
         let scene = WaterScene::still_pool(n).with_steps(steps);
         let mut optimized = run_with_retired_speed(scene, fresh);
@@ -2472,7 +2472,7 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
         let mut original_cpu = Vec::with_capacity(MEASURED);
         let mut warm_replay = [manifold_gpu::GpuReplayStats::default(); 2];
         for frame in 0..WARMUP + MEASURED {
-            super::gpu_flip_step::set_force_dense_extend(false);
+            manifold_node_engine::water::primitives::gpu_flip_step::set_force_dense_extend(false);
             let (optimized_time, original_time) = if frame % 2 == 0 {
                 (optimized.timed_frame(), original_frame(&mut original))
             } else {
@@ -2513,7 +2513,7 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
             optimized.set_encode_replay(false);
             original.set_encode_replay(false);
             let direct_before = [optimized.replay_stats(), original.replay_stats()];
-            super::gpu_flip_step::set_force_dense_extend(false);
+            manifold_node_engine::water::primitives::gpu_flip_step::set_force_dense_extend(false);
             optimized.timed_frame();
             original_frame(&mut original);
             compare(&optimized, &original, fresh, WARMUP + MEASURED);
@@ -2549,7 +2549,7 @@ fn gpu_flip_fresh_speed_preserves_force_changes_and_multiple_intervals() {
             }
             if frame == 8 {
                 let step = node_named(&run.graph, STEP_NODE);
-                run.graph.set_param(step, "steps", crate::parameters::ParamValue::Float(3.0)).unwrap();
+                run.graph.set_param(step, "steps", manifold_node_engine::parameters::ParamValue::Float(3.0)).unwrap();
             }
             run.frame();
         }
@@ -2749,4 +2749,4 @@ fn gpu_flip_sheeting_cost_at_64() {
     );
 }
 
-use crate::testkit::atom::{node_named, output_of};
+use manifold_node_engine::testkit::atom::{node_named, output_of};

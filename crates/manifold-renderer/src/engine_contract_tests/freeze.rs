@@ -10,3 +10,7 @@ mod codegen;
 mod segment;
 #[path = "freeze_space.rs"]
 mod space;
+
+#[cfg(feature = "gpu-proofs")]
+#[path = "freeze_proof.rs"]
+mod proof;

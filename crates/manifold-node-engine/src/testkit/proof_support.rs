@@ -2,16 +2,16 @@ use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use crate::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
 use crate::graph::Graph;
 use crate::parameters::ParamValue;
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 use crate::primitives::gain::Gain;
 use crate::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, state_store::StateStore};
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 use crate::scene::boundary_nodes::{FinalOutput, Source};
 use crate::gpu::render_target::RenderTarget;
 use half::f16;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 use manifold_gpu::GpuBinding;
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
@@ -208,8 +208,8 @@ pub fn render_graph_at_time(
 /// Render the hand-fused Gain kernel: `out.rgb = in.rgb * product`, alpha kept.
 /// One read, one multiply, one write — the bandwidth collapse of an N-Gain
 /// chain.
-#[cfg(test)]
-pub(crate) fn render_fused_gain(device: &GpuDevice, input: &GpuTexture, product: f32) -> RenderTarget {
+#[cfg(any(test, feature = "testkit"))]
+pub fn render_fused_gain(device: &GpuDevice, input: &GpuTexture, product: f32) -> RenderTarget {
     let (w, h) = (input.width, input.height);
     let pipeline = device.create_compute_pipeline(
         include_str!("../freeze/shaders/gain_fused.wgsl"),
@@ -247,8 +247,8 @@ pub(crate) fn render_fused_gain(device: &GpuDevice, input: &GpuTexture, product:
 
 /// Build the unfused `Source -> Gain(g1) -> Gain(g2) -> FinalOutput` chain and
 /// render it. Returns (rendered texture, the source ResourceId is internal).
-#[cfg(test)]
-pub(crate) fn render_unfused_two_gain(device: &std::sync::Arc<GpuDevice>, input: &GpuTexture, g1: f32, g2: f32) -> RenderTarget {
+#[cfg(any(test, feature = "testkit"))]
+pub fn render_unfused_two_gain(device: &std::sync::Arc<GpuDevice>, input: &GpuTexture, g1: f32, g2: f32) -> RenderTarget {
     let mut g = Graph::new();
     let src = g.add_node(Box::new(Source::new()));
     let a = g.add_node(Box::new(Gain::new()));

@@ -37,7 +37,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "dots-hud", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.blob_tracker", "nodeId": "blobs" },
                 { "id": 3, "typeId": "node.draw_dots", "nodeId": "dots" },
                 { "id": 4, "typeId": "node.saturation", "nodeId": "sat" },
@@ -632,5 +632,101 @@ mod tests {
             ]
         }))
         .expect("honest fixture")
+    }
+
+    /// `node.tone_map` and `node.gradient_map` ship no bundled preset today
+    /// (unlike the other five wave-2 atoms), so the real-preset proof above
+    /// can't cover them — this minimal synthetic graph (`node.contrast`, the
+    /// doc's own worked scalar-param example, feeding the target atom) covers
+    /// each instead, per the task's documented fallback.
+    ///
+    /// - `node.tone_map` has ZERO non-scalar params (exposure/paper_white/
+    ///   max_nits are Float, curve/mode are Enum->u32) — it's exactly as
+    ///   scalar-clean as `node.contrast`, so it joins the region.
+    /// - `node.gradient_map` carries two Color params (`color_a`/`color_b`).
+    ///   Before P5 this was the same scalar-only cut as the five real-preset
+    ///   atoms above (a standalone dispatch); P5 (D4's Vec3/Vec4/Color lift)
+    ///   now lifts it too, so both atoms join the region — no longer an
+    ///   "opposite behaviour" pair, both genuinely fuse.
+    #[test]
+    fn tone_map_and_gradient_map_both_fuse_next_to_a_fusable_neighbor() {
+        let registry = registry();
+        for (type_id, in_port, should_fuse) in
+            [("node.tone_map", "in", true), ("node.gradient_map", "source", true),
+        ]
+        {
+            let json = format!(
+                r#"{{
+                    "version": 1, "name": "pair", "nodes": [
+                        {{ "id": 0, "typeId": "system.source", "nodeId": "source" }},
+                        {{ "id": 1, "typeId": "node.contrast", "nodeId": "contrast" }},
+                        {{ "id": 2, "typeId": "{type_id}", "nodeId": "target" }},
+                        {{ "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }}
+                    ], "wires": [
+                        {{ "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" }},
+                        {{ "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "{in_port}" }},
+                        {{ "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }}
+                    ]
+                }}"#
+            );
+            let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+            let regions = partition_regions(&def, &registry);
+            let fused_doc_ids: std::collections::HashSet<u32> =
+                regions.iter().flat_map(|r| r.members.iter().map(|m| m.doc_id)).collect();
+            assert_eq!(
+                fused_doc_ids.contains(&2),
+                should_fuse,
+                "{type_id}: region-membership next to a fusable neighbour (contrast) \
+                 didn't match expectation (fuse={should_fuse})"
+            );
+        }
+    }
+
+    /// P3 wave 3 (2026-07-14, final conversion wave): `node.rotate_coordinates`
+    /// and `node.sine_wave` also ship in zero bundled presets today (palette/
+    /// vocabulary atoms, not yet wired into a shipped preset), so — same
+    /// documented fallback as `tone_map_fuses_gradient_map_stays_boundary_
+    /// next_to_a_fusable_neighbor` above — this synthetic pair covers each
+    /// instead of a real-preset proof. Both are genuinely scalar-only
+    /// (`angle`; `a, b, c, freq, freq_scale, time, time_scale` — all Float,
+    /// no Color/Vec3/Vec4), so both actually DO join the region next to
+    /// `node.contrast`, unlike the wave-2 Color-param atoms above. `graph_tool
+    /// fusion` confirms the same per-node verdict interactively. The third
+    /// remaining ledger atom, `node.watercolor`, is NOT covered here — it's a
+    /// 7-pass composite with persistent cross-frame feedback state, not a
+    /// single-dispatch atom, so it was left in `CONVERSION_DEBT_LEDGER`
+    /// rather than converted this wave (see the ledger's comment).
+    #[test]
+    fn wave3_scalar_only_atoms_fuse_next_to_a_fusable_neighbor() {
+        let registry = registry();
+        for (type_id, in_port, should_fuse) in
+            [("node.rotate_coordinates", "in", true), ("node.sine_wave", "field", true),
+        ]
+        {
+            let json = format!(
+                r#"{{
+                    "version": 1, "name": "pair", "nodes": [
+                        {{ "id": 0, "typeId": "system.source", "nodeId": "source" }},
+                        {{ "id": 1, "typeId": "node.contrast", "nodeId": "contrast" }},
+                        {{ "id": 2, "typeId": "{type_id}", "nodeId": "target" }},
+                        {{ "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }}
+                    ], "wires": [
+                        {{ "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" }},
+                        {{ "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "{in_port}" }},
+                        {{ "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }}
+                    ]
+                }}"#
+            );
+            let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+            let regions = partition_regions(&def, &registry);
+            let fused_doc_ids: std::collections::HashSet<u32> =
+                regions.iter().flat_map(|r| r.members.iter().map(|m| m.doc_id)).collect();
+            assert_eq!(
+                fused_doc_ids.contains(&2),
+                should_fuse,
+                "{type_id}: region-membership next to a fusable neighbour (contrast) \
+                 didn't match expectation (fuse={should_fuse})"
+            );
+        }
     }
 }

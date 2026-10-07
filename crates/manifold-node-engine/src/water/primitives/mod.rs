@@ -7,7 +7,7 @@ mod crossing_distance;
 pub mod dot_products;
 mod dust_potential;
 pub mod emission_count;
-mod energy_potential;
+pub mod energy_potential;
 mod extend_lattice;
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub mod face_grid_scenes;
@@ -29,10 +29,8 @@ pub mod gpu_flip_preset;
 pub mod gpu_flip_pressure;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_pressure_tests;
-#[cfg(all(test, feature = "water-race-probes"))]
-pub(crate) mod gpu_flip_race_tests;
-#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-pub mod gpu_flip_scene_tests;
+
+
 pub(crate) mod gpu_flip_sheeting;
 #[cfg(test)]
 mod gpu_flip_sheeting_cpu_tests;
@@ -43,12 +41,11 @@ mod gpu_flip_sheeting_tests;
 pub mod gpu_flip_step;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_step_tests;
-#[cfg(all(test, feature = "water-race-probes"))]
-pub(crate) mod gpu_flip_still;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_tile_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) mod gpu_flip_volume;
+#[cfg(all(any(test, feature = "testkit"), feature = "water-race-probes"))]
+pub mod gpu_flip_still;
+
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub mod gpu_flip_volume;
 mod inside_turbulence_potential;
 pub mod jitter_particles;
 mod keep_whitewater;
@@ -123,8 +120,7 @@ mod whitewater_engine_gpu_tests;
 mod whitewater_extent_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_field_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod whitewater_golden_tests;
+
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_grid_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -144,3 +140,6 @@ pub mod whitewater_step;
 #[cfg(test)]
 mod whitewater_step_tests;
 pub mod whitewater_type;
+
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+mod gpu_flip_tile_tests;

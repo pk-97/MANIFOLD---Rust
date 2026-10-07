@@ -14,7 +14,9 @@
     //! nodes register under the same `EffectGroupId` in
     //! `group_mix_nodes`, so the per-frame `wet_dry` refresh sets the
     //! `amount` param on every segment uniformly.
-    use super::*;
+    use manifold_node_engine::runtime::*;
+use manifold_node_engine::persistence::*;
+
     use manifold_core::PresetTypeId;
     use manifold_core::effects::{EffectGroup, PresetInstance};
     use manifold_core::id::EffectGroupId;
@@ -59,11 +61,11 @@
 
         // Two segments → two Mix sub-graphs, both keyed to g1.
         assert_eq!(
-            cg.group_mix_nodes.len(),
+            cg.group_mix_nodes_for_test().len(),
             2,
             "non-contiguous group with 2 segments must emit 2 Mix sub-graphs",
         );
-        for (gid, _) in &cg.group_mix_nodes {
+        for (gid, _) in cg.group_mix_nodes_for_test() {
             assert_eq!(gid.as_str(), "g1");
         }
     }
@@ -97,7 +99,7 @@
             PresetRuntime::try_build(ChainBuildInputs { effects: &[e1, e2, e3], groups: &[g1], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None);
 
         let cg = result.expect("PresetRuntime should build for contiguous group");
-        assert_eq!(cg.group_mix_nodes.len(), 1);
+        assert_eq!(cg.group_mix_nodes_for_test().len(), 1);
     }
 
     #[test]
@@ -130,5 +132,5 @@
         let result = PresetRuntime::try_build(ChainBuildInputs { effects: &[e1, e2, e3, e4, e5], groups: &[g1], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None);
 
         let cg = result.expect("PresetRuntime should build for three-segment group");
-        assert_eq!(cg.group_mix_nodes.len(), 3);
+        assert_eq!(cg.group_mix_nodes_for_test().len(), 3);
     }

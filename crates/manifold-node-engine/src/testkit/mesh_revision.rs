@@ -32,7 +32,7 @@ use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind};
             rule: Arc<Mutex<Option<MeshOutputRule<'static>>>>,
         }
 
-        pub(crate) fn shared_rule(rule: Option<MeshOutputRule<'static>>) -> Arc<Mutex<Option<MeshOutputRule<'static>>>> {
+        pub fn shared_rule(rule: Option<MeshOutputRule<'static>>) -> Arc<Mutex<Option<MeshOutputRule<'static>>>> {
             Arc::new(Mutex::new(rule))
         }
 
@@ -195,3 +195,69 @@ use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind};
             required: false,
         }
     }
+
+pub struct ScriptedMeshSource {
+            type_id: EffectNodeType,
+            rule: Arc<Mutex<Option<MeshOutputRule<'static>>>>,
+        }
+impl ScriptedMeshSource {
+            pub fn new(rule: Arc<Mutex<Option<MeshOutputRule<'static>>>>) -> Self {
+                Self {
+                    type_id: EffectNodeType::new("test.scripted_mesh_source"),
+                    rule,
+                }
+            }
+        }
+impl EffectNode for ScriptedMeshSource {
+            fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+                crate::scene::depth_rule::DepthRule::Terminal
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                &[]
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                static OUTPUTS: [NodeOutput; 2] = [
+                    NodePort {
+                        name: std::borrow::Cow::Borrowed("vertices"),
+                        ty: PortType::Array(ArrayType::of_known::<MeshVertex>()),
+                        kind: PortKind::Output,
+                        required: false,
+                    },
+                    NodePort {
+                        name: std::borrow::Cow::Borrowed("weights"),
+                        ty: PortType::Array(ArrayType::of_known::<f32>()),
+                        kind: PortKind::Output,
+                        required: false,
+                    },
+                ];
+                &OUTPUTS
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &[]
+            }
+            fn array_output_capacity(
+                &self,
+                port: &str,
+                _: &crate::exec::effect_node::ParamValues,
+                _: &[(&str, u32)],
+            ) -> Option<u32> {
+                // Mirror `MeshInput`'s standalone minima.
+                match port {
+                    "vertices" => Some(1536),
+                    "weights" => Some(1),
+                    _ => None,
+                }
+            }
+            fn mesh_output_rule(&self, _port: &str) -> MeshOutputRule<'_> {
+                self.rule.lock().unwrap().unwrap_or(MeshOutputRule {
+                    topology: MeshRevisionRule::Written,
+                    positions: MeshRevisionRule::Written,
+                })
+            }
+            fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {
+                // No-op actual write — MockBackend cannot run GPU dispatches.
+            }
+        }

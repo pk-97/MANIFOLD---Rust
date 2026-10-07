@@ -14,7 +14,7 @@
 //! freshness tests walk. Tests add it to a registry explicitly with
 //! `PrimitiveRegistry::register(TYPE_ID, …)`.
 
-#![cfg(test)]
+#![cfg(any(test, feature = "testkit"))]
 
 use std::borrow::Cow;
 use std::sync::OnceLock;

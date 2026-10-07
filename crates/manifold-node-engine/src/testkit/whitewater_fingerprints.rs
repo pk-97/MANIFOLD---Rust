@@ -1,7 +1,7 @@
 use crate::testkit::whitewater_scene::Show;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use crate::water::fluid::TICK;
-pub(crate) const WHITEWATER: &str = "whitewater";
+pub const WHITEWATER: &str = "whitewater";
 /// The liquid boundary that captures each tick's whitewater results.
 const BOUNDARY: &str = "state";
 /// Each whitewater output and the boundary port that holds its capture,
@@ -15,7 +15,7 @@ const PORTS: [(&str, &str); 7] = [
     ("spray_particles", "spray_particles"),
     ("dust_particles", "dust_particles"),
 ];
-pub(crate) const TICKS: u32 = 120;
+pub const TICKS: u32 = 120;
 /// `WHITEWATER_ID_LIMIT`: ids are taken modulo this.
 const ID_LIMIT: u32 = 256;
 
@@ -23,7 +23,7 @@ const ID_LIMIT: u32 = 256;
 /// recorded run or the golden proves nothing about it. Compaction moving a
 /// survivor is not visible in the outputs alone: [`compaction_moves_a_survivor`]
 /// proves it on a constructed pool.
-pub(crate) const EVENTS: [&str; 6] = ["spawn candidate", "spawn placed", "removal", "capacity overflow", "id wrap", "dust spawn"];
+pub const EVENTS: [&str; 6] = ["spawn candidate", "spawn placed", "removal", "capacity overflow", "id wrap", "dust spawn"];
 
 fn fnv(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))

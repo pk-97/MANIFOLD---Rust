@@ -73,7 +73,7 @@ use manifold_node_engine::graph::Graph;
             graph
                 .coupled_scenes()
                 .iter()
-                .map(|pair| (pair.fluid, pair.rigid))
+                .map(|pair| (pair.fluid_for_test(), pair.rigid_for_test()))
                 .collect::<Vec<_>>(),
             vec![(first_fluid, first_rigid), (second_fluid, second_rigid)]
         );

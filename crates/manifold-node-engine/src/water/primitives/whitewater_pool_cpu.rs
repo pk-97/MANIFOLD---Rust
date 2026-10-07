@@ -12,7 +12,7 @@
 #![cfg_attr(not(feature = "gpu-proofs"), allow(dead_code))]
 
 use super::whitewater_particle_cpu::{Box3, face_index};
-use crate::water::whitewater::{WHITEWATER_EMPTY, WHITEWATER_ID_LIMIT, WhitewaterParticle};
+use crate::water::whitewater::{WHITEWATER_ID_LIMIT, WhitewaterParticle};
 use manifold_fluids::WhitewaterSpawn;
 
 const BOX_INSET: f32 = 1.625;
@@ -533,9 +533,8 @@ pub(super) fn keep(pool: &[WhitewaterParticle], solid: &[f32], grid: &Box3, cap:
 }
 
 /// An empty pool slot.
-pub(super) fn empty_slot() -> WhitewaterParticle {
-    WhitewaterParticle { kind: WHITEWATER_EMPTY, ..Default::default() }
-}
+use super::whitewater_step::empty_slot;
+
 
 /// What `node.whitewater_step` keeps across ticks beside the pool, as its
 /// `state` buffer holds it. pool_full, emitted and thinned count since the

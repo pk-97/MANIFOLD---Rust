@@ -115,7 +115,7 @@ impl Canvas {
 /// Writes `name`.png into `GPU_FLIP_STILLS`: the tank floor in grey and the
 /// surface's triangles in water blue, lit from the camera's upper left.
 /// Does nothing when `GPU_FLIP_STILLS` is unset.
-pub(crate) fn write_still(name: &str, triangles: impl Iterator<Item = [[f32; 3]; 3]>) {
+pub fn write_still(name: &str, triangles: impl Iterator<Item = [[f32; 3]; 3]>) {
     let Some(dir) = std::env::var_os("GPU_FLIP_STILLS").map(PathBuf::from) else {
         return;
     };

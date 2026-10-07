@@ -116,15 +116,14 @@ fn camera_stages_reuse_one_anchor_and_reference_original_source() {
         .attachment_key(&modifier, None, SceneEndpoint::Camera)
         .unwrap();
     builder
-        .current
-        .insert(first.clone(), Some((90, "out".into())));
+        .set_current_for_test(first.clone(), Some((90, "out".into())));
     let second = builder
         .attachment_key(&modifier, None, SceneEndpoint::Camera)
         .unwrap();
 
     assert_eq!(first, second);
-    assert_eq!(builder.current[&first], Some((90, "out".into())));
-    assert_eq!(builder.reference[&first], Some((1, "out".into())));
+    assert_eq!(*builder.current_for_test(&first), Some((90, "out".into())));
+    assert_eq!(*builder.reference_for_test(&first), Some((1, "out".into())));
 }
 
 #[test]

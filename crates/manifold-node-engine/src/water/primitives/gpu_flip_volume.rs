@@ -11,7 +11,7 @@
 /// jumps at the side walls carry no divergence. Each triangle is sampled at
 /// its centroid. The free surface is the triangles inside the tank; every
 /// closing face sits past a wall.
-pub(crate) fn volume_and_area(triangles: impl Iterator<Item = [[f32; 3]; 3]>, min: [f64; 3], size: f64) -> (f64, f64) {
+pub fn volume_and_area(triangles: impl Iterator<Item = [[f32; 3]; 3]>, min: [f64; 3], size: f64) -> (f64, f64) {
     let inside = |centroid: &[f64; 3], axis: usize| (min[axis]..=min[axis] + size).contains(&centroid[axis]);
     triangles.fold((0.0, 0.0), |(volume, area), t| {
         let [a, b, c] = t.map(|p| p.map(f64::from));
@@ -36,25 +36,21 @@ pub(crate) fn volume_and_area(triangles: impl Iterator<Item = [[f32; 3]; 3]>, mi
 /// seeded packing makes `truth` exact: δ = (V₀ − truth) / A₀. The resting
 /// pool's skin (`gpu_flip_still_pool_keeps_its_meshed_volume`) checks the
 /// model on a second shape.
-pub(crate) struct VolumeDrift {
+pub struct VolumeDrift {
     truth: f64,
     skin: f64,
 }
 
 impl VolumeDrift {
-    pub(crate) fn new(first: (f64, f64), truth: f64) -> Self {
+    pub fn new(first: (f64, f64), truth: f64) -> Self {
         Self { truth, skin: (first.0 - truth) / first.1 }
     }
 
-    pub(crate) fn skin(&self) -> f64 {
+    pub fn skin(&self) -> f64 {
         self.skin
     }
 
-    #[cfg_attr(
-        not(feature = "water-race-probes"),
-        expect(dead_code, reason = "the race probes under water-race-probes read the drift per frame")
-    )]
-    pub(crate) fn drift(&self, (volume, area): (f64, f64)) -> f64 {
+    pub fn drift(&self, (volume, area): (f64, f64)) -> f64 {
         (volume - self.skin * area) / self.truth - 1.0
     }
 }

@@ -230,10 +230,10 @@ impl Chain {
 
 
 use crate::{graph::Graph, exec::execution_plan::ExecutionPlan, exec::effect_node::NodeInstanceId, exec::execution_plan::ResourceId};
-pub(crate) fn node_named(graph: &Graph, name: &str) -> NodeInstanceId {
+pub fn node_named(graph: &Graph, name: &str) -> NodeInstanceId {
     graph.nodes().find(|n| n.node_id.as_str() == name).map(|n| n.id).unwrap_or_else(|| panic!("no node {name}"))
 }
-pub(crate) fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
+pub fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
     let step = plan.steps().iter().find(|s| s.node == node).expect("node compiled");
     step.outputs.iter().find(|(name, _)| *name == port).map(|&(_, r)| r).expect("output port")
 }

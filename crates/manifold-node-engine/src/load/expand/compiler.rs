@@ -546,8 +546,8 @@ pub struct Builder<'a> {
     index: &'a FlatSceneIndex,
     registry: &'a PrimitiveRegistry,
     next_id: u32,
-    pub current: BTreeMap<EndpointKey, Option<PortAddress>>,
-    pub reference: BTreeMap<EndpointKey, Option<PortAddress>>,
+    current: BTreeMap<EndpointKey, Option<PortAddress>>,
+    reference: BTreeMap<EndpointKey, Option<PortAddress>>,
     written: BTreeSet<EndpointKey>,
     camera_anchors: BTreeMap<SceneNodeRef, EndpointKey>,
     contexts: BTreeMap<String, PortAddress>,
@@ -662,6 +662,17 @@ fn preflight_expansion(
 }
 
 impl Builder<'_> {
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn current_for_test(&self, key: &EndpointKey) -> &Option<PortAddress> { &self.current[key] }
+
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn reference_for_test(&self, key: &EndpointKey) -> &Option<PortAddress> { &self.reference[key] }
+
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn set_current_for_test(&mut self, key: EndpointKey, value: Option<PortAddress>) {
+        self.current.insert(key, value);
+    }
+
     #[cfg(any(test, feature = "testkit"))]
     #[doc(hidden)]
     pub fn for_test<'a>(

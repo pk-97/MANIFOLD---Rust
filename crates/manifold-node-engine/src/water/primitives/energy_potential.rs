@@ -17,8 +17,8 @@ use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::primitive::Primitive;
 
 /// FLIP's defaults, in J/kg.
-pub(crate) const MIN_ENERGY: f32 = 0.1;
-pub(crate) const MAX_ENERGY: f32 = 60.0;
+pub const MIN_ENERGY: f32 = 0.1;
+pub const MAX_ENERGY: f32 = 60.0;
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`,
 /// padded to 16 bytes.

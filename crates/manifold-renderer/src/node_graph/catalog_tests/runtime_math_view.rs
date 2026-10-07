@@ -722,7 +722,7 @@ fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
         let injection = manifold_node_engine::gpu::render_target::fail_allocation_after(stage);
         let result = runtime.prepare_resize(&device, 48, 64);
         drop(injection);
-        assert_eq!((runtime.width, runtime.height), (64, 48));
+        assert_eq!((runtime.width_for_test(), runtime.height_for_test()), (64, 48));
         for (id, buffer) in &original {
             let backend = runtime.backend_for_test();
             assert!(backend.array_buffer(backend.slot_for(*id).unwrap()).unwrap().ptr_eq(buffer));
@@ -734,7 +734,7 @@ fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
     }
     assert!(failures > 2, "must exercise parent and child allocation failures");
     assert_eq!(successes, 1, "bounded preparation must eventually succeed");
-    assert_eq!((runtime.width, runtime.height), (48, 64));
+    assert_eq!((runtime.width_for_test(), runtime.height_for_test()), (48, 64));
     for shared in manifold_node_engine::runtime::testkit::all_math_array_links_share_storage(&runtime) {
         assert!(shared);
     }

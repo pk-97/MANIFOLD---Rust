@@ -10,17 +10,17 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::GpuBuffer;
 use serde_json::{Value, json};
 
-use super::energy_potential::{MAX_ENERGY, MIN_ENERGY};
-use super::gpu_flip_preset::WaterScene;
-use crate::testkit::liquid_surface::{Harness, read};
-use crate::testkit::whitewater_scene::{whitewater_render_def, with_tick_probe};
-use super::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
-use crate::gpu::gpu_encoder::GpuEncoder;
-use crate::water::fluid::TICK;
-use crate::water::fluid_particles::FluidParticle;
-use crate::water::liquid::grid::face_len;
-use crate::scene::transform::Transform;
-use crate::water::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
+use manifold_node_engine::water::primitives::energy_potential::{MAX_ENERGY, MIN_ENERGY};
+use manifold_node_engine::water::primitives::gpu_flip_preset::WaterScene;
+use manifold_node_engine::testkit::liquid_surface::{Harness, read};
+use manifold_node_engine::testkit::whitewater_scene::{whitewater_render_def, with_tick_probe};
+use manifold_node_engine::water::primitives::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::water::fluid::TICK;
+use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::water::liquid::grid::face_len;
+use manifold_node_engine::scene::transform::Transform;
+use manifold_node_engine::water::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
 
 const GOLDEN: &str = "whitewater_tick_golden.txt";
 const CANDIDATE: &str = "whitewater_tick_golden.candidate.txt";
@@ -32,7 +32,7 @@ const BASE: &str = "1a7fe1437";
 
 
 
-use crate::water::liquid::conformance::json_node_mut;
+use manifold_node_engine::water::liquid::conformance::json_node_mut;
 
 /// The shipped def with these whitewater params and, when given, this
 /// whitewater budget (the card's node, which sizes stage and boundary alike).
@@ -69,7 +69,7 @@ pub(super) fn all_emitters(budget: Option<f64>) -> EffectGraphDef {
 
 
 pub(super) fn packed_scene_fingerprints() {
-    use crate::water::primitives::gpu_flip_preset::with_whitewater_axes;
+    use manifold_node_engine::water::primitives::gpu_flip_preset::with_whitewater_axes;
     let def = with_tick_probe(whitewater_render_def(WaterScene::dam_break(64)));
     let mut packed = Vec::new();
     let mut axes = Vec::new();
@@ -122,7 +122,7 @@ fn compaction_moves_a_survivor() -> (usize, u32) {
         obstacle_source: None,
         particles: &particles,
         solid: &solid,
-        faces: super::whitewater_step::FaceSource::Axes([&faces[0], &faces[1], &faces[2]]),
+        faces: manifold_node_engine::water::primitives::whitewater_step::FaceSource::Axes([&faces[0], &faces[1], &faces[2]]),
         level_set: &distance,
         distance: Some(&distance),
     };
@@ -250,4 +250,4 @@ fn whitewater_tick_state_matches_golden() {
     assert!(moved.is_empty(), "{} of {} fingerprints moved; first:\n{}", moved.len(), lines.len(), moved.iter().take(10).cloned().collect::<Vec<_>>().join("\n"));
 }
 
-use crate::testkit::whitewater_fingerprints::*;
+use manifold_node_engine::testkit::whitewater_fingerprints::*;

@@ -12,7 +12,7 @@ use manifold_node_engine::water::primitives::face_grid_scenes::{DIVISOR_ROW, mat
 use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
 use manifold_node_engine::water::primitives::matter_face_component::MatterFaceComponent;
 use manifold_node_engine::water::primitives::gpu_flip_preset::WaterScene;
-use manifold_node_engine::water::primitives::gpu_flip_scene_tests::Run;
+use crate::water::primitives::gpu_flip_scene_tests::Run;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::water::liquid::grid::{face_coords, face_dims, face_index, face_len};
 use manifold_node_engine::water::liquid::lattice::PADDING_NODES;

@@ -59,7 +59,7 @@ use serde_json::{Value, json};
             let geometry = scene.geometry();
             let outputs = geometry.outputs();
             let read = |name: &str| outputs.iter().find(|(port, _)| *port == name).unwrap().1;
-            let surface = geometry.setup.lattice.surface();
+            let surface = geometry.setup_for_test().lattice_for_test().surface();
             let def = water_def(scene);
             let id = |name: &str| def.nodes.iter().find(|n| n.node_id.as_str() == name).unwrap().id;
             let domain = id("domain");
@@ -78,8 +78,8 @@ use serde_json::{Value, json};
                 && w.from_port == "solid" && w.to_port == "solid"));
             // Frame's surface() uses the same source rule; the simulation
             // lattice continues to carry its original cells and padding.
-            assert_eq!(geometry.setup.lattice.cells(), [resolution as u32; 3]);
-            assert_eq!(geometry.setup.lattice.nodes(), [resolution as u32 + 7; 3]);
+            assert_eq!(geometry.setup_for_test().lattice_for_test().cells(), [resolution as u32; 3]);
+            assert_eq!(geometry.setup_for_test().lattice_for_test().nodes(), [resolution as u32 + 7; 3]);
         }
     }
 
@@ -509,7 +509,7 @@ use serde_json::{Value, json};
                 assert_eq!(node.params.get("sheet_fill_rate"), Some(&ParamValue::Float(rate)));
                 let geometry = gpu_flip_geometry(|key, default| node.params.get(key)
                     .map(manifold_node_engine::snapshot::param_default_to_f32).unwrap_or(default), None, None).unwrap();
-                assert_eq!(geometry.sheet_fill_rate, rate);
+                assert_eq!(geometry.sheet_fill_rate_for_test(), rate);
             }
         }
     }

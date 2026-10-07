@@ -99,8 +99,8 @@ use manifold_core::{Beats, Seconds};
         assert!(!pairs.is_empty(), "the box and the liquid are one coupled scene");
         let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime).expect("the liquid samples its field per tick");
         for pair in pairs {
-            assert!(mask[pair.fluid_step], "the liquid samples");
-            assert!(mask[pair.rigid_step], "its owned world's scene samples per tick");
+            assert!(mask[pair.fluid_step_for_test()], "the liquid samples");
+            assert!(mask[pair.rigid_step_for_test()], "its owned world's scene samples per tick");
         }
     }
 

@@ -168,13 +168,13 @@ inventory::collect!(PresetAssetsRoot);
 #[doc(hidden)]
 pub struct KindDirs {
     /// Human label for log + panic messages ("effect" / "generator").
-    pub label: &'static str,
+    label: &'static str,
     /// Sub-dir under the packaged-bundle `Resources/presets/` and under
     /// the user `presets/` root (e.g. `"effects"`).
-    pub bundle_subdir: &'static str,
+    bundle_subdir: &'static str,
     /// Sub-dir under the dev workspace assets root
     /// (e.g. `"effect-presets"`).
-    pub dev_subdir: &'static str,
+    dev_subdir: &'static str,
 }
 
 #[doc(hidden)]
@@ -693,6 +693,9 @@ pub fn build_catalog_with_overlays(
         } else {
             merged.push((id, Arc::from(derived)));
         }
+        if disk_ids.contains("BlobTrackingV2") {
+            disk_ids.insert(Arc::from("MaskBlob"));
+        }
     }
 
     // Browser provenance is captured alongside the immutable catalog. Disk
@@ -916,6 +919,15 @@ pub fn start_preset_watcher() {
             }
         })
         .expect("failed to spawn preset-watcher thread");
+}
+
+#[cfg(any(test, feature = "testkit"))]
+impl KindDirs {
+    pub fn for_test(label: &'static str, bundle_subdir: &'static str, dev_subdir: &'static str) -> Self {
+        Self { label, bundle_subdir, dev_subdir }
+    }
+    pub fn bundle_subdir_for_test(&self) -> &'static str { self.bundle_subdir }
+    pub fn dev_subdir_for_test(&self) -> &'static str { self.dev_subdir }
 }
 
 #[cfg(test)]

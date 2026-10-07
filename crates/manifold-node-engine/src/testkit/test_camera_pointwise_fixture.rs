@@ -32,7 +32,7 @@
 //! with `PrimitiveRegistry::with_builtin().register("test.camera_pointwise",
 //! ...)` rather than relying on global auto-discovery.
 
-#![cfg(test)]
+#![cfg(any(test, feature = "testkit"))]
 
 use std::borrow::Cow;
 use std::sync::OnceLock;

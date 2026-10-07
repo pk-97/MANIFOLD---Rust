@@ -13,16 +13,16 @@ use crate::validation::GraphError;
 /// One resolved pair of graph nodes that must be evaluated as one scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoupledScene {
-    pub fluid: NodeInstanceId,
-    pub rigid: NodeInstanceId,
+    pub(crate) fluid: NodeInstanceId,
+    pub(crate) rigid: NodeInstanceId,
     pub(crate) colliders: RigidImpulseTargets,
 }
 
 /// Final execution-step positions for one coupled scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoupledSceneSteps {
-    pub fluid_step: usize,
-    pub rigid_step: usize,
+    pub(crate) fluid_step: usize,
+    pub(crate) rigid_step: usize,
     pub(crate) colliders: RigidImpulseTargets,
 }
 
@@ -219,6 +219,17 @@ fn active_nodes(
     }
 
     crate::validation::reachable_from_liveness_roots(graph)
+}
+
+#[cfg(any(test, feature = "testkit"))]
+impl CoupledScene {
+    pub fn fluid_for_test(&self) -> NodeInstanceId { self.fluid }
+    pub fn rigid_for_test(&self) -> NodeInstanceId { self.rigid }
+}
+#[cfg(any(test, feature = "testkit"))]
+impl CoupledSceneSteps {
+    pub fn fluid_step_for_test(&self) -> usize { self.fluid_step }
+    pub fn rigid_step_for_test(&self) -> usize { self.rigid_step }
 }
 
 #[cfg(test)]
