@@ -127,6 +127,7 @@ impl PresetRuntime {
         // Editor fusion changes execution topology, not the authored simulation.
         // Compare the effective unfused definition when carrying physics state.
         let content_key = crate::node_graph::freeze::install::def_content_key(&render_def);
+        #[cfg(feature = "gpu-proofs")]
         let physics_sources = super::physics_sources::prepare(
             &render_def,
             authoring.as_ref().map_or(&render_def, |(owner, ..)| owner),
@@ -154,6 +155,7 @@ impl PresetRuntime {
         };
         let impulse_routes = authoring.as_ref().map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice());
         let mut runtime = Self::from_render_def(render_def, registry, manifest, &mesh_rules, impulse_routes)?;
+        #[cfg(feature = "gpu-proofs")]
         runtime.apply_physics_source_graphs(physics_sources);
         runtime.effect_nodes[0].def_content_key = content_key;
         if let Some(view) = &fused {

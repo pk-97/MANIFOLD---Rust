@@ -320,10 +320,11 @@ fn physics_carry_rejects_setup_changes_and_output_resize() {
     assert_ne!(frame(&mut resized, 0.5), fallen);
 }
 
+#[cfg(feature = "gpu-proofs")]
 #[test]
 fn physics_carry_matches_owners_across_actual_fused_topology() {
     let mut def: EffectGraphDef = serde_json::from_str(include_str!(
-        "../../assets/generator-presets/WaterBasin.json"
+        "../../tests/fixtures/cpu-flip/WaterBasin.json"
     ))
     .unwrap();
     // A fusible image segment after the scene changes the execution plan,
@@ -350,10 +351,18 @@ fn physics_carry_matches_owners_across_actual_fused_topology() {
                 to_port: to_port.into(),
             });
     }
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let mut prior =
         PresetRuntime::from_def_for_render(def.clone(), &registry, None, false).unwrap();
-    let mut fused = PresetRuntime::from_def_for_render(def, &registry, None, true).unwrap();
+    // The product fusion cache excludes retired nodes; compile this reference
+    // graph explicitly with the proof registry instead.
+    let view = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry)
+        .expect("reference fixture fuses");
+    let mut fused = PresetRuntime::from_render_def(
+        (*view.def).clone(), &registry, None, &view.mesh_rules, &[],
+    ).unwrap();
+    fused.effect_nodes[0].def_content_key = prior.effect_nodes[0].def_content_key;
+    fused.effect_nodes[0].bound.fused_retarget = view.retarget;
     assert!(
         fused.graph.nodes().count() < prior.graph.nodes().count(),
         "fixture must really fuse"

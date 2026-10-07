@@ -1,8 +1,8 @@
 # Fluid engine integration — creative scene physics in Manifold
 
-<!-- index: FLIP integration through shared manifold-physics forces, scene authoring, timed controls, rigid-body interaction, baking and export. -->
+<!-- index: Historical CPU FLIP integration and reference-engine contract; product liquids use GPU FLIP. -->
 
-**Status:** IN PROGRESS · 2026-09-27 · Codex. Shared native force adapters, Add Fluid authoring, and the P3 mesh bridge are implemented locally. Typed mesh roles reach the fluid worker and renderer, and grouped scene objects can receive fluid roles. The shared continuous-field graph bridge and Scene Force authoring are implemented locally with focused CPU/UI and Metal verification. P4 geometry authoring, timed routing and remaining acceptance are in progress. P8b has verified native mass-aware pressure, mesh attribution and joint viscosity, now connected through owner-driven FLIP substeps to real Box3D bodies in buoyancy, submerged contact and sustained viscosity CPU fixtures. Connected scene playback, authored liquid density and shared World gravity/speed/reset are implemented with focused CPU verification. Ordinary objects can explicitly enable Physics or acquire an emitter role after World creation, with focused UI and native scene proofs. Liquid-only off-centre impulses transfer angular motion in the shared worker. Domain override UI, sustained authored/rendered interaction acceptance and paired takes remain unfinished.
+**Status:** REFERENCE ONLY · 2026-10-07. CPU FLIP is retired from product playback and baking. Native behavior and scene harnesses remain for GPU FLIP proofs. Dependency separation is deferred; see LIQUID_SOLVER_SEAM_DESIGN.md.
 **Prerequisites:** existing CPU FLIP work at `3683a086d66bd5edf68328a7fdb427515258292b` on `codex/flip-fluids-engine`; main through `9d76e803e` and collision work through `d2bc03f50` are integrated locally. Collision UI gaps are tracked in BUG-vglg.4 (preparation controls) and BUG-vglg.5 (compound-child modifier addressing).
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6. Peter requested moving toward landing on 2026-09-28. Freeze feature expansion for the first landing: integrate latest main, verify live scene authoring and sustained two-way coupling, resolve release blockers, and run the required landing gate. After the first landing and push, Peter has prioritized scene setup → higher-quality Bake → normal export, including advanced quality workflows. Custom fields and further generalisation follow that usable workflow. These remain required work, not prerequisites for landing the working live integration. Existing unsupported recording paths must remain explicit; this landing does not complete P9–P11 or the full implementation goal.
 
@@ -15,6 +15,12 @@ Peter, 2026-09-27: “please include two-way coupling as part of this implementa
 The first hands-on milestone is **P2: add and edit a fluid in an existing scene**. Complete the later phases for arbitrary scene geometry, shared forces, musical control and repeatable high-quality export. Do not postpone that first milestone until every advanced feature is finished.
 
 Companions: [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md) records the current prototype contract; [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) governs graph composition; [MANIFOLD_GPU_ARCHITECTURE.md](MANIFOLD_GPU_ARCHITECTURE.md) governs GPU access; [WIDGET_TREE_DESIGN.md](WIDGET_TREE_DESIGN.md) governs the existing parameter UI.
+
+## Product retirement boundary
+
+The CPU presets `WaterBasin`, `WaterDamBreak`, `WaterDamBreakGpu`, and `HoneyDamBreak`, and the node `node.fluid_surface`, are absent from the product catalog. Required graphs live in `crates/manifold-renderer/tests/fixtures/cpu-flip/`; native scene stepping and the CPU scene template require `gpu-proofs`. Saved CPU graphs and parameters are preserved with explicit load notices; an affected graph never falls back to a canonical preset.
+
+`manifold-fluids` remains a normal dependency for shared whitewater records, mesh validation, and the native whitewater lifecycle used by GPU liquids. The dependency cut belongs to the later water crate boundary. The integration plan below is historical except for shared rigid, clock, and liquid contracts.
 
 ## 1. Audit — what exists
 
@@ -36,7 +42,7 @@ Verified 2026-09-26 against the worktree baseline above. These are source findin
 | Trigger and modulation routes | `crates/manifold-core/src/audio_trigger.rs` (`TriggerFireMode`); renderer `primitives/trigger_gate.rs`, `primitives/trigger_ease_to.rs`; `crates/manifold-playback/src/modulation.rs` | Reuse clip-edge/transient choices, envelopes and continuous modulation. Preserve every event between simulation ticks; a display-frame boolean is insufficient. |
 | Offline audio | `crates/manifold-app/src/offline_audio_mod.rs` (`OfflineAudioModDriver`); `content_export.rs` | Existing analysis can be reused. Feeding simulation controls independently of output FPS still needs implementation. |
 | Existing force nodes | Renderer `primitives/curl_slope_force_3d.rs`, `radial_burst_force_field.rs`, `apply_radial_burst_3d_to_particles.rs`, `field_combine.rs` | Not a shared CPU 3D field API: they include texture/particle-specific payloads, 2D fields and a fixed four-zone burst. Reuse suitable mathematics, not those restrictions. |
-| Rendering and examples | Renderer `assets/generator-presets/WaterBasin.json`, `WaterDamBreak.json`, `HoneyDamBreak.json`; `primitives/fluid_surface.rs` | Ordinary meshes, PBR materials and whitewater already render. Preserve them as editable examples; they are not the product's only scene configurations. |
+| Rendering and examples | Renderer `tests/fixtures/cpu-flip/WaterBasin.json`, `WaterDamBreak.json`, `WaterDamBreakGpu.json`; proof-only `primitives/fluid_surface.rs` | Retained CPU reference fixtures for mesh, PBR and whitewater proofs. HoneyDamBreak is retired without a reference fixture. Product scenes use GPU FLIP. |
 
 Observed baseline: the cinematic captures established useful water/honey output. Extremely coarse 12³ probes kept approximately real time at 30/60 display FPS on this busy machine, but lost substantial shape detail. Neither observation establishes arbitrary-scene performance or production app acceptance. The existing rendering includes screen-space approximations; this plan does not promise physically complete underwater optics or caustics.
 

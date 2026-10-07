@@ -43,7 +43,7 @@ fn viewport_session_fluid_domain_draft_redraws_without_rebuilding() {
     use manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines;
 
     let h = harness::shared();
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let def: EffectGraphDef = serde_json::from_str(&scene_json()).unwrap();
     let mut frame_ctx = ctx(h);
     frame_ctx.width = 640;
@@ -167,7 +167,7 @@ fn shared_scene_viewport_navigates_without_advancing_fluid_or_changing_show() {
     use manifold_renderer::render_target::RenderTarget;
 
     let h = harness::shared();
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     // Keep the diagnostic scalar ports live through ordinary graph wires;
     // the executor intentionally does not allocate unconsumed outputs.
     let mut def = fluid_session_json();
@@ -286,7 +286,7 @@ fn shared_scene_viewport_does_not_activate_a_hidden_fluid_branch() {
     use manifold_renderer::render_target::RenderTarget;
 
     let h = harness::shared();
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let mut def = fluid_session_json();
     def["nodes"].as_array_mut().unwrap().push(serde_json::json!({
         "id":10, "nodeId":"active_scene", "typeId":"node.render_scene",
@@ -426,7 +426,7 @@ fn viewport_session_refreshes_effective_controls_and_fluid_bounds() {
     use manifold_renderer::node_graph::physics::PhysicsStepScope;
 
     let h = harness::shared();
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let def: EffectGraphDef = serde_json::from_value(fluid_session_json()).unwrap();
     let mut frame_ctx = ctx(h);
     frame_ctx.width = 320;

@@ -1,21 +1,30 @@
 //! The rigid participant travels through the existing fluid worker handoff.
 //! Transport mapping, cancellation and publication remain owned by FluidRuntime.
 
+#[cfg(feature = "gpu-proofs")]
 use std::sync::Arc;
 
+#[cfg(feature = "gpu-proofs")]
 use manifold_physics::input::{InputHistory, Timestamped};
-use manifold_physics::{Seconds, TickStamp};
+use manifold_physics::TickStamp;
+#[cfg(feature = "gpu-proofs")]
+use manifold_physics::Seconds;
 
-use crate::node_graph::physics::{MAX_BODIES, RigidBody, RigidImpulseTargets, RigidSceneInputs};
+use crate::node_graph::physics::{MAX_BODIES, RigidImpulseTargets, RigidSceneInputs};
 use crate::node_graph::transform::Transform;
 
+#[cfg(feature = "gpu-proofs")]
 use super::HISTORY_CAPACITY;
+#[cfg(feature = "gpu-proofs")]
+use crate::node_graph::physics::RigidBody;
 
 mod native;
 pub(crate) use native::Layout;
+#[cfg(feature = "gpu-proofs")]
 pub(super) use native::Native;
 
 #[cfg(test)]
+#[cfg(feature = "gpu-proofs")]
 mod tests;
 
 /// Resolved rigid inputs for one fluid domain. The same rigid world supplies
@@ -66,12 +75,14 @@ impl Default for CoupledRigidFrame {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(feature = "gpu-proofs")]
 pub(super) struct Setup {
     pub initial: RigidSceneInputs,
     pub colliders: RigidImpulseTargets,
     pub density: f64,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Setup {
     pub fn validate_impulse_targets(&self, targets: RigidImpulseTargets) -> Result<(), String> {
         if targets.is_empty() {
@@ -129,6 +140,7 @@ impl Setup {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 fn same_body_geometry(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bool {
     match (left, right) {
         (None, None) => true,
@@ -143,6 +155,7 @@ fn same_body_geometry(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bo
 }
 
 #[cfg(test)]
+#[cfg(feature = "gpu-proofs")]
 mod geometry_tests {
     use super::*;
     use crate::node_graph::physics::ColliderGeometry;
@@ -237,24 +250,28 @@ mod geometry_tests {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(feature = "gpu-proofs")]
 pub(super) struct Sample {
     pub sequence: u64,
     pub time: Seconds,
     pub inputs: RigidSceneInputs,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Timestamped for Sample {
     fn time(&self) -> Seconds {
         self.time
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 pub(super) struct Request {
     pub setup: Arc<Setup>,
     pub history: Vec<Sample>,
     pub output: CoupledRigidFrame,
 }
 
+#[cfg(feature = "gpu-proofs")]
 pub(super) struct Runtime {
     setup: Arc<Setup>,
     history: InputHistory<Sample>,
@@ -264,6 +281,7 @@ pub(super) struct Runtime {
     sequence: u64,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Runtime {
     pub fn new(inputs: CoupledRigidInputs<'_>) -> Self {
         Self {

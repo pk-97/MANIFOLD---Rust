@@ -222,6 +222,31 @@ pub fn load_project_from_json_with(
     // toast surfaces them (CINEMATIC_SCENE_TAIL D3's I5).
     project.load_report.migration_notes = crate::migrations::take_migration_notes();
 
+    // CPU FLIP is retired from the product path, but projects still own their
+    // authored graph topology and parameter values. Surface one explicit load
+    // notice for affected projects so the app can explain why those graphs no
+    // longer produce a live CPU simulation instead of silently substituting a
+    // canonical preset.
+    if project_contains_retired_cpu_flip_content(&project) {
+        let node_identities = project_retired_cpu_flip_node_identities(&project);
+        let node_detail = if node_identities.is_empty() {
+            format!(
+                "{} nodes",
+                manifold_core::retired_cpu_flip::RETIRED_CPU_FLIP_NODE_TYPE_ID
+            )
+        } else {
+            format!(
+                "nested {} nodes [{}]",
+                manifold_core::retired_cpu_flip::RETIRED_CPU_FLIP_NODE_TYPE_ID,
+                node_identities.join(", ")
+            )
+        };
+        project.load_report.migration_notes.push(format!(
+            "CPU FLIP retirement: authored graphs and parameters using the retired presets [{}] or {node_detail} were preserved; CPU FLIP is unavailable for live playback.",
+            manifold_core::retired_cpu_flip::RETIRED_CPU_FLIP_PRESET_IDS.join(", "),
+        ));
+    }
+
     // Install the file's own embedded presets NOW — typed, post-parse. The
     // caller (the app) installs them into the catalog overlay + core
     // definition registry.
@@ -252,36 +277,133 @@ pub fn load_project_from_json_with(
     Ok(project)
 }
 
+fn project_contains_retired_cpu_flip_content(project: &Project) -> bool {
+    let graph_is_retired = |generator_type: &manifold_core::PresetTypeId,
+                            graph: &manifold_core::effect_graph_def::EffectGraphDef| {
+        manifold_core::retired_cpu_flip::preserve_authored_cpu_flip_graph(generator_type, graph)
+    };
+
+    if project.embedded_presets.iter().any(|preset| {
+        preset.id().is_some_and(|id| {
+            manifold_core::retired_cpu_flip::is_retired_cpu_flip_preset(id)
+        }) || manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(&preset.def)
+    }) {
+        return true;
+    }
+
+    if project.settings.master_effects.iter().any(|effect| {
+        effect.graph.as_ref().is_some_and(|graph| {
+            manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(graph)
+        })
+    }) {
+        return true;
+    }
+
+    project.timeline.layers.iter().any(|layer| {
+        let generator_type_is_retired =
+            manifold_core::retired_cpu_flip::is_retired_cpu_flip_preset(layer.generator_type());
+        let generator_graph_is_retired = layer
+            .gen_params()
+            .and_then(|params| params.graph.as_ref())
+            .is_some_and(|graph| graph_is_retired(layer.generator_type(), graph));
+        let generator = generator_type_is_retired || generator_graph_is_retired;
+        let effects = layer.effects.as_ref().is_some_and(|effects| {
+            effects.iter().any(|effect| {
+                effect.graph.as_ref().is_some_and(|graph| {
+                    manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(graph)
+                })
+            })
+        });
+        let clip_effects = layer.clips.iter().any(|clip| {
+            clip.effects.iter().any(|effect| {
+                effect.graph.as_ref().is_some_and(|graph| {
+                    manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(graph)
+                })
+            })
+        });
+        generator || effects || clip_effects
+    })
+}
+
+fn project_retired_cpu_flip_node_identities(project: &Project) -> Vec<String> {
+    let mut identities = Vec::new();
+    let mut collect = |owner: String, graph: &manifold_core::effect_graph_def::EffectGraphDef| {
+        for identity in manifold_core::retired_cpu_flip::retired_cpu_flip_node_identities(graph) {
+            identities.push(format!("{owner}/{identity}"));
+        }
+    };
+
+    for (index, preset) in project.embedded_presets.iter().enumerate() {
+        collect(format!("embeddedPreset[{index}]"), &preset.def);
+    }
+    for (index, effect) in project.settings.master_effects.iter().enumerate() {
+        if let Some(graph) = effect.graph.as_ref() {
+            collect(format!("masterEffect[{index}]"), graph);
+        }
+    }
+    for (layer_index, layer) in project.timeline.layers.iter().enumerate() {
+        if let Some(graph) = layer.generator_graph() {
+            collect(format!("layer[{layer_index}]/generator"), graph);
+        }
+        if let Some(effects) = layer.effects.as_ref() {
+            for (effect_index, effect) in effects.iter().enumerate() {
+                if let Some(graph) = effect.graph.as_ref() {
+                    collect(format!("layer[{layer_index}]/effect[{effect_index}]"), graph);
+                }
+            }
+        }
+        for (clip_index, clip) in layer.clips.iter().enumerate() {
+            for (effect_index, effect) in clip.effects.iter().enumerate() {
+                if let Some(graph) = effect.graph.as_ref() {
+                    collect(
+                        format!("layer[{layer_index}]/clip[{clip_index}]/effect[{effect_index}]"),
+                        graph,
+                    );
+                }
+            }
+        }
+    }
+    identities
+}
+
 fn migrate_phong_graphs(project: &mut Project) {
-    let migrate = |graph: &mut manifold_core::effect_graph_def::EffectGraphDef| {
-        manifold_core::phong_migration::migrate_phong_to_pbr(graph);
+    let migrate = |graph: &mut manifold_core::effect_graph_def::EffectGraphDef,
+                   generator_type: Option<&manifold_core::PresetTypeId>| {
+        let is_retired = generator_type.is_some_and(|id| {
+            manifold_core::retired_cpu_flip::is_retired_cpu_flip_preset(id)
+        }) || manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(graph);
+        if !is_retired {
+            manifold_core::phong_migration::migrate_phong_to_pbr(graph);
+        }
     };
 
     for preset in &mut project.embedded_presets {
-        migrate(&mut preset.def);
+        let preset_id = preset.id().cloned();
+        migrate(&mut preset.def, preset_id.as_ref());
     }
     for effect in &mut project.settings.master_effects {
         if let Some(graph) = effect.graph.as_mut() {
-            migrate(graph);
+            migrate(graph, None);
         }
     }
     for layer in &mut project.timeline.layers {
+        let generator_type = layer.generator_type().clone();
         if let Some(generator) = layer.gen_params_mut()
             && let Some(graph) = generator.graph_def_mut().as_mut()
         {
-            migrate(graph);
+            migrate(graph, Some(&generator_type));
         }
         if let Some(effects) = layer.effects.as_mut() {
             for effect in effects {
                 if let Some(graph) = effect.graph.as_mut() {
-                    migrate(graph);
+                    migrate(graph, None);
                 }
             }
         }
         for clip in &mut layer.clips {
             for effect in &mut clip.effects {
                 if let Some(graph) = effect.graph.as_mut() {
-                    migrate(graph);
+                    migrate(graph, None);
                 }
             }
         }
@@ -454,6 +576,104 @@ impl std::fmt::Display for LoadError {
 }
 
 impl std::error::Error for LoadError {}
+
+#[cfg(test)]
+mod retired_cpu_flip_compat_tests {
+    use super::*;
+    use manifold_core::effect_graph_def::EffectGraphDef;
+    use manifold_core::layer::Layer;
+    use manifold_core::PresetTypeId;
+
+    fn retired_graph() -> EffectGraphDef {
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "nodes": [{
+                "id": 1,
+                "nodeId": "retired-group",
+                "typeId": "group",
+                "handle": "retired-group",
+                "group": {
+                    "interface": {"inputs": [], "outputs": [], "params": []},
+                    "nodes": [{
+                        "id": 2,
+                        "nodeId": "retired-fluid",
+                        "typeId": manifold_core::retired_cpu_flip::RETIRED_CPU_FLIP_NODE_TYPE_ID,
+                        "handle": "fluid-domain",
+                        "params": {
+                            "resolution": {"type": "Float", "value": 0.75},
+                            "fillHeight": {"type": "Float", "value": 0.42}
+                        }
+                    }],
+                    "wires": []
+                }
+            }],
+            "wires": []
+        }))
+        .expect("retired graph fixture deserializes")
+    }
+
+    #[test]
+    fn retired_graph_loads_with_notice_and_survives_save_reload() {
+        let graph = retired_graph();
+        let graph_bytes = serde_json::to_string(&graph).unwrap();
+        let mut project = Project::default();
+        let mut layer = Layer::new_generator(
+            "Retired water".to_string(),
+            PresetTypeId::new("WaterBasin"),
+            0,
+        );
+        layer.gen_params_or_init().graph = Some(graph);
+        project.timeline.layers.push(layer);
+
+        let root = std::env::temp_dir().join(format!(
+            "manifold-retired-cpu-flip-{}",
+            std::process::id()
+        ));
+        let path = root.join("retired.manifold");
+        crate::saver::save_project(&mut project, &path, None, false)
+            .expect("retired project saves");
+        let loaded = load_project(&path).expect("retired project loads");
+        let notice = loaded.load_report.human_lines().join("\n");
+        for retired_id in manifold_core::retired_cpu_flip::RETIRED_CPU_FLIP_PRESET_IDS {
+            assert!(notice.contains(retired_id), "notice omitted {retired_id}");
+        }
+        assert!(notice.contains("layer[0]/generator/retired-group/retired-fluid"));
+        assert!(notice.contains(
+            manifold_core::retired_cpu_flip::RETIRED_CPU_FLIP_NODE_TYPE_ID
+        ));
+
+        let mut loaded = loaded;
+        crate::saver::save_project(&mut loaded, &path, None, false)
+            .expect("re-saved retired project saves");
+        let reopened = load_project(&path).expect("re-saved retired project loads");
+        let reopened_graph = reopened.timeline.layers[0]
+            .generator_graph()
+            .expect("authored graph remains attached");
+        assert_eq!(serde_json::to_string(reopened_graph).unwrap(), graph_bytes);
+        assert_eq!(
+            reopened.timeline.layers[0].generator_type(),
+            &PresetTypeId::new("WaterBasin")
+        );
+        std::fs::remove_dir_all(root).expect("retired fixture cleanup");
+    }
+
+    #[test]
+    fn ordinary_generator_does_not_get_retirement_notice() {
+        let mut project = Project::default();
+        project.timeline.layers.push(Layer::new_generator(
+            "Ordinary".to_string(),
+            PresetTypeId::new("Plasma"),
+            0,
+        ));
+        let source = serde_json::to_string(&project).unwrap();
+        let loaded = load_project_from_json(&source).expect("ordinary project loads");
+        assert!(loaded
+            .load_report
+            .human_lines()
+            .iter()
+            .all(|line| !line.contains("CPU FLIP retirement")));
+    }
+}
 
 #[cfg(test)]
 mod legacy_clip_trigger_migration_tests {

@@ -81,7 +81,8 @@ table! {
     "node.hdri_source" => NodeFileLoad::File(AssetFamily::Hdri),
     // A folder of still images, copied as a tree.
     "node.image_folder" => NodeFileLoad::Folder(AssetFamily::Images),
-    // A fluid simulation take/cache directory, copied as a tree.
+    // Preserve retired CPU FLIP cache assets when collecting an existing project.
+    // This compatibility entry does not register the retired solver.
     FLIP_DOMAIN_TYPE_ID => NodeFileLoad::Folder(AssetFamily::Physics),
 }
 

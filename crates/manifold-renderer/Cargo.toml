@@ -166,7 +166,7 @@ required-features = ["gpu-proofs"]
 # deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,
 # every `mod gpu_tests`, the `gpu_proofs` integration binary above, and the
 # counters and error tap the liquid conformance suite reads.
-gpu-proofs = ["manifold-gpu/gpu-proofs"]
+gpu-proofs = ["manifold-gpu/gpu-proofs", "manifold-editing/gpu-proofs"]
 # Bounded dynamic-RT timing is opt-in, separate from correctness gates.
 rt-perf-proofs = ["gpu-proofs"]
 # GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.
@@ -182,3 +182,7 @@ water-race-probes = ["gpu-proofs", "fluid-perf-proofs", "manifold-fluids/face-or
 whitewater-oracle = ["gpu-proofs", "manifold-fluids/whitewater-oracle"]
 [lints]
 workspace = true
+
+[[example]]
+name = "fluid_capture"
+required-features = ["gpu-proofs"]

@@ -1827,6 +1827,57 @@ def review_cases():
          'mod first {\n#![cfg(unix)]\nuse old::group::A;\n}\nmod second {\n#![cfg(windows)]\nuse old::group::B;\n}\n',
          'mod first {\n#![cfg(windows)]\nuse new::group::A;\n}\nmod second {\n#![cfg(unix)]\nuse new::group::B;\n}\n',
          ('old::group::=new::group::',))
+    # BUG-48557: second-review false accepts must fail closed.
+    common = 'mod group;\nmod shadow { pub mod other { pub const VALUE: u32 = 2; pub const B: u32 = 2; } }\nuse crate::shadow as app;\n'
+    for name in ('shadow_alias', 'shadow_alias_rename', 'glob_alias_rename'):
+        glob = name == 'glob_alias_rename'
+        old_body = 'use crate::group::*;\nB' if glob else 'crate::group::VALUE'
+        new_body = 'use app::other::*;\nB' if glob else 'app::other::VALUE'
+        prefix = 'const B: u32 = 3;\n' if glob else ''
+        before = BASE | {P: common + prefix + 'pub fn run() -> u32 {\n' + old_body + '\n}\n',
+                         'crates/app/src/group.rs': 'pub const VALUE: u32 = 1;\n'}
+        if name == 'shadow_alias':
+            same(name, common + 'pub fn run() -> u32 { crate::group::VALUE }\n',
+                 common + 'pub fn run() -> u32 { app::other::VALUE }\n',
+                 extra={'crates/app/src/group.rs': 'pub const VALUE: u32 = 1;\n'})
+            continue
+        after = {P: common.replace('mod group;', 'mod other;') + prefix + 'pub fn run() -> u32 {\n' + new_body + '\n}\n',
+                 'crates/app/src/other.rs': 'pub const VALUE: u32 = 1;\n'}
+        deleted = ('crates/app/src/group.rs',) if name != 'shadow_alias' else ()
+        probe(name, before, after, ('app::group::=app::other::',), deleted)
+    for name, expression in (
+            ('include_raw_str', 'include_str!(r"../a.txt")'),
+            ('include_raw_bytes', 'include_bytes!(r#"../a.txt"#)'),
+            ('include_braces', 'include_str!{"../a.txt"}'),
+            ('include_brackets', 'include_str!["../a.txt"]'),
+            ('include_space', 'include_str !("../a.txt")'),
+            ('include_concat', 'include_str!(concat!("../", "a.txt"))')):
+        ty = '&[u8]' if name == 'include_raw_bytes' else '&str'
+        body = f'pub const A: {ty} = {expression};\n'
+        move(name, {'crates/old/a.txt': 'ONE', 'crates/new/a.txt': 'TWO'},
+             bodyold=body, bodynew=body)
+    build = ('mod native_source_identity {\n'
+             'pub fn emit_source_identity(_: &str, sources: &[&str], _: &str) {\n'
+             'println!("cargo:rustc-env=LABEL={}", sources[0]);\n}\n}\n'
+             'fn main() { native_source_identity::emit_source_identity(".", &[\n'
+             '    "src/worker.rs",\n], "LABEL"); }\n')
+    move('build_shadow_consumer', {'crates/old/build.rs': build},
+         {'crates/old/build.rs': build.replace('"src/worker.rs"', '"../new/src/worker.rs"')})
+    for name, body in (
+            ('attribute_same_header', 'mod a {\n#[cfg(unix)]\npub const VALUE: u32 = 1;\n}\nmod b {\n#[cfg(windows)]\npub const VALUE: u32 = 2;\n}\n'),
+            ('attribute_same_header_runtime', '#[cfg(unix)]\npub fn run() -> u32 { 1 }\n#[cfg(windows)]\npub fn run() -> u32 { 2 }\n')):
+        same(name, body, body.replace('unix', 'SWAP').replace('windows', 'unix').replace('SWAP', 'windows'))
+    body = '#[path = "one.rs"]\nmod chosen;\npub fn run() -> u32 { chosen::VALUE }\n'
+    same('attribute_path_redirect', body, body.replace('one.rs', 'two.rs'),
+         extra={'crates/app/src/one.rs': 'pub const VALUE: u32 = 1;\n',
+                'crates/app/src/two.rs': 'pub const VALUE: u32 = 2;\n'})
+    body = 'const A: &str = r#"\nhello\n"#;\nconst B: &str = r#"\n  hello\n"#;\n'
+    same('raw_inventory_swap', body, body.replace('\nhello\n', '\nSWAP\n').replace('\n  hello\n', '\nhello\n').replace('\nSWAP\n', '\n  hello\n'))
+    body = "fn a() -> &'static str {\nstringify!(crate::group::Thing)\n}\nfn b() -> &'static str {\nstringify!(crate::other::Thing)\n}\n"
+    same('macro_payload_swap', body, body.replace('group', 'SWAP').replace('other', 'group').replace('SWAP', 'other'))
+    same('python_indent_inventory',
+         'if False:\n    print("first long output string")\nprint("second")\nif False:\n    pass\nprint("first long output string")\n',
+         'if False:\n    pass\nprint("first long output string")\nprint("second")\nif False:\n    print("first long output string")\n', path='script.py')
     return cases
 
 

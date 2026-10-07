@@ -134,7 +134,7 @@ fn add_empty_fluid(def: &mut EffectGraphDef) {
         id: 900,
         handle: Some("test_fluid".into()),
         node_id: NodeId::new("test_fluid"),
-        type_id: manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID.into(),
+        type_id: manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID.into(),
         params: BTreeMap::new(),
         exposed_params: BTreeSet::new(),
         editor_pos: None,
@@ -144,6 +144,10 @@ fn add_empty_fluid(def: &mut EffectGraphDef) {
         output_canvas_scales: BTreeMap::new(),
         group: None,
     });
+    let mut mesh = clone_node(def, "test_fluid", 901, "test_fluid_mesh");
+    mesh.type_id = "node.grid_mesh".into();
+    def.nodes.push(mesh);
+    wire(def, "test_fluid", "cell_size", "test_fluid_mesh", "size_x");
     remove_wire(
         def,
         "physics_demo_102",
@@ -160,7 +164,7 @@ fn add_empty_fluid(def: &mut EffectGraphDef) {
     );
     wire(
         def,
-        "test_fluid",
+        "test_fluid_mesh",
         "vertices",
         "physics_demo_104",
         "vertices",

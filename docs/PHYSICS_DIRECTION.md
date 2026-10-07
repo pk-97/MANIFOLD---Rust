@@ -38,7 +38,7 @@ do not treat a temporary slot path as a permanent integration dependency.
 | Family | Intended role | Boundaries |
 |---|---|---|
 | **Box3D** | Rigid objects, contacts, joints and real-time mechanical scenes | Whole-body translation/rotation, not deformation. “Real-time” remains scene- and hardware-dependent. |
-| **Liquid backends** | Detailed free-surface liquids, viscosity, splashes and cinematic liquid output | CPU FLIP Fluids today; GPU FLIP/APIC is an evaluation candidate beneath the same authoring workflow. Neither real-time performance nor matching trajectories across backends is promised. |
+| **Liquid backends** | Detailed free-surface liquids, viscosity, splashes and cinematic liquid output | GPU FLIP in the show; CPU FLIP Fluids remains a proof reference only. Neither real-time performance nor matching trajectories across backends is promised. |
 | **PBD/XPBD candidate** | Cloth, ropes, jelly-like solids, grains and supported mixed-material interactions | Library, supported material models and performance remain to be evaluated. PBD support does not mean every feature uses XPBD. |
 
 FLIP supplies much more than a pressure solve: particle/grid transfers, liquid

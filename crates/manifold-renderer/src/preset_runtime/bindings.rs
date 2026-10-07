@@ -128,6 +128,7 @@ impl PresetRuntime {
         values: Option<&std::collections::BTreeMap<String, String>>,
     ) {
         let Some(values) = values else {
+            #[cfg(feature = "gpu-proofs")]
             self.observe_physics_source_strings();
             return;
         };
@@ -153,6 +154,7 @@ impl PresetRuntime {
                 ParamValue::String(value),
             );
         }
+        #[cfg(feature = "gpu-proofs")]
         self.observe_physics_source_strings();
     }
 
@@ -175,6 +177,7 @@ impl PresetRuntime {
                 ParamValue::String(std::sync::Arc::new(seed.clone())),
             );
         }
+        #[cfg(feature = "gpu-proofs")]
         self.observe_physics_source_strings();
     }
 
@@ -194,5 +197,4 @@ impl PresetRuntime {
             slot.apply_relight_params(&mut self.graph, params);
         }
     }
-
 }

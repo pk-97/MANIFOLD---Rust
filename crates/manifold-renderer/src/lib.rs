@@ -75,6 +75,9 @@ pub(crate) fn clear_texture_committed(
 #[cfg(test)]
 mod live_sim_clock_reference;
 
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub mod reference_fixtures;
+
 #[path = "generators/compute_common.rs"]
 pub mod particles;
 #[path = "generators/mesh_common.rs"]

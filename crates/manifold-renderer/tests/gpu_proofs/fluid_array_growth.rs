@@ -43,7 +43,7 @@ fn resource_for(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> Resou
 }
 
 fn make_runtime(harness: &harness::ParityHarness, max_capacity: f32) -> Runtime {
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let mut graph = Graph::new();
     let fluid = graph.add_node(
         registry

@@ -152,7 +152,7 @@ impl EffectNode for LiquidProbe {
 }
 
 fn registry() -> PrimitiveRegistry {
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     registry.register(PROBE_TYPE, || Box::new(LiquidProbe::new()));
     registry
 }

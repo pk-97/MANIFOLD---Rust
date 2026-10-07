@@ -13,6 +13,8 @@ Three liquid solvers exist. FLIP is the vendored CPU engine (`crates/manifold-fl
 
 Binding from outside this doc: no FLIP tuning or integration work (Peter, 2026-09-29), so FLIP conforms as built; never a GPU port of FLIP; no fallback modes and no stopgaps; before any GPU run at a new size, prove on the CPU that every buffer covers its dispatch, and step resolution up one size at a time (two forced Mac resets above res 64); SWASH stays a challenger on its branch until Peter's SWASH P4 call.
 
+CPU FLIP retirement (2026-10-07): native scene stepping and `node.fluid_surface` registration are proof-only, with reference fixtures outside the product catalog. Shared clock, coupling, domain, and surface contracts remain. CPU playback/cache/authoring clauses now describe the reference harness. The dependency boundary and saved-project policy are in [FLUID_ENGINE_INTEGRATION_PLAN.md](FLUID_ENGINE_INTEGRATION_PLAN.md).
+
 ## What it does on stage
 
 Today each liquid joins the scene its own way. FLIP water takes forces, has a water panel, pauses, records takes, and floats Box3D boxes. MPM water floats boxes but ignores force fields and MIDI hits, and shows no water panel (BUG-4lfm (GPU-surface water not recognised as water)). SWASH water has none of it: it keeps moving while the transport is paused, ignores Speed, and runs at half speed when the frame rate halves.
@@ -50,6 +52,8 @@ Paths: `R/` = `crates/manifold-renderer/src/node_graph/`, `RP/` = `crates/manifo
 - The added-mass result: holding the body during an explicit pressure exchange gave 16.1× and 23.7× body energy at density ratio 0.1, and halving dt did not help (FLUID_ENGINE_INTEGRATION_PLAN.md P8b; `coupling_partitioned_light_body_rejects_energy_growth`, `crates/manifold-fluids/src/tests/coupling.rs:330`). MPM's light-body proof passes (`crates/manifold-renderer/tests/gpu_proofs/matter_coupling.rs:675`).
 
 ### 1.3 Where the scene layer names a solver
+
+Historical pre-retirement inventory: CPU FLIP runtime entries below are now proof-only; `scene_exposure/fluid_quality.rs` was removed. The cache resource classification remains for saved-project asset preservation.
 
 `rg -n '"node\.fluid_surface"' crates -g '*.rs' -g '!*tests*' -g '!**/tests/**' -g '!**/examples/**'` gives 51 lines; 32 are production code, the rest inline test modules. Both literals over every `.rs` file: `rg -c '"node\.(fluid_surface|matter_domain)"' crates -g '*.rs'` gives 105 lines in 49 files.
 
