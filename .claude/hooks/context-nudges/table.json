@@ -13,12 +13,12 @@
     },
     {
       "topic": "effect-runtime",
-      "globs": ["*chain_dispatch*", "*chain_spec*", "*preset_runtime*", "*content_pipeline.rs", "*node_graph/execution*", "*node_graph/freeze/*"],
+      "globs": ["*chain_dispatch*", "*chain_spec*", "*preset_runtime*", "*content_pipeline.rs", "*manifold-node-engine/src/runtime/*", "*manifold-node-engine/src/exec/*", "*manifold-node-engine/src/freeze/*"],
       "snippet": "effect-runtime-invariants.md"
     },
     {
       "topic": "graph-authoring",
-      "globs": ["*node_graph/primitives/*", "*presets/*.json", "*composites/*"],
+      "globs": ["*node_graph/primitives/*", "*manifold-node-engine/src/primitives/*", "*manifold-node-engine/src/water/primitives/*", "*presets/*.json", "*composites/*"],
       "snippet": "graph-authoring-rules.md"
     },
     {
