@@ -194,7 +194,7 @@ const CAPTURE_SHADER: &str = include_str!("shaders/history_capture.wgsl");
 
 inventory::submit! {
     crate::plugin_prewarm::PipelinePrewarm {
-        type_id: RenderMeshDiagram::TYPE_ID,
+        purpose: crate::plugin_prewarm::PipelinePrewarmPurpose::MathView,
         run: RenderMeshDiagram::prewarm_pipelines,
     }
 }
@@ -789,11 +789,10 @@ mod depth_tests;
 
 #[cfg(test)]
 mod prewarm_source_tests {
-    use crate::node_graph::primitive::PrimitiveSpec;
     #[test]
     fn pipeline_prewarm_registration_uses_direct_prewarmer() {
         let entries: Vec<_> = inventory::iter::<crate::plugin_prewarm::PipelinePrewarm>
-            .into_iter().filter(|entry| entry.type_id == super::RenderMeshDiagram::TYPE_ID).collect();
+            .into_iter().filter(|entry| entry.purpose == crate::plugin_prewarm::PipelinePrewarmPurpose::MathView).collect();
         assert_eq!(entries.len(), 1);
         assert!(std::ptr::fn_addr_eq(entries[0].run,
             super::RenderMeshDiagram::prewarm_pipelines as fn(&manifold_gpu::GpuDevice)));

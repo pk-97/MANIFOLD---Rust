@@ -44,18 +44,24 @@ pub struct PluginPrewarm {
 
 inventory::collect!(PluginPrewarm);
 
+/// Runtime preparation sites supported by family pipeline providers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PipelinePrewarmPurpose {
+    MathView,
+}
+
 /// Family pipeline preparation, invoked at the owning runtime's preparation site.
 pub struct PipelinePrewarm {
-    pub type_id: &'static str,
+    pub purpose: PipelinePrewarmPurpose,
     pub run: fn(&GpuDevice),
 }
 
 inventory::collect!(PipelinePrewarm);
 
-pub fn prewarm_pipeline(type_id: &str, device: &GpuDevice) {
+pub fn prewarm_pipeline(purpose: PipelinePrewarmPurpose, device: &GpuDevice) {
     let mut entries = inventory::iter::<PipelinePrewarm>
         .into_iter()
-        .filter(|entry| entry.type_id == type_id);
+        .filter(|entry| entry.purpose == purpose);
     let entry = entries.next().expect("pipeline prewarm provider must be linked");
     assert!(entries.next().is_none(), "duplicate pipeline prewarm provider");
     (entry.run)(device);
