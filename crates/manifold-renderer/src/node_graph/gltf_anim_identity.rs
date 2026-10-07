@@ -4,6 +4,14 @@ use super::gltf_anim_cache::{ChannelKind, GltfAnimSet};
 use super::gltf_load::GltfInterp;
 use sha2::{Digest, Sha256};
 
+inventory::submit! {
+    super::fluid::identity::PhysicsSourceIdentity {
+        name: "gltf_animation",
+        identity: env!("MANIFOLD_PHYSICS_FAMILY_IDENTITY"),
+    }
+}
+
+
 pub(super) fn identity(set: &GltfAnimSet) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"manifold.loaded-gltf-animation.v1");
@@ -73,5 +81,30 @@ fn floats(hash: &mut Sha256, values: &[f32]) {
     len(hash, values.len());
     for value in values {
         hash.update(value.to_le_bytes());
+    }
+}
+
+#[cfg(test)]
+mod source_identity_tests {
+    #[test]
+    fn physics_source_identity_registration_matches_family_build() {
+        use sha2::{Digest, Sha256};
+        let entries: Vec<_> = inventory::iter::<super::super::fluid::identity::PhysicsSourceIdentity>
+            .into_iter().filter(|entry| entry.name == "gltf_animation").collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].identity, env!("MANIFOLD_PHYSICS_FAMILY_IDENTITY"));
+        let mut expected = Sha256::new();
+        expected.update(b"manifold-physics-sources-v1\0");
+        for identity in [
+            manifold_fluids::SOURCE_IDENTITY,
+            manifold_physics::SOURCE_IDENTITY,
+            env!("MANIFOLD_PHYSICS_INTEGRATION_IDENTITY"),
+            env!("MANIFOLD_PHYSICS_FAMILY_IDENTITY"),
+        ] {
+            expected.update((identity.len() as u64).to_le_bytes());
+            expected.update(identity.as_bytes());
+        }
+        let expected: [u8; 32] = expected.finalize().into();
+        assert_eq!(super::super::fluid::identity::solver_identity(), expected);
     }
 }
