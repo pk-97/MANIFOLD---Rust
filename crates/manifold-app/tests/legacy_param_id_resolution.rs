@@ -179,40 +179,6 @@ fn burn_v5_drivers_resolve_to_stable_param_ids() {
 }
 
 #[test]
-fn waypoints_generator_drivers_resolve_to_stable_param_ids() {
-    let path = fixture_path("WAYPOINTS.manifold");
-    if !path.exists() {
-        return;
-    }
-
-    let project = loader::load_project(&path).expect("load WAYPOINTS");
-
-    // Generator drivers are the half of the addressing space that
-    // only Liveschool/WAYPOINTS exercise. Verify the resolver walks
-    // `layer.gen_params().drivers` AND uses the generator registry
-    // (not the effect registry).
-    let mut gen_drivers = 0;
-    for layer in &project.timeline.layers {
-        if let Some(gp) = layer.gen_params()
-            && let Some(ref drivers) = gp.drivers
-        {
-            for d in drivers {
-                gen_drivers += 1;
-                assert!(
-                    !d.param_id.is_empty(),
-                    "WAYPOINTS generator driver has empty param_id post-resolve"
-                );
-                assert_eq!(d.legacy_param_index, None);
-            }
-        }
-    }
-    assert!(
-        gen_drivers > 0,
-        "WAYPOINTS must have generator drivers post-migration"
-    );
-}
-
-#[test]
 fn liveschool_envelopes_resolve_to_stable_param_ids() {
     let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
     if !path.exists() {

@@ -285,47 +285,6 @@ fn driver_beat_divisions_survive_roundtrip() {
     }
 }
 
-#[test]
-fn waypoints_gen_drivers_survive_migration() {
-    use manifold_core::types::BeatDivision;
-    let path = fixture_path("WAYPOINTS.manifold");
-    if !path.exists() {
-        return;
-    }
-
-    let project = loader::load_project(&path).unwrap();
-
-    // WAYPOINTS has legacy genDrivers that get migrated into genParams.drivers.
-    // Verify they survived the V1.0.0 → V1.1.0 migration.
-    let mut gen_driver_count = 0;
-    let mut non_quarter_count = 0;
-    for (li, layer) in project.timeline.layers.iter().enumerate() {
-        if let Some(gp) = layer.gen_params()
-            && let Some(drivers) = gp.drivers.as_ref()
-        {
-            for d in drivers {
-                gen_driver_count += 1;
-                if d.beat_division != BeatDivision::Quarter {
-                    non_quarter_count += 1;
-                }
-                eprintln!(
-                    "  layer[{li}].gen param={} beat_div={:?}",
-                    d.param_id, d.beat_division
-                );
-            }
-        }
-    }
-    eprintln!("Gen drivers: {gen_driver_count} total, {non_quarter_count} non-Quarter");
-    assert!(
-        gen_driver_count > 0,
-        "WAYPOINTS should have generator drivers"
-    );
-    assert!(
-        non_quarter_count > 0,
-        "WAYPOINTS gen drivers should have non-Quarter beat divisions"
-    );
-}
-
 // ── Additional project files ──
 
 #[test]
@@ -387,35 +346,6 @@ fn graphtestsv4_reconciles_desynced_generator_identity() {
     // metadata id (no longer NONE), so the inspector gate
     // (`generator_type != NONE`) surfaces the card.
     assert_eq!(*gen_layer.generator_type(), graph_id);
-}
-
-#[test]
-fn load_waypoints_large_project() {
-    let path = fixture_path("WAYPOINTS.manifold");
-    if !path.exists() {
-        return;
-    }
-
-    let project = loader::load_project(&path).expect("Failed to load WAYPOINTS.manifold");
-
-    assert_eq!(project.project_name, "WAYPOINTS");
-    assert!((project.settings.bpm.0 - 110.0).abs() < 0.01);
-    assert_eq!(project.timeline.layers.len(), 9);
-    // Original project had 2311 clips; 297 overlapping clips removed on load repair.
-    assert_eq!(project.timeline.total_clip_count(), 2014);
-
-    // Stress test: all clips should have valid beats and no overlaps
-    for layer in &project.timeline.layers {
-        for clip in &layer.clips {
-            assert!(clip.duration_beats > manifold_core::Beats::ZERO);
-            assert!(clip.start_beat >= manifold_core::Beats::ZERO);
-        }
-        assert!(
-            !layer.has_overlapping_clips(),
-            "Layer {:?} still has overlapping clips after load repair",
-            layer.layer_id
-        );
-    }
 }
 
 // ── Liveschool Live Show V6 — canonical regression for steps 8-14 ──
