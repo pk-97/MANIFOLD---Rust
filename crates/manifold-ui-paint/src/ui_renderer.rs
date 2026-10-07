@@ -2366,10 +2366,9 @@ mod tests {
     /// idempotent — the SAME `TextureHandle` uploads a GPU texture only on
     /// its first call, reporting `false` (no-op) on every subsequent one, so
     /// the app-side "decode + register" loop never re-uploads a key it has
-    /// already cached (the "decoded once per distinct path" contract). Needs
-    /// a real GPU device; run with `--ignored`.
+    /// already cached (the "decoded once per distinct path" contract). Runs under
+    /// the `gpu-proofs` feature.
     #[test]
-    #[ignore = "needs a real GPU device; run with --ignored"]
     fn register_image_is_idempotent_per_handle() {
         let device = manifold_gpu::testkit::test_device();
         let mut ui = UIRenderer::new(&device, GpuTextureFormat::Rgba8Unorm);
@@ -2405,7 +2404,6 @@ mod tests {
     /// commands themselves, before `prepare()` even derives batches from
     /// them — there is no flush step left to get it wrong.
     #[test]
-    #[ignore = "needs a real GPU device; run with --ignored"]
     fn transform_boundary_keeps_tree_scissor_on_pending_batch() {
         let device = manifold_gpu::testkit::test_device();
         let mut ui = UIRenderer::new(&device, GpuTextureFormat::Bgra8Unorm);
