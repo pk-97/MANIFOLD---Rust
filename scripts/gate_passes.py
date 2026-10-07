@@ -324,7 +324,8 @@ def queued_proof(command, repo):
                 run['filters'].append(arg)
     except (StopIteration, ValueError):
         return None
-    if (len(packages) != 1 or packages[0] not in ('manifold-renderer', 'manifold-ui-paint')
+    if (len(packages) != 1 or packages[0] not in (
+            'manifold-renderer', 'manifold-node-engine', 'manifold-ui-paint')
             or sorted(features) != ['gpu-proofs'] or threads != 1):
         return None
     if not (run['targets'] or run['lib']):
