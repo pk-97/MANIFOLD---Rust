@@ -7,6 +7,7 @@ Scheduled by launchd (scripts/com.manifold.trunk-health.plist).
 """
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
@@ -16,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 import shutil
 
+import gpu_queue
 from storage_budget import apply_cache_cleanup, plan_cache_cleanup
 
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
@@ -84,7 +86,8 @@ def main():
                         help="print gate commands and simulate a red bead without running cargo or filing")
     args = parser.parse_args()
 
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    if not args.dry_run:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"{datetime.now().strftime('%Y-%m-%d')}.log"
     log_lines = []
 
@@ -94,15 +97,16 @@ def main():
         return 2
 
     # Fetch origin
-    print(f"[trunk-health] fetching origin...")
-    try:
-        run_cmd(["git", "fetch", "origin"], cwd=MAIN_CHECKOUT, timeout=300)
-    except subprocess.TimeoutExpired:
-        print("[FAIL] git fetch timed out")
-        return 2
-    except Exception as e:
-        print(f"[FAIL] git fetch failed: {e}")
-        return 2
+    if not args.dry_run:
+        print(f"[trunk-health] fetching origin...")
+        try:
+            run_cmd(["git", "fetch", "origin"], cwd=MAIN_CHECKOUT, timeout=300)
+        except subprocess.TimeoutExpired:
+            print("[FAIL] git fetch timed out")
+            return 2
+        except Exception as e:
+            print(f"[FAIL] git fetch failed: {e}")
+            return 2
 
     sha = run_cmd(["git", "rev-parse", "--short=12", "origin/main"],
                   cwd=MAIN_CHECKOUT, timeout=300)[1].strip()
@@ -117,7 +121,7 @@ def main():
     print(cap_line, end="")
     log_lines.append(cap_line)
 
-    gates = [
+    cpu_gates = [
         # Ignored-test ratchet: any #[ignore] beyond the baseline is a red
         # gate made invisible (SCENE_LOOP shipped broken behind one).
         # Cheap, runs first so it files before the long legs.
@@ -130,9 +134,11 @@ def main():
         # the gate instead of its printed rerun commands.
         ["python3", "scripts/landing_metrics.py", "--days", "7"],
         ["cargo", "clippy", "--workspace", "--tests", "--", "-D", "warnings"],
-        ["cargo", "nextest", "run", "--workspace"],
+        ["cargo", "nextest", "run", "--workspace", "--no-fail-fast"],
         ["cargo", "deny", "check", "bans"],
         ["python3", "scripts/feature_matrix.py"],
+    ]
+    gpu_gates = [
         # Full renderer coverage, including the asset-conformance sweep, belongs
         # here (landing runs only the scoped set; see scripts/gpu_scope.py).
         # Successful proof runs also update the shared timing cache consumed
@@ -157,14 +163,14 @@ def main():
          "--require-fixture"],
         # Presentation-tear class (BUG-xaw4): legacy policy must keep tearing
         # (probe not blind) AND fenced policy must stay clean (the shipped
-        # read-fence contract). GPU-serial here — this loop is sequential.
+        # read-fence contract). All GPU legs share one queue hold.
         ["python3", "scripts/bridge_probe_gate.py"],
     ]
 
     green_gates = []
     red_gates = []
 
-    for cmd in gates:
+    def run_gate(cmd):
         cmd_str = " ".join(cmd)
         print(f"[trunk-health] running {cmd_str}...")
         header = f"\n=== {cmd_str} ===\n"
@@ -176,12 +182,12 @@ def main():
                 print(f"[dry-run] would run: {cmd_str}")
                 print(f"[dry-run] [FAIL] cargo deny check bans (simulated red)")
                 red_gates.append((cmd_str, "[FAIL] cargo deny check bans (simulated red)", "simulated tail\nline 2\nline 3"))
-                continue
+                return
             print(f"[dry-run] would run: {cmd_str}")
             print(f"[dry-run] [PASS] {cmd_str}")
             log_lines.append(f"[PASS] {cmd_str}\n")
             green_gates.append(cmd_str)
-            continue
+            return
 
         try:
             exit_, out, err, duration = run_cmd(cmd, cwd=MAIN_CHECKOUT, timeout=5400)
@@ -211,6 +217,15 @@ def main():
             print(f"[FAIL] {cmd_str} ({e})")
             log_lines.append(f"[FAIL] ({e})\n")
             red_gates.append((cmd_str, f"[FAIL] {cmd_str}", str(e)[:800]))
+
+    for cmd in cpu_gates:
+        if run_gate(cmd) == 2:
+            return 2
+    # Child gates inherit this hold, so no queued work can interleave.
+    with contextlib.nullcontext() if args.dry_run else gpu_queue.hold("trunk_health gpu legs"):
+        for cmd in gpu_gates:
+            if run_gate(cmd) == 2:
+                return 2
 
     if args.dry_run:
         # Simulate bead dedupe logic for the fake red gate

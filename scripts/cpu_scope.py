@@ -11,10 +11,22 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Cross-file contracts which cannot be inferred from a Rust module path.
+def godfile_paths():
+    """Read the source-of-truth CEILINGS table; reject unparsed entries."""
+    source = Path(__file__).resolve().parent.parent / "crates/manifold-app/tests/godfile_regrowth.rs"
+    text = re.sub(r"//[^\n]*", "", source.read_text())
+    table = re.search(r"const CEILINGS\b[^=]*=\s*&\[(.*?)\];", text, re.S)
+    entry = re.compile(r'\(\s*"([^"]+)"\s*,\s*\d[\d_]*\s*,?\s*\)\s*,?')
+    if table is None or not entry.search(table[1]) or entry.sub("", table[1]).strip():
+        raise ValueError(f"cannot parse CEILINGS in {source}")
+    return entry.findall(table[1])
+
+
+# Cross-file contracts: path -> (owning package, integration binaries).
 INTEGRATION_ROWS = {
-    "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ["file_loader_exhaustiveness"],
-    "crates/manifold-renderer/src/node_graph/fluid.rs": ["fluid_preset"],
+    "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
+    "crates/manifold-renderer/src/node_graph/fluid.rs": ("manifold-renderer", ["fluid_preset"]),
+    **{path: ("manifold-app", ["godfile_regrowth"]) for path in godfile_paths()},
 }
 # Contracts over every file under a prefix, Rust or not:
 # (prefix, suffix, package, test modules, integration binaries).
@@ -72,6 +84,10 @@ class Plan:
 def plan_for_paths(paths, repo):
     repo, plan, cache = Path(repo), Plan(), {}
     for path in sorted(set(paths)):
+        if path in INTEGRATION_ROWS:
+            package, binaries = INTEGRATION_ROWS[path]
+            plan.packages.add(package)
+            plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
         for prefix, suffix, package, modules, binaries in PREFIX_ROWS:
             if path.startswith(prefix) and path.endswith(suffix):
                 plan.packages.add(package)
@@ -93,7 +109,7 @@ def plan_for_paths(paths, repo):
         manifest, aliases = cache[crate]
         package = manifest["package"]["name"]
         plan.packages.add(package)
-        binaries = set(INTEGRATION_ROWS.get(path, []))
+        binaries = set()
         if parts[2] == "tests":
             relative = Path(*parts[2:]).as_posix()
             explicit = [t["name"] for t in manifest.get("test", [])
