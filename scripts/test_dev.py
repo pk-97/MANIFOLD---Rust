@@ -11,12 +11,12 @@ import dev
 
 class InventoryTests(unittest.TestCase):
     def test_every_script_is_a_verb_or_named_internal(self):
-        on_disk = {p.name for p in dev.SCRIPTS.iterdir()
-                   if p.suffix in {".py", ".sh"} and not p.name.startswith("test_")}
+        all_scripts = {p.name for p in dev.SCRIPTS.iterdir() if p.suffix in {".py", ".sh"}}
+        on_disk = {name for name in all_scripts if not name.startswith("test_")}
         listed = {t for _, _, t, _ in dev.VERBS if isinstance(t, str)} | dev.INTERNAL
         self.assertEqual(sorted(on_disk - listed), [],
                          "new script: add a verb to scripts/dev.py VERBS (or INTERNAL with a reason)")
-        self.assertEqual(sorted(listed - on_disk), [], "verb points at a script that no longer exists")
+        self.assertEqual(sorted(listed - all_scripts), [], "verb points at a script that no longer exists")
 
     def test_cargo_verbs_name_real_targets(self):
         manifests = "\n".join(p.read_text() for p in (dev.ROOT / "crates").glob("*/Cargo.toml"))

@@ -173,8 +173,8 @@ def commit_tree(repo: Path, files: dict[str, str], msg: str) -> None:
     git(repo, "commit", "-q", "-m", msg)
 
 
-def run_checker(repo: Path) -> tuple[int, str]:
-    r = subprocess.run([sys.executable, CHECKER, "HEAD"], cwd=repo,
+def run_checker(repo: Path, *args: str) -> tuple[int, str]:
+    r = subprocess.run([sys.executable, CHECKER, "HEAD", *args], cwd=repo,
                        capture_output=True, text=True)
     return r.returncode, r.stdout
 
@@ -1146,7 +1146,99 @@ def case_ctx_cfg_conversion_smuggled(repo: Path) -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_crate_skeleton(repo: Path, smuggle=False) -> tuple[bool, str]:
+    commit_tree(repo, {"keep.rs": "// keep\n"}, "base")
+    lib = ('//! A leaf crate.\n#![deny(unsafe_code)]\n'
+           '#[cfg(feature = "testkit")]\npub mod testkit;\n'
+           'use crate::engine::{\n    Alpha, Beta,\n};\n')
+    if smuggle:
+        lib += "fn smuggled() { perform(99); }\n"
+    commit_tree(repo, {
+        "crates/leaf/Cargo.toml": '[package]\nname = "leaf"\nversion = "0.1.0"\n',
+        "crates/leaf/src/lib.rs": lib,
+        "crates/leaf/src/main.rs": "mod engine;\n",
+    }, "crate-skeleton")
+    code, out = run_checker(repo)
+    ok = code == int(smuggle) and field(out, "crate skeletons") > 0
+    ok &= (field(out, "residue") > 0) == smuggle
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+MANIFEST_BASE = '[package]\nname = "app"\nversion = "0.1.0"\n'
+MANIFEST_WIRING = (
+    '[dependencies]\nleaf = { path = "../leaf", features = ["testkit"] }\n'
+    '[dev-dependencies]\nfixture = { package = "leaf", path = "../leaf" }\n'
+    '[build-dependencies]\nbuilder = { package = "leaf", path = "../leaf" }\n'
+    '[features]\nproofs = [\n    "leaf/gpu-proofs",\n    "fixture/testkit",\n]\n'
+)
+
+
+def case_manifest(repo: Path, mode="add") -> tuple[bool, str]:
+    workspace = '[workspace]\nmembers = [\n    "crates/app",\n    "crates/leaf",\n]\n'
+    commit_tree(repo, {
+        "Cargo.toml": workspace,
+        "crates/leaf/Cargo.toml": '[package]\nname = "leaf"\nversion = "0.1.0"\n',
+        "crates/app/Cargo.toml": MANIFEST_BASE + (MANIFEST_WIRING if mode == "remove" else ""),
+    }, "base")
+    manifest = MANIFEST_BASE + MANIFEST_WIRING
+    if mode == "version":
+        manifest = manifest.replace('version = "0.1.0"', 'version = "0.2.0"')
+    elif mode == "local-feature":
+        manifest = manifest.replace('"leaf/gpu-proofs"', '"local-feature"')
+    elif mode == "external-path":
+        manifest = manifest.replace('path = "../leaf"', 'path = "../../external"')
+    elif mode == "remove":
+        manifest = MANIFEST_BASE
+    commit_tree(repo, {"crates/app/Cargo.toml": manifest,
+                       "Cargo.toml": workspace.replace('    "crates/leaf",\n', '')
+                       if mode == "remove" else workspace.replace('    "crates/leaf",\n', '    "crates/leaf",\n    "crates/added",\n')},
+                "manifest-wiring")
+    code, out = run_checker(repo)
+    drift = mode not in {"add", "remove"}
+    ok = code == int(drift) and (field(out, "residue") > 0) == drift
+    ok &= field(out, "manifest wiring") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_path_rewrite(repo: Path, mode="exact") -> tuple[bool, str]:
+    before = ('use crate::node_graph::Thing;\n'
+              'fn invoke() {\n    crate::node_graph::run(42);\n'
+              '    $crate::node_graph::emit!(value);\n}\n')
+    after = before.replace("$crate::node_graph::", "manifold_graph::").replace(
+        "crate::node_graph::", "manifold_graph::")
+    if mode == "argument":
+        after = after.replace("run(42)", "run(43)")
+    if mode == "boundary":
+        before = before.replace("crate::node_graph::run", "othercrate::node_graph::run")
+        after = after.replace("manifold_graph::run", "othermanifold_graph::run")
+    commit_tree(repo, {"caller.rs": before, "other.rs": "// other\n"}, "base")
+    commit_tree(repo, {"caller.rs": after if mode != "cross-file" else "// caller\n",
+                       "other.rs": after if mode == "cross-file" else "// other\n"}, "paths")
+    args = [] if mode == "implicit" else ["--rewrite", "crate::node_graph::=manifold_graph::",
+                                           "--rewrite", "$crate::node_graph::=manifold_graph::"]
+    code, out = run_checker(repo, *args)
+    drift = mode != "exact"
+    ok = code == int(drift) and (field(out, "residue") > 0) == drift
+    if mode == "exact":
+        ok &= field(out, "path rewrites") == 6
+    if mode in {"implicit", "cross-file"}:
+        ok &= field(out, "path rewrites") == 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
 CASES = [
+    ("new crate skeletons", case_crate_skeleton),
+    ("new lib.rs with function is residue", lambda repo: case_crate_skeleton(repo, True)),
+    ("manifest wiring additions", case_manifest),
+    ("manifest wiring removals", lambda repo: case_manifest(repo, "remove")),
+    ("manifest version bump is residue", lambda repo: case_manifest(repo, "version")),
+    ("local feature is residue", lambda repo: case_manifest(repo, "local-feature")),
+    ("external path dependency is residue", lambda repo: case_manifest(repo, "external-path")),
+    ("explicit path rewrites", case_path_rewrite),
+    ("rewritten argument change is residue", lambda repo: case_path_rewrite(repo, "argument")),
+    ("no implicit rewrites", lambda repo: case_path_rewrite(repo, "implicit")),
+    ("rewrites cannot pair separate files", lambda repo: case_path_rewrite(repo, "cross-file")),
+    ("rewrites respect path boundaries", lambda repo: case_path_rewrite(repo, "boundary")),
     ("pure move -> exit 0", case_pure_move),
     ("smuggled edit -> exit 1", case_smuggled),
     ("dispatch-split scaffold -> exit 0", case_dispatch_split),
