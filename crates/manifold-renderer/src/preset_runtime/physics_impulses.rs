@@ -159,27 +159,18 @@ impl PresetRuntime {
         selection: &SceneTargetSelection,
         field_node: &NodeId,
         field_port: &str,
+        registry: &PrimitiveRegistry,
     ) -> Result<PreparedSceneImpulse, String> {
         if self.forced_outputs_stale
             || self.graph.forced_outputs_epoch() != self.last_forced_outputs_epoch
         {
             return Err("Impulse: rebuild the changed graph before preparing a binding".into());
         }
-        #[cfg(feature = "gpu-proofs")]
-        let registry = if self.graph.nodes().any(|node| {
-            node.node.type_id().as_str() == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID
-        }) {
-            PrimitiveRegistry::with_cpu_flip_reference()
-        } else {
-            PrimitiveRegistry::with_builtin()
-        };
-        #[cfg(not(feature = "gpu-proofs"))]
-        let registry = PrimitiveRegistry::with_builtin();
         let targets = crate::node_graph::scene_modifier_expand::impulse_recipients(
             owner,
             scene,
             selection,
-            &registry,
+            registry,
         )
         .map_err(|error| error.to_string())?;
         if targets.is_empty() {

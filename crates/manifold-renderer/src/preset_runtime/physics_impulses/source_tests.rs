@@ -32,6 +32,7 @@ fn scene_impulse_source_requires_rebuild_after_output_roots_change() {
                 &SceneTargetSelection::AllObjects,
                 &NodeId::new("field"),
                 "out",
+                &registry(),
             )
             .is_err(),
         "marking a plan stale is not a completed rebuild"

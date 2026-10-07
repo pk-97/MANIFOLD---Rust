@@ -160,6 +160,7 @@ fn prepare(runtime: &PresetRuntime, def: &EffectGraphDef, ids: &[&str]) -> Prepa
             },
             &NodeId::new("field"),
             "out",
+            &registry(),
         )
         .unwrap()
 }
@@ -437,7 +438,8 @@ fn scene_impulse_rejects_stateful_ancestry_and_inactive_selections() {
                 &reference("scene"),
                 &SceneTargetSelection::Explicit { objects: vec![] },
                 &NodeId::new("field"),
-                "out"
+                "out",
+                &registry(),
             )
             .is_err()
     );
