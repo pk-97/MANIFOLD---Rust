@@ -333,7 +333,7 @@ fn find_preset_node<'a>(
 /// other publishes through a frame node and is a GPU solver.
 fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
     let document: serde_json::Value = serde_json::from_str(json)?;
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let built = |node: &serde_json::Value| node["typeId"].as_str().and_then(|type_id| registry.construct(type_id));
     let mut domains = Vec::new();
     find_preset_nodes(&document["nodes"], &|node| node["typeId"].as_str().is_some_and(is_liquid_domain), &mut domains);
@@ -558,7 +558,7 @@ fn build_runtime(
     height: u32,
     frame_node: &str,
 ) -> CaptureResult<PresetRuntime> {
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         instrumented_json,
         &registry,

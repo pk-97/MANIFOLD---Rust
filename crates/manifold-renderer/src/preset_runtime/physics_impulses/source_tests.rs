@@ -38,6 +38,7 @@ fn scene_impulse_source_requires_rebuild_after_output_roots_change() {
     );
 }
 
+#[cfg(feature = "gpu-proofs")]
 #[test]
 fn scene_impulse_source_captures_fluid_clock_and_waits_for_changed_setup() {
     let mut def = fixture();

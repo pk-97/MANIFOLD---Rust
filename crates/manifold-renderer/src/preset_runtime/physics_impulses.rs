@@ -165,11 +165,21 @@ impl PresetRuntime {
         {
             return Err("Impulse: rebuild the changed graph before preparing a binding".into());
         }
+        #[cfg(feature = "gpu-proofs")]
+        let registry = if self.graph.nodes().any(|node| {
+            node.node.type_id().as_str() == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID
+        }) {
+            PrimitiveRegistry::with_cpu_flip_reference()
+        } else {
+            PrimitiveRegistry::with_builtin()
+        };
+        #[cfg(not(feature = "gpu-proofs"))]
+        let registry = PrimitiveRegistry::with_builtin();
         let targets = crate::node_graph::scene_modifier_expand::impulse_recipients(
             owner,
             scene,
             selection,
-            &PrimitiveRegistry::with_builtin(),
+            &registry,
         )
         .map_err(|error| error.to_string())?;
         if targets.is_empty() {

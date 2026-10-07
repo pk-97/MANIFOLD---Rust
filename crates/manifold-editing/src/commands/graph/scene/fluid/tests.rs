@@ -88,6 +88,11 @@ fn command(target: GraphTarget, catalog_default: EffectGraphDef) -> AddSceneFlui
         target,
         10,
         vec![
+            scene_param_meta("gravity_x", "Gravity X"),
+            scene_param_meta("gravity", "Gravity"),
+            scene_param_meta("gravity_z", "Gravity Z"),
+            scene_param_meta("speed", "Speed"),
+            scene_param_meta("reset", "Reset"),
             scene_param_meta("fill_height", "Fill"),
             scene_param_meta("emission", "Legacy Emission"),
             scene_param_meta("inflow_speed", "Legacy Inflow Speed"),
@@ -313,6 +318,21 @@ fn scene_physics_add_fluid_preserves_world_controls_and_authored_wires() {
     assert_eq!(graph(&project, &target), &def);
     cmd.execute(&mut project);
     assert_eq!(graph(&project, &target), &after);
+}
+
+#[test]
+fn scene_physics_add_fluid_requires_complete_domain_controls_atomically() {
+    for missing in ["gravity_x", "gravity", "gravity_z", "speed", "reset"] {
+        let def = render_scene_graph(0, false);
+        let (mut project, target) = project_with_graph(def.clone());
+        let before = serde_json::to_value(&project).unwrap();
+        let mut cmd = command(target, def);
+        cmd.fluid_metadata.retain(|metadata| metadata.name != missing);
+        cmd.execute(&mut project);
+        assert!(!cmd.was_applied(), "accepted missing {missing}");
+        assert_eq!(cmd.rejection_reason(), Some("Add Fluid liquid domain lacks the shared World controls"));
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+    }
 }
 
 #[test]

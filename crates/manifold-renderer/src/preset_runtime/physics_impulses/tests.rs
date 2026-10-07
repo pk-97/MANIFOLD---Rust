@@ -119,6 +119,9 @@ fn fixture() -> EffectGraphDef {
     })).unwrap()
 }
 fn registry() -> PrimitiveRegistry {
+    #[cfg(feature = "gpu-proofs")]
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
+    #[cfg(not(feature = "gpu-proofs"))]
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("node.render_scene", || {
         Box::new(CpuScene(
@@ -555,6 +558,7 @@ fn scene_impulse_captures_spatial_shape_before_center_edits() {
     );
 }
 
+#[cfg(feature = "gpu-proofs")]
 #[test]
 fn scene_impulse_selection_combines_body_slots_copies_and_fluid_domain() {
     use crate::node_graph::physics::RigidImpulseTargets;

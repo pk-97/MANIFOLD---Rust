@@ -38,21 +38,17 @@ fn migrated_dam_break_publishes_progress_while_live_preview_is_behind() {
             .map(Param::bundled)
             .collect(),
     );
-    let registry = manifold_renderer::generators::registry::GeneratorRegistry::new(
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
+    let mut runtime = PresetRuntime::from_def_with_device(
+        def,
+        &registry,
+        Arc::clone(&harness.device),
+        WIDTH,
+        HEIGHT,
         GpuTextureFormat::Rgba16Float,
-    );
-    let mut runtime = registry
-        .create_with_override(
-            Arc::clone(&harness.device),
-            &manifold_core::PresetTypeId::new("WaterDamBreak"),
-            Some(&def),
-            WIDTH,
-            HEIGHT,
-            false,
-            Some(&manifest),
-            None,
-        )
-        .unwrap();
+        Some(&manifest),
+    )
+    .unwrap();
     runtime.set_preview_target(&EffectId::default(), Some(&NodeId::new("fluid_surface")));
     let target = RenderTarget::new(
         &harness.device,

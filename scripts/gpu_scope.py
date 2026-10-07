@@ -36,6 +36,19 @@ RENDERER_SRC = "crates/manifold-renderer/src/"
 UI_PAINT_DIR = "crates/manifold-ui-paint/"
 UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::"]
 PROOFS_DIR = "crates/manifold-renderer/tests/gpu_proofs/"
+CPU_FLIP_FIXTURES_DIR = "crates/manifold-renderer/tests/fixtures/cpu-flip/"
+CPU_FLIP_REFERENCE_FILTERS = [
+    "liquid_conformance::",
+    "water_basin::",
+    "fluid_surface_perf::",
+    "node_graph::primitives::whitewater_scene_tests::",
+    "node_graph::primitives::gpu_flip_render_smoke_tests::",
+    "node_graph::primitives::gpu_flip_preset::",
+    "node_graph::scene_modifier_expand::acceleration::",
+    "preset_runtime::physics_carry::",
+    "preset_runtime::physics_sampling::",
+    "preset_runtime::physics_impulses::tests::coupled_playback_tests::",
+]
 
 # Landing warning budget for the scoped (non-glb) GPU step, seconds of test time.
 LANDING_BUDGET_S = 360
@@ -412,6 +425,8 @@ for _engine_path in (
     ]
 del _engine_path
 
+LIB_PROOF_ROWS[RENDERER_SRC + "reference_fixtures.rs"] = CPU_FLIP_REFERENCE_FILTERS
+
 PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
 
 
@@ -423,7 +438,7 @@ def is_gpu_path(path):
         return True
     if "shaders/" in path or "gpu_encoder" in path:
         return True
-    if path.startswith(PRESET_RUNTIME_DIR) or path in LIB_PROOF_ROWS:
+    if path.startswith((PRESET_RUNTIME_DIR, CPU_FLIP_FIXTURES_DIR)) or path in LIB_PROOF_ROWS:
         return True
     return "tests/gpu_proofs/" in path or is_gltf_path(path)
 
@@ -640,6 +655,9 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
         if path.startswith(PROOFS_DIR) and path.endswith(".rs"):
             rel = path[len(PROOFS_DIR):].split("/")
             plan.filters.add(rel[0][:-3] + "::" if len(rel) == 1 else rel[0] + "::")
+            continue
+        if path.startswith(CPU_FLIP_FIXTURES_DIR):
+            plan.filters.update(CPU_FLIP_REFERENCE_FILTERS)
             continue
         if path in LIB_PROOF_ROWS:
             plan.filters.update(LIB_PROOF_ROWS[path])

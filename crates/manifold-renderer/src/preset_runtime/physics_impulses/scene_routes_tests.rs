@@ -192,6 +192,7 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
     assert_eq!(receipts, 1);
 }
 
+#[cfg(feature = "gpu-proofs")]
 #[test]
 fn scene_impulse_routes_share_rigid_and_fluid_targets_and_wait_for_domain_edits() {
     let (mut def, manifest) = scene_fixture(&["part_a", "part_b"]);
@@ -287,7 +288,7 @@ fn scene_impulse_routes_report_exhaustion_and_recover_after_native_reset() {
 /// once on the following ticks.
 #[test]
 fn scene_impulse_routes_accept_audio_hits_stamped_ahead_of_the_last_render() {
-    for with_fluid in [false, true] {
+    let check = |with_fluid| {
         let (mut def, manifest) = scene_fixture(&["part_a", "part_b"]);
         if with_fluid {
             def.nodes.push(serde_json::from_value(serde_json::json!({"id":14,"nodeId":"fluid","typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,
@@ -315,5 +316,8 @@ fn scene_impulse_routes_accept_audio_hits_stamped_ahead_of_the_last_render() {
         assert_eq!(sequences, [0, 1], "fluid {with_fluid}: each hit applies once");
         // Older than the latest observation: stale, refused.
         assert!(runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).is_err());
-    }
+    };
+    check(false);
+    #[cfg(feature = "gpu-proofs")]
+    check(true);
 }

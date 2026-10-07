@@ -81,7 +81,7 @@ fn runtime_definition() -> EffectGraphDef {
 }
 
 fn runtime_from_definition(def: EffectGraphDef) -> PresetRuntime {
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     registry.register("test.fluid_time", || {
         Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
     });
@@ -198,7 +198,7 @@ fn fluid_graph_cache_ignores_appearance_but_rejects_authored_force_edits() {
         "manifold-fluid-source-graph-{}",
         std::process::id()
     ));
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     registry.register("test.fluid_time", || {
         Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
     });

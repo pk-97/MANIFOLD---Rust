@@ -2,7 +2,7 @@
 
 use super::*;
 use manifold_core::effect_graph_def::{BindingTarget, GROUP_INPUT_TYPE_ID};
-use manifold_core::liquid_domain::{NestedLiquidDomain, liquid_dial_params};
+use manifold_core::liquid_domain::NestedLiquidDomain;
 use manifold_core::scene_exposure::stamp_scene_node_exposures;
 
 const CONTROLS: [(&str, &str); 5] = [
@@ -46,6 +46,7 @@ pub(super) fn share_world_controls(
     group_id: u32,
     domain: &NestedLiquidDomain,
     metadata: &[SceneParamMetadata],
+    fluid_metadata: &[SceneParamMetadata],
 ) -> Result<(), &'static str> {
     if CONTROLS
         .iter()
@@ -120,14 +121,11 @@ pub(super) fn share_world_controls(
             _ => return Err("Add Fluid control group has more than one input sentinel"),
         });
     }
-    let domain_type = group_body_mut(&mut def.nodes, &path)?
-        .nodes
-        .iter()
-        .find(|node| node.id == domain.node)
-        .map(|node| node.type_id.clone())
-        .ok_or("Add Fluid simulation node is unavailable")?;
-    let dials = liquid_dial_params(&domain_type).unwrap_or_default();
-    if CONTROLS.iter().any(|(_, fluid)| !dials.contains(fluid)) {
+    if !group_body_mut(&mut def.nodes, &path)?.nodes.iter().any(|node| node.id == domain.node) {
+        return Err("Add Fluid simulation node is unavailable");
+    }
+    // Use the supplied primitive capabilities, including proof-only templates.
+    if CONTROLS.iter().any(|(_, fluid)| !fluid_metadata.iter().any(|m| m.name == *fluid)) {
         return Err("Add Fluid liquid domain lacks the shared World controls");
     }
 

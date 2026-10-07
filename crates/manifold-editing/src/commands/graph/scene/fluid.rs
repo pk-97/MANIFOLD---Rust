@@ -473,7 +473,9 @@ impl Command for AddSceneFluidCommand {
                     params,
                 );
             }
-            world_controls::share_world_controls(def, group_id, &domain, &self.world_metadata)?;
+            world_controls::share_world_controls(
+                def, group_id, &domain, &self.world_metadata, &self.fluid_metadata,
+            )?;
             Ok(())
         })(&mut candidate);
 
