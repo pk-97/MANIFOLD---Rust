@@ -10,7 +10,7 @@ pub struct PhysicsSourceIdentity {
 
 inventory::collect!(PhysicsSourceIdentity);
 
-pub(in crate::node_graph) fn solver_identity() -> [u8; 32] {
+pub(in super::super) fn solver_identity() -> [u8; 32] {
     static SOURCES: std::sync::LazyLock<Vec<&'static PhysicsSourceIdentity>> = std::sync::LazyLock::new(|| {
         let mut sources: Vec<_> = inventory::iter::<PhysicsSourceIdentity>.into_iter().collect();
         sources.sort_unstable_by_key(|source| source.name);
