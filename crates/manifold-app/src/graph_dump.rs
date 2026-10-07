@@ -206,7 +206,7 @@ pub fn write_graph_dump(
 /// image representation. Returns the per-array manifest entry.
 fn dump_one_array(
     device: &GpuDevice,
-    a: &manifold_renderer::compositor::ArrayDump<'_>,
+    a: &manifold_renderer::preset_runtime::instrumentation::ArrayDump<'_>,
 ) -> serde_json::Value {
     let size = a.buffer.size();
     let item_count = if a.item_size == 0 {
@@ -307,7 +307,7 @@ fn dump_one_array(
 /// Dump every array output to `dir/arrays.json` (schema + stats + samples).
 pub fn write_array_dump(
     device: &GpuDevice,
-    arrays: &[manifold_renderer::compositor::ArrayDump<'_>],
+    arrays: &[manifold_renderer::preset_runtime::instrumentation::ArrayDump<'_>],
     dir: &Path,
 ) -> std::io::Result<()> {
     if arrays.is_empty() {

@@ -1642,20 +1642,7 @@ pub(crate) fn fold_uv_transform(offset: [f32; 2], rotation: f32, scale: [f32; 2]
 
 pub(crate) const IDENTITY_UV_TRANSFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
-/// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: finite stand-in for
-/// `KHR_materials_volume`'s `attenuationDistance` spec default of
-/// `+infinity` ("no attenuation beneath the surface"). Chosen large
-/// enough that Beer-Lambert transmittance
-/// (`exp(-distance_travelled / attenuation_distance)`, E2's shading math)
-/// is indistinguishable from `1.0` — no attenuation — at any distance a
-/// real MANIFOLD scene can produce (world units are typically single/low
-/// double digits; this is six orders of magnitude beyond that), so it's a
-/// byte-identical-in-effect substitute for the spec's true infinity, not
-/// an approximation that changes behavior. A true `f32::INFINITY` is not
-/// usable here: `serde_json` errors serializing a non-finite float, and
-/// this is the default for every glTF import that doesn't carry an
-/// explicit `attenuationDistance` — i.e. almost every asset.
-pub(crate) const VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION: f32 = 1.0e6;
+use crate::node_graph::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION;
 
 /// Parse a raw `KHR_texture_transform` extension JSON object (the shape the
 /// spec defines: optional `offset: [f32; 2]`, `rotation: f32`,

@@ -1,3 +1,4 @@
+use crate::preset_runtime::instrumentation::ArrayDump;
 use crate::gpu_encoder::GpuEncoder;
 use crate::layer_compositor::CompositeClipDescriptor;
 use crate::preset_context::ProjectTempo;
@@ -141,19 +142,6 @@ impl DumpRequest {
             DumpRequest::All(eid) | DumpRequest::Visible(eid, _) => eid,
         }
     }
-}
-
-/// One dumped `Array` (storage-buffer) output for inspection: identity, the
-/// live buffer, the per-item byte stride, and the channel layout as
-/// `(name, kind, byte_offset)` where `kind` ∈ {`f32`,`i32`,`u32`,`vec2f`,
-/// `vec3f`,`vec4f`}. The reader decodes the buffer against these fields.
-pub struct ArrayDump<'a> {
-    pub name: String,
-    pub port: String,
-    pub type_id: String,
-    pub buffer: &'a manifold_gpu::GpuBuffer,
-    pub item_size: u32,
-    pub fields: Vec<(String, &'static str, u32)>,
 }
 
 /// Trait for compositing layers into a final output.

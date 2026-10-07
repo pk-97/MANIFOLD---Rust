@@ -101,7 +101,6 @@ mod draw_ticks;
 mod edge_detect;
 mod envelope_decay;
 mod envelope_beats;
-pub(crate) use envelope_beats::{BeatEnvelopeState, BeatEnvelopeDurations};
 mod envelope_follower_ar;
 mod fbm_per_instance;
 mod field_combine;
@@ -1115,7 +1114,6 @@ mod tests {
 mod rigid_body;
 mod fluid_role_source;
 pub(crate) mod physics_world;
-pub(crate) use gltf_animation_source::quat_to_render_scene_euler;
 mod platonic_mesh;
 
 mod interpolate_particle_frames;

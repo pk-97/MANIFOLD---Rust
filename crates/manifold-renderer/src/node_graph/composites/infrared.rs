@@ -4,7 +4,7 @@
 //! cleanest demonstration of how primitives compose into a recognisable
 //! effect — the entire implementation is "two nodes wired in series".
 
-use crate::node_graph::composites::CompositeHandle;
+use crate::node_graph::param_binding::composite_handle::CompositeHandle;
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::primitives::{Brightness, ColorRamp};

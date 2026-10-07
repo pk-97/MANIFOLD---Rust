@@ -326,7 +326,7 @@ pub struct Material {
     pub volume_thickness_factor: f32,
     /// `KHR_materials_volume`'s `attenuationDistance`. glTF's own implicit
     /// default is `+infinity` ("no attenuation"); MANIFOLD substitutes the
-    /// finite `gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION`
+    /// finite `VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION`
     /// sentinel at import time (`f32::INFINITY` is not `serde_json`-safe
     /// and every import without an explicit value would hit it), so this
     /// field is never non-finite. A hand-authored material leaves it at
@@ -414,7 +414,7 @@ impl Material {
             transmission_factor: 0.0,
             volume_thickness_factor: 0.0,
             volume_attenuation_distance:
-                crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+                VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
             volume_attenuation_color: [1.0, 1.0, 1.0],
             volume_geometry: false,
             volume_scattering_density: 0.0,
@@ -514,6 +514,21 @@ fn premultiply_emission(rgb: [f32; 3], intensity: f32) -> [f32; 4] {
         1.0,
     ]
 }
+
+/// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: finite stand-in for
+/// `KHR_materials_volume`'s `attenuationDistance` spec default of
+/// `+infinity` ("no attenuation beneath the surface"). Chosen large
+/// enough that Beer-Lambert transmittance
+/// (`exp(-distance_travelled / attenuation_distance)`, E2's shading math)
+/// is indistinguishable from `1.0` — no attenuation — at any distance a
+/// real MANIFOLD scene can produce (world units are typically single/low
+/// double digits; this is six orders of magnitude beyond that), so it's a
+/// byte-identical-in-effect substitute for the spec's true infinity, not
+/// an approximation that changes behavior. A true `f32::INFINITY` is not
+/// usable here: `serde_json` errors serializing a non-finite float, and
+/// this is the default for every glTF import that doesn't carry an
+/// explicit `attenuationDistance` — i.e. almost every asset.
+pub(crate) const VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION: f32 = 1.0e6;
 
 #[cfg(test)]
 mod tests {

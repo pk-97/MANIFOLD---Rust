@@ -94,7 +94,8 @@ use core::assert_manifest_gate;
 use core::GRAPH_FORMAT;
 
 mod dump_sets;
-mod instrumentation;
+pub mod instrumentation;
+pub(crate) mod beat_envelope;
 mod scene_viewport;
 mod modifier_preview;
 mod modifier_runtime;

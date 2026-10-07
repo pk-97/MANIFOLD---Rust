@@ -471,7 +471,7 @@ crate::primitive! {
             label: "Volume Attenuation Distance",
             ty: ParamType::Float,
             default: ParamValue::Float(
-                crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+                crate::node_graph::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
             ),
             range: Some((0.001, 1.0e6)),
             enum_values: &[],
@@ -1309,7 +1309,7 @@ impl Primitive for PbrMaterial {
         let volume_thickness = ctx.scalar_or_param("volume_thickness", 0.0);
         let volume_attenuation_distance = ctx.scalar_or_param(
             "volume_attenuation_distance",
-            crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            crate::node_graph::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
         );
         let volume_attenuation_color_r = ctx.scalar_or_param("volume_attenuation_color_r", 1.0);
         let volume_attenuation_color_g = ctx.scalar_or_param("volume_attenuation_color_g", 1.0);

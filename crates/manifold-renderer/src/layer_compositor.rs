@@ -3086,7 +3086,7 @@ impl Compositor for LayerCompositor {
         Vec::new()
     }
 
-    fn dump_arrays(&self) -> Vec<crate::compositor::ArrayDump<'_>> {
+    fn dump_arrays(&self) -> Vec<crate::preset_runtime::instrumentation::ArrayDump<'_>> {
         let Some(effect_id) = self.dump_request.as_ref().map(|r| r.effect_id()) else {
             return Vec::new();
         };

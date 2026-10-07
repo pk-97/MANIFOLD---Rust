@@ -4,7 +4,7 @@
 //! source fan-out within a composite: the outer source feeds both the
 //! Blur input and Mix's "a" input.
 
-use crate::node_graph::composites::CompositeHandle;
+use crate::node_graph::param_binding::composite_handle::CompositeHandle;
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::primitives::{Blur, Mix};

@@ -1,6 +1,6 @@
 //! One event clock per Math View modifier, shared across all presentation modes.
 use super::*;
-use crate::node_graph::primitives::{BeatEnvelopeDurations, BeatEnvelopeState};
+use super::beat_envelope::{BeatEnvelopeDurations, BeatEnvelopeState};
 use crate::node_graph::scene_modifier_expand::math_resource_node_id;
 use manifold_core::scene_modifier_preset::SceneModifierInstanceDef;
 

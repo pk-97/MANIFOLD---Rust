@@ -9,7 +9,7 @@ use crate::node_graph::physics::{
     MAX_BODIES, ResolvedRigidImpulse, RigidSceneInputs, RigidSimulation,
 };
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
-use crate::node_graph::primitives::quat_to_render_scene_euler;
+use crate::node_graph::transform::quat_to_render_scene_euler;
 use crate::node_graph::transform::Transform;
 
 use super::super::impulses::ImpulseSum;

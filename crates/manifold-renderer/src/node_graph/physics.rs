@@ -1485,7 +1485,7 @@ impl RigidSimulation {
                 .expect("world constructed above")
                 .pose(handle)
                 .map_err(|e| e.to_string())?;
-            let rot_euler = super::primitives::quat_to_render_scene_euler(pose.rotation);
+            let rot_euler = super::transform::quat_to_render_scene_euler(pose.rotation);
             self.poses[i] = Transform {
                 pos: pose.position,
                 rot_euler,
@@ -1527,7 +1527,7 @@ impl RigidSimulation {
                     .map_err(|e| e.to_string())?;
                 self.copy_poses[index] = Transform {
                     pos: pose.position,
-                    rot_euler: super::primitives::quat_to_render_scene_euler(pose.rotation),
+                    rot_euler: super::transform::quat_to_render_scene_euler(pose.rotation),
                     scale: prototype.transform.scale,
                     billboard: false,
                 };

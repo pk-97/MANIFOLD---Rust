@@ -14,7 +14,7 @@
 //! brightening). Both follow naturally from this pattern; deferred
 //! until the V0 proof-point lands.
 
-use crate::node_graph::composites::CompositeHandle;
+use crate::node_graph::param_binding::composite_handle::CompositeHandle;
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;

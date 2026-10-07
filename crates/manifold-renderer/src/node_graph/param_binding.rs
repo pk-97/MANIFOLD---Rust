@@ -58,7 +58,8 @@ use std::borrow::Cow;
 use manifold_core::NodeId;
 use manifold_core::params::ParamManifest;
 
-use crate::node_graph::composites::CompositeHandle;
+pub mod composite_handle;
+use crate::node_graph::param_binding::composite_handle::CompositeHandle;
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::{ParamType, ParamValue};
@@ -834,7 +835,7 @@ pub fn binding_value(
 /// destination, so the editor can't surface it.
 pub fn outer_routings_from_bindings(
     bindings: &[ResolvedBinding],
-    handle: Option<&crate::node_graph::composites::CompositeHandle>,
+    handle: Option<&crate::node_graph::param_binding::composite_handle::CompositeHandle>,
     graph: &Graph,
 ) -> Vec<crate::node_graph::OuterParamRouting> {
     let id_to_handle: ahash::AHashMap<u32, String> = graph

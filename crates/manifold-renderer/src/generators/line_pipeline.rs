@@ -1,4 +1,5 @@
-use crate::generators::generator_math::DEFAULT_DOT_RADIUS;
+/// Default dot radius in normalized screen space.
+pub const DEFAULT_DOT_RADIUS: f32 = 0.005;
 use crate::gpu_encoder::GpuEncoder;
 
 /// Per-instance edge data uploaded to the GPU storage buffer.

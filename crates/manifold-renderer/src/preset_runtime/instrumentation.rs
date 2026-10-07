@@ -4,6 +4,21 @@
 
 use super::*;
 
+/// One dumped `Array` (storage-buffer) output for inspection: identity, the
+/// live buffer, the per-item byte stride, and the channel layout as
+/// `(name, kind, byte_offset)` where `kind` ∈ {`f32`,`i32`,`u32`,`vec2f`,
+/// `vec3f`,`vec4f`}. The reader decodes the buffer against these fields.
+pub struct ArrayDump<'a> {
+    pub name: String,
+    pub port: String,
+    pub type_id: String,
+    pub buffer: &'a manifold_gpu::GpuBuffer,
+    pub item_size: u32,
+    pub fields: Vec<(String, &'static str, u32)>,
+}
+
+
+
 impl PresetRuntime {
     /// Aim the authoring-time output preview at `node_id` within effect
     /// `effect_id`, or clear it. Resolves the editor's stable [`NodeId`] to
@@ -237,7 +252,7 @@ impl PresetRuntime {
     /// Captured `Array` (storage-buffer) outputs of effect `effect_id` after a
     /// dump `run`, with their channel layout — the array counterpart of
     /// [`Self::dump_textures`].
-    pub fn dump_arrays(&self, effect_id: &EffectId) -> Vec<crate::compositor::ArrayDump<'_>> {
+    pub fn dump_arrays(&self, effect_id: &EffectId) -> Vec<ArrayDump<'_>> {
         use crate::node_graph::ports::{ChannelElementType, PortType, std430_layout};
         let kind = |t: ChannelElementType| match t {
             ChannelElementType::F32 => "f32",
@@ -280,7 +295,7 @@ impl PresetRuntime {
                 .get_node(node)
                 .map(|inst| inst.node.type_id().as_str().to_string())
                 .unwrap_or_default();
-            out.push(crate::compositor::ArrayDump {
+            out.push(ArrayDump {
                 name: node_id.to_string(),
                 port: port.to_string(),
                 type_id,
@@ -404,7 +419,7 @@ impl PresetRuntime {
 
     /// Whole-graph `Array` dump (generator path) — the array counterpart of
     /// [`Self::dump_textures_all`].
-    pub fn dump_arrays_all(&self) -> Vec<crate::compositor::ArrayDump<'_>> {
+    pub fn dump_arrays_all(&self) -> Vec<ArrayDump<'_>> {
         use crate::node_graph::ports::{ChannelElementType, PortType, std430_layout};
         let kind = |t: ChannelElementType| match t {
             ChannelElementType::F32 => "f32",
@@ -446,7 +461,7 @@ impl PresetRuntime {
                     )
                 })
                 .unwrap_or_default();
-            out.push(crate::compositor::ArrayDump {
+            out.push(ArrayDump {
                 name,
                 port: port.to_string(),
                 type_id,
