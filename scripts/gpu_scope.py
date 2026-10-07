@@ -34,6 +34,7 @@ from pathlib import Path
 
 RENDERER_SRC = "crates/manifold-renderer/src/"
 ENGINE_SRC = "crates/manifold-node-engine/src/"
+CONTRACT_TESTS_DIR = RENDERER_SRC + "engine_contract_tests/"
 UI_PAINT_DIR = "crates/manifold-ui-paint/"
 UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::"]
 PROOFS_DIR = "crates/manifold-renderer/tests/gpu_proofs/"
@@ -225,17 +226,14 @@ NARROW_ROWS = [
       ENGINE_SRC + "water/primitives/shaders/particle_identity",
       ENGINE_SRC + "water/primitives/shaders/particle_publication",
       RENDERER_SRC + "node_graph/primitives/shaders/interpolate_particle_frames",
-      RENDERER_SRC + "node_graph/primitives/shaders/push_out_of_solid",
+      ENGINE_SRC + "water/primitives/shaders/push_out_of_solid",
       RENDERER_SRC + "node_graph/primitives/shaders/mix_arrays",
-      RENDERER_SRC + "node_graph/primitives/shaders/liquid_frame.wgsl"),
+      ENGINE_SRC + "water/primitives/shaders/liquid_frame_faces.wgsl"),
      (["particle_publication_gpu_tests::", "particle_frame_blend_tests::gpu_tests::",
        "interpolate_particle_frames::gpu_tests::", "push_out_of_solid::gpu_tests::",
        "mix_arrays::gpu_tests::", "gpu_flip_inflow_emits_at_empty_sites_into_free_slots",
        "gpu_flip_narrow_band_publication_repeats_failed_ticks",
-       "liquid_frame_live_held_frame_matches_offline",
-       "liquid_frame_whitewater_reads_the_selected_slot",
-       "liquid_frame_encode_failure_publishes_the_selected_outputs",
-       "liquid_frame_solid_shrink_keeps_mix_capacity"], [])),
+       "liquid_frame::gpu_tests::"], [])),
     # The sheeting stage; its step wiring is proven by gpu_flip_step's own filters.
     ((ENGINE_SRC + "water/primitives/gpu_flip_sheeting",
       ENGINE_SRC + "water/primitives/shaders/gpu_flip_sheeting.wgsl"),
@@ -272,9 +270,9 @@ EXPLICIT_ROWS = [
        "liquid_surface_tests::", "liquid_bricks::tests::gpu_tests::"], [])),
     ((ENGINE_SRC + "water/primitives/offset_lattice",
       ENGINE_SRC + "water/primitives/redistance_lattice",
-      RENDERER_SRC + "node_graph/primitives/lattice_closing",
-      RENDERER_SRC + "node_graph/primitives/shaders/offset_lattice",
-      RENDERER_SRC + "node_graph/primitives/shaders/redistance_lattice"),
+      ENGINE_SRC + "water/primitives/lattice_closing",
+      ENGINE_SRC + "water/primitives/shaders/offset_lattice",
+      ENGINE_SRC + "water/primitives/shaders/redistance_lattice"),
      (["fluid_fill_pits"], [])),
     (("crates/manifold-gpu/src/metal/raytrace.rs",
       RENDERER_SRC + "node_graph/primitives/render_scene.rs",
@@ -291,7 +289,7 @@ EXPLICIT_ROWS = [
       RENDERER_SRC + "node_graph/primitives/grid_to_matter",
       RENDERER_SRC + "node_graph/primitives/zero_array",
       ENGINE_SRC + "water/primitives/shaders/matter_",
-      RENDERER_SRC + "node_graph/primitives/shaders/grid_to_matter",
+      ENGINE_SRC + "water/primitives/shaders/grid_to_matter",
       RENDERER_SRC + "node_graph/primitives/shaders/zero_array",
       PROOFS_DIR + "matter_",
       PROOFS_DIR + "substeps"),
@@ -305,8 +303,8 @@ EXPLICIT_ROWS = [
       ENGINE_SRC + "water/primitives/liquid_fill",
       ENGINE_SRC + "water/primitives/face_sample_component",
       ENGINE_SRC + "water/primitives/shaders/gpu_flip_",
-      RENDERER_SRC + "node_graph/primitives/shaders/liquid_fill",
-      RENDERER_SRC + "node_graph/primitives/shaders/face_sample_component"),
+      ENGINE_SRC + "water/primitives/shaders/liquid_fill",
+      ENGINE_SRC + "water/primitives/shaders/face_sample_component"),
      (["gpu_flip_", "face_grid_tests::"], REPORTER_SKIPS)),
     # The GPU FLIP step runs its sort, scans and coarse inverse gated on the
     # clock's slot plan; only the inactive-slot proof runs them gated.
@@ -333,10 +331,11 @@ EXPLICIT_ROWS = [
       RENDERER_SRC + "node_graph/primitives/surface_mesh_normals",
       ENGINE_SRC + "water/primitives/surface_mesh_parity",
       RENDERER_SRC + "node_graph/primitives/surface_mesh_freeze_tests",
-      RENDERER_SRC + "node_graph/primitives/shaders/count_surface_edges",
-      RENDERER_SRC + "node_graph/primitives/shaders/surface_edge_",
-      RENDERER_SRC + "node_graph/primitives/shaders/volume_surface_mesh",
-      RENDERER_SRC + "node_graph/primitives/shaders/relax_surface_mesh",
+      ENGINE_SRC + "water/primitives/shaders/count_surface_edges",
+      ENGINE_SRC + "water/primitives/shaders/surface_edge_",
+      ENGINE_SRC + "water/primitives/shaders/volume_surface_mesh",
+      ENGINE_SRC + "water/primitives/shaders/relax_surface_mesh",
+      ENGINE_SRC + "water/primitives/shaders/surface_mesh_",
       RENDERER_SRC + "node_graph/primitives/shaders/surface_mesh_",
       PROOFS_DIR + "liquid_indexed.rs"),
      (["count_surface_edges::gpu_tests::", "volume_surface_mesh::gpu_tests::", "surface_mesh_normals::gpu_tests::", "surface_mesh_freeze_tests::gpu_tests::", "fluid_indexed_", "liquid_indexed::"], [])),
@@ -430,6 +429,11 @@ for _engine_path in (
 del _engine_path
 
 LIB_PROOF_ROWS[RENDERER_SRC + "reference_fixtures.rs"] = CPU_FLIP_REFERENCE_FILTERS
+for _pressure_fixture in ("dambreak_pressure_problems.bin.zst", "deep_pool_pressure_problems.bin.zst",
+                          "deep_pool_density_problems.bin.zst", "gpu_flip_pressure_golden.txt"):
+    LIB_PROOF_ROWS["crates/manifold-node-engine/tests/fixtures/" + _pressure_fixture] = [
+        "water::primitives::gpu_flip_pressure_tests::",
+    ]
 
 PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
 
@@ -438,7 +442,7 @@ def is_gpu_path(path):
     """Paths that trigger the GPU-proofs leg (mirrors the context-nudge triggers)."""
     if path.endswith(".wgsl"):
         return True
-    if path.startswith(("crates/manifold-gpu/", UI_PAINT_DIR, ENGINE_SRC, RENDERER_SRC + "node_graph/")):
+    if path.startswith(("crates/manifold-gpu/", UI_PAINT_DIR, ENGINE_SRC, CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
         return True
     if "shaders/" in path or "gpu::gpu_encoder" in path:
         return True
@@ -537,6 +541,41 @@ def module_filters(path):
     return ["::".join(m) + "::" for m in mods if m]
 
 
+def contract_module_filters(path, repo):
+    """Resolve relocated contracts through their real Rust module mounts."""
+    from crate_move_replay import module_items
+    repo = Path(repo)
+    target = (repo / path).resolve()
+    found = set()
+
+    def walk(source, prefix, ancestors):
+        source = source.resolve()
+        if source in ancestors or not source.is_file():
+            return
+        if source == target:
+            found.add("::".join(prefix) + "::")
+            return
+        text = source.read_text()
+        for start, end, head, scope in module_items(text):
+            declaration = re.match(r"(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", text[head:end])
+            if not declaration:
+                continue
+            name = declaration[1]
+            attrs = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', text[start:head])
+            if attrs:
+                child = source.parent.joinpath(*scope, attrs[-1])
+            else:
+                base = source.parent if source.stem in ("lib", "mod") else source.with_suffix("")
+                child = base.joinpath(*scope, name + ".rs")
+                if not child.is_file():
+                    child = base.joinpath(*scope, name, "mod.rs")
+            if "engine_contract_tests" in child.parts:
+                walk(child, prefix + scope + (name,), ancestors | {source})
+
+    walk(repo / RENDERER_SRC / "lib.rs", (), set())
+    return sorted(found)
+
+
 def path_attr_filters(path, repo):
     """Filters for a `<dir>/tests/<file>.rs` pulled in by `#[path] mod x;` in `<dir>/mod.rs`.
 
@@ -544,6 +583,8 @@ def path_attr_filters(path, repo):
     path-derived filter would select nothing. Unresolvable preset_runtime test
     files fall back to the whole preset_runtime module rather than to nothing.
     """
+    if path.startswith(CONTRACT_TESTS_DIR):
+        return contract_module_filters(path, repo)
     root = ENGINE_SRC if path.startswith(ENGINE_SRC) else RENDERER_SRC
     parts = path[len(root):].split("/")
     if len(parts) < 3 or parts[-2] != "tests":
@@ -635,6 +676,12 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
         if path.startswith(UI_PAINT_DIR):
             plan.ui_paint = True
             continue
+        if path.startswith(CONTRACT_TESTS_DIR):
+            mounted = contract_module_filters(path, repo)
+            if not mounted:
+                plan.unmapped.append((path, "contract test has no resolvable Rust module mount"))
+                continue
+            plan.filters.update(mounted)
         plan.filters.update(changed_test_filters(path, repo, base))
         if is_gltf_path(path):
             plan.glb = True
@@ -656,6 +703,9 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
             plan.filters.update(BROAD_FILTERS)
             plan.broad.append((path, "manifold-gpu core"))
             continue
+        if path in LIB_PROOF_ROWS:
+            plan.filters.update(LIB_PROOF_ROWS[path])
+            continue
         if path.endswith(DOC_SUFFIXES):
             continue
         if path.endswith(".wgsl"):
@@ -667,9 +717,6 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
             continue
         if path.startswith(CPU_FLIP_FIXTURES_DIR):
             plan.filters.update(CPU_FLIP_REFERENCE_FILTERS)
-            continue
-        if path in LIB_PROOF_ROWS:
-            plan.filters.update(LIB_PROOF_ROWS[path])
             continue
         if path.startswith((RENDERER_SRC, ENGINE_SRC)) and path.endswith(".rs"):
             plan.filters.update(path_attr_filters(path, repo) or module_filters(path))
