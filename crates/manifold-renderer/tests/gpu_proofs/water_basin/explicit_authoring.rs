@@ -144,7 +144,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
     let mut fluid = AddSceneFluidCommand::new(
         target.clone(),
         scene,
-        metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
+        manifold_renderer::reference_fixtures::cpu_flip_metadata(),
         metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"),
         metadata_for_node_type("node.scene_object"),
@@ -273,7 +273,7 @@ fn scene_physics_explicit_object_uses_shared_world_after_fluid_authoring() {
             .unwrap();
     instrument(&mut def, &body_id);
     let harness = harness::shared();
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     registry.register("test.explicit_physics_observer", || {
         Box::new(Observe(EffectNodeType::new(
             "test.explicit_physics_observer",

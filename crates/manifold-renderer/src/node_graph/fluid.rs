@@ -1,55 +1,85 @@
 //! CPU FLIP reference runtime. Native state belongs exclusively to a worker;
 //! the content thread retains bounded control history and immutable mesh frames.
+#[cfg(feature = "gpu-proofs")]
 use std::collections::VecDeque;
+#[cfg(feature = "gpu-proofs")]
 use std::path::PathBuf;
+#[cfg(feature = "gpu-proofs")]
 use std::sync::Arc;
+#[cfg(feature = "gpu-proofs")]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "gpu-proofs")]
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 
+#[cfg(feature = "gpu-proofs")]
 use manifold_core::Seconds;
+#[cfg(feature = "gpu-proofs")]
 use manifold_fluids::{
     FrameStats, LiquidOptions, SurfaceOptions, TimeStepOptions, WhitewaterKind, WhitewaterOptions,
     WhitewaterParticle,
 };
+#[cfg(feature = "gpu-proofs")]
 use manifold_physics::FieldValue;
+#[cfg(feature = "gpu-proofs")]
 use manifold_physics::clock::ClockFrame;
+#[cfg(feature = "gpu-proofs")]
 use manifold_physics::stepping::StepInterval;
+#[cfg(feature = "gpu-proofs")]
 use manifold_physics::input::{
     AppliedEvent, EventQueue, HistoryWrite, InputHistory, Timestamped, input_span,
     input_span_before,
 };
 
+#[cfg(feature = "gpu-proofs")]
 use super::fluid_cache::CacheMode;
 #[cfg(test)]
+#[cfg(feature = "gpu-proofs")]
 use super::fluid_cache::{CacheReader, CacheWriter};
+#[cfg(feature = "gpu-proofs")]
 use super::fluid_role::FluidRole;
+#[cfg(feature = "gpu-proofs")]
 use super::physics_events::ResolvedNodeImpulse;
 use super::transform::Transform;
+#[cfg(feature = "gpu-proofs")]
 use super::vector_field::ContinuousField;
+#[cfg(feature = "gpu-proofs")]
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 
 mod coupled;
 mod domain;
+#[cfg(feature = "gpu-proofs")]
 pub(super) mod identity;
+#[cfg(feature = "gpu-proofs")]
 mod impulses;
+#[cfg(feature = "gpu-proofs")]
 mod native;
+#[cfg(feature = "gpu-proofs")]
 pub(crate) mod particle_ring;
 #[cfg(test)]
+#[cfg(feature = "gpu-proofs")]
 mod playback_tests;
 #[cfg(all(test, feature = "water-race-probes"))]
+#[cfg(feature = "gpu-proofs")]
 mod race_probe;
+#[cfg(feature = "gpu-proofs")]
 mod roles;
+#[cfg(feature = "gpu-proofs")]
 mod take;
 pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};
 pub(crate) use coupled::Layout as CoupledRigidLayout;
 pub use domain::{FluidDomainLayout, domain_layout};
+#[cfg(feature = "gpu-proofs")]
 use impulses::IMPULSE_CAPACITY;
+#[cfg(feature = "gpu-proofs")]
 use native::NativeSimulation;
+#[cfg(feature = "gpu-proofs")]
 pub use take::{FluidTakeFrame, FluidTakeIdentity, FluidTakeReplay, TakeRange, TakeTime};
+#[cfg(feature = "gpu-proofs")]
 pub(super) use take::{PlaybackClock, PreparedGeometry};
 
 pub const TICK: f64 = 1.0 / 60.0;
 
+#[cfg(feature = "gpu-proofs")]
 pub(super) fn simulation_tick(time: f64) -> u64 {
     (time / TICK + 1e-8).floor() as u64
 }
@@ -65,7 +95,9 @@ pub(crate) fn display_blend(s: f64, t_a: f64, t_b: f64) -> (f32, f32) {
     (((s - t_a) / span).clamp(0.0, 1.0) as f32, span as f32)
 }
 // Initial retained-input allocation; histories grow without discarding debt.
+#[cfg(feature = "gpu-proofs")]
 const HISTORY_CAPACITY: usize = 8192;
+#[cfg(feature = "gpu-proofs")]
 const BATCH: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +117,7 @@ pub struct FluidDomainSnapshot {
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(feature = "gpu-proofs")]
 pub struct FluidSettings {
     pub seed: u64,
     pub resolution: u32,
@@ -105,6 +138,7 @@ pub struct FluidSettings {
     pub max_vertices: usize,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Default for FluidSettings {
     fn default() -> Self {
         Self {
@@ -129,6 +163,7 @@ impl Default for FluidSettings {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl FluidSettings {
     pub fn validate(self) -> Result<(), String> {
         self.liquid.validate().map_err(|error| error.to_string())?;
@@ -190,6 +225,7 @@ impl FluidSettings {
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(feature = "gpu-proofs")]
 pub struct FluidControls {
     pub emitter: Transform,
     pub obstacle: Transform,
@@ -199,6 +235,7 @@ pub struct FluidControls {
     pub inflow_speed: f32,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Default for FluidControls {
     fn default() -> Self {
         Self {
@@ -220,6 +257,7 @@ impl Default for FluidControls {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl FluidControls {
     fn validate(self) -> Result<(), String> {
         for pose in [self.emitter, self.obstacle] {
@@ -254,12 +292,14 @@ impl FluidControls {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(feature = "gpu-proofs")]
 struct Sample {
     time: f64,
     controls: FluidControls,
     acceleration_field: Option<FieldValue>,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Timestamped for Sample {
     fn time(&self) -> manifold_physics::Seconds {
         manifold_physics::Seconds(self.time)
@@ -267,12 +307,14 @@ impl Timestamped for Sample {
 }
 
 #[derive(Clone, Copy)]
+#[cfg(feature = "gpu-proofs")]
 struct Step {
     previous: FluidControls,
     current: FluidControls,
     next: FluidControls,
 }
 
+#[cfg(feature = "gpu-proofs")]
 fn request_count(
     cache_mode: CacheMode,
     due: u64,
@@ -301,12 +343,14 @@ pub(crate) fn whitewater_fade(lifetime: f32) -> f32 {
 /// Separate populations share the mesh publication epoch and tick. Each can use
 /// an ordinary scene object with its own material, mesh and live instance count.
 #[derive(Default, Clone)]
+#[cfg(feature = "gpu-proofs")]
 pub struct WhitewaterFrame {
     pub foam: Vec<InstanceTransform>,
     pub bubbles: Vec<InstanceTransform>,
     pub spray: Vec<InstanceTransform>,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl WhitewaterFrame {
     fn clear(&mut self) {
         self.foam.clear();
@@ -346,18 +390,21 @@ impl WhitewaterFrame {
 /// The project address is distinct from the native tick returned by playback.
 /// Untimed legacy caches keep their historical seconds-times-speed address.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg(feature = "gpu-proofs")]
 struct PlaybackAddress {
     transport: Seconds,
     legacy_tick: u64,
 }
 
 #[derive(Clone, Copy)]
+#[cfg(feature = "gpu-proofs")]
 struct PlaybackRequest {
     address: PlaybackAddress,
     published_tick: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
+#[cfg(feature = "gpu-proofs")]
 struct PlaybackCompletion {
     address: PlaybackAddress,
     unchanged: bool,
@@ -365,6 +412,7 @@ struct PlaybackCompletion {
 
 /// What a request publishes besides the mesh (GPU_FLUID_SURFACE_DESIGN.md
 /// D7, D13, D19). Travels in the request and comes back in its reply.
+#[cfg(feature = "gpu-proofs")]
 pub(crate) struct Outputs {
     /// Per-tick CPU surface reconstruction; off only when nothing reads
     /// `vertices` (D13). Fixed for a world's lifetime.
@@ -377,6 +425,7 @@ pub(crate) struct Outputs {
     growth: Option<(u32, usize)>,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Default for Outputs {
     fn default() -> Self {
         Self {
@@ -388,6 +437,7 @@ impl Default for Outputs {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 struct Request {
     outputs: Outputs,
     source_identity: Option<[u8; 32]>,
@@ -412,6 +462,7 @@ struct Request {
     playback: Option<PlaybackRequest>,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Request {
     fn interval(&self, tick: u64) -> Option<StepInterval> {
         let frame = self.schedule.as_ref()?;
@@ -428,6 +479,7 @@ impl Request {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 struct Reply {
     outputs: Outputs,
     source_identity: Option<[u8; 32]>,
@@ -449,6 +501,7 @@ struct Reply {
     playback: Option<PlaybackCompletion>,
 }
 
+#[cfg(feature = "gpu-proofs")]
 fn cancelled_reply(request: Request) -> Reply {
     Reply {
         outputs: Outputs {
@@ -477,12 +530,14 @@ fn cancelled_reply(request: Request) -> Reply {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 struct Worker {
     requests: SyncSender<Request>,
     replies: Receiver<Reply>,
     cancel_epoch: Arc<AtomicU64>,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Worker {
     fn spawn(cancel_epoch: Arc<AtomicU64>) -> Result<Self, String> {
         let worker_cancel_epoch = Arc::clone(&cancel_epoch);
@@ -510,12 +565,14 @@ impl Worker {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Drop for Worker {
     fn drop(&mut self) {
         self.cancel_epoch.fetch_add(1, Ordering::Release);
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 pub struct FluidRuntime {
     source_identity: Option<[u8; 32]>,
     committed_source_identity: Option<[u8; 32]>,
@@ -569,6 +626,7 @@ pub struct FluidRuntime {
     surface_meshing: bool,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Default for FluidRuntime {
     fn default() -> Self {
         Self {
@@ -624,12 +682,14 @@ impl Default for FluidRuntime {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Drop for FluidRuntime {
     fn drop(&mut self) {
         self.cancel_epoch.fetch_add(1, Ordering::Release);
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl FluidRuntime {
     pub(crate) fn set_source_identity(&mut self, identity: Result<[u8; 32], String>) {
         let identity = match identity {
@@ -1623,6 +1683,7 @@ impl FluidRuntime {
 }
 
 #[cfg(test)]
+#[cfg(feature = "gpu-proofs")]
 mod tests {
     use super::*;
     use manifold_physics::VectorField;
@@ -3422,4 +3483,5 @@ mod tests {
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(feature = "gpu-proofs")]
 mod particle_tests;

@@ -69,12 +69,17 @@ mod scene_impulses;
 pub use scene_impulses::SceneImpulseDiagnostics;
 pub use physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
 mod physics_carry;
+#[cfg(feature = "gpu-proofs")]
 mod physics_sources;
 mod physics_source_runtime;
+#[cfg(feature = "gpu-proofs")]
 mod physics_source_controls;
+#[cfg(feature = "gpu-proofs")]
 mod physics_source_state;
+#[cfg(feature = "gpu-proofs")]
 mod physics_source_chain;
 #[cfg(test)]
+#[cfg(feature = "gpu-proofs")]
 mod physics_source_state_tests;
 mod convert_heal;
 mod math_view;

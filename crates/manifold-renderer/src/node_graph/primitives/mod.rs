@@ -7,6 +7,7 @@
 //! not a structural divide.
 
 mod abs_texture;
+#[cfg(feature = "gpu-proofs")]
 pub(crate) mod fluid_surface;
 mod glyph_atlas;
 mod render_glyph_grid;

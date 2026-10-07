@@ -20,7 +20,11 @@ use std::mem::size_of;
 
 use ahash::AHashMap;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID, is_liquid_domain};
+#[cfg(feature = "gpu-proofs")]
+use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
+#[cfg(feature = "gpu-proofs")]
+use crate::node_graph::primitives::{matter_domain::fill_region, matter_fill::fill_cells};
+use manifold_core::liquid_domain::{MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID, is_liquid_domain};
 use manifold_core::{Beats, Seconds};
 
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
@@ -49,12 +53,13 @@ use crate::node_graph::primitives::dot_products::MAX_ROWS;
 use crate::node_graph::liquid::coupling::REACTION_FLOATS;
 use crate::node_graph::primitives::gpu_flip_bodies::held_bytes as body_pass_bytes;
 use crate::node_graph::primitives::face_sample_component::axis_param;
+#[cfg(feature = "gpu-proofs")]
 use crate::node_graph::primitives::fluid_surface::{boundary_collisions, fluid_settings};
 use crate::node_graph::primitives::liquid_fill::{fill_of, filled_sites, pool_slots};
 use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, partial_bytes};
-use crate::node_graph::primitives::matter_domain::{fill_region, matter_geometry};
+use crate::node_graph::primitives::matter_domain::{matter_geometry};
 use crate::node_graph::primitives::matter_face_component::matter_cells;
-use crate::node_graph::primitives::matter_fill::{fill_cells, fill_count};
+use crate::node_graph::primitives::matter_fill::{fill_count};
 use crate::node_graph::primitives::particle_volume::{refined_nodes, volume_scale};
 use crate::node_graph::primitives::prefix_scan::storage_words;
 use crate::node_graph::primitives::sort_particles_into_cells::range_storage_bytes;
@@ -485,11 +490,18 @@ pub struct LiquidPreset {
 impl LiquidPreset {
     pub fn build(def: &EffectGraphDef) -> Result<Self, ExtentError> {
         let registry = PrimitiveRegistry::with_builtin();
+        Self::build_with_registry(def, &registry)
+    }
+
+    /// Build with an explicitly selected primitive registry. Product callers
+    /// use [`Self::build`], while reference proofs opt into the retired CPU
+    /// FLIP node through `PrimitiveRegistry::with_cpu_flip_reference`.
+    pub(crate) fn build_with_registry(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Result<Self, ExtentError> {
         let build = |error: String| ExtentError::Build(error);
-        let expanded = crate::node_graph::scene_modifier_expand::expand_scene_modifiers(def, &registry)
+        let expanded = crate::node_graph::scene_modifier_expand::expand_scene_modifiers(def, registry)
             .map_err(|error| build(error.to_string()))?;
         let flat = manifold_core::flatten::flatten_groups(&expanded).map_err(|error| build(error.to_string()))?;
-        let graph = flat.into_graph(&registry, &Default::default()).map_err(|error| build(format!("{error:?}")))?;
+        let graph = flat.into_graph(registry, &Default::default()).map_err(|error| build(format!("{error:?}")))?;
         let plan = compile(&graph).map_err(|error| build(format!("{error:?}")))?;
         let domains: Vec<_> = graph.nodes().filter(|node| is_liquid_domain(node.node.type_id().as_str())).map(|node| node.id).collect();
         if domains.is_empty() {
@@ -556,6 +568,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.push_out_of_solid", check: push_out_of_solid },
     ExtentRule { type_id: "node.mix_arrays", check: mix_arrays },
     ExtentRule { type_id: MATTER_DOMAIN_TYPE_ID, check: matter_domain },
+    #[cfg(feature = "gpu-proofs")]
     ExtentRule { type_id: FLIP_DOMAIN_TYPE_ID, check: fluid_surface },
     ExtentRule { type_id: "node.matter_fill", check: matter_fill },
     ExtentRule { type_id: "node.matter_state", check: matter_state },
@@ -839,6 +852,7 @@ fn field_reads(x: &AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers_if_bound("impulses", bytes)
 }
 
+#[cfg(feature = "gpu-proofs")]
 fn fluid_surface(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let faces = boundary_collisions(x.params()).map_err(Verdict::Refused)?;
     let settings = fluid_settings(

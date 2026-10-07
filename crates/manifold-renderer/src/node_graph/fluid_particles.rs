@@ -165,6 +165,7 @@ pub fn searched_bins(bins: [f32; 3], range_bytes: u64, atom: &str) -> Result<[u3
 
 /// View of a `FluidParticle` buffer as the solver's record type, for workers
 /// that write the seam from CPU memory.
+#[cfg(feature = "gpu-proofs")]
 pub(crate) fn as_records(particles: &mut [FluidParticle]) -> &mut [manifold_fluids::ParticleRecord] {
     // SAFETY: identical size, field offsets and plain-old-data fields,
     // asserted above; every bit pattern is valid for both.

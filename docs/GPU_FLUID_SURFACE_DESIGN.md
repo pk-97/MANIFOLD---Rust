@@ -4,9 +4,9 @@
 
 **Status:** BUILDING · P1–P3 (both passes), P5, P6–P6c, P6e, P6g and Sim Rate built and GPU-proven; P4 dropped; P6d and P6f measured; GPU water follows the FLIP Fluids engine (audit below). Owed: P7–P8, optional-A fusion (BUG-adcx (unwired gather blocks fusion)), surface kernel cost (BUG-l24y (GPU liquid surface kernels cost)) and the capped live clock (BUG-g75v.11 (capped live clock rework) in BUG-g75v (GPU water campaign)). See [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
-**Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
+**Product boundary (2026-10-07):** the show uses GPU FLIP. CPU FLIP scene stepping is proof-only. D1 live-CPU clauses, D3, D9 and P4 do not apply to product playback. Shared seams, atoms and interpolation remain.
 
-On stage today the water is a CPU instrument that cannot keep time. At resolution 64 the
+Historical CPU measurements motivating this surface work: At resolution 64 the
 FLIP worker spends about 245 ms per 1/60 s tick; 35 ms of that is the surface mesher at
 Surface Detail 0, and remeshing at Detail 1 or 2 costs 347 or 800 ms on its own
 (measured single runs, 90 ticks, 2026-09-29). This design takes the two stages that do

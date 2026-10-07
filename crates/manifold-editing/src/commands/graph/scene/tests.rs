@@ -413,8 +413,8 @@ fn scene_physics_refuses_enable_physics_on_water() {
     const WATER: &str = "Water cannot take Enable Physics";
     for (name, json) in [
         (
-            "WaterDamBreakGpu",
-            include_str!("../../../../../manifold-renderer/assets/generator-presets/WaterDamBreakGpu.json"),
+            "WaterDamBreakGpuFlip",
+            include_str!("../../../../../manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json"),
         ),
         (
             "WaterDamBreakMatter",

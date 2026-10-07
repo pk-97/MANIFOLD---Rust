@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 389 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 388 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -167,7 +167,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (95)
+### 3D Geometry (94)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -194,7 +194,6 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | Flatten 3D → 2D | `node.flatten_3d` | Filter | Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering. |
 | Flatten 4D → 3D | `node.flatten_4d` | Filter | Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape. |
 | Fluid Role Source | `node.fluid_role_source` | Source | Prepares one reusable fluid source or collider geometry and emits its typed CPU role wire. |
-| Liquid Surface | `node.fluid_surface` | Source | Simulate liquid and generate its surface. Connect optional sources and colliders to control its motion. |
 | Fold | `node.fold_mesh` | Filter | Mirrors a mesh across a plane through the origin along one axis, with adjustable blend amount — the building block for kaleidoscope geometry. |
 | Free Camera | `node.free_camera` | Source | A free-look camera positioned and aimed directly with Euler angles, instead of orbiting a target. Gizmo- and import-friendly. |
 | Glitch Jitter | `node.glitch_jitter` | Filter | Snaps every vertex to a new random offset on each time step, giving a hard-cut digital glitch look. |
@@ -519,7 +518,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (99)
+### Effect & generator presets (95)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -552,7 +551,6 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | `FluidSim3D` | Fluid Sim 3D | generator | Sim | 26 |
 | `Glitch` | Glitch | effect | Stylize | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
-| `HoneyDamBreak` | Honey — Dam Break | generator | Sim | 2306 |
 | `Infrared` | Infrared | effect | Filmic | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
@@ -610,9 +608,6 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
-| `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
-| `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
-| `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2314 |
 | `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2005 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1397 |
 | `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 1998 |

@@ -9,6 +9,7 @@ use std::{borrow::Cow, cell::Cell};
 mod source_tests;
 #[path = "scene_routes_tests.rs"]
 mod scene_routes_tests;
+#[cfg(feature = "gpu-proofs")]
 #[path = "coupled_playback_tests.rs"]
 mod coupled_playback_tests;
 

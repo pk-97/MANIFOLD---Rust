@@ -21,9 +21,13 @@ use super::super::{
 };
 use super::{collect_all_handles, max_node_id_over, restore_scene_owner_graph};
 
+#[cfg(feature = "gpu-proofs")]
 const ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
+#[cfg(feature = "gpu-proofs")]
 const TRANSFORM_TYPE_ID: &str = "node.transform_3d";
+#[cfg(feature = "gpu-proofs")]
 const MATERIAL_TYPE_ID: &str = "node.pbr_material";
+#[cfg(feature = "gpu-proofs")]
 const SCENE_OBJECT_TYPE_ID: &str = "node.scene_object";
 const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 const ID_SPACE_EXHAUSTED: &str = "Add Fluid document id space is exhausted";
@@ -31,7 +35,9 @@ const ID_SPACE_EXHAUSTED: &str = "Add Fluid document id space is exhausted";
 mod template;
 mod world_controls;
 
-pub use template::{ExposureSet, LiquidTemplate, TemplateExposure, flip_scene_fluid_template};
+pub use template::{ExposureSet, LiquidTemplate, TemplateExposure};
+#[cfg(feature = "gpu-proofs")]
+pub use template::flip_scene_fluid_template;
 
 type GraphSnapshot = EffectGraphDef;
 
@@ -540,6 +546,7 @@ fn float(value: f32) -> SerializedParamValue {
     SerializedParamValue::Float { value }
 }
 
+#[cfg(feature = "gpu-proofs")]
 fn int(value: i32) -> SerializedParamValue {
     SerializedParamValue::Int { value }
 }

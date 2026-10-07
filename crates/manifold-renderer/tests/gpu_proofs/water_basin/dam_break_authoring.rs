@@ -7,9 +7,9 @@ use manifold_core::{EffectId, NodeId};
 #[test]
 fn migrated_dam_break_publishes_progress_while_live_preview_is_behind() {
     let harness = harness::shared();
-    let mut def: EffectGraphDef = serde_json::from_str(include_str!(
-        "../../../assets/generator-presets/WaterDamBreak.json"
-    ))
+    let mut def: EffectGraphDef = serde_json::from_str(
+        manifold_renderer::reference_fixtures::cpu_flip_preset_json("WaterDamBreak.json"),
+    )
     .unwrap();
     manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
     // Scalar outputs without consumers are pruned. Keep the surface count live

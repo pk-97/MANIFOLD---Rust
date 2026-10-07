@@ -329,12 +329,11 @@ mod tests {
     /// BUG-4lfm (GPU-surface water not recognised as water): the water object
     /// is fed by particles_b → sort → blobs → volume → marching cubes, never
     /// by fluid_surface.vertices, and must still reach its domain.
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn gpu_surface_water_resolves_to_its_flip_domain() {
-        let def = preset(include_str!(
-            "../../../assets/generator-presets/WaterDamBreakGpu.json"
-        ));
-        let registry = PrimitiveRegistry::with_builtin();
+        let def = preset(crate::reference_fixtures::cpu_flip_preset_json("WaterDamBreakGpu.json"));
+        let registry = PrimitiveRegistry::with_cpu_flip_reference();
         let index = FlatSceneIndex::build(&def).unwrap();
         let water = top("water_object");
         assert_eq!(liquid_domain_of(&index, &water).unwrap(), Some(top("fluid_surface")));

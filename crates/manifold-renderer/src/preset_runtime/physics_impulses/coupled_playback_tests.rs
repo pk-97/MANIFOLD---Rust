@@ -31,7 +31,7 @@ fn authored_shared_world_fixture() -> EffectGraphDef {
     let mut add = AddSceneFluidCommand::new(
         target.clone(),
         render_id,
-        crate::node_graph::scene_exposure::metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
+        crate::reference_fixtures::cpu_flip_metadata(),
         crate::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
         crate::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
         crate::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),

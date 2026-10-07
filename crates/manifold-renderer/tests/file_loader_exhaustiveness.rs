@@ -57,12 +57,12 @@ fn every_registered_file_reader_has_a_core_table_entry() {
 }
 
 #[test]
-fn every_table_entry_names_a_registered_primitive() {
+fn every_table_entry_names_a_registered_or_retired_primitive() {
     let registry = PrimitiveRegistry::with_builtin();
     let missing: Vec<&str> = ALL_FILE_LOADER_TYPE_IDS
         .iter()
         .copied()
-        .filter(|t| !registry.contains(t))
+        .filter(|t| *t != manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID && !registry.contains(t))
         .collect();
     assert!(
         missing.is_empty(),
@@ -77,6 +77,12 @@ fn table_entries_are_exactly_the_file_reading_primitives() {
     // a node that doesn't actually read a file).
     let registry = PrimitiveRegistry::with_builtin();
     for type_id in ALL_FILE_LOADER_TYPE_IDS {
+        // Legacy project collection must preserve recorded assets even though
+        // the retired solver has no product constructor or controls.
+        if *type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID {
+            assert!(!registry.contains(type_id));
+            continue;
+        }
         let node = registry
             .construct(type_id)
             .unwrap_or_else(|| panic!("table names unregistered {type_id}"));
