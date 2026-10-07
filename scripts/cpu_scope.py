@@ -26,7 +26,7 @@ def godfile_paths():
 INTEGRATION_ROWS = {
     "Cargo.toml": ("manifold-app", ["crate_layering"]),
     "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
-    "crates/manifold-renderer/src/node_graph/fluid.rs": ("manifold-renderer", ["fluid_preset"]),
+    "crates/manifold-renderer/src/node_graph/fluid.rs": ("manifold-renderer", ["gpu_proofs"]),
     **{path: ("manifold-app", ["godfile_regrowth"]) for path in godfile_paths()},
 }
 # Contracts over every file under a prefix, Rust or not:

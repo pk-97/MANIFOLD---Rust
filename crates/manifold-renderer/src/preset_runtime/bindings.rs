@@ -197,5 +197,4 @@ impl PresetRuntime {
             slot.apply_relight_params(&mut self.graph, params);
         }
     }
-
 }

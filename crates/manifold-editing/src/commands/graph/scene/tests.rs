@@ -433,7 +433,8 @@ fn scene_physics_refuses_enable_physics_on_water() {
                 wire.to_port.strip_prefix("object_").and_then(|slot| slot.parse::<u32>().ok())
             })
         };
-        let water = slot_of("water_object").expect("the preset's water object has a slot");
+        let water = slot_of(if name == "WaterDamBreakGpuFlip" { "water_family" } else { "water_object" })
+            .expect("the preset's water object has a slot");
         let refusal = scene_object_physics_eligibility(&graph, scene.id, water)
             .expect_err("water must refuse Enable Physics");
         assert!(refusal.starts_with(WATER), "{name}: {refusal}");

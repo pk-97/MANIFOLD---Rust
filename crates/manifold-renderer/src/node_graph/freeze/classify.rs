@@ -930,6 +930,9 @@ mod tests {
         use std::fs::{read_dir, read_to_string};
         use std::path::Path;
 
+        #[cfg(feature = "gpu-proofs")]
+        let registry = PrimitiveRegistry::with_cpu_flip_reference();
+        #[cfg(not(feature = "gpu-proofs"))]
         let registry = PrimitiveRegistry::with_builtin();
         let mut violations: Vec<String> = Vec::new();
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
@@ -943,7 +946,10 @@ mod tests {
             let Some(type_id) = extract_primitive_type_id(&source) else {
                 continue;
             };
-            if type_id.starts_with("node.__") {
+            if type_id.starts_with("node.__")
+                || (!cfg!(feature = "gpu-proofs")
+                    && type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID)
+            {
                 continue;
             }
             let Some(run_start) = source.find("fn run(&mut self") else {

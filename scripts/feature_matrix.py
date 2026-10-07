@@ -36,6 +36,7 @@ MATRIX = [
     ("manifold-app", "journey-proofs"),
     ("manifold-app", "perf-soak"),
     ("manifold-core", "bench-timing"),
+    ("manifold-editing", "gpu-proofs"),
     ("manifold-gpu", "gpu-proofs"),
     ("manifold-ui-paint", "gpu-proofs"),
     ("manifold-gpu", "vulkan"),

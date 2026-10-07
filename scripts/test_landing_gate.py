@@ -757,7 +757,7 @@ class DiffScopeTests(unittest.TestCase):
             (src / "fluid_tests.rs").write_text("")
             plan = cpu_scope.plan_for_paths(["crates/manifold-renderer/src/node_graph/fluid.rs"], d)
             self.assertIn("test(/^node_graph::fluid::checks::/)", plan.filterset)
-            self.assertIn("binary(=fluid_preset)", plan.filterset)
+            self.assertIn("binary(=gpu_proofs)", plan.filterset)
 
     def test_shared_test_code_selects_the_binaries_that_use_it(self):
         with tempfile.TemporaryDirectory() as d:
