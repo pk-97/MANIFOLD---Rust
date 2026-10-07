@@ -193,8 +193,8 @@ def rewrite_rust(text, old_path, new_path, mapping, moves):
             if common and all(len(x) > len(common) for x in parts):
                 prefix = '::'.join(common) + '::'
                 return indent+(vis or '')+'use '+prefix+'{'+', '.join(x[len(prefix):] for x in changed)+'};'
-        newline = '\r\n' if '\r\n' in m[0] or text[m.end():m.end()+2] == '\r\n' else '\n'
-        return newline.join(indent+(vis or '')+'use '+x+';' for x in changed)
+        body = changed[0] if len(changed) == 1 else '{' + ', '.join(changed) + '}'
+        return indent+(vis or '')+'use '+body+';'
     replacements=[]
     masked = code_mask(text)
     use_matches=[m for m in USE.finditer(text) if masked[m.start():m.end()] == text[m.start():m.end()]]
@@ -215,19 +215,6 @@ def rewrite_rust(text, old_path, new_path, mapping, moves):
         rel=os.path.relpath(target,str(PurePosixPath(new_path).parent))
         return m[1]+rel+m[3]
     text=code_sub(r'((?:include_str!|include_bytes!)\(\s*")([^"]+)("\s*\))',asset,text)
-    def path_attr(m):
-        target=os.path.normpath(str(PurePosixPath(old_path).parent/m[1]))
-        if target not in moves:return m[0]
-        dest_target=moves[target]
-        standard=str(PurePosixPath(new_path).with_suffix('')/m[3])+'.rs' if not new_path.endswith(('mod.rs','lib.rs')) else str(PurePosixPath(new_path).parent/(m[3]+'.rs'))
-        if dest_target==standard:
-            if old_path==R+'src/generators/mesh_common.rs': return m[2]+'mod '+m[3]+';'
-            return m[0]
-        if not dest_target.startswith(new_path.split('/src/')[0]+'/src/'):
-            return 'use '+module(dest_target)+' as '+m[3]+';'
-        rel=os.path.relpath(dest_target,str(PurePosixPath(new_path).parent))
-        return '#[path = "'+rel+'"]\n'+m[2]+'mod '+m[3]+';'
-    text=code_sub(r'#\[path = "([^"]+)"\]\n((?:pub(?:\([^)]*\))? )?)mod (\w+);',path_attr,text)
     return text
 
 def files(root):
@@ -405,6 +392,153 @@ def manifest_rows(plan):
     return rows
 
 
+IDENT = r'(?:r#)?[A-Za-z_][A-Za-z_0-9]*'
+VIS = r'(?:pub(?:\((?:crate|super|in ' + IDENT + r'(?:::' + IDENT + r')*)\))? +)?'
+
+
+def module_items(text):
+    """Locate module-level items; never descend into functions, macros or impls."""
+    masked = code_mask(text)
+    tokens = list(re.finditer(IDENT + r'|[^\s]', masked))
+    result = []
+    def scan(pos, scope):
+        start = None; header = None
+        while pos < len(tokens):
+            token = tokens[pos]; value = token[0]
+            if value == '}': return pos + 1
+            if value == '#' and pos + 2 < len(tokens) and tokens[pos+1][0] == '!' and tokens[pos+2][0] == '[':
+                pos = skip(pos+2); start = header = None; continue
+            if start is None: start = token.start()
+            if value == '#' and pos + 1 < len(tokens) and tokens[pos+1][0] == '[':
+                pos = skip(pos+1); continue
+            if header is None: header = token.start()
+            if value == '{':
+                head = masked[header:token.start()].strip()
+                mod = re.fullmatch(VIS + r'mod (' + IDENT + ')', head)
+                end = scan(pos+1, scope+(mod[1],)) if mod else skip(pos)
+                result.append((start, tokens[end-1].end(), header, scope))
+                pos = end; start = header = None; continue
+            if value in ('(', '['): pos = skip(pos); continue
+            if value == ';':
+                result.append((start, token.end(), header, scope))
+                start = header = None
+            pos += 1
+        return pos
+    def skip(pos):
+        stack = []
+        pairs = {'(': ')', '[': ']', '{': '}'}
+        while pos < len(tokens):
+            value = tokens[pos][0]
+            if value in pairs: stack.append(pairs[value])
+            elif value in (')', ']', '}'):
+                if not stack or value != stack.pop(): raise ValueError('unbalanced Rust delimiters')
+                if not stack: return pos+1
+            pos += 1
+        raise ValueError('unclosed Rust delimiter')
+    scan(0, ())
+    return result
+
+
+def mount_parent(path, inventory):
+    rel = PurePosixPath(path)
+    directory = rel.parent.parent if rel.name == 'mod.rs' else rel.parent
+    name = rel.parent.name if rel.name == 'mod.rs' else rel.stem
+    stem = rel.parent if rel.name == 'mod.rs' else rel.with_suffix('')
+    if str(stem)+'.rs' in inventory and str(stem/'mod.rs') in inventory:
+        raise ValueError(path + ': ambiguous module source files')
+    if directory.name == 'src':
+        candidates = [str(directory / 'lib.rs'), str(directory / 'main.rs')]
+    else:
+        candidates = [str(directory) + '.rs', str(directory / 'mod.rs')]
+    parents = [p for p in candidates if p in inventory and inventory[p][0] != '120000']
+    if len(parents) != 1:
+        raise ValueError(path + ': module parent must exist exactly once')
+    return parents[0], name
+
+
+def mount_item(text, name):
+    matches = []
+    for start, end, header, scope in module_items(text):
+        if scope: continue
+        head = text[header:end]
+        if not re.match(VIS + r'mod ' + re.escape(name) + r'\b', head): continue
+        if not re.fullmatch(VIS + r'mod ' + re.escape(name) + ';', head):
+            raise ValueError(name + ': inline or unsupported module mount')
+        attrs = text[start:header]
+        if re.search(r'\bpath\b', code_mask(attrs)):
+            raise ValueError(name + ': path module mounts are forbidden')
+        first = text.rfind('\n', 0, start) + 1
+        last = text.find('\n', end)
+        last = len(text) if last < 0 else last + 1
+        if text[first:start].strip() or text[end:last].strip():
+            raise ValueError(name + ': module mount must occupy complete lines')
+        # Doc comments are attributes too; the lexer masks them, so fail closed.
+        previous = text[:first].rstrip()
+        if previous.endswith('*/') or (previous and previous.split('\n')[-1].lstrip().startswith('///')):
+            raise ValueError(name + ': comment-attached mount requires a separate reviewed fix')
+        matches.append((first, last, text[first:last]))
+    if len(matches) != 1:
+        raise ValueError(name + ': module mount must exist exactly once')
+    return matches[0]
+
+
+def derive_mounts(source, templates, moves):
+    """Only move-derived module items may leave or enter existing source files."""
+    final = {moves.get(p, p): entry for p, entry in source.items()}
+    final.update(templates)
+    removals = {}; additions = {}
+    for old, new in sorted(moves.items()):
+        if not module(old): continue
+        if PurePosixPath(old).name in ('lib.rs', 'main.rs'):
+            raise ValueError(old + ': moving crate roots requires a separate reviewed fix')
+        if old in MODULES:
+            raise ValueError(old + ': path/include module mounts are forbidden')
+        parent, name = mount_parent(old, source)
+        start, end, item = mount_item(source[parent][1].decode('utf-8'), name)
+        new_parent, new_name = mount_parent(new, final)
+        # The move determines any identifier rename; visibility and attributes are bytes.
+        at = item.rindex('mod ' + name + ';')
+        renamed = item[:at] + 'mod ' + new_name + ';' + item[at+len('mod ' + name + ';'):]
+        if moves.get(parent, parent) == new_parent and name == new_name:
+            continue
+        removals.setdefault(parent, []).append((start, end))
+        if new_parent in templates:
+            _, _, mounted = mount_item(templates[new_parent][1].decode('utf-8'), new_name)
+            if mounted != renamed:
+                raise ValueError(new_parent + ': template mount differs from moved item')
+        else:
+            text = final[new_parent][1].decode('utf-8')
+            for _, end2, header, scope in module_items(text):
+                if not scope and re.match(VIS + r'mod ' + re.escape(new_name) + r'\b', text[header:end2]):
+                    raise ValueError(new_parent + ': destination module already mounted')
+            additions.setdefault(new_parent, []).append(renamed)
+    return removals, additions
+
+
+def remove_mounts(dest, removals):
+    for parent, spans in sorted(removals.items()):
+        p = checked_file(dest, parent); text = read_utf8(p)
+        for start, end in sorted(spans, reverse=True): text = text[:start] + text[end:]
+        write_regular(p, text.encode('utf-8'))
+
+
+def add_mounts(dest, additions):
+    for parent, items in sorted(additions.items()):
+        p = checked_file(dest, parent); text = read_utf8(p)
+        if text and not text.endswith('\n'):
+            raise ValueError(parent + ': cannot append mount after unterminated line')
+        # Insert after complete items, before any trailing outer attributes.
+        # Prepending would put crate-level inner attributes after the new item.
+        ends = [end for _, end, _, scope in module_items(text) if not scope]
+        at = max(ends, default=0)
+        if at:
+            newline = text.find('\n', at)
+            at = len(text) if newline < 0 else newline+1
+        elif code_mask(text).strip():
+            raise ValueError(parent + ': no proven insertion point for module mount')
+        write_regular(p, (text[:at] + ''.join(items) + text[at:]).encode('utf-8'))
+
+
 def review_digest(plan):
     for rel, (mode, data) in sorted(files(plan / 'templates').items()):
         print(f'review template {rel} mode={mode} sha256={hashlib.sha256(data).hexdigest()}')
@@ -465,9 +599,11 @@ def _replay_tree(source, plan, dest):
     validate_paths(set(source_entries) | set(moves.values()) | set(template_entries))
     collect_path_modules(source, moves)
     mapping = mappings(moves, tsv(plan / 'rewrites.tsv'))
+    removals, additions = derive_mounts(source_entries, template_entries, moves)
     # Source is a materialized Git tree, never a checkout with caches or local secrets.
     write_files(dest, source_entries)
     apply_manifests(dest, plan)
+    remove_mounts(dest, removals)
     for a, b in sorted(moves.items()):
         p = dest / b
         no_symlink_parents(p)
@@ -487,6 +623,7 @@ def _replay_tree(source, plan, dest):
             if (dest / rel).exists() or (dest / rel).is_symlink():
                 raise ValueError('template would overwrite input: ' + rel)
             write_files(dest, {rel: entry})
+    add_mounts(dest, additions)
     validate_paths(files(dest))
     print(f'replayed {len(moves)} moves, {len(mapping)} path mappings')
 

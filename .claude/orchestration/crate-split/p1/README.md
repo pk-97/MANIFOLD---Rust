@@ -22,10 +22,23 @@ Body changes and residual repairs belong in subsequent separately reviewed commi
   P1 inventory includes six seam files and 22 testkit files.
 - `rewrites.tsv`: validated Rust path/macro substitutions. Move rows also derive
   module substitutions. Unmoved family references retain their renderer owner.
-  File-path rewrites derive from moves and affect include/path syntax only.
+  File-path rewrites derive from moves and affect include_str!/include_bytes!
+  syntax only; path-mounted modules are rejected.
 - `manifests.json`: contextual replacements targeting only Cargo.toml or
   Cargo.lock, applied before relocation, including testkit feature wiring.
   Arbitrary source patch rows (declarations.json and finish.json) are forbidden.
+- Module wiring is derived from `moves.tsv`. Replay finds exactly one old
+  out-of-line `mod` item, removes it with its attached attributes, and mounts it
+  in the new parent with identical visibility and attribute bytes. Only the
+  module identifier may change, as determined by the destination filename.
+  Co-moved parent/child mounts remain in place. Existing parents receive derived
+  items; new parents must be reviewed templates containing the exact item.
+  Missing, ambiguous, inline, `#[path]` and include-based mounts fail closed.
+  The lexical reader also rejects comment-attached or non-whole-line mounts;
+  prepare these in a separate reviewed fix before replay.
+  `declarations.tsv` is not an accepted plan file. Use items are never added or
+  removed: existing path rewrites preserve aliases, visibility, cfg and globs.
+  Unresolved imports are compile errors for a separate reviewed fix commit.
 - `templates/`: new files at repository-relative destinations; overwrites fail.
   Engine build.rs hashes only engine-owned source rows. Renderer build.rs must
   already have its final family emission; replay cannot delete emission bodies.
@@ -50,12 +63,13 @@ output; existing destinations are preserved. Text is explicit UTF-8 and preserve
 newline bytes. Traversal and diagnostics are sorted.
 
 Rewriting is lexical, preserves comments and ordinary strings, and preserves
-grouped imports where they retain a common prefix. Reproducibility proves the
+grouped imports as one item, including when their owners diverge. Reproducibility proves the
 reviewed transformation, not Rust semantics. The lexical move gate, compiler,
 census and phase tests remain required.
 
 This plan is incomplete against the assembled pre-move tree: the base lacks six
-seams and 22 testkit inputs. The removed 73 declaration patch rows need reviewed
-module templates/pre-move wiring against that source. Prepare the renderer's
-identity-emission seam separately. Review the engine identity source list and
+seams and 22 testkit inputs. Module wiring must derive from that source; the
+removed declaration patch rows cannot be restored. Existing path mounts require
+a separate reviewed fix before replay. Prepare the renderer's identity-emission
+seam separately. Review the engine identity source list and
 coverage before the final replay; residual member widenings are not invented.
