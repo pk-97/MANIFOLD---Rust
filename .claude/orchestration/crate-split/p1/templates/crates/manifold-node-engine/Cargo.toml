@@ -32,13 +32,9 @@ sha2 = "0.10"
 
 [dev-dependencies]
 glam = "0.29.3"
-syn = { version = "2", features = ["full", "visit"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2 = "0.6"
-core-text = "20"
-core-graphics = "0.23"
-core-foundation = "0.9"
 
 [features]
 testkit = []

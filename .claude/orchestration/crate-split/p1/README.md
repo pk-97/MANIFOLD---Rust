@@ -19,7 +19,8 @@ Body changes and residual repairs belong in subsequent separately reviewed commi
 - `plan.json`: version, owning crates, Rust rewrite roots and explicit helper
   aliases. Unknown configuration and plan files fail closed.
 - `moves.tsv`: required source and destination paths, separated by a tab. The
-  P1 inventory includes six seam files and 22 testkit files.
+  P1 inventory includes the six existing seam files, root testkit fixtures and
+  nested owner-local probes, with ordinary module mounts.
 - `rewrites.tsv`: validated Rust path/macro substitutions. Move rows also derive
   module substitutions. Unmoved family references retain their renderer owner.
   File-path rewrites derive from moves and affect include_str!/include_bytes!
@@ -67,9 +68,27 @@ grouped imports as one item, including when their owners diverge. Reproducibilit
 reviewed transformation, not Rust semantics. The lexical move gate, compiler,
 census and phase tests remain required.
 
-This plan is incomplete against the assembled pre-move tree: the base lacks six
-seams and 22 testkit inputs. Module wiring must derive from that source; the
-removed declaration patch rows cannot be restored. Existing path mounts require
-a separate reviewed fix before replay. Prepare the renderer's identity-emission
-seam separately. Review the engine identity source list and
-coverage before the final replay; residual member widenings are not invented.
+The draft inventory has 598 moves against the prepared renderer layout. Mesh,
+particles, nested tests and probes use ordinary mounts. The 27 retired test
+rows, the family-only mesh-cut oracle, and the unmounted compile-contract source
+are excluded. Eleven water shader rows include the shared adjacency source;
+compositor shaders and fx_watercolor_compute stay with their family owners.
+The engine identity uses emit_owned_source_identity and has no implicit
+foundation source read. Templates preserve exact source mount attributes and
+visibility and introduce no re-export facade.
+
+Compilation of this draft is not verified. The requested target/p1-try-target
+compile was refused by storage admission because it is not a registered
+worktree's canonical target. In particular, post-move repair must remove the
+renderer build script's engine emission, expose owner-local probes and fixtures
+under testkit (their original cfg(test) mounts are preserved by INV-2), and
+resolve compiler-demanded imports and visibility. No residual repairs are
+encoded as template overwrites or source patches. The lead must compile and
+review the residual inventory before treating this plan as complete.
+
+A5 makes extent rules owner-submitted inventory entries. Its 65 engine-owned
+rule files move with their node parents; 29 family rule files stay with theirs.
+The ocean sizing helper remains inside the ocean family. Testkit graph imports
+are explicit. Solver identity uses the equivalent relative visibility restriction
+pub(in super::super), which replay preserves: node_graph before the move,
+water afterwards.

@@ -1,25 +1,21 @@
 pub mod atmosphere;
+mod boundary_nodes;
 pub mod camera;
+pub mod depth_rule;
+pub mod exposure_source;
 pub mod light;
-pub mod material;
 pub mod live_extent;
-pub mod mesh_source;
-pub mod source_asset;
-pub mod render_mode;
-pub mod scene_object;
-pub mod transform;
-pub mod viewport_camera;
-pub mod scene_viewport;
-pub mod vector_field;
-pub(crate) mod boundary_nodes;
+pub mod material;
+pub mod mesh_asset_source;
 mod mesh_boundary;
 pub mod mesh_change;
-pub mod depth_rule;
 pub mod mesh_partition;
+pub mod mesh_source;
 pub mod physics_mesh;
-#[cfg(test)]
-mod mesh_cut;
-
-pub mod exposure_source;
-
-pub mod mesh_asset_source;
+pub mod render_mode;
+pub mod scene_object;
+pub mod scene_viewport;
+pub mod source_asset;
+pub mod transform;
+pub mod vector_field;
+pub mod viewport_camera;

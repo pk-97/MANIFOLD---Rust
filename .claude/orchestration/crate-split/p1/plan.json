@@ -7,8 +7,5 @@
     "crates/manifold-node-engine",
     "crates/manifold-app"
   ],
-  "aliases": {
-    "manifold_renderer::mesh": "manifold_renderer::generators::mesh_common",
-    "manifold_renderer::particles": "manifold_renderer::generators::compute_common"
-  }
+  "aliases": {}
 }
