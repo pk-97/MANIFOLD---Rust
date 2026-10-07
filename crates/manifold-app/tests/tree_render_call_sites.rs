@@ -22,7 +22,7 @@
 //!     (`overlay_fidelity_proof`), which needs raw calls to demonstrate the
 //!     root-scan-vs-flat-scan distinction the shared pass depends on.
 //!     Everything else in `manifold-app/src/` is expected to have ZERO raw call
-//!     sites. `manifold-renderer`'s `ui_cache_manager.rs`/`ui_renderer.rs` (the
+//!     sites. `manifold-ui-paint`'s `ui_cache_manager.rs`/`ui_renderer.rs` (the
 //!     internal cache-render path and a renderer unit test) are a different
 //!     crate and out of this guard's scope by design (D7).
 //!
@@ -75,7 +75,7 @@ fn all_src_files() -> Vec<(String, PathBuf)> {
 /// mentions like `` `render_tree_range(start, end)` `` (no leading dot) don't
 /// count as call sites. This file has no `fn render_tree_range`/
 /// `fn render_sub_region` definitions (those live in
-/// `manifold-renderer::ui_renderer`), so every dotted occurrence here is a
+/// `manifold-ui-paint::ui_renderer`), so every dotted occurrence here is a
 /// real call.
 fn count_raw_calls(text: &str) -> usize {
     text.matches(".render_tree_range(").count() + text.matches(".render_sub_region(").count()

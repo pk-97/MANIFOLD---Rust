@@ -155,9 +155,9 @@ struct FontManager {
 
 impl FontManager {
     fn new() -> Self {
-        let regular = Self::load(include_bytes!("../assets/fonts/Inter-Regular.ttf"));
-        let medium = Self::load(include_bytes!("../assets/fonts/Inter-Medium.ttf"));
-        let bold = Self::load(include_bytes!("../assets/fonts/Inter-Bold.ttf"));
+        let regular = Self::load(include_bytes!("../../manifold-renderer/assets/fonts/Inter-Regular.ttf"));
+        let medium = Self::load(include_bytes!("../../manifold-renderer/assets/fonts/Inter-Medium.ttf"));
+        let bold = Self::load(include_bytes!("../../manifold-renderer/assets/fonts/Inter-Bold.ttf"));
         Self {
             regular,
             medium,

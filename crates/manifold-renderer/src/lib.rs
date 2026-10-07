@@ -1,9 +1,5 @@
-pub mod automation_lane_draw;
 pub mod background_worker;
 pub mod chain_dispatch;
-pub mod clip_content_gpu;
-pub mod clip_draw;
-pub mod clip_thumb_gpu;
 pub mod compositor;
 pub mod effect;
 pub mod effects;
@@ -18,14 +14,11 @@ pub mod gpu_types;
 pub mod headless_readback;
 pub mod presentation;
 pub mod display_capture;
-pub mod layer_bitmap_gpu;
 pub mod layer_compositor;
 pub mod layer_skin;
 pub mod denoiser;
 pub mod metalfx_temporal_upscaler;
 pub mod metalfx_upscaler;
-#[cfg(target_os = "macos")]
-pub mod native_text;
 pub mod node_graph;
 pub mod plugin_prewarm;
 pub mod pq_encoder;
@@ -38,8 +31,6 @@ pub mod render_target_pool;
 #[cfg(target_os = "macos")]
 pub mod text_rasterizer;
 pub mod tonemap;
-pub mod ui_cache_manager;
-pub mod ui_renderer;
 pub mod uniform_arena;
 
 #[cfg(all(test, feature = "gpu-proofs"))]

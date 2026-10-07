@@ -40,7 +40,8 @@ class CacheTests(unittest.TestCase):
         self.write('.gitignore', 'target/\n.claude/orchestration/\ntests/fixtures/ignored.bin\n')
         self.write('scripts/ui-flows/manifest.json', '{"path_triggers": {}}')
         for name, deps in [('base', ''), ('a', '[dependencies]\nbase = {path="../base"}\n'),
-                           ('b', ''), ('manifold-renderer', '[dependencies]\nbase = {path="../base"}\n')]:
+                           ('b', ''), ('manifold-renderer', '[dependencies]\nbase = {path="../base"}\n'),
+                           ('manifold-ui-paint', '[dependencies]\na = {path="../a"}\n')]:
             self.write(f'crates/{name}/Cargo.toml', f'[package]\nname = "{name}"\nversion = "0.1.0"\n{deps}')
             self.write(f'crates/{name}/src/lib.rs', 'pub fn original() {}\n')
         self.commit('base')
@@ -171,6 +172,48 @@ class CacheTests(unittest.TestCase):
         for extra in ('--ignored', '--exact', '--list'):
             self.assertIsNone(cache.queued_proof(command + [extra], self.repo))
 
+    def test_proof_package_identity_and_dependency_closure(self):
+        renderer = dict(self.run_spec(), targets=[], lib=True, filters=['shared::test'])
+        paint = dict(renderer, package='manifold-ui-paint')
+        renderer_pass = cache.proof_pass(self.repo, renderer)
+        renderer_pass.save(0)
+        paint_pass = cache.proof_pass(self.repo, paint)
+        self.assertNotEqual(renderer_pass.key, paint_pass.key)
+        self.assertIsNone(paint_pass.record)
+        paint_pass.save(0)
+        self.write('crates/manifold-ui-paint/src/lib.rs', 'pub fn newer() {}\n')
+        self.assertIsNone(cache.proof_pass(self.repo, paint).record)
+        self.assertIsNotNone(cache.proof_pass(self.repo, renderer).record)
+        cache.proof_pass(self.repo, paint).save(0)
+        self.write('crates/a/src/lib.rs', 'pub fn newer() {}\n')
+        self.assertIsNone(cache.proof_pass(self.repo, paint).record)
+        self.assertIsNotNone(cache.proof_pass(self.repo, renderer).record)
+        cache.proof_pass(self.repo, paint).save(0)
+        self.write('crates/manifold-renderer/assets/fonts/Inter-Regular.ttf', 'new font bytes')
+        self.assertIsNone(cache.proof_pass(self.repo, paint).record)
+        self.assertIsNone(cache.proof_pass(self.repo, renderer).record)
+        cache.proof_pass(self.repo, paint).save(0)
+        cache.proof_pass(self.repo, renderer).save(0)
+        self.write('crates/base/src/lib.rs', 'pub fn newer() {}\n')
+        self.assertIsNone(cache.proof_pass(self.repo, paint).record)
+        self.assertIsNone(cache.proof_pass(self.repo, renderer).record)
+
+    def test_ui_paint_queue_and_gate_share_exact_proof_key(self):
+        run = dict(self.run_spec(), package='manifold-ui-paint', targets=[], lib=True,
+                   filters=['clip_content_gpu::tests::gpu::'])
+        command = proofs.cargo_test_cmd(self.repo / 'Cargo.toml', run['targets'],
+                                        lib=run['lib'], package=run['package'])
+        command += ['--', '--test-threads=1', *run['filters']]
+        command += [a for skip in run['skips'] for a in ('--skip', skip)]
+        queued = cache.queued_proof(command, self.repo)
+        self.assertIsNotNone(queued)
+        queued.save(0, 2)
+        gated = cache.proof_pass(self.repo, run)
+        self.assertEqual(queued.key, gated.key)
+        self.assertTrue(gated.reused())
+        for extra in ('--ignored', '--exact', '--list'):
+            self.assertIsNone(cache.queued_proof(command + [extra], self.repo))
+
     def test_actual_standalone_wrapper_and_queue_save_for_landing(self):
         run = self.run_spec()
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
@@ -279,7 +322,9 @@ class CacheTests(unittest.TestCase):
                 patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
             self.assertEqual(proofs.main(), 0)
             self.assertEqual(build.call_count, 1)
-            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual([call.args[-1] for call in run.call_args_list],
+                             ['manifold-renderer', 'manifold-ui-paint'])
 
     def run_landing(self, failed=None, keep_going=True):
         calls = []

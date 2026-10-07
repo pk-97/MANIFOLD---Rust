@@ -24,6 +24,7 @@ def godfile_paths():
 
 # Cross-file contracts: path -> (owning package, integration binaries).
 INTEGRATION_ROWS = {
+    "Cargo.toml": ("manifold-app", ["crate_layering"]),
     "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
     "crates/manifold-renderer/src/node_graph/fluid.rs": ("manifold-renderer", ["fluid_preset"]),
     **{path: ("manifold-app", ["godfile_regrowth"]) for path in godfile_paths()},
@@ -31,6 +32,7 @@ INTEGRATION_ROWS = {
 # Contracts over every file under a prefix, Rust or not:
 # (prefix, suffix, package, test modules, integration binaries).
 PREFIX_ROWS = [
+    ("crates/", "/Cargo.toml", "manifold-app", [], ["crate_layering"]),
     # Scene-panel manifest rows are guarded by the existing INV-8 integration
     # test; keep it in the scoped CPU plan for every panel change.
     ("crates/manifold-ui/src/panels/", ".rs", "manifold-ui", [],

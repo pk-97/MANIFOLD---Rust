@@ -92,6 +92,7 @@ core-foundation = "0.9"
 sha2 = "0.10"
 
 [dev-dependencies]
+manifold-ui-paint = { path = "../manifold-ui-paint" }
 # Independent f64 FLIP surface reconstruction reference fixtures.
 glam = "0.29.3"
 syn = { version = "2", features = ["full", "visit"] }

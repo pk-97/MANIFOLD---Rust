@@ -681,6 +681,12 @@ class BridgeProbeQueueTests(unittest.TestCase):
 
 
 class DiffScopeTests(unittest.TestCase):
+    def test_manifests_select_workspace_layering_contract(self):
+        for path in ("Cargo.toml", "crates/manifold-ui-paint/Cargo.toml"):
+            with self.subTest(path=path):
+                plan = cpu_scope.plan_for_paths([path], Path("/nonexistent"))
+                self.assertIn("(package(=manifold-app) & binary(=crate_layering))", plan.filters)
+
     def test_ceiling_paths_select_app_godfile_binary_across_packages(self):
         with tempfile.TemporaryDirectory() as d:
             crate = Path(d) / "crates/manifold-core"

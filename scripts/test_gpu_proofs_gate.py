@@ -34,6 +34,13 @@ def run_gate(*, targets=None, lib=False, full_suite=False, filters=None, skips=N
 
 
 class GpuProofsGateTests(unittest.TestCase):
+    def test_ui_paint_command_uses_own_lib_binary(self):
+        cmd = gate.cargo_test_cmd(Path("/tmp/Cargo.toml"), targets=[], lib=True,
+                                  package="manifold-ui-paint")
+        self.assertEqual(cmd[cmd.index("-p") + 1], "manifold-ui-paint")
+        self.assertIn("--lib", cmd)
+        self.assertNotIn("--test", cmd)
+
     def setUp(self):
         directory = self.enterContext(tempfile.TemporaryDirectory())
         self.learned = Path(directory) / "learned.json"
@@ -169,9 +176,10 @@ class GpuProofsGateTests(unittest.TestCase):
         self.events = events = []
 
         def fake_run_gate(manifest, filters, skips, targets, full, lib, timings, hung=None,
-                          hang_floor=None):
-            calls.append(dict(filters=filters, skips=skips, targets=targets, full=full, lib=lib))
-            events.append(("run", gate.cargo_test_cmd(manifest, targets, full, lib)))
+                          hang_floor=None, package="manifold-renderer"):
+            calls.append(dict(filters=filters, skips=skips, targets=targets, full=full,
+                              lib=lib, package=package))
+            events.append(("run", gate.cargo_test_cmd(manifest, targets, full, lib, package)))
             timings.extend(measured)
             hung.extend(run_hung)
             return run_exit, run_output
@@ -236,7 +244,7 @@ class GpuProofsGateTests(unittest.TestCase):
         code, calls, text = self.run_main(["--build-only", "--all"])
         self.assertEqual(code, 0)
         self.assertEqual(calls, [])
-        self.assertEqual([kind for kind, _ in self.events], ["build"])
+        self.assertEqual([kind for kind, _ in self.events], ["build", "build"])
         self.assertIn("GPU-PROOFS GATE: BUILT", text)
 
     def test_default_is_scoped_from_diff_and_prints_mode(self):
@@ -264,8 +272,22 @@ class GpuProofsGateTests(unittest.TestCase):
 
     def test_all_flag_runs_full_suite_and_prints_mode(self):
         code, calls, text = self.run_main(["--all"])
+        self.assertEqual([call["package"] for call in calls],
+                         ["manifold-renderer", "manifold-ui-paint"])
         self.assertTrue(calls[0]["full"])
         self.assertIn("GPU-PROOFS MODE: all", text)
+
+    def test_ui_paint_build_and_run_target_its_own_lib(self):
+        code, calls, _ = self.run_main(
+            [], repo_changed=["crates/manifold-ui-paint/src/ui_renderer.rs"])
+        self.assertEqual(code, 0)
+        self.assertEqual([call["package"] for call in calls],
+                         ["manifold-renderer", "manifold-ui-paint"])
+        self.assertTrue(calls[1]["lib"])
+        self.assertEqual(calls[1]["targets"], [])
+        builds = [cmd for kind, cmd in self.events if kind == "build"]
+        runs = [cmd for kind, cmd in self.events if kind == "run"]
+        self.assertEqual(builds, [cmd + ["--no-run"] for cmd in runs])
 
     def test_all_keeps_slow_tests_and_scoped_skips_them(self):
         import json, tempfile
