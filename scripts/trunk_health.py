@@ -125,6 +125,10 @@ def main():
         # Stale open beads get one forced verb a night (fix, demote, close)
         # instead of a nag at every session start.
         ["python3", "scripts/stale_beads.py"],
+        # The landing loop measured: runs per landing, red share, GPU reuse
+        # and queue wait over the week. Red when reds are found by rerunning
+        # the gate instead of its printed rerun commands.
+        ["python3", "scripts/landing_metrics.py", "--days", "7"],
         ["cargo", "clippy", "--workspace", "--tests", "--", "-D", "warnings"],
         ["cargo", "nextest", "run", "--workspace"],
         ["cargo", "deny", "check", "bans"],

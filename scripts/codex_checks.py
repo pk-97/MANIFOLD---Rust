@@ -53,6 +53,7 @@ def tooling_checks(repo, paths):
         ".codex/hooks/test_context.py": {".codex/hooks/guard.py", ".codex/hooks/context.py", ".codex/hooks/test_context.py", "scripts/codex_prepare.py", "scripts/codex_subsystems.json", ".codex/hooks.json"},
         # The tool inventory covers every script: any script added, renamed or
         # removed must keep scripts/dev.py and scripts/TOOLS.md in step.
+        "scripts/test_landing_metrics.py": {"scripts/landing_metrics.py", "scripts/test_landing_metrics.py"},
         "scripts/test_dev.py": {"scripts/dev.py", "scripts/TOOLS.md", "scripts/test_dev.py"} | {
             p for p in paths if p.startswith("scripts/") and p.endswith((".py", ".sh"))},
     }
