@@ -32,7 +32,7 @@ use manifold_gpu::{
     GpuBuffer, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
-use manifold_renderer::generators::mesh_common::InstanceTransform;
+use manifold_renderer::mesh::InstanceTransform;
 
 use crate::harness;
 

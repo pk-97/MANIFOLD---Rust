@@ -99,10 +99,6 @@ mod validation;
 pub mod channel_names;
 
 pub use backend::{Backend, MockBackend};
-pub use primitives::gpu_flip_preset::{LIQUID_BODY_OUTPUT, gpu_flip_liquid_body};
-pub use primitives::liquid_stats::SOLVER_WORDS;
-#[doc(hidden)]
-pub use primitives::liquid_stats::with_stats_layout as with_liquid_stats_layout;
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
 pub use content_revision::{ContentVersion, StorageRevision};
 pub use camera::{Camera, CameraMode};
@@ -151,7 +147,7 @@ pub use graph_loader::{
     BoundaryHandling, GraphBuildError, HandleScope, NodeInstantiation, PreAllocationError,
     WireSide as BuildWireSide, instantiate_def, log_build_error, pre_allocate_resources, allocate_resources,
 };
-pub(crate) use graph_loader::{has_retired_params, retire_params, wire_gpu_flip_grid};
+pub(crate) use graph_loader::{has_retired_params, retire_params};
 pub use loaded_preset_view::{
     LoadedPresetView, collect_node_handles, loaded_preset_view_by_id, outer_routings_from_view,
     snapshot_for_view,
@@ -206,3 +202,8 @@ pub mod physics_mesh;
 pub mod physics;
 pub mod physics_events;
 pub mod physics_metrics;
+
+pub(crate) mod migration;
+
+#[cfg(test)]
+mod builtins;

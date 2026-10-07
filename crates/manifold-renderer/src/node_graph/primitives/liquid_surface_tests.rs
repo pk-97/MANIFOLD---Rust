@@ -1239,7 +1239,7 @@ fn fluid_particle_volume_is_the_distance_to_a_lone_sphere() {
 use super::count_surface_edges::CountSurfaceEdges;
 use super::count_surface_triangles::CountSurfaceTriangles;
 use super::volume_surface_mesh::VolumeSurfaceMesh;
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 
 /// Upstream's triangle table, parsed from the vendored source so the packed
 /// WGSL table is checked against its origin, not against itself.

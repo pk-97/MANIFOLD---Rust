@@ -2,7 +2,7 @@
 //! triangle/barycentric cut map so Math View and geometry masks keep the same
 //! logical layout as remapped mesh/reference data.
 
-use crate::generators::mesh_common::Vec4Vertex;
+use crate::mesh::Vec4Vertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::primitive::Primitive;

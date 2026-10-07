@@ -69,7 +69,7 @@ pub(crate) fn loaded_identity<'a, T>(
     }
 }
 
-pub(crate) fn mesh_identity(vertices: &[crate::generators::mesh_common::MeshVertex]) -> [u8; 32] {
+pub(crate) fn mesh_identity(vertices: &[crate::mesh::MeshVertex]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut hash = Sha256::new();
     hash.update(b"manifold.loaded-mesh.v1");

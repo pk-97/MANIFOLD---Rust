@@ -19,7 +19,7 @@
 //! overhead and lands the data in shared MTLBuffer for downstream
 //! same-frame readers.
 
-use crate::generators::mesh_common::Vec4Vertex;
+use crate::mesh::Vec4Vertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::primitive::Primitive;
 

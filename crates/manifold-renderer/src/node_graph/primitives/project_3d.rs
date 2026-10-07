@@ -16,7 +16,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::generators::mesh_common::{CurvePoint, MeshVertex};
+use crate::mesh::{CurvePoint, MeshVertex};
 use crate::node_graph::camera::CameraMode;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};

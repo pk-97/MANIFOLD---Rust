@@ -16,7 +16,7 @@ use manifold_gpu::{
 };
 
 use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::node_graph::execution_plan::ResourceId;
 use crate::node_graph::{
     Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue, compile,

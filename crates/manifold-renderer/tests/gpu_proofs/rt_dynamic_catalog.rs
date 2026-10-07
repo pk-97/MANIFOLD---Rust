@@ -16,8 +16,8 @@ use manifold_gpu::GpuBuffer;
 use manifold_gpu::GpuTextureFormat;
 use manifold_gpu::raytrace::{DebugRayQueryHit, DebugRayQueryRay};
 use manifold_renderer::frame_status::FrameRenderStatus;
-use manifold_renderer::generators::mesh_common::InstanceTransform;
-use manifold_renderer::generators::mesh_common::MeshVertex;
+use manifold_renderer::mesh::InstanceTransform;
+use manifold_renderer::mesh::MeshVertex;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::node_graph::loaded_scene_modifier_presets_from_bundled;
@@ -737,8 +737,7 @@ fn render_and_witness_controlled(
                 let mut gpu = RendererGpuEncoder::new(&mut encoder, &h.device);
                 gpu.capture_rt_geometry = true;
                 runtime.render(&mut gpu, &target.texture, &context, &manifest);
-                let scene = runtime
-                    .rt_probe_scene()
+                let scene = manifold_renderer::node_graph::primitives::render_scene::rt_proof::rt_probe_scene(&runtime)
                     .unwrap_or_else(|| panic!("{label} frame {frame} must capture RT geometry"));
                 snapshot = Some(snapshot_scene(&h.device, gpu.native_enc, scene));
                 status = Some(gpu.frame_status());

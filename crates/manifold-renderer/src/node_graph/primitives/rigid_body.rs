@@ -1,4 +1,4 @@
-use crate::generators::mesh_common::PLATONIC_SHAPES;
+use crate::mesh::PLATONIC_SHAPES;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::mesh_source::MeshSource;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};

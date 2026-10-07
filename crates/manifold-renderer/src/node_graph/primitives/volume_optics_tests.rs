@@ -4,7 +4,7 @@ use manifold_gpu::{
     GpuTextureUsage,
 };
 
-use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
+use crate::mesh::{InstanceTransform, MeshVertex};
 
 use super::{SHADER, Uniforms};
 
