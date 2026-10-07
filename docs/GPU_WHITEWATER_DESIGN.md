@@ -3,9 +3,10 @@
 <!-- index: Spray, foam and bubbles for GPU FLIP water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; `node.whitewater_step` advances the lifecycle on the GPU. Builds the liquid seam's P10 grid outputs. -->
 
 **Status:** BUILT · GPU emitter (P1–P6) and `node.whitewater_step` lifecycle (L1–L6) ship in the GPU FLIP Dam Break preset with every engine emitter (BUG-imy3.1 (engine emitters)) and the engine's distance, per-substep motion, forces and drains (BUG-g75v.7 (engine whitewater physics)). L5 compares against the old vendored lifecycle, which lacks those emitters, so it no longer matches · owed: an engine-emitter parity oracle (BUG-z0p7p (whitewater parity oracle)) and the calls in section 8 (Calls only Peter makes).
-**Reference boundary:** `WaterDamBreakGpu.json` below is the proof-only CPU fixture in `crates/manifold-renderer/tests/fixtures/cpu-flip/`; product water uses `WaterDamBreakGpuFlip`.
 **Prerequisites:** none — the seam's P1 and GPU FLIP's full step are on main. This design's P1 is the seam's P10 (Grid outputs).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
+
+**Reference boundary:** `WaterDamBreakGpu.json` below is the proof-only CPU fixture in `crates/manifold-renderer/tests/fixtures/cpu-flip/`; product water uses `WaterDamBreakGpuFlip`.
 
 Peter, 2026-09-30, on BUG-imy3 (GPU whitewater, solver-agnostic): "move the spawn search to the GPU and reuse FLIP's own foam and bubble code."
 
