@@ -464,6 +464,40 @@ def test_landing_ask_survives_auto_mode():
     check("auto mode: force-push to main still asks", '"ask"' in out, out)
 
 
+# --- shared-checkout commit hygiene (CLAUDE.md: pathspec, never the index;
+# no substitution inside a double-quoted message) ---
+
+def test_index_add_denied_all_modes():
+    for cmd in ("git add -A", "git add .", "git add --all", "git add -u",
+                "git -C /x add -A && git commit -m 'x'", "git commit -am 'x'",
+                "git commit -a -m 'x'", "git commit --all -m 'x'"):
+        for mode in ("default", "auto"):
+            out = run_hook_main({"tool_input": {"command": cmd}, "cwd": MAIN_CWD,
+                                 "permission_mode": mode})
+            check(f"{cmd} ({mode}) -> deny", '"deny"' in out and "pathspec" in out, out)
+
+
+def test_pathspec_add_and_commit_unaffected():
+    for cmd in ("git add -- scripts/dev.py", "git add scripts/dev.py docs/x.md",
+                "git commit -m 'msg' -- scripts/dev.py", "git commit -q -F - -- a.py",
+                "git add -p", "git status --porcelain"):
+        check(f"{cmd} -> no index deny", hook.index_add_guard(cmd) is None, cmd)
+
+
+def test_commit_message_substitution_denied():
+    for cmd in ('git commit -m "fix `x`" -- a.py', 'git commit -m "run $(date)" -- a.py',
+                'git commit --message="see `y`" -- a.py'):
+        out = run_hook_main({"tool_input": {"command": cmd}, "cwd": MAIN_CWD,
+                             "permission_mode": "auto"})
+        check(f"{cmd} -> deny", '"deny"' in out and "single-quote" in out.lower(), out)
+
+
+def test_commit_message_quoted_safely_unaffected():
+    for cmd in ("git commit -m 'fix `x` and $(y)' -- a.py", 'git commit -m "plain message" -- a.py',
+                "git commit -F - -- a.py <<'EOF'\nuses `code`\nEOF"):
+        check(f"{cmd!r} -> no substitution deny", hook.commit_substitution_guard(cmd) is None, cmd)
+
+
 def test_rg_replace_bundled_rn_fires():
     reason = hook.rg_replace_lint("rg -rn pattern file")
     check("rg -rn (bundled) -> warns", reason is not None, reason)
@@ -885,6 +919,11 @@ def main():
     test_inline_python_heredoc_denied()
     test_inline_python_dash_c_denied()
     test_inline_python_script_path_unaffected()
+
+    test_index_add_denied_all_modes()
+    test_pathspec_add_and_commit_unaffected()
+    test_commit_message_substitution_denied()
+    test_commit_message_quoted_safely_unaffected()
 
     for name in PASS:
         print(f"PASS: {name}")

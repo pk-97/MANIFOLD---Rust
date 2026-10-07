@@ -958,6 +958,68 @@ def inline_python_guard(cmd):
         return None
 
 
+# Index-staging guard (CLAUDE.md: commit with a pathspec, never the index).
+# Checkouts are shared: another seat's uncommitted edits sit beside yours,
+# and `git add -A` / `add .` / `commit -a` sweep them into your commit.
+# Deterministic deny in every mode, with the corrected form spelled out.
+INDEX_ADD_REASON = (
+    "Staging the whole index is denied: checkouts are shared, so `git add -A`, "
+    "`git add .`, `git add -u` and `git commit -a` sweep another seat's edits "
+    "into your commit. Name the files: `git add -- <paths>` for new files, then "
+    "`git commit -m '...' -- <paths>` (.claude/GIT_TREE_DISCIPLINE.md section 3b "
+    "(Commit with a pathspec))."
+)
+INDEX_ADD_FLAGS = {"-A", "--all", "-u", "--update", "--no-ignore-removal", "."}
+
+
+def index_add_guard(cmd):
+    """Return a deny reason for `git add` of the whole index or `git commit -a`
+    in any segment. `git add -- <paths>` and `git add <path>` pass. Never raises."""
+    try:
+        for toks in _shlex_segments(cmd):
+            toks = _strip_leading_keywords(toks)
+            if not toks or toks[0].rsplit("/", 1)[-1] != "git":
+                continue
+            _, sub, rest = _git_checkout_dir(toks, os.getcwd())
+            if sub == "add" and any(t in INDEX_ADD_FLAGS for t in rest):
+                return INDEX_ADD_REASON
+            if sub == "commit":
+                flags = [t for t in rest if t.startswith("-") and t != "--"]
+                # `-a`, `--all`, and any short-flag group holding `a` (`-am`).
+                if any(f == "--all" or (not f.startswith("--") and "a" in f[1:])
+                       for f in flags):
+                    return INDEX_ADD_REASON
+        return None
+    except Exception:
+        return None
+
+
+# Commit-message substitution guard (CLAUDE.md: backticks and `$()` inside
+# `-m "..."` are live substitution). The message either runs a command or
+# arrives mangled; single quotes or a heredoc carry it verbatim.
+COMMIT_SUBSTITUTION_REASON = (
+    "Backticks or `$(` inside a double-quoted commit message are live shell "
+    "substitution: the message runs a command or lands mangled. Single-quote "
+    "the message, or feed it with `git commit -F - <<'EOF' ... EOF`."
+)
+_COMMIT_MESSAGE_RE = re.compile(r'(?:^|\s)(?:-m|--message)(?:=|\s+)"((?:[^"\\]|\\.)*)"')
+
+
+def commit_substitution_guard(cmd):
+    """Return a deny reason when a `git commit -m "..."` message contains a
+    backtick or `$(` (raw text, before shell unescaping). Never raises."""
+    try:
+        if "git" not in cmd or "commit" not in cmd:
+            return None
+        for match in _COMMIT_MESSAGE_RE.finditer(cmd):
+            message = match.group(1)
+            if "`" in message or "$(" in message:
+                return COMMIT_SUBSTITUTION_REASON
+        return None
+    except Exception:
+        return None
+
+
 def manifold_gui_guard(cmd):
     """Return a deny reason if any segment runs the manifold app binary
     (directly or via `cargo run --bin manifold`) without one of the
@@ -1719,6 +1781,14 @@ def main() -> int:
     python_deny = inline_python_guard(cmd)
     if python_deny:
         json.dump(build_deny([python_deny]), sys.stdout)
+        return 0
+
+    # 0k. Shared-checkout commit hygiene, denied in every mode: staging the
+    # whole index sweeps another seat's edits into the commit; a double-quoted
+    # message with a backtick or `$(` runs or mangles.
+    commit_deny = index_add_guard(cmd) or commit_substitution_guard(cmd)
+    if commit_deny:
+        json.dump(build_deny([commit_deny]), sys.stdout)
         return 0
 
     # 0c. Unverified compound landing-merge guard (T6): denies a compound
