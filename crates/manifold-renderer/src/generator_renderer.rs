@@ -1,4 +1,4 @@
-use crate::generators::registry::GeneratorRegistry;
+use manifold_node_engine::runtime::generator_provider::{GeneratorProvider, generator_provider};
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::runtime::preset_context::{PresetContext, ProjectTempo};
@@ -169,7 +169,7 @@ pub struct GeneratorRenderer {
     width: u32,
     height: u32,
     format: GpuTextureFormat,
-    registry: GeneratorRegistry,
+    registry: &'static GeneratorProvider,
     active_clips: AHashMap<ClipId, ActiveClip>,
     layer_generators: AHashMap<LayerId, LayerGeneratorState>,
     /// section 24 5c cold-start thumbnail instances, keyed by clip id (parked clips).
@@ -231,7 +231,7 @@ impl GeneratorRenderer {
         pool_size: usize,
     ) -> Self {
         let renderer = Self::new_unwarmed(device, width, height, format, pool_size);
-        renderer.registry.prewarm_all(&renderer.device);
+        (renderer.registry.prewarm)(&renderer.device, renderer.format);
         renderer
     }
 
@@ -249,7 +249,7 @@ impl GeneratorRenderer {
 
         let uniform_arena = UniformArena::new(&device);
 
-        let registry = GeneratorRegistry::new(format);
+        let registry = generator_provider();
 
         Self {
             next_physics_event: 0,
@@ -1302,8 +1302,9 @@ impl GeneratorRenderer {
         // live edits). The registry's fuse gate consults this; the rebuild
         // sweeps consult `built_watched` to re-instantiate when it toggles.
         let is_watched = self.preview_layer.as_ref() == Some(&layer_id);
-        let Some(mut generator) = self.registry.create_with_override(
+        let Some(mut generator) = (self.registry.create)(
             Arc::clone(&self.device),
+            self.format,
             &gen_type,
             override_def,
             self.width,
@@ -1393,8 +1394,9 @@ impl GeneratorRenderer {
             .get(clip_id)
             .is_none_or(|t| t.gen_type != gen_type);
         if needs_create {
-            let runtime = self.registry.create_with_override(
+            let runtime = (self.registry.create)(
                 Arc::clone(&self.device),
+                self.format,
                 &gen_type,
                 None,
                 THUMB_W,
@@ -2273,10 +2275,9 @@ mod warmup_tests {
         status: manifold_node_engine::runtime::frame_status::FrameRenderStatus,
     ) {
         let gen_type = PresetTypeId::new("Plasma");
-        let runtime = renderer
-            .registry
-            .create_with_override(
+        let runtime = (renderer.registry.create)(
                 renderer.device.clone(),
+                renderer.format,
                 &gen_type,
                 None,
                 THUMB_W,

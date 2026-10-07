@@ -8,6 +8,8 @@ use manifold_core::preset_def::PresetKind;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
+mod provider;
+
 /// Factory that maps PresetTypeId to concrete [`PresetRuntime`]
 /// instances. Pipeline compilation happens at creation time (expensive — do at
 /// startup or first use).
