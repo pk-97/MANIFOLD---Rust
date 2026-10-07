@@ -237,3 +237,46 @@ use manifold_core::liquid_domain::is_liquid_domain;
             other => panic!("expected the level set to be short, got {other:?}"),
         }
     }
+
+    #[test]
+    fn ocean_cliff_authored_extent_checked() {
+        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
+        let mut preset = LiquidPreset::build(def).unwrap();
+        let report = preset.check_authored().unwrap();
+        println!("OceanCliff authored {:?}: {} nodes checked, {} array/private bytes", preset.domains(), report.checked, report.scene_bytes);
+    }
+
+    #[test]
+    fn inverse_fft_extent_counts_retained_full_buffers_at_rebind_peak() {
+        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
+        let preset = LiquidPreset::build(def).unwrap();
+        for padding in [0, 4096] {
+            let (bound, held) = crate::node_graph::liquid::extent::testkit::inverse_fft_rebind_bytes(&preset, padding);
+            // Four cached pairs plus a distinct incoming pair before eviction.
+            assert_eq!(bound + held, 5 * bound);
+        }
+    }
+
+    #[test]
+    fn ocean_gathers_reject_undersized_inputs() {
+        use manifold_core::effect_graph_def::SerializedParamValue;
+        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
+        for (type_id, param, value, port) in [
+            ("node.inverse_fft_2d", "size", 512.0, "spectrum"),
+            ("node.ocean_displace", "size_0", 512.0, "field_0"),
+            ("node.make_triangles", "src_cols", 4096.0, "in"),
+        ] {
+            let mut flat = manifold_core::flatten::flatten_groups(def).expect("preset flattens");
+            // Keep the producer's capacity unchanged while the consumer's
+            // gather footprint grows; a size-bounded exemption would miss it.
+            let node = flat.nodes.iter_mut().find(|node| node.type_id == type_id).expect("consumer");
+            node.params.insert(param.into(), SerializedParamValue::Float { value });
+            match check_preset_extents(&flat, 8) {
+                Err(ExtentError::Uncovered { node, detail }) => {
+                    assert!(node.contains(type_id), "{node}");
+                    assert!(detail.starts_with(&format!("{port} holds ")), "{detail}");
+                }
+                other => panic!("{type_id}.{param}: expected uncovered {port}, got {other:?}"),
+            }
+        }
+    }

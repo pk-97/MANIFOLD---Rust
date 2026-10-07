@@ -4,6 +4,7 @@ use super::gltf_anim_cache::{ChannelKind, GltfAnimSet};
 use super::gltf_load::GltfInterp;
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "gpu-proofs")]
 inventory::submit! {
     super::fluid::identity::PhysicsSourceIdentity {
         name: "gltf_animation",
@@ -84,7 +85,7 @@ fn floats(hash: &mut Sha256, values: &[f32]) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod source_identity_tests {
     #[test]
     fn physics_source_identity_registration_matches_family_build() {

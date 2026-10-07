@@ -5,9 +5,10 @@ use crate::node_graph::*;
 use manifold_core::{Beats, Seconds};
     use crate::node_graph::PrimitiveRegistry;
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn scene_physics_role_history_samples_live_controls_without_rendering() {
-        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterBasin.json")))
+        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cpu-flip/WaterBasin.json")))
         .unwrap();
         def["nodes"]
             .as_array_mut()
@@ -27,7 +28,7 @@ use manifold_core::{Beats, Seconds};
             serde_json::json!({"fromNode": 500, "fromPort": "role", "toNode": 4, "toPort": "role_0"}),
         ]);
         let runtime =
-            PresetRuntime::from_json_str(&def.to_string(), &PrimitiveRegistry::with_builtin())
+            PresetRuntime::from_json_str(&def.to_string(), &PrimitiveRegistry::with_cpu_flip_reference())
                 .expect("typed fluid role ancestry loads");
         let mut saw_source = false;
         let mut saw_motion = false;
@@ -54,11 +55,12 @@ use manifold_core::{Beats, Seconds};
         assert!(saw_source && saw_motion);
     }
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn water_history_samples_fluid_controls_without_rendering() {
         let runtime = PresetRuntime::from_json_str(
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterBasin.json")),
-            &PrimitiveRegistry::with_builtin(),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cpu-flip/WaterBasin.json")),
+            &PrimitiveRegistry::with_cpu_flip_reference(),
         )
         .expect("WaterBasin loads");
         let mask = crate::preset_runtime::testkit::sampling_mask(&runtime)
@@ -303,4 +305,5 @@ use manifold_core::{Beats, Seconds};
         }
     }
 
+#[cfg(feature = "gpu-proofs")]
 use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;

@@ -24,6 +24,7 @@ use crate::node_graph::EffectNode;
 use crate::node_graph::ParamValue;
 use crate::testkit::substep_nodes::register_substep_test_nodes;
 use crate::node_graph::PrimitiveRegistry;
+use crate::reference_fixtures::cpu_flip_preset_json;
 
 
 
@@ -34,8 +35,7 @@ const STUDIO_FLOOR: [&str; 4] = ["studio_floor", "studio_floor_mesh", "studio_fl
 const OBSTACLE: [&str; 5] = ["obstacle_transform", "obstacle_collider", "obstacle_mesh", "obstacle_material", "obstacle_object"];
 
 fn preset_json(file: &str) -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/generator-presets").join(file);
-    serde_json::from_str(&std::fs::read_to_string(path).expect("preset reads")).expect("preset parses")
+    serde_json::from_str(cpu_flip_preset_json(file)).expect("preset parses")
 }
 
 /// CPU-only regression: the probed scene must remain compilable after fusion.
@@ -45,7 +45,7 @@ fn whitewater_scene_fuses_without_gpu() {
     use crate::node_graph::freeze::install::fuse_generator_view;
 
     let def = whitewater_render_def(WaterScene::dam_break(64));
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     register_substep_test_nodes(&mut registry);
     registry.register(PROBE, || Box::new(Probe::new()));
     registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
@@ -96,7 +96,7 @@ fn vendored_whitewater_scene_loads_and_compiles_without_gpu() {
     assert_eq!(capacity.target_handle, "Whitewater Lifecycle");
     assert_eq!(capacity.target_param, "capacity");
 
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     register_substep_test_nodes(&mut registry);
     registry.register(PROBE, || Box::new(Probe::new()));
     registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));

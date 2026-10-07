@@ -14,7 +14,21 @@ Crate moves add three separately counted classes: newly added
 `crates/<name>/Cargo.toml` and wiring-only `src/lib.rs`/`src/main.rs` skeletons;
 workspace members, local path dependencies and feature-forwarding manifest
 entries; and same-file removed/added pairs matching explicit --rewrite maps.
-Rewrite counts are changed lines (two per pair); no map is implicit.
+Rewrite counts are changed lines (two per exact pair, or a complete import
+group). Each file pair's use-leaf multisets must match after rewriting; scope,
+visibility, attributes, aliases and glob/named identities are preserved.
+Declared paths resolve in each
+revision's crate and file/inline-module context, including terminal symbols,
+macro arguments and $crate. Exported macro maps use OLD::macro!::=NEW::macro!::.
+Strings/comments are opaque. Includes and build-source rows follow exact git
+rename pairs; includes additionally require asset byte identity. New-package
+lock entries and target dependencies/features require source-crate precedents.
+Unmatched contextual paths stay residue even when shaped like legacy wiring.
+New-manifest external dependencies equal to parsed old-workspace values and
+transferred bin tables count as crate skeletons; transfers in existing manifests
+count as manifest wiring. Bins preserve name, crate-relative path (defaulting to
+src/bin/<name>.rs), and required-features, with no other table keys allowed.
+Their sources must be a git rename pair or byte-identical across revisions.
 Exit code 0 = pure move proven; 1 = residue found (printed); 2 = usage.
 
 Why not `cargo public-api`: not installed, requires a lib target (manifold-app
@@ -28,9 +42,10 @@ Usage:
   scripts/move_identity_check.py <ref> --show-all    # print all residue lines
   scripts/move_identity_check.py <ref> --rewrite 'crate::node_graph::=manifold_node_engine::'
 
-The moved-line detection uses `--color-moved=plain` with `--color-moved-ws=
-ignore-all-space` so re-indented relocations still count as moves, and pins the
-four diff colors explicitly so parsing never depends on user git config.
+The moved-line detection uses `--color-moved=plain --color-moved-ws=no` and
+pins the four diff colors so parsing never depends on user git config.
+Rust indentation is handled by contextual keys; literal bytes, opaque macro
+payloads and non-Rust indentation cannot use whitespace-normalized waivers.
 Plain mode marks individual matching added/removed lines; it has no three-line
 minimum. Unmatched lines remain subject to the bounded classes below and review.
 """
@@ -40,8 +55,10 @@ import subprocess
 import sys
 import argparse
 import fnmatch
+import json
 import posixpath
 import tomllib
+from collections import Counter
 
 # Pinned colors: 35=magenta (old moved), 36=cyan (new moved). git may emit
 # them with attributes (e.g. \x1b[1;36m), so match the code anywhere in the
@@ -599,10 +616,640 @@ def classify(out: str, claimed: dict[int, str] | None = None) -> tuple[dict[str,
 
 def rewrite_map(value: str) -> tuple[str, str]:
     old, sep, new = value.partition("=")
-    path = r"\$?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*::"
+    path = r"\$?(?:r#)?[A-Za-z_]\w*(?:::(?:r#)?[A-Za-z_]\w*)*(?:!::|::)"
     if not sep or not re.fullmatch(path, old) or not re.fullmatch(path, new):
         raise argparse.ArgumentTypeError("rewrite must be OLD::=NEW:: Rust path prefixes")
     return old, new
+
+
+# Keep literals opaque: path-looking text in a shader, string or comment is not
+# a Rust path. The scanner also supplies inline-module depth for super:: paths.
+RUST_PATH = r'\$?(?:r#)?[A-Za-z_]\w*(?:::(?:r#)?[A-Za-z_]\w*)*(?:::)?'
+RUST_TOKEN = re.compile(
+    r'//[^\n]*|/\*|(?:br|r)(?P<hashes>\#*)"[\s\S]*?"(?P=hashes)'
+    r'|b?"(?:\\[\s\S]|[^"\\])*"|b?\'(?:\\.|[^\'\\\n])\''
+    rf'|::|(?<![\w$]){RUST_PATH}|[^\s]', re.MULTILINE)
+
+
+def rust_tokens(source):
+    end = 0
+    while match := RUST_TOKEN.search(source, end):
+        end = match.end()
+        token = match[0]
+        if token == '/*':
+            depth = 1
+            while depth and end < len(source):
+                if source[end:end + 2] in ('/*', '*/'):
+                    depth += 1 if source[end:end + 2] == '/*' else -1
+                    end += 2
+                else:
+                    end += 1
+            yield match.start(), source[match.start():end], False
+        else:
+            yield match.start(), token, bool(re.fullmatch(RUST_PATH, token))
+
+
+def macro_ranges(source, recorded=()):
+    """Macro payloads are text unless their macro has a recorded map."""
+    tokens = list(rust_tokens(source))
+    ranges = []
+    for i, (_, token, _) in enumerate(tokens):
+        if token != '!' or i + 1 >= len(tokens) or not i or not tokens[i - 1][2]:
+            continue
+        opening = i + 1
+        if i and tokens[i - 1][1] == 'macro_rules':
+            opening += 1
+        if opening >= len(tokens) or tokens[opening][1] not in ('(', '[', '{'):
+            continue
+        name = tokens[i - 1][1] if i else ''
+        stack = []
+        for end in range(opening, len(tokens)):
+            text = tokens[end][1]
+            if text in ('(', '[', '{'):
+                stack.append({'(': ')', '[': ']', '{': '}'}[text])
+            elif stack and text == stack[-1]:
+                stack.pop()
+                if not stack:
+                    ranges.append((tokens[opening][0], tokens[end][0] + 1,
+                                   name in recorded))
+                    break
+    return ranges
+
+
+def opaque_macro_offsets(source, recorded=()):
+    return [(a, b) for a, b, permitted in macro_ranges(source, recorded) if not permitted]
+
+
+def build_source_spans(source):
+    """Only literal source-list arguments and literal Cargo rerun directives."""
+    tokens = list(rust_tokens(source))
+    opaque = opaque_macro_offsets(source)
+    spans = []
+    for i, (start, token, _) in enumerate(tokens):
+        if token != 'native_source_identity::emit_source_identity' or any(a < start < b for a, b in opaque):
+            continue
+        if i + 1 >= len(tokens) or tokens[i + 1][1] != '(':
+            continue
+        depth, argument, values = [], 0, []
+        for pos, text, _ in tokens[i + 2:]:
+            if not depth and text in (',', ')'):
+                if argument == 1:
+                    # Refuse expressions, identifiers and computed strings.
+                    if (len(values) >= 3 and [v for _, v in values[:2]] == ['&', '[']
+                            and values[-1][1] == ']'
+                            and all(v == ',' or re.fullmatch(r'"[^"\\\n]+"', v)
+                                    for _, v in values[2:-1])):
+                        spans.extend((p + 1, p + len(v) - 1) for p, v in values[2:-1] if v != ',')
+                    break
+                argument += 1
+                values = []
+                if text == ')':
+                    break
+                continue
+            values.append((pos, text))
+            if text in ('(', '[', '{'):
+                depth.append({'(': ')', '[': ']', '{': '}'}[text])
+            elif depth and text == depth[-1]:
+                depth.pop()
+    starts = {p for p, t, _ in tokens if t == 'println'}
+    for match in re.finditer(r'\bprintln!\s*\(\s*"cargo::?rerun-if-changed=([^"\\\n]+)"\s*\)', source):
+        if match.start() in starts:
+            spans.append(match.span(1))
+    return spans
+
+
+def text_identity_regions(source, recorded=(), source_spans=()):
+    """Literal and opaque-macro byte identity overrides line-based waivers."""
+    regions = [(a, b) for a, b in opaque_macro_offsets(source, recorded)
+               if not any(a <= x < y <= b for x, y in source_spans)]
+    for start, token, is_path in rust_tokens(source):
+        if not is_path and not token.startswith(('//', '/*')) and (
+                '"' in token or (token.startswith("'") and len(token) > 1)):
+            if not any(start <= a < b <= start + len(token) for a, b in source_spans):
+                regions.append((start, start + len(token)))
+    return regions
+
+
+def changed_region_lines(before, after, old_regions, new_regions, inventories=None):
+    old_values = Counter(before[a:b] for a, b in old_regions)
+    new_values = Counter(after[a:b] for a, b in new_regions)
+    result = {'-': set(), '+': set()}
+    for sign, source, regions, own, other in (
+            ('-', before, old_regions, old_values, new_values),
+            ('+', after, new_regions, new_values, old_values)):
+        for a, b in regions:
+            if (source[a:b] not in inventories['+' if sign == '-' else '-'] if inventories is not None
+                    else own[source[a:b]] != other[source[a:b]]):
+                result[sign].update(range(source.count('\n', 0, a) + 1,
+                                          source.count('\n', 0, b) + 2))
+    return result
+
+
+def item_attributes(source):
+    """Associate attributes with their following item, never just a loose line."""
+    tokens = list(rust_tokens(source))
+    opaque = opaque_macro_offsets(source)
+    records, regions = [], []
+    i = 0
+    while i < len(tokens):
+        start, token, _ = tokens[i]
+        if token != '#' or any(a <= start < b for a, b in opaque):
+            i += 1
+            continue
+        first = i
+        attrs = []
+        while i + 1 < len(tokens) and tokens[i][1] == '#':
+            i += 1
+            if tokens[i][1] == '!':
+                i += 1
+            if tokens[i][1] != '[':
+                break
+            depth = 0
+            group = []
+            while i < len(tokens):
+                value = tokens[i][1]
+                group.append(value)
+                depth += value == '['
+                depth -= value == ']'
+                i += 1
+                if depth == 0:
+                    break
+            if len(group) < 2 or group[1] != 'path':
+                attrs.extend(group)
+        header = []
+        end = tokens[i - 1][0] + len(tokens[i - 1][1])
+        for _, value, _ in tokens[i:]:
+            if value in ('{', ';', '='):
+                break
+            header.append(value)
+        records.append((tuple(attrs), tuple(header)))
+        regions.append((tokens[first][0], end))
+        if i == first:
+            i += 1
+    return records, regions
+
+
+def crate_context(path, reader):
+    match = re.match(r'(crates/[^/]+)/(.*)', path or '')
+    if not match:
+        return None, None, ()
+    root, relative = match.groups()
+    manifest = tomllib.loads(reader(root + '/Cargo.toml') or '')
+    name = manifest.get('lib', {}).get('name') or manifest.get('package', {}).get('name')
+    if not name:
+        return root, None, ()
+    parts = relative.removeprefix('src/').removesuffix('.rs').split('/')
+    if parts[-1] in ('lib', 'main', 'mod'):
+        parts.pop()
+    # File-layout context is not proof for an explicitly mounted module. Keep
+    # absolute crate paths usable, but decline relative-path claims there.
+    candidates = {root + '/src/lib.rs', root + '/src/main.rs'}
+    directory = posixpath.dirname(path)
+    while directory.startswith(root + '/src'):
+        candidates.update((directory + '.rs', directory + '/mod.rs'))
+        directory = posixpath.dirname(directory)
+    for parent in candidates - {path}:
+        for mount in re.finditer(r'#\[path\s*=\s*"([^"]+)"\]', reader(parent) or ''):
+            mounted = posixpath.normpath(posixpath.join(posixpath.dirname(parent), mount[1]))
+            if mounted == path:
+                return root, name.replace('-', '_'), None
+    return root, name.replace('-', '_'), tuple(parts)
+
+
+def rename_pairs(blocks):
+    result = {}
+    for lines in blocks:
+        plain = [ANSI.sub('', line) for line in lines]
+        old = next((s[12:] for s in plain if s.startswith('rename from ')), None)
+        new = next((s[10:] for s in plain if s.startswith('rename to ')), None)
+        if old and new:
+            result[old] = new
+    return result
+
+
+def lockfile_lines(source, before, read_old, read_new, donor_paths):
+    """Whole package validation; never waive individual dependency/name lines."""
+    old_packages = {p['name']: p for p in tomllib.loads(before).get('package', [])
+                    if 'source' not in p}
+    created = {}
+    for root, donors in donor_paths.items():
+        manifest = tomllib.loads(read_new(root + '/Cargo.toml'))
+        package = manifest.get('package', {})
+        name = package.get('name')
+        if name and name not in old_packages:
+            created[name] = (root, manifest, donors)
+
+    def dependencies(manifest):
+        result = set()
+        for scope in [manifest, *manifest.get('target', {}).values()]:
+            for kind in ('dependencies', 'dev-dependencies', 'build-dependencies'):
+                for key, value in scope.get(kind, {}).items():
+                    result.add(value.get('package', key) if isinstance(value, dict) else key)
+        return result
+
+    valid_created = set()
+    packages = tomllib.loads(source).get('package', [])
+    for package in packages:
+        name = package['name']
+        if name not in created or set(package) != {'name', 'version', 'dependencies'}:
+            continue
+        if sum(entry['name'] == name for entry in packages) != 1:
+            continue
+        _, manifest, donors = created[name]
+        inherited = set()
+        for donor in donors:
+            donor_name = tomllib.loads(read_old(donor)).get('package', {}).get('name')
+            inherited.update(old_packages.get(donor_name, {}).get('dependencies', []))
+        deps = package['dependencies']
+        if (package['version'] == manifest['package'].get('version')
+                and len(set(deps)) == len(deps) and set(deps) <= inherited
+                and {dep.split()[0] for dep in deps} == dependencies(manifest)):
+            valid_created.add(name)
+    allowed = set()
+    headers = [m.start() for m in re.finditer(r'^\[\[package\]\]$', source, re.MULTILINE)]
+    for start, end in zip(headers, headers[1:] + [len(source)]):
+        package = tomllib.loads(source[start:end])['package'][0]
+        name = package['name']
+        ok = name in valid_created
+        old = old_packages.get(name)
+        if old and package != old:
+            old_rest = {k: v for k, v in old.items() if k != 'dependencies'}
+            new_rest = {k: v for k, v in package.items() if k != 'dependencies'}
+            old_deps, new_deps = old.get('dependencies', []), package.get('dependencies', [])
+            additions = set(new_deps) - set(old_deps)
+            # Existing packages may only gain edges to verified new packages.
+            ok = (old_rest == new_rest and set(old_deps) <= set(new_deps)
+                  and bool(additions) and additions <= valid_created
+                  and len(set(new_deps)) == len(new_deps))
+            manifest = tomllib.loads(read_new('crates/' + name + '/Cargo.toml') or '')
+            ok = ok and additions <= dependencies(manifest)
+        if ok:
+            allowed.update(range(source.count('\n', 0, start) + 1,
+                                 source.count('\n', 0, end) + 1))
+    return allowed
+
+
+def rust_path_resolver(path, reader, rewrites, other_path=None, other_reader=None, renames=None):
+    """One resolver shared by exact lines and expanded import leaves."""
+    root, crate, module = crate_context(path, reader)
+    _, new_crate, _ = crate_context(other_path, other_reader) if other_reader else (None, None, None)
+    mapping = {old.removesuffix('::'): new.removesuffix('::') for old, new in rewrites}
+    if crate:
+        mapping = {(crate + key[len('crate'):] if key.startswith('crate::') else
+                    crate + key[len('$crate'):] if key.startswith('$crate::') else key): value
+                   for key, value in mapping.items()}
+    if new_crate:
+        mapping = {key: (new_crate + value[len('crate'):] if value.startswith('crate::')
+                         else '$' + new_crate + value[len('$crate'):] if value.startswith('$crate::')
+                         else value) for key, value in mapping.items()}
+    prefixes = sorted(mapping, key=len, reverse=True)
+    local_source = reader(path) or ''
+    opaque = opaque_macro_offsets(local_source)
+    local_tokens = [(pos, token) for pos, token, is_path in rust_tokens(local_source)
+                    if is_path and not any(a <= pos < b for a, b in opaque)]
+    local_names = {local_tokens[i + 1][1] for i, (_, token) in enumerate(local_tokens[:-1])
+                   if token == 'mod'}
+    def resolve(token, inline=(), macro=False):
+        mapped = False
+        absolute = token.startswith('::')
+        token = token.removeprefix('::')
+        trailing = '::' if token.endswith('::') else ''
+        value = token.removesuffix('::')
+        # Explicit local maps retain their old context-free meaning when
+        # no manifest exists (historical god-file fixtures).
+        canonical = value
+        parts = value.split('::')
+        if crate and parts[0] in ('crate', '$crate', 'self', 'super'):
+            if module is None and parts[0] in ('self', 'super'):
+                return token, False
+            scope = list(module or ()) + list(inline)
+            head = parts.pop(0)
+            if head in ('crate', '$crate'):
+                scope = []
+            elif head == 'super':
+                if not scope:
+                    return token, False
+                scope.pop()
+                while parts and parts[0] == 'super':
+                    if not scope:
+                        break
+                    scope.pop()
+                    parts.pop(0)
+            canonical = '::'.join([crate, *scope, *parts])
+        elif crate and not absolute and parts[0] in local_names:
+            canonical = '::'.join([crate, *list(module or ()), *inline, *parts])
+        original_canonical = canonical
+        macro_key = canonical + '!' if macro else None
+        if macro_key in mapping:
+            canonical = mapping[macro_key].removesuffix('!')
+            mapped = True
+        else:
+            key = next((key for key in prefixes if canonical == key or canonical.startswith(key + '::')), None)
+            if key is not None:
+                canonical = mapping[key] + canonical[len(key):]
+                mapped = True
+        if mapped and value.endswith('::*'):
+            # A declared prefix map alone says nothing about a glob's exports.
+            # Require the module source itself to be a recorded rename.
+            old_module = original_canonical.removesuffix('::*')
+            new_module = canonical.removesuffix('::*')
+            moved_modules = set()
+            for old_file, new_file in (renames or {}).items():
+                if not old_file.endswith('.rs') or not new_file.endswith('.rs'):
+                    continue
+                _, old_name, old_parts = crate_context(old_file, reader)
+                _, new_name, new_parts = crate_context(new_file, other_reader)
+                if old_name and new_name and old_parts is not None and new_parts is not None:
+                    moved_modules.add(('::'.join((old_name, *old_parts)),
+                                       '::'.join((new_name, *new_parts))))
+            same_module = any(
+                old_module == a and new_module == b
+                or (old_module.startswith(a + '::') and new_module.startswith(b + '::')
+                    and old_module[len(a):] == new_module[len(b):])
+                for a, b in moved_modules)
+            if old_module != new_module and not same_module:
+                return '!unproved-glob:' + original_canonical, False
+        if crate and token.startswith('$crate::') and not canonical.startswith('$') and not any(
+                old.startswith('$crate::') and token.startswith(old) for old, _ in rewrites):
+            canonical = '$' + canonical
+        return ('::' if absolute else '') + canonical + trailing, mapped
+
+    return resolve
+
+
+def recorded_macro_names(source, resolve, rewrites):
+    names = {p.removesuffix('!::') for pair in rewrites for p in pair if p.endswith('!::')}
+    tokens = list(rust_tokens(source))
+    for i, (_, token, is_path) in enumerate(tokens[:-1]):
+        if is_path and tokens[i + 1][1] == '!':
+            canonical, _ = resolve(token, macro=True)
+            if canonical in names:
+                names.add(token)
+    return names
+
+
+def contextual_lines(source, path, reader, rewrites, renames, other_path=None,
+                     other_reader=None, proved=None, recorded_macros=None):
+    """Canonical line keys, preserving every non-path token and literal byte.
+
+    Only the old side receives declared rewrites. Canonical crate/module paths
+    let the new side spell that *same* target as crate, $crate or super. Renames
+    supply include ownership; no basename or equal-content search is used.
+    """
+    root, _, _ = crate_context(path, reader)
+    resolve = rust_path_resolver(path, reader, rewrites, other_path, other_reader, renames)
+    stack, inline, pending = [], [], None
+    replacements = []
+    code_starts = set()
+    literal_lines = set()
+    recorded = (recorded_macros if recorded_macros is not None else
+                recorded_macro_names(source, resolve, rewrites))
+    opaque = opaque_macro_offsets(source, recorded)
+    for start, token, is_path in rust_tokens(source):
+        if '\n' in token and not token.startswith(('//', '/*')):
+            first = source.count('\n', 0, start)
+            literal_lines.update(range(first + 1, first + token.count('\n') + 1))
+        if any(a < start < b for a, b in opaque):
+            continue
+        if is_path:
+            code_starts.add(start)
+        if token == 'mod':
+            pending = ''
+        elif pending == '' and is_path:
+            pending = token
+        elif token == '{':
+            stack.append(pending)
+            if pending:
+                inline.append(pending)
+            pending = None
+        elif token == '}':
+            if stack and stack.pop():
+                inline.pop()
+            pending = None
+        elif token == ';':
+            pending = None
+        if is_path and ('::' in token):
+            absolute = source[:start].endswith('::')
+            canonical, mapped = resolve(('::' if absolute else '') + token, inline,
+                                        source[start + len(token):start + len(token) + 1] == '!')
+            if absolute:
+                canonical = canonical.removeprefix('::')
+            if mapped and proved is not None:
+                proved.add(source.count('\n', 0, start) + 1)
+            replacements.append((start, start + len(token), canonical))
+    # Includes are source-relative, even in inline modules. Require the exact
+    # file move, or the same existing file, and preserve all surrounding bytes.
+    if other_path and other_reader:
+        for match in re.finditer(r'\binclude_(?:str|bytes)!\s*\(\s*"([^"\n]+)"\s*\)', source):
+            if match.start() not in code_starts:
+                continue
+            old_asset = posixpath.normpath(posixpath.join(posixpath.dirname(path), match[1]))
+            new_asset = renames.get(old_asset, old_asset)
+            old_bytes = reader(old_asset, raw=True)
+            if old_bytes is not None and old_bytes == other_reader(new_asset, raw=True):
+                target = posixpath.relpath(new_asset, posixpath.dirname(other_path))
+                replacements.append((match.start(1), match.end(1), target))
+                if proved is not None and target != match[1]:
+                    proved.add(source.count('\n', 0, match.start()) + 1)
+        if root and path == root + '/build.rs':
+            new_root, _, _ = crate_context(other_path, other_reader)
+            for start, end in build_source_spans(source):
+                old_source = posixpath.normpath(root + '/' + source[start:end])
+                if new_root and old_source in renames:
+                    target = posixpath.relpath(renames[old_source], new_root)
+                    replacements.append((start, end, target))
+                    if proved is not None:
+                        proved.add(source.count('\n', 0, start) + 1)
+    pieces, end = [], 0
+    for start, stop, value in sorted(replacements):
+        pieces.extend((source[end:start], value))
+        end = stop
+    pieces.append(source[end:])
+    return [line if number in literal_lines else line.strip()
+            for number, line in enumerate(''.join(pieces).splitlines())]
+
+
+def import_tree_leaves(tokens):
+    """Parse only Rust use-tree grammar; consume every token or refuse proof."""
+    parts = []
+    for token in tokens:
+        parts.extend(part for part in re.split(r'(::)', token) if part)
+    cursor = 0
+    leaves = []
+
+    def tree(prefix):
+        nonlocal cursor
+        path = list(prefix)
+        if cursor < len(parts) and parts[cursor] == '::':
+            if prefix:
+                raise ValueError('absolute path inside a prefixed group')
+            path.append('')
+            cursor += 1
+        while cursor < len(parts):
+            token = parts[cursor]
+            if token == '{':
+                cursor += 1
+                while cursor < len(parts) and parts[cursor] != '}':
+                    tree(path)
+                    if cursor < len(parts) and parts[cursor] == ',':
+                        cursor += 1
+                    elif cursor >= len(parts) or parts[cursor] != '}':
+                        raise ValueError('expected use-tree comma')
+                if cursor >= len(parts):
+                    raise ValueError('unclosed use tree')
+                cursor += 1
+                return
+            if token == '*' or re.fullmatch(r'\$?(?:r#)?[A-Za-z_]\w*', token):
+                path.append(token)
+                cursor += 1
+            else:
+                raise ValueError('invalid use-tree item')
+            if token != '*' and cursor < len(parts) and parts[cursor] == '::':
+                cursor += 1
+                continue
+            alias = None
+            if cursor < len(parts) and parts[cursor] == 'as':
+                cursor += 1
+                if token == '*' or cursor >= len(parts) or not re.fullmatch(r'(?:r#)?[A-Za-z_]\w*', parts[cursor]):
+                    raise ValueError('invalid use alias')
+                alias = parts[cursor]
+                cursor += 1
+            if len(path) > 1 and path[-1] == 'self':
+                path.pop()
+            leaves.append(('::'.join(path), alias))
+            return
+        raise ValueError('missing use-tree item')
+
+    tree([])
+    if cursor != len(parts):
+        raise ValueError('non-use tokens in declaration')
+    return leaves
+
+
+def import_identity(source, resolve):
+    """Return a scoped leaf multiset, declaration lines and non-use remainder.
+
+    A scope ordinal ignores use trees, so regrouping/reordering imports cannot
+    change it, but moving an import between functions cannot pass. Attributes
+    and visibility are token tuples; literal contents and attribute order are
+    preserved. Parse failure refuses the entire file's import proof.
+    """
+    opaque = opaque_macro_offsets(source)
+    tokens = [(pos, token) for pos, token, _ in rust_tokens(source)
+              if not any(a <= pos < b for a, b in opaque)
+              and (not token.startswith(('//', '/*')) or token.startswith(('///', '/**')))]
+    leaves, spans = Counter(), []
+    valid = True
+    i = 0
+    prefix_start, attributes, visibility = None, [], ()
+    scope, children, modules, inline = [], [0], [], []
+    pending_module = None
+    enclosing_attributes, item_attributes = [], []
+    file_attributes = []
+
+    def balanced(index, opener, closer):
+        depth = 0
+        for end in range(index, len(tokens)):
+            text = tokens[end][1]
+            depth += text == opener
+            depth -= text == closer
+            if depth == 0:
+                return end + 1
+        raise ValueError('unclosed attribute/visibility')
+
+    while i < len(tokens):
+        pos, token = tokens[i]
+        if token.startswith(('///', '/**')):
+            prefix_start = pos if prefix_start is None else prefix_start
+            attributes.append((token,))
+            i += 1
+            continue
+        inner = token == '#' and i + 2 < len(tokens) and tokens[i + 1][1] == '!'
+        attr_open = i + 2 if inner else i + 1
+        if token == '#' and attr_open < len(tokens) and tokens[attr_open][1] == '[':
+            try:
+                end = balanced(attr_open, '[', ']')
+            except ValueError:
+                valid = False
+                break
+            attribute = tuple(text for _, text in tokens[i:end])
+            if inner:
+                if enclosing_attributes:
+                    enclosing_attributes[-1] += (attribute,)
+                else:
+                    file_attributes.append(attribute)
+            else:
+                prefix_start = pos if prefix_start is None else prefix_start
+                attributes.append(attribute)
+            i = end
+            continue
+        if token == 'pub':
+            if visibility:
+                valid = False
+            end = i + 1
+            if end < len(tokens) and tokens[end][1] == '(':
+                try:
+                    end = balanced(end, '(', ')')
+                except ValueError:
+                    valid = False
+                    break
+            prefix_start = pos if prefix_start is None else prefix_start
+            visibility = tuple(text for _, text in tokens[i:end])
+            i = end
+            continue
+        if token == 'use':
+            end = next((j for j in range(i + 1, len(tokens)) if tokens[j][1] == ';'), None)
+            if end is None:
+                spans.append((prefix_start if prefix_start is not None else pos, len(source)))
+                valid = False
+                break
+            spans.append((prefix_start if prefix_start is not None else pos, tokens[end][0] + 1))
+            try:
+                for full_path, alias in import_tree_leaves([text for _, text in tokens[i + 1:end]]):
+                    canonical, _ = resolve(full_path, inline)
+                    inherited = tuple(file_attributes) + tuple(attr for group in enclosing_attributes for attr in group)
+                    leaves[(tuple(scope), visibility, inherited + tuple(attributes), canonical, alias)] += 1
+            except ValueError:
+                valid = False
+            i = end + 1
+            prefix_start, attributes, visibility = None, [], ()
+            continue
+        if attributes:
+            item_attributes.extend(attributes)
+        prefix_start, attributes, visibility = None, [], ()
+        if token == 'mod':
+            pending_module = ''
+        elif pending_module == '' and re.fullmatch(r'\w+', token):
+            pending_module = token
+        elif token == '{':
+            enclosing_attributes.append(tuple(item_attributes))
+            item_attributes = []
+            scope.append(children[-1])
+            children[-1] += 1
+            children.append(0)
+            modules.append(pending_module)
+            if pending_module:
+                inline.append(pending_module)
+            pending_module = None
+        elif token == '}':
+            if scope:
+                scope.pop()
+                children.pop()
+                enclosing_attributes.pop()
+                if modules.pop():
+                    inline.pop()
+            pending_module = None
+        elif token == ';':
+            pending_module = None
+            item_attributes = []
+        i += 1
+    owned, pieces, end = set(), [], 0
+    for start, stop in spans:
+        owned.update(range(source.count('\n', 0, start) + 1, source.count('\n', 0, stop) + 2))
+        pieces.extend((source[end:start], '\n' * source.count('\n', start, stop)))
+        end = stop
+    pieces.append(source[end:])
+    return leaves if valid else None, owned, ''.join(pieces)
 
 
 def skeleton_lines(source: str) -> bool:
@@ -633,33 +1280,91 @@ def workspace_member(directory: str, root: dict) -> bool:
             and not any(fnmatch.fnmatchcase(directory, member) for member in root.get("exclude", [])))
 
 
-def external_dependency_lines(paths, read_file) -> set[str]:
-    """Exact single-line external dependency precedents in the old workspace."""
+def external_dependency_values(paths, read_file) -> dict[tuple, list]:
+    """Parsed external dependency precedents in the old workspace."""
     root = tomllib.loads(read_file("Cargo.toml") or "").get("workspace", {})
-    result = set()
+    result = {}
     for path in paths:
         if path != "Cargo.toml" and not workspace_member(posixpath.dirname(path), root):
             continue
-        table = ""
-        for line in read_file(path).splitlines():
-            body = line.strip()
-            if body.startswith("["):
-                table = body.split("#", 1)[0].strip().strip("[]")
-            elif table in {"dependencies", "dev-dependencies", "build-dependencies", "workspace.dependencies"}:
-                try:
-                    entry = tomllib.loads(body)
-                except tomllib.TOMLDecodeError:
-                    continue
-                if len(entry) == 1:
-                    value = next(iter(entry.values()))
+        document = tomllib.loads(read_file(path))
+        scopes = [(None, document), (None, document.get("workspace", {}))]
+        scopes.extend(document.get("target", {}).items())
+        for target, scope in scopes:
+            for table in ("dependencies", "dev-dependencies", "build-dependencies"):
+                for name, value in scope.get(table, {}).items():
                     if isinstance(value, str) or (isinstance(value, dict)
                                                   and not {"path", "workspace"} & value.keys()):
-                        result.add(body)
+                        result.setdefault((target, table, name), []).append(value)
+    return result
+
+
+def bin_identity(value):
+    """Only the bounded, crate-relative bin declaration can transfer."""
+    if not isinstance(value, dict) or not set(value) <= {"name", "path", "required-features"}:
+        return None
+    name = value.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    path = value.get("path", f"src/bin/{name}.rs")
+    if not isinstance(path, str) or posixpath.isabs(path):
+        return None
+    path = posixpath.normpath(path)
+    if path == ".." or path.startswith("../"):
+        return None
+    return name, path, value.get("required-features")
+
+
+def transferred_bins(blocks, read_old, read_new) -> dict[tuple[str, str], set[int]]:
+    """Pair declarations across manifests only when their sources also transfer."""
+    removed, added = [], []
+    renames = set()
+    for lines in blocks:
+        plain = [ANSI.sub("", line) for line in lines]
+        rename_from = next((line.removeprefix("rename from ") for line in plain
+                            if line.startswith("rename from ")), None)
+        rename_to = next((line.removeprefix("rename to ") for line in plain
+                          if line.startswith("rename to ")), None)
+        if rename_from is not None and rename_to is not None:
+            renames.add((rename_from, rename_to))
+        old = next((line[4:].removeprefix("a/") for line in plain if line.startswith("--- ")), None)
+        new = next((line[4:].removeprefix("b/") for line in plain if line.startswith("+++ ")), None)
+        if not ((old and old.endswith("Cargo.toml")) or (new and new.endswith("Cargo.toml"))):
+            continue
+        before = tomllib.loads(read_old(old) or "") if old != "/dev/null" else {}
+        after = tomllib.loads(read_new(new) or "") if new != "/dev/null" else {}
+        surviving_names = {value.get("name") for value in after.get("bin", [])}
+        for index, value in enumerate(before.get("bin", [])):
+            identity = bin_identity(value)
+            if identity is not None and value["name"] not in surviving_names:
+                removed.append((old, index, identity))
+        previous_names = {value.get("name") for value in before.get("bin", [])}
+        if new and re.fullmatch(r"crates/[^/]+/Cargo.toml", new):
+            for index, value in enumerate(after.get("bin", [])):
+                if value.get("name") not in previous_names:
+                    added.append((new, index, bin_identity(value)))
+    result = {}
+    for path, index, identity in added:
+        if identity is None:
+            continue
+        for candidate, (old, old_index, old_identity) in enumerate(removed):
+            if old != path and identity == old_identity:
+                old_source = posixpath.join(posixpath.dirname(old), identity[1])
+                new_source = posixpath.join(posixpath.dirname(path), identity[1])
+                if (old_source, new_source) not in renames:
+                    before = read_old(old_source, raw=True)
+                    if before is None or before != read_new(new_source, raw=True):
+                        continue
+                result.setdefault(("+", path), set()).add(index)
+                result.setdefault(("-", old), set()).add(old_index)
+                removed.pop(candidate)
+                break
     return result
 
 
 def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
-                    new_crate=False, external_lines=frozenset(), other_path=None) -> tuple[set[int], set[int]]:
+                    new_crate=False, external_values=None, other_path=None,
+                    bins=frozenset(), donors=(), feature_transfers=()) -> tuple[set[int], set[int]]:
     """Eligible physical lines, with table context from the complete revision.
 
     Only added dev-dependencies may select features. Removing feature selectors
@@ -702,7 +1407,35 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
     def workspace_dependency(value) -> bool:
         return isinstance(value, dict) and value == {"workspace": True}
 
-    def eligible(table: str, key: str, value, lines) -> bool:
+    def eligible(table: str, key: str, value) -> bool:
+        if table == 'features' and key != 'default' and sign == '+':
+            previous = other_document.get('features', {}).get(key)
+            for name, features in feature_transfers:
+                if (previous is not None and features.get(key) == previous
+                        and value == [name + '/' + key, *previous]
+                        and local_dependency(dependencies.get(name))):
+                    return True
+        if donors and new_crate:
+            if table == 'features' and key != 'default':
+                return (any(doc.get('features', {}).get(key) == value for doc in donors)
+                        and isinstance(value, list)
+                        and all('/' in item or item in document.get('features', {}) for item in value))
+            parsed_table = tomllib.loads('[' + table + ']\n') if table else {}
+            def entries(doc):
+                for component in table.split('.') if not table.startswith('target.') else ():
+                    doc = doc.get(component, {})
+                if table.startswith('target.'):
+                    target = next(iter(parsed_table.get('target', {})), None)
+                    kind = table.rsplit('.', 1)[-1]
+                    scope = doc.get('target', {}).get(target, {})
+                    # A new crate's test-only use may inherit a former runtime
+                    # dependency, but never change its target predicate/value.
+                    if kind == 'dev-dependencies':
+                        return {**scope.get('dependencies', {}), **scope.get(kind, {})}
+                    return scope.get(kind, {})
+                return doc
+            if table in {'dependencies', 'dev-dependencies', 'build-dependencies'} or table.startswith('target.'):
+                return any(entries(doc).get(key) == value for doc in donors)
         if table == "lints":
             return key == "workspace" and value is True and len(document["lints"]) == 1
         if table == "package" and new_crate:
@@ -724,7 +1457,9 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
             return (local_dependency(value, conservative=sign == "+" or key in surviving_dependencies,
                                      dev_features=sign == "+" and table == "dev-dependencies")
                     or (new_crate and (workspace_dependency(value)
-                                       or (len(lines) == 1 and lines[0].strip() in external_lines))))
+                                       or value in (external_values or {}).get((None, table, key), [])
+                                       or (table in ('dev-dependencies', 'build-dependencies')
+                                           and value in (external_values or {}).get((None, 'dependencies', key), [])))))
         if table == "features" and key != "default" and isinstance(value, list) and (value or new_crate):
             for feature in value:
                 if not isinstance(feature, str) or not re.fullmatch(r"[\w-]+\??/[\w-]+", feature):
@@ -747,21 +1482,56 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
     entries = []
     pending = []
     start = 0
+    bin_index = -1
+    source_lines = source.splitlines()
 
-    def finish_table():
+    def dotted_dependency():
+        if not table or table == '[bin]':
+            return None
+        parsed = tomllib.loads('[' + table + ']\n')
+        prefix = ''
+        if 'target' in parsed:
+            target, parsed = next(iter(parsed['target'].items()))
+            prefix = 'target.' + json.dumps(target) + '.'
+        for kind in ('dependencies', 'dev-dependencies', 'build-dependencies'):
+            if kind in parsed and len(parsed[kind]) == 1:
+                return prefix + kind, next(iter(parsed[kind]))
+        return None
+
+    def finish_table(end):
+        if table == "[bin]":
+            if bin_index in bins:
+                allowed.update(range(header, end))
+            else:
+                forbidden.update(range(header, end))
+            return
+        if new_crate and dotted_dependency():
+            block = tomllib.loads("\n".join(source_lines[header - 1:end - 1]))
+            base_table, key = dotted_dependency()
+            if 'target' in block:
+                block = next(iter(block['target'].values()))
+            kind = base_table.rsplit('.', 1)[-1]
+            ok = eligible(base_table, key, block[kind][key])
+            (allowed if ok else forbidden).update(range(header, end))
+            return
         if (header is not None and (table in {"dependencies", "dev-dependencies", "build-dependencies", "features", "lints"}
+                                   or (donors and table.startswith('target.'))
                                    or (new_crate and table == "package"))
                 and entries and all(entries)):
             allowed.add(header)
         elif header is not None and (new_crate or table == "lints"):
             forbidden.add(header)
 
-    for number, line in enumerate(source.splitlines(), 1):
+    for number, line in enumerate(source_lines, 1):
         stripped = line.strip()
         if not pending and stripped.startswith("["):
-            finish_table()
+            finish_table(number)
             table = stripped.split("#", 1)[0].strip().removeprefix("[").removesuffix("]")
             header, entries = number, []
+            if table == "[bin]":
+                bin_index += 1
+            continue
+        if table == "[bin]" or (new_crate and dotted_dependency()):
             continue
         if not pending and (not stripped or stripped.startswith("#")):
             if new_crate:
@@ -774,7 +1544,7 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
             entry = tomllib.loads("\n".join(pending))
         except tomllib.TOMLDecodeError:
             continue
-        ok = len(entry) == 1 and all(eligible(table, key, value, pending) for key, value in entry.items())
+        ok = len(entry) == 1 and all(eligible(table, key, value) for key, value in entry.items())
         entries.append(ok)
         if ok:
             allowed.update(range(start, number + 1))
@@ -785,17 +1555,20 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
                   and any(isinstance(value, dict) and "path" in value for value in entry.values()))):
             forbidden.update(range(start, number + 1))
         pending = []
-    finish_table()
+    finish_table(len(source_lines) + 1)
     return allowed, forbidden
 
 
 def crate_move_claims(out: str, read_old, read_new, rewrites,
-                      external_lines=frozenset(), hints=None) -> dict[int, str]:
-    """Claim three disjoint classes without changing any legacy allowlist.
+                      external_values=None, hints=None) -> dict[int, str]:
+    """Claim bounded crate wiring before applying the legacy classifications.
 
     Rewrite pairs are restricted to the same diff file (including a git-detected
     rename), one removed and one added occurrence each. Maps are explicit,
     simultaneous, token-boundary path substitutions on the removed side only.
+    Contextual failures cannot fall through to the legacy use/include waivers.
+    Imports have a separate whole-file leaf-multiset proof; alias expansion in
+    bodies and relative paths in custom #[path] mounts still require review.
     Basenames and module prefixes cannot prove identity between delete/add files
     (notably repeated mod.rs names). Such pairs retain residue and get a hint to
     separate the git mv from its rewrite rather than guessing their pairing.
@@ -806,15 +1579,37 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
         if ANSI.sub("", raw).startswith("diff --git "):
             blocks.append([])
         blocks[-1].append(raw)
+    bins = transferred_bins(blocks, read_old, read_new)
+    renames = rename_pairs(blocks)
+    # Byte-identical literals/payloads may move between files. Prove that with
+    # the complete diff inventory, not a per-file count that rejects extraction.
+    inventories = {'-': set(), '+': set()}
+    for lines in blocks:
+        plain = [ANSI.sub('', line) for line in lines]
+        for sign, prefix, rename_prefix, reader in (
+                ('-', '--- a/', 'rename from ', read_old),
+                ('+', '+++ b/', 'rename to ', read_new)):
+            file = next((line[len(prefix):] for line in plain if line.startswith(prefix)), None)
+            file = file or next((line[len(rename_prefix):] for line in plain if line.startswith(rename_prefix)), None)
+            if file and file.endswith('.rs'):
+                source = reader(file)
+                inventories[sign].update(source[a:b] for a, b in text_identity_regions(source))
+    donor_paths = {}
+    for old, new in renames.items():
+        old_root, _, _ = crate_context(old, read_old)
+        new_root, _, _ = crate_context(new, read_new)
+        if old_root and new_root and old_root != new_root and not read_old(new_root + '/Cargo.toml'):
+            donor_paths.setdefault(new_root, set()).add(old_root + '/Cargo.toml')
+    lock_allowed = lockfile_lines(read_new('Cargo.lock'), read_old('Cargo.lock'),
+                                  read_old, read_new, donor_paths) if donor_paths else set()
     offset = 0
-    mapping = dict(rewrites)
-    pattern = (re.compile(r"(?<![\w$])(?:" + "|".join(
-        re.escape(key) for key in sorted(mapping, key=len, reverse=True)) + ")") if mapping else None)
     deleted_paths, added_paths = [], []
     for lines in blocks:
         plain = [ANSI.sub("", line) for line in lines]
         old_path = next((line[4:].removeprefix("a/") for line in plain if line.startswith("--- ")), None)
         new_path = next((line[4:].removeprefix("b/") for line in plain if line.startswith("+++ ")), None)
+        old_path = old_path or next((line[12:] for line in plain if line.startswith('rename from ')), None)
+        new_path = new_path or next((line[10:] for line in plain if line.startswith('rename to ')), None)
         path = new_path if new_path != "/dev/null" else old_path
         added = old_path == "/dev/null"
         if path and path.endswith(".rs"):
@@ -829,14 +1624,98 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
         eligible, forbidden = {}, {}
         new_manifest = bool(added and path and re.fullmatch(r"crates/[^/]+/Cargo.toml", path))
         if manifest:
+            donor_files = donor_paths.get(posixpath.dirname(path), ())
+            precedents = (external_dependency_values(donor_files, read_old)
+                          if donor_files else external_values)
+            transfers = []
+            for root, donors in donor_paths.items():
+                if path in donors:
+                    doc = tomllib.loads(read_new(root + '/Cargo.toml'))
+                    transfers.append((doc['package']['name'], doc.get('features', {})))
             for sign, file_path, reader in (("-", old_path, read_old), ("+", new_path, read_new)):
                 source = reader(file_path) if file_path != "/dev/null" else ""
                 other = read_new if sign == "-" else read_old
                 eligible[sign], forbidden[sign] = manifest_wiring(
-                    source, file_path, reader, other, sign, new_manifest, external_lines,
-                    new_path if sign == "-" else old_path
+                    source, file_path, reader, other, sign, new_manifest, precedents,
+                    new_path if sign == "-" else old_path, bins.get((sign, file_path), set()),
+                    tuple(tomllib.loads(read_old(p)) for p in donor_files), transfers
                 ) if source else (set(), set())
         numbers = {"-": 0, "+": 0}
+        keys = {}
+        proved = set()
+        import_lines = {'-': set(), '+': set()}
+        import_ok = False
+        import_remainders = {}
+        protected = {'-': set(), '+': set()}
+        attribute_protected = {'-': set(), '+': set()}
+        macro_protected = {'-': set(), '+': set()}
+        if path and path.endswith('.rs') and old_path != '/dev/null' and new_path != '/dev/null':
+            before, after = read_old(old_path), read_new(new_path)
+            recorded = recorded_macro_names(before,
+                rust_path_resolver(old_path, read_old, rewrites, new_path, read_new), rewrites)
+            new_recorded = recorded_macro_names(after, rust_path_resolver(new_path, read_new, []), rewrites)
+            protected = changed_region_lines(before, after,
+                text_identity_regions(before, recorded, build_source_spans(before) if path.endswith('/build.rs') else ()),
+                text_identity_regions(after, new_recorded, build_source_spans(after) if path.endswith('/build.rs') else ()),
+                inventories)
+            macro_protected = changed_region_lines(before, after,
+                opaque_macro_offsets(before, recorded), opaque_macro_offsets(after, new_recorded), inventories)
+            # Includes and verified build-source consumers have their own byte
+            # proof below; their changed string spellings are not data edits.
+            for sign, source in (('-', before), ('+', after)):
+                for number, row in enumerate(source.splitlines(), 1):
+                    if 'include_str!' in row or 'include_bytes!' in row:
+                        protected[sign].discard(number)
+                        macro_protected[sign].discard(number)
+                if path.endswith('/build.rs'):
+                    for a, b in build_source_spans(source):
+                        macro_protected[sign].difference_update(
+                            range(source.count('\n', 0, a) + 1, source.count('\n', 0, b) + 2))
+            old_attrs, old_regions = item_attributes(before)
+            new_attrs, new_regions = item_attributes(after)
+            old_headers = {header for _, header in old_attrs if 'use' not in header}
+            new_headers = {header for _, header in new_attrs if 'use' not in header}
+            old_tokens = ' '.join(t for _, t, _ in rust_tokens(before))
+            new_tokens = ' '.join(t for _, t, _ in rust_tokens(after))
+            common_headers = {header for header in old_headers | new_headers
+                              if ' '.join(header) in old_tokens and ' '.join(header) in new_tokens}
+            changed_headers = {header for header in common_headers
+                               if Counter(attrs for attrs, h in old_attrs if h == header)
+                               != Counter(attrs for attrs, h in new_attrs if h == header)}
+            for sign, source, records, regions in (
+                    ('-', before, old_attrs, old_regions), ('+', after, new_attrs, new_regions)):
+                for (_, header), (a, b) in zip(records, regions):
+                    owned = set(range(source.count('\n', 0, a) + 1, source.count('\n', 0, b) + 2))
+                    # Import attributes are checked with their expanded leaves.
+                    protected[sign].difference_update(owned)
+                    if header in changed_headers:
+                        attribute_protected[sign].update(owned)
+            if old_path != new_path:
+                pattern = r'\binclude_(?:str|bytes)!\s*\(\s*"([^"\n]+)"\s*\)'
+                def includes(source):
+                    starts = {pos for pos, token, is_path in rust_tokens(source)
+                              if is_path and token in ('include_str', 'include_bytes')}
+                    return [match for match in re.finditer(pattern, source) if match.start() in starts]
+                old_includes = includes(before)
+                new_includes = includes(after)
+                if len(old_includes) != len(new_includes) or any(
+                        read_old(posixpath.normpath(posixpath.join(posixpath.dirname(old_path), a[1])), raw=True) is None
+                        or read_old(posixpath.normpath(posixpath.join(posixpath.dirname(old_path), a[1])), raw=True)
+                        != read_new(posixpath.normpath(posixpath.join(posixpath.dirname(new_path), b[1])), raw=True)
+                        for a, b in zip(old_includes, new_includes)):
+                    claims[offset] = 'blocked'
+            if rewrites or (crate_context(old_path, read_old)[0] != crate_context(new_path, read_new)[0]):
+                old_leaves, import_lines['-'], old_remainder = import_identity(
+                    before, rust_path_resolver(old_path, read_old, rewrites, new_path, read_new, renames))
+                new_leaves, import_lines['+'], new_remainder = import_identity(
+                    after, rust_path_resolver(new_path, read_new, []))
+                import_ok = old_leaves is not None and new_leaves is not None and old_leaves == new_leaves
+                if import_ok:
+                    before, after = old_remainder, new_remainder
+                import_remainders = {'-': old_remainder.splitlines(), '+': new_remainder.splitlines()}
+            keys['-'] = contextual_lines(before, old_path, read_old,
+                                          rewrites, renames, new_path, read_new, proved)
+            keys['+'] = contextual_lines(after, new_path, read_new, [], {}, recorded_macros=new_recorded)
         removed, additions = [], []
         for index, line in enumerate(plain):
             hunk = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
@@ -847,27 +1726,45 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
             elif line.startswith(("+", "-")):
                 sign = line[0]
                 absolute = offset + index
-                if skeleton:
+                import_line = numbers[sign] in import_lines[sign]
+                if numbers[sign] in attribute_protected[sign] or numbers[sign] in macro_protected[sign] or (
+                        numbers[sign] in protected[sign] and not MOVED_RE.match(lines[index])):
+                    claims[absolute] = 'blocked'
+                elif path and not path.endswith(('.rs', 'Cargo.toml', 'Cargo.lock')) and not MOVED_RE.match(lines[index]):
+                    claims[absolute] = 'blocked'
+                elif import_line and not import_ok:
+                    claims[absolute] = 'blocked'
+                elif import_line and not import_remainders[sign][numbers[sign] - 1].strip():
+                    claims[absolute] = 'rewrites'
+                elif skeleton:
                     claims[absolute] = "skeletons"
+                elif path == 'Cargo.lock' and sign == '+' and numbers[sign] in lock_allowed:
+                    claims[absolute] = 'manifests'
+                elif path == 'Cargo.lock' and donor_paths and line[1:].strip():
+                    claims[absolute] = 'blocked'
                 elif manifest and numbers[sign] in forbidden[sign]:
                     claims[absolute] = "blocked"
                 elif manifest and numbers[sign] in eligible[sign]:
                     claims[absolute] = "skeletons" if new_manifest else "manifests"
-                elif pattern and path and path.endswith(".rs") and not MOVED_RE.match(lines[index]):
-                    (removed if sign == "-" else additions).append((absolute, line[1:]))
+                elif keys and (rewrites or renames) and (import_line or not MOVED_RE.match(lines[index])):
+                    key = keys[sign][numbers[sign] - 1]
+                    if import_line or (not COMMENT.match(line) and ('::' in line or 'include_str!' in line or 'include_bytes!' in line)):
+                        claims[absolute] = 'blocked'
+                    (removed if sign == "-" else additions).append(
+                        (absolute, key, line[1:], numbers[sign] in proved or import_line))
                 numbers[sign] += 1
             elif line.startswith(" "):
                 numbers["-"] += 1
                 numbers["+"] += 1
-        if pattern:
+        if keys:
             available = {}
-            for index, body in additions:
-                available.setdefault(_normalize_ws(body), []).append(index)
-            for index, body in removed:
-                rewritten, count = pattern.subn(lambda match: mapping[match[0]], body)
-                matches = available.get(_normalize_ws(rewritten), [])
-                if count and matches:
-                    claims[index] = claims[matches.pop()] = "rewrites"
+            for index, body, original, _ in additions:
+                available.setdefault(body, []).append((index, original))
+            for index, body, original, mapped in removed:
+                matches = available.get(body, [])
+                if matches and (mapped or old_path != new_path) and (body != original or matches[-1][1] != original):
+                    other, _ = matches.pop()
+                    claims[index] = claims[other] = "rewrites"
         offset += len(lines)
     if rewrites and hints is not None:
         for old_path in deleted_paths:
@@ -902,7 +1799,7 @@ def main() -> int:
         "diff",
         "--color=always",
         "--color-moved=plain",
-        "--color-moved-ws=ignore-all-space",
+        "--color-moved-ws=no",
     ]
     if target == "--cached":
         diff_args.append("--cached")
@@ -928,23 +1825,24 @@ def main() -> int:
     cache = {}
 
     def reader(ref):
-        def read(path):
+        def read(path, raw=False):
             key = (ref, path)
             if key not in cache:
-                result = subprocess.run(["git", "show", f"{ref}:{path}"], capture_output=True, text=True)
-                cache[key] = result.stdout if result.returncode == 0 else ""
-            return cache[key]
+                result = subprocess.run(["git", "show", f"{ref}:{path}"], capture_output=True)
+                cache[key] = result.stdout if result.returncode == 0 else None
+            # Raw reads preserve line endings and distinguish empty from missing.
+            return cache[key] if raw else (cache[key] or b"").decode()
         return read
 
     # Strip only ANSI for file boundaries; retain moved colors for legacy classes.
     old_reader, new_reader = reader(old_ref), reader(new_ref)
-    external_lines = set()
+    external_values = {}
     if re.search(r"^\+\+\+ b/crates/[^/]+/Cargo.toml$", ANSI.sub("", out), re.MULTILINE):
         paths = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", old_ref], text=True).splitlines()
-        external_lines = external_dependency_lines(
+        external_values = external_dependency_values(
             [path for path in paths if path.endswith("Cargo.toml")], old_reader)
     hints = []
-    claims = crate_move_claims(out, old_reader, new_reader, args.rewrite, external_lines, hints)
+    claims = crate_move_claims(out, old_reader, new_reader, args.rewrite, external_values, hints)
     counts, residue = classify(out, claims)
     residue, vis_pairs = drop_visibility_pairs(residue)
     residue, include_pairs = drop_include_str_prefix_pairs(residue)

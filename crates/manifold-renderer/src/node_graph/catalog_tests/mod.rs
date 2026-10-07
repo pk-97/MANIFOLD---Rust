@@ -53,12 +53,14 @@ mod freeze_region;
 
 mod physics_impulses;
 
+#[cfg(feature = "gpu-proofs")]
 mod physics_collection;
 
 mod physics_sampling;
 
 mod gpu_flip_surface;
 
+#[cfg(feature = "gpu-proofs")]
 mod physics_sources;
 
 mod physics_host_modulation;

@@ -172,6 +172,18 @@ impl PrimitiveRegistry {
         r
     }
 
+    /// The retired native solver is available only to explicit reference proofs.
+    #[cfg(feature = "gpu-proofs")]
+    pub fn with_cpu_flip_reference() -> Self {
+        let mut registry = Self::with_builtin();
+        for factory in inventory::iter::<PrimitiveFactory> {
+            if factory.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID {
+                registry.register(factory.type_id, factory.create);
+            }
+        }
+        registry
+    }
+
     /// Add (or replace) a constructor for one `type_id`. Returns `self`
     /// so the builder pattern flows.
     pub fn register(
@@ -215,7 +227,9 @@ impl Default for PrimitiveRegistry {
 /// hand-write theirs alongside the struct definition.
 fn register_builtin(r: &mut PrimitiveRegistry) {
     for factory in inventory::iter::<PrimitiveFactory> {
-        r.register(factory.type_id, factory.create);
+        if factory.type_id != manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID {
+            r.register(factory.type_id, factory.create);
+        }
     }
 }
 
@@ -1389,5 +1403,20 @@ mod tests {
             let v2: ParamValue = back.into();
             assert_eq!(v, v2);
         }
+    }
+}
+
+#[cfg(test)]
+mod retired_cpu_flip_tests {
+    use super::PrimitiveRegistry;
+    use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
+
+    #[test]
+    fn retired_cpu_flip_is_reference_only() {
+        assert!(!PrimitiveRegistry::with_builtin().contains(FLIP_DOMAIN_TYPE_ID));
+        assert!(!crate::node_graph::palette::palette_atoms().iter()
+            .any(|atom| atom.type_id == FLIP_DOMAIN_TYPE_ID));
+        #[cfg(feature = "gpu-proofs")]
+        assert!(PrimitiveRegistry::with_cpu_flip_reference().contains(FLIP_DOMAIN_TYPE_ID));
     }
 }

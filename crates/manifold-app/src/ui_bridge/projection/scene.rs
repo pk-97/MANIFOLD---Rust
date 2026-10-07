@@ -99,9 +99,12 @@ pub(crate) fn group_fluid_role_nodes(
 
 /// The nodes whose controls an object's panel shows: its scene_object, its
 /// liquid, its enabled body, transform, material and every modifier.
+/// Shared transforms and modifiers belong to their first consuming object
+/// in scene order. Materials deliberately remain visible on every consumer.
 pub(crate) fn object_controls(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     row: &manifold_renderer::node_graph::scene_vm::SceneObjectKnownRow,
+    objects: &[manifold_renderer::node_graph::scene_vm::SceneObjectVm],
 ) -> Vec<manifold_core::NodeId> {
     let mut owned = vec![row.object.clone()];
     owned.extend_from_slice(&row.fluid_controls);
@@ -120,6 +123,16 @@ pub(crate) fn object_controls(
     }
     owned.extend(row.modifier_chain.iter().map(|modifier| modifier.node.clone()));
     owned.extend(row.transform_chain.iter().map(|modifier| modifier.node.clone()));
+    for object in objects {
+        let manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(other) = object else { continue; };
+        if other.object == row.object && other.index == row.index { break; }
+        for node in other.transform.iter().map(|transform| &transform.node)
+            .chain(other.modifier_chain.iter().map(|modifier| &modifier.node))
+            .chain(other.transform_chain.iter().map(|modifier| &modifier.node))
+        {
+            owned.retain(|owned_node| owned_node != node);
+        }
+    }
     owned
 }
 
@@ -525,23 +538,6 @@ mod ownership_tests {
         assert_eq!(parameter_ids_for_nodes(Some(&def), &ids(&["grouped_domain"])), vec!["1_intensity"]);
     }
 
-    #[test]
-    fn dam_break_water_owns_curated_quality_controls_after_migration_and_reload() {
-        let mut def: EffectGraphDef = serde_json::from_str(include_str!(
-            "../../../../manifold-renderer/assets/generator-presets/WaterDamBreak.json"
-        )).unwrap();
-        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
-        let def: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
-        let domain = def.nodes.iter()
-            .find(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID)
-            .expect("the dam break domain").node_id.clone();
-        let ids = parameter_ids_for_nodes(Some(&def), &[domain]);
-        for id in ["resolution", "surface_detail", "whitewater", "surface_particle_scale", "4_grid_budget_mcells"] {
-            assert!(ids.iter().any(|actual| actual == id), "missing Water control {id}");
-        }
-        assert!(!ids.iter().any(|id| id == "environment_mode"));
-    }
-
     /// Every control the scene panel shows belongs to one item: an object, a
     /// light, the camera or the world. The one sharing allowed is a material
     /// wired into several objects, which each of them shows. Returns the
@@ -557,7 +553,7 @@ mod ownership_tests {
         for object in &vm.objects {
             if let SceneObjectVm::Known(row) = object {
                 let material = match &row.material { MaterialVm::Known(m) => Some(m.node.clone()), _ => None };
-                items.push((format!("object {}", row.name), object_controls(Some(def), row), material));
+                items.push((format!("object {}", row.name), object_controls(Some(def), row, &vm.objects), material));
             }
         }
         for light in &vm.lights {
@@ -595,7 +591,96 @@ mod ownership_tests {
             }
         }
         assert!(scenes.iter().any(|scene| scene == "WaterDamBreakMatter"), "{scenes:?}");
-        assert!(scenes.iter().any(|scene| scene == "WaterDamBreak"), "{scenes:?}");
+        assert!(scenes.iter().any(|scene| scene == "WaterDamBreakGpuFlip"), "{scenes:?}");
+    }
+
+    #[test]
+    fn shared_transform_and_modifier_controls_follow_the_first_scene_consumer() {
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+
+        let mut def = azalea_like_fixture();
+        def.nodes = [
+            (1, "mesh", "node.cube_mesh"),
+            (2, "shared_transform", "node.transform_3d"),
+            (3, "shake", "node.transform_shake"),
+            (4, "bend", "node.bend_mesh"),
+            (5, "material", "node.pbr_material"),
+            (6, "first", "node.scene_object"),
+            (7, "second", "node.scene_object"),
+            (8, "independent", "node.scene_object"),
+            (9, "local_transform", "node.transform_3d"),
+            (10, "scene", "node.render_scene"),
+            (11, "output", "system.final_output"),
+        ].into_iter().map(|(id, node_id, type_id)| {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "nodeId": node_id, "typeId": type_id,
+            })).unwrap()
+        }).collect();
+        def.nodes.iter_mut().find(|node| node.id == 10).unwrap().params.insert(
+            "objects".into(),
+            manifold_core::effect_graph_def::SerializedParamValue::Int { value: 3 },
+        );
+        def.wires = [
+            (1, "vertices", 4, "in"),
+            (2, "transform", 3, "transform"),
+            (3, "out", 6, "transform"),
+            (3, "out", 7, "transform"),
+            (4, "out", 6, "vertices"),
+            (4, "out", 7, "vertices"),
+            (5, "out", 6, "material"),
+            (5, "out", 7, "material"),
+            (1, "vertices", 8, "vertices"),
+            (9, "transform", 8, "transform"),
+            (6, "object", 10, "object_0"),
+            (7, "object", 10, "object_1"),
+            (8, "object", 10, "object_2"),
+            (10, "color", 11, "in"),
+        ].into_iter().map(|(from_node, from_port, to_node, to_port)| EffectGraphWire {
+            from_node, from_port: from_port.into(), to_node, to_port: to_port.into(),
+        }).collect();
+        let metadata = def.preset_metadata.as_mut().unwrap();
+        metadata.params.clear();
+        metadata.bindings.clear();
+        for (id, node_id, param) in [
+            ("position", "shared_transform", "pos_x"),
+            ("shake_amount", "shake", "amount"),
+            ("bend_angle", "bend", "angle"),
+            ("roughness", "material", "roughness"),
+            ("local_position", "local_transform", "pos_x"),
+        ] {
+            metadata.params.push(ParamSpecDef { id: id.into(), ..Default::default() });
+            metadata.bindings.push(BindingDef {
+                id: id.into(),
+                target: BindingTarget::Node { node_id: NodeId::new(node_id), param: param.into() },
+                ..binding_defaults()
+            });
+        }
+
+        for first_object in [6, 7] {
+            for wire in &mut def.wires {
+                if wire.to_node == 10 && matches!(wire.from_node, 6 | 7) {
+                    wire.to_port = if wire.from_node == first_object { "object_0" } else { "object_1" }.into();
+                }
+            }
+            assert_one_owner("shared spatial controls", &def);
+            let vm = SceneVm::from_def(&def).unwrap();
+            for object in &vm.objects {
+                let SceneObjectVm::Known(row) = object else { panic!("known object"); };
+                let controls = parameter_ids_for_nodes(Some(&def), &object_controls(Some(&def), row, &vm.objects));
+                let expected = match row.index {
+                    0 => vec!["position", "shake_amount", "bend_angle", "roughness"],
+                    1 => vec!["roughness"],
+                    2 => vec!["local_position"],
+                    _ => unreachable!(),
+                };
+                assert_eq!(controls, expected, "{}", row.object);
+                if row.index < 2 {
+                    assert_eq!(row.transform.as_ref().unwrap().node, NodeId::new("shared_transform"));
+                    assert_eq!(row.transform_chain.len(), 1);
+                    assert_eq!(row.modifier_chain.len(), 1);
+                }
+            }
+        }
     }
 
     #[test]
@@ -609,7 +694,7 @@ mod ownership_tests {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("the water is a scene object");
-        let sections = sections_for_nodes(Some(def), &object_controls(Some(def), water));
+        let sections = sections_for_nodes(Some(def), &object_controls(Some(def), water, &vm.objects));
         assert!(sections.iter().any(|section| section.contains("Simulation")), "{sections:?}");
         assert!(sections.iter().all(|section| !section.contains("Camera")), "{sections:?}");
     }
@@ -669,7 +754,7 @@ mod ownership_tests {
         let roles = fluid_role_rows(&def, obstacle.group_node_id, &fluid_domains(&vm)).unwrap();
         assert_eq!(roles.len(), 1, "the Fluid Role panel keeps the collider");
         assert_eq!(roles[0].target_label, "Target: Water");
-        assert!(object_controls(Some(&def), obstacle).contains(&NodeId::new("obstacle_collider")));
+        assert!(object_controls(Some(&def), obstacle, &vm.objects).contains(&NodeId::new("obstacle_collider")));
     }
 
     /// The GPU water's panel carries its whitewater switch, amount and
@@ -684,7 +769,7 @@ mod ownership_tests {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("the water is a scene object");
-        let owned = object_controls(Some(def), water);
+        let owned = object_controls(Some(def), water, &vm.objects);
         let ids = parameter_ids_for_nodes(Some(def), &owned);
         assert!(ids.iter().any(|id| id == "whitewater_capacity"), "missing whitewater budget");
         for param in ["enabled", "amount"] {
@@ -716,7 +801,7 @@ mod ownership_tests {
 
             // Collapsing or expanding the family leaves the parent's own
             // simulation and shared gate controls intact.
-            let parent_owned = object_controls(Some(def), water);
+            let parent_owned = object_controls(Some(def), water, &vm.objects);
             let mut parent_ids = parameter_ids_for_nodes(Some(def), &parent_owned);
             filter_family_parameter_ids(Some(def), water, &mut parent_ids);
             assert!(parent_ids.contains(&"parent_visible".to_string()), "{preset}: parent gate");
@@ -734,7 +819,7 @@ mod ownership_tests {
                     MaterialVm::None => panic!("{preset}: {} has no material", child.name),
                 };
                 let mesh = child.look_mesh.clone().expect("look mesh");
-                let owned = object_controls(Some(def), child);
+                let owned = object_controls(Some(def), child, &vm.objects);
                 assert!(owned.contains(&child.object));
                 assert!(owned.contains(&mesh));
                 assert!(owned.contains(&material));
@@ -775,7 +860,7 @@ mod ownership_tests {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("water object");
-        let owned = object_controls(Some(def), water);
+        let owned = object_controls(Some(def), water, &vm.objects);
         let specs: Vec<_> = owned_specs(Some(def), &owned).collect();
         let meta = def.preset_metadata.as_ref().unwrap();
         let mut instance = manifold_core::effects::PresetInstance::new(PresetTypeId::new("WaterDamBreakGpuFlip"));

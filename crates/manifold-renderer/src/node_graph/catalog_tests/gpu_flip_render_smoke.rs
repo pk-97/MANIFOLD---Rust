@@ -34,6 +34,7 @@ use crate::testkit::substep_nodes::register_substep_test_nodes;
 use crate::node_graph::{NodeInstanceId, PrimitiveRegistry};
 use crate::preset_context::PresetContext;
 use crate::preset_runtime::PresetRuntime;
+use crate::reference_fixtures::cpu_flip_preset_json;
 use crate::render_target::RenderTarget;
 
 const WIDTH: u32 = 1920;
@@ -211,7 +212,7 @@ impl Smoke {
     /// The scene frozen, as the app renders a generator. The step is one
     /// barriered node and never fuses, so its dispatches keep their labels.
     fn new(scene: WaterScene) -> Self {
-        let mut registry = PrimitiveRegistry::with_builtin();
+        let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
         register_substep_test_nodes(&mut registry);
         let def = render_def(scene);
         let Some(view) = crate::node_graph::primitives::gpu_flip_preset::testkit::fused_as_rendered(&def, &registry) else {
@@ -233,7 +234,7 @@ impl Smoke {
     }
 
     fn with_def(scene: WaterScene, def: EffectGraphDef) -> Self {
-        let mut registry = PrimitiveRegistry::with_builtin();
+        let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
         register_substep_test_nodes(&mut registry);
         let device = crate::test_device();
         let manifest = ParamManifest::from_params(
@@ -840,8 +841,14 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
 const STUDIO_FLOOR: [&str; 4] = ["studio_floor", "studio_floor_mesh", "studio_floor_material", "studio_floor_transform"];
 
 fn preset_json(file: &str) -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/generator-presets").join(file);
-    serde_json::from_str(&std::fs::read_to_string(path).expect("preset reads")).expect("preset parses")
+    let source = match file {
+        "WaterBasin.json" | "WaterDamBreak.json" | "WaterDamBreakGpu.json" => cpu_flip_preset_json(file),
+        _ => {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/generator-presets").join(file);
+            &std::fs::read_to_string(path).expect("preset reads")
+        }
+    };
+    serde_json::from_str(source).expect("preset parses")
 }
 
 /// `WaterDamBreakGpu.json` as shipped (FLIP engine and its GPU surface), with
@@ -878,7 +885,7 @@ fn preset_def_from(file: &str, left_out: &[&str], overrides: &Value) -> EffectGr
 
 /// Stills of the shipped preset's own water at `stills`, as `preset_<name>_frameNNNN.png`.
 fn render_preset(name: &str, overrides: &Value, stills: &[usize], dir: &Path) {
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let device = crate::test_device();
     let mut runtime = PresetRuntime::from_def_with_device(preset_def(overrides), &registry, device.arc(), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None)
         .expect("preset builds on the device");
@@ -945,7 +952,7 @@ fn write_frame(encoder: &mut std::process::Child, rgba: &[u8]) {
 /// A preset's first `frames` frames as `{name}.mp4`, with stills: one column
 /// of the race clip.
 fn record_preset(def: EffectGraphDef, name: &str, frames: usize, stills: &[usize], dir: &Path) -> PathBuf {
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let device = crate::test_device();
     let mut runtime = PresetRuntime::from_def_with_device(def, &registry, device.arc(), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None)
         .expect("preset builds on the device");

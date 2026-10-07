@@ -1,7 +1,10 @@
 //! One scene/native mapping for simulation, roles, whitewater and editor bounds.
+#[cfg(feature = "gpu-proofs")]
 use manifold_fluids::{Bounds, Config};
 
-use super::{FluidSettings, Transform};
+use super::Transform;
+#[cfg(feature = "gpu-proofs")]
+use super::FluidSettings;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FluidDomainLayout {
@@ -11,6 +14,7 @@ pub struct FluidDomainLayout {
     pub cell_size: f64,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl FluidSettings {
     pub fn domain_layout(self) -> Result<FluidDomainLayout, String> {
         domain_layout(self.domain, self.domain_size, self.resolution)
@@ -96,6 +100,7 @@ impl FluidDomainLayout {
         }
     }
 
+    #[cfg(feature = "gpu-proofs")]
     pub(super) fn config(self, settings: FluidSettings) -> Config {
         Config {
             // FLIP reserves 1.5 cells at each closed boundary. They belong
@@ -107,22 +112,26 @@ impl FluidDomainLayout {
         }
     }
 
+    #[cfg(feature = "gpu-proofs")]
     pub(super) fn to_native(self, point: [f32; 3]) -> [f32; 3] {
         let origin = self.native_origin();
         std::array::from_fn(|i| point[i] - origin[i])
     }
 
+    #[cfg(feature = "gpu-proofs")]
     pub(super) fn to_scene(self, point: [f32; 3]) -> [f32; 3] {
         let origin = self.native_origin();
         std::array::from_fn(|i| point[i] + origin[i])
     }
 
+    #[cfg(any(test, feature = "gpu-proofs"))]
     pub(super) fn native_origin(self) -> [f32; 3] {
         self.min.map(|value| value - (1.5 * self.cell_size) as f32)
     }
 
     /// Scene box and node counts of the FLIP solid lattice: the padded
     /// native grid, node (i, j, k) at `min + (i, j, k)·size/(nodes − 1)`.
+    #[cfg(any(test, feature = "gpu-proofs"))]
     pub(crate) fn solid_lattice(self) -> (Transform, [u32; 3]) {
         let origin = self.native_origin();
         let size: [f32; 3] = std::array::from_fn(|axis| (f64::from(self.cells[axis] + 3) * self.cell_size) as f32);
@@ -136,6 +145,7 @@ impl FluidDomainLayout {
 
     /// The FLIP Grid Budget gate: the padded grid over `budget_mcells`
     /// million cells is refused by name.
+    #[cfg(feature = "gpu-proofs")]
     pub(crate) fn admit_flip_grid(self, budget_mcells: f32) -> Result<(), String> {
         let cells = self.cells.into_iter().map(|n| u64::from(n) + 3).product::<u64>();
         if !budget_mcells.is_finite() || budget_mcells <= 0.0 || cells as f64 > f64::from(budget_mcells) * 1e6 {
@@ -147,6 +157,7 @@ impl FluidDomainLayout {
         Ok(())
     }
 
+    #[cfg(feature = "gpu-proofs")]
     pub(super) fn bounds(self, pose: Transform) -> Bounds {
         let centre = self.to_native(pose.pos);
         Bounds {
@@ -156,7 +167,7 @@ impl FluidDomainLayout {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod tests {
     use super::*;
 

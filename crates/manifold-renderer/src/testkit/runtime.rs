@@ -9,7 +9,9 @@ pub(crate) fn slot_count(runtime: &PresetRuntime) -> usize { runtime.effect_node
 pub(crate) fn pending_segments(runtime: &PresetRuntime) -> bool { runtime.pending_segments }
 pub(crate) fn sampling_mask(runtime: &PresetRuntime) -> Option<&[bool]> { runtime.physics_sample_steps.as_deref() }
 pub(crate) fn last_physics_frame_time(runtime: &PresetRuntime) -> Option<FrameTime> { runtime.last_physics_frame_time }
+#[cfg(feature = "gpu-proofs")]
 pub(crate) fn set_last_physics_frame_time(runtime: &mut PresetRuntime, value: Option<FrameTime>) { runtime.last_physics_frame_time = value; }
+#[cfg(feature = "gpu-proofs")]
 pub(crate) fn published_identity(runtime: &PresetRuntime, fluid: NodeInstanceId) -> Option<Result<[u8; 32], String>> {
     runtime.effect_nodes.first().expect("effect slot").physics_sources.published_identity(fluid).map(|result| result.map_err(str::to_owned))
 }
@@ -83,8 +85,10 @@ use manifold_core::params::ParamManifest;
 use crate::node_graph::PrimitiveRegistry;
 #[cfg(feature = "gpu-proofs")]
 use crate::node_graph::LoadedPresetView;
-use crate::node_graph::scene_modifier_expand::{PreparedModifierEvents, SceneModifierImpulseRoute, LegacyMathViewScope};
+use crate::node_graph::scene_modifier_expand::{PreparedModifierEvents, LegacyMathViewScope};
 use super::JsonGeneratorLoadError;
+#[cfg(feature = "gpu-proofs")]
+use crate::node_graph::scene_modifier_expand::SceneModifierImpulseRoute;
 
 pub(crate) fn render_view(def: EffectGraphDef, registry: &PrimitiveRegistry, params: Option<&ParamManifest>, fused: bool, view: Option<(&NodeId, Option<LegacyMathViewScope>)>) -> Result<PresetRuntime, JsonGeneratorLoadError> {
     PresetRuntime::from_def_for_render_view(def, registry, params, fused, view)
@@ -95,6 +99,7 @@ pub(crate) fn prepare_surface(def: &mut EffectGraphDef) { super::gpu_flip_surfac
 #[cfg(feature = "gpu-proofs")]
 pub(crate) fn build_segment_cards(indices: &[usize], effects: &[(usize, &manifold_core::effects::PresetInstance)], registry: &PrimitiveRegistry) -> Vec<(EffectGraphDef, &'static LoadedPresetView)> { super::segments::build_segment_cards(indices, effects, registry) }
 
+#[cfg(feature = "gpu-proofs")]
 pub(crate) struct SourceObservation {
     pub(crate) fluid: NodeId,
     pub(crate) digest: [u8; 32],
@@ -102,6 +107,7 @@ pub(crate) struct SourceObservation {
     pub(crate) string_targets: Vec<(NodeId, String)>,
     pub(crate) asset_nodes: Vec<NodeId>,
 }
+#[cfg(feature = "gpu-proofs")]
 pub(crate) fn prepare_sources(expanded: &EffectGraphDef, canonical: &EffectGraphDef, routes: &[SceneModifierImpulseRoute], registry: &PrimitiveRegistry) -> Result<Vec<SourceObservation>, String> {
     super::physics_sources::prepare(expanded, canonical, routes, registry).map(|sources| sources.into_iter().map(|source| SourceObservation {
         fluid: source.fluid, digest: source.digest, control_ids: source.control_ids,
@@ -111,4 +117,10 @@ pub(crate) fn prepare_sources(expanded: &EffectGraphDef, canonical: &EffectGraph
 #[cfg(feature = "gpu-proofs")]
 pub(crate) fn metal_backend(runtime: &mut PresetRuntime) -> &mut crate::node_graph::MetalBackend {
     runtime.executor.backend_mut().as_any_mut().and_then(|value| value.downcast_mut::<crate::node_graph::MetalBackend>()).expect("production path constructs a MetalBackend")
+}
+
+#[cfg(feature = "gpu-proofs")]
+pub(crate) fn set_reference_fusion(runtime: &mut PresetRuntime, prior: &PresetRuntime, retarget: ahash::AHashMap<(String, String), (NodeId, String)>) {
+    runtime.effect_nodes[0].def_content_key = prior.effect_nodes[0].def_content_key;
+    runtime.effect_nodes[0].bound.fused_retarget = retarget;
 }

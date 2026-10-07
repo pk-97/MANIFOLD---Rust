@@ -479,49 +479,6 @@ fn engine_beat_time_conversion_roundtrip() {
     );
 }
 
-#[test]
-fn engine_waypoints_stress_test() {
-    let path = fixture_path("WAYPOINTS.manifold");
-    if !path.exists() {
-        return;
-    }
-
-    let project = manifold_io::loader::load_project(&path).unwrap();
-    assert!(project.timeline.total_clip_count() > 0);
-
-    let mut engine = create_engine();
-    engine.initialize(project);
-    engine.set_state(PlaybackState::Playing);
-
-    let dt = 1.0 / 60.0;
-    let mut realtime = 0.0;
-    let mut total_ready = 0usize;
-
-    // Tick 500 frames (~8.3 seconds)
-    for i in 0..500 {
-        let ctx = TickContext {
-            dt_seconds: Seconds(dt),
-            realtime_now: Seconds(realtime),
-            pre_render_dt: Seconds(dt),
-            frame_count: i as u64,
-            export_fixed_dt: Seconds(0.0),
-        };
-        let result = engine.tick(ctx);
-        total_ready += result.ready_clips.len();
-        realtime += dt;
-    }
-
-    assert!(
-        engine.current_time() > Seconds(8.0),
-        "Should have ticked ~8.3 seconds"
-    );
-    // WAYPOINTS has clips starting early in the timeline, so we should have seen some
-    assert!(
-        total_ready > 0,
-        "WAYPOINTS should have active clips in the first 8 seconds"
-    );
-}
-
 /// P2 helper: two video layers, each with a generator clip spanning beats 0..4.
 /// Layer 0 is the top layer (index 0), layer 1 is below it (index 1).
 fn project_with_two_video_layers() -> manifold_core::project::Project {

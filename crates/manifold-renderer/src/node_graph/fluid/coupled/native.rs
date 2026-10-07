@@ -1,19 +1,31 @@
+#[cfg(feature = "gpu-proofs")]
 use manifold_fluids::{
     CoupledFluidFrame, FluidFrame, FluidWorld, FrameStats, MeshRole, RigidFluidCoupling,
 };
+#[cfg(feature = "gpu-proofs")]
 use manifold_physics::input::AppliedEvent;
+#[cfg(feature = "gpu-proofs")]
 use manifold_physics::stepping::{StepCoupling, StepInterval, SubstepExchange, Uncoupled};
-use manifold_physics::{BodyHandle, FieldInput, PhysicsWorld, Seconds, TickStamp};
+#[cfg(feature = "gpu-proofs")]
+use manifold_physics::{FieldInput, Seconds, TickStamp};
+use manifold_physics::{BodyHandle, PhysicsWorld};
 
+#[cfg(feature = "gpu-proofs")]
 use crate::node_graph::physics::{
-    MAX_BODIES, ResolvedRigidImpulse, RigidSceneInputs, RigidSimulation,
+    ResolvedRigidImpulse,
 };
+#[cfg(feature = "gpu-proofs")]
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::transform::quat_to_render_scene_euler;
 use crate::node_graph::transform::Transform;
 
+#[cfg(feature = "gpu-proofs")]
 use super::super::impulses::ImpulseSum;
-use super::{CoupledRigidFrame, Request, Setup};
+#[cfg(feature = "gpu-proofs")]
+use super::{Request, Setup};
+use super::CoupledRigidFrame;
+use crate::node_graph::physics::{MAX_BODIES, RigidSceneInputs, RigidSimulation};
+#[cfg(feature = "gpu-proofs")]
 use crate::node_graph::fluid::{FluidDomainLayout, FluidRuntime, Sample, TICK};
 
 /// How a prepared rigid world's bodies map onto a [`CoupledRigidFrame`]:
@@ -103,6 +115,7 @@ impl Layout {
 /// Both native worlds live on the existing fluid worker. The rigid owner's
 /// histories, contacts, events and substep loop are reused without another
 /// transport-to-simulation clock.
+#[cfg(feature = "gpu-proofs")]
 pub(crate) struct Native {
     rigid: RigidSimulation,
     coupling: Option<RigidFluidCoupling>,
@@ -113,6 +126,7 @@ pub(crate) struct Native {
     rigid_events: Vec<AppliedEvent<ResolvedRigidImpulse>>,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Native {
     pub fn prepare(
         fluid: &mut FluidWorld,
@@ -325,6 +339,7 @@ impl Native {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 struct Participant<'a> {
     fluid: &'a mut FluidWorld,
     coupling: Option<&'a mut RigidFluidCoupling>,
@@ -340,11 +355,13 @@ struct Participant<'a> {
     live_domain: FluidDomainLayout,
 }
 
+#[cfg(feature = "gpu-proofs")]
 enum LiquidFrame<'a> {
     Coupled(CoupledFluidFrame<'a, 'a>),
     Plain(FluidFrame<'a>),
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl LiquidFrame<'_> {
     fn set_fields(
         &mut self,
@@ -358,6 +375,7 @@ impl LiquidFrame<'_> {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 struct Exchange<'a> {
     liquid: LiquidFrame<'a>,
     layout: &'a Layout,
@@ -375,6 +393,7 @@ struct Exchange<'a> {
     live_fields_prepared: bool,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl StepCoupling for Participant<'_> {
     type Error = String;
     type Frame<'a>
@@ -432,6 +451,7 @@ impl StepCoupling for Participant<'_> {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl Exchange<'_> {
     fn set_live_fields(&mut self, duration: Seconds, include_impulses: bool) -> Result<(), String> {
         let Some(interval) = self.live_interval else {
@@ -485,6 +505,7 @@ impl Exchange<'_> {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl SubstepExchange for Exchange<'_> {
     type Error = String;
 

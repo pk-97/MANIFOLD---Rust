@@ -33,7 +33,7 @@ Machine: GPU, worktrees, disk:
   claude-pane             launch a Claude Code session in a new tmux pane without stealing focus  [scripts/claude-pane.sh]
 
 Render and measure:
-  capture                 render any preset to PNG frames: OUT_DIR --preset <json> [--frames N] (the visual oracle)  [scripts/gpu_queue.py -- cargo run -p manifold-renderer --example fluid_capture --]
+  capture                 render any preset to PNG frames: OUT_DIR --preset <json> [--frames N] (the visual oracle)  [scripts/gpu_queue.py -- cargo run -p manifold-renderer --features gpu-proofs --example fluid_capture --]
   render-generator        render one generator preset headless  [cargo run -p manifold-renderer --bin render-generator-preset --]
   render-import           render an imported glTF/GLB headless; --dump-def writes the importer's def JSON  [cargo run -p manifold-renderer --bin render-import --]
   graph-tool              validate <file.json> --kind effect|generator, fusion report; pre-flight for graph JSON  [cargo run -p manifold-renderer --bin graph-tool --]

@@ -67,11 +67,11 @@ impl PresetRuntime {
             // Do not move arbitrary GPU primitives or copy backend slot IDs.
             if matches!(
                 new.node.type_id().as_str(),
-                manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID
-                    | "node.physics_world"
+                "node.physics_world"
                     | "node.rigid_body"
                     | "node.fluid_role_source"
-            ) {
+            ) || (cfg!(feature = "gpu-proofs")
+                && new.node.type_id().as_str() == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID) {
                 let old = prior.graph.get_node_mut(old_id).expect("compiled node");
                 std::mem::swap(&mut new.node, &mut old.node);
             }
@@ -84,7 +84,9 @@ impl PresetRuntime {
         }
         self.last_physics_frame_time = prior.last_physics_frame_time;
         self.physics_project_tempo.clone_from(&prior.physics_project_tempo);
+        #[cfg(feature = "gpu-proofs")]
         self.carry_physics_source_controls_from(prior);
+        #[cfg(feature = "gpu-proofs")]
         self.install_physics_source_identities();
 
         // Setup and event wires are intentionally outside historical sampling.

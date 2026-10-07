@@ -70,7 +70,7 @@ pub(crate) fn runtime_definition() -> EffectGraphDef {
 }
 
 pub(crate) fn runtime_from_definition(def: EffectGraphDef) -> PresetRuntime {
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     registry.register("test.fluid_time", || {
         Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
     });

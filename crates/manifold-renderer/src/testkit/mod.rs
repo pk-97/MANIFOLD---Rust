@@ -23,7 +23,7 @@ pub(crate) mod codegen_support;
 #[cfg(test)]
 pub(crate) mod proof_support;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod physics_history;
 
 #[cfg(test)]

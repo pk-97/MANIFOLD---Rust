@@ -6,6 +6,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 use crate::node_graph::physics_events::ImpulseTarget;
 
+#[cfg(feature = "gpu-proofs")]
 pub(crate) fn authoring_objects(owner: &EffectGraphDef, scene: &SceneNodeRef, registry: &PrimitiveRegistry) -> Result<Vec<SceneNodeRef>, SceneModifierExpandError> {
     super::acceleration::authoring_objects(owner, scene, registry)
 }

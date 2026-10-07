@@ -124,8 +124,6 @@ mod window_input;
 mod live_ui;
 mod viewport_input;
 mod scene_viewport;
-#[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
-mod scene_viewport_proof;
 // P5c evidence — test-only (`#![cfg(test)]` inside), see its module doc.
 mod viewport_p5c_demo;
 // P6 evidence — test-only (`#![cfg(test)]` inside), see its module doc.

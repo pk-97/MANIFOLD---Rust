@@ -1,15 +1,20 @@
 //! Capture observations without exposing recipient or capture storage.
 use crate::preset_runtime::{CapturedSceneImpulse, PreparedSceneImpulse};
+#[cfg(feature = "gpu-proofs")]
 use crate::node_graph::physics_events::ImpulseTarget;
+#[cfg(feature = "gpu-proofs")]
 use manifold_core::NodeId;
 use manifold_physics::{FieldValue, input::EventStamp};
 
 impl PreparedSceneImpulse {
     #[doc(hidden)]
+    #[cfg(feature = "gpu-proofs")]
     pub(crate) fn test_recipient_count(&self) -> usize { self.recipients.len() }
     #[doc(hidden)]
+    #[cfg(feature = "gpu-proofs")]
     pub(crate) fn test_recipient_id(&self, index: usize) -> &NodeId { &self.recipients[index].id }
     #[doc(hidden)]
+    #[cfg(feature = "gpu-proofs")]
     pub(crate) fn test_recipient_target(&self, index: usize) -> ImpulseTarget { self.recipients[index].target }
 }
 impl CapturedSceneImpulse {

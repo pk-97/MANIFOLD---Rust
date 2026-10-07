@@ -58,7 +58,9 @@ pub mod fluid_particles;
 pub mod liquid;
 pub mod whitewater;
 pub(crate) mod whitewater_handoff;
+#[cfg(feature = "gpu-proofs")]
 pub(crate) mod fluid_cache;
+#[cfg(feature = "gpu-proofs")]
 pub(crate) mod fluid_mesh_upload;
 pub(crate) mod instance_upload;
 mod graph;

@@ -6,6 +6,8 @@
 **Prerequisites:** none — the seam's P1 and GPU FLIP's full step are on main. This design's P1 is the seam's P10 (Grid outputs).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
+**Reference boundary:** `WaterDamBreakGpu.json` below is the proof-only CPU fixture in `crates/manifold-renderer/tests/fixtures/cpu-flip/`; product water uses `WaterDamBreakGpuFlip`.
+
 Peter, 2026-09-30, on BUG-imy3 (GPU whitewater, solver-agnostic): "move the spawn search to the GPU and reuse FLIP's own foam and bubble code."
 
 FLIP's whitewater costs 42–55 ms per tick at 64, and about 92% of that is two jobs that are parallel by nature: scanning every liquid particle for emitters, and the curvature grid (BUG-imy3 notes). The life of the few thousand whitewater particles afterwards (advection, buoyancy, drag, collisions, lifetime, removal) costs about 1 ms and is FLIP's tuned behaviour. **So the GPU finds emitters and spawns whitewater from what the seam already publishes, and the unchanged vendored C++ advances it, fed through shared memory after a fence.** Any solver that publishes the seam's face grid gets whitewater; FLIP keeps its native whitewater as the reference (seam D3).

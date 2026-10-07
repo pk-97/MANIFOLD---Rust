@@ -26,7 +26,7 @@ def godfile_paths():
 INTEGRATION_ROWS = {
     "Cargo.toml": ("manifold-app", ["crate_layering"]),
     "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
-    "crates/manifold-renderer/src/node_graph/fluid.rs": ("manifold-renderer", ["fluid_preset"]),
+    "crates/manifold-renderer/src/node_graph/fluid.rs": ("manifold-renderer", ["gpu_proofs"]),
     **{path: ("manifold-app", ["godfile_regrowth"]) for path in godfile_paths()},
 }
 # Contracts over every file under a prefix, Rust or not:
@@ -97,6 +97,9 @@ def plan_for_paths(paths, repo):
                 plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
         parts = Path(path).parts
         if len(parts) < 4 or parts[0] != "crates" or not path.endswith(".rs"):
+            continue
+        # Deleted tests have no binary; a rename selects only its surviving path.
+        if parts[2] == "tests" and not (repo / path).is_file():
             continue
         crate = repo / parts[0] / parts[1]
         if not (crate / "Cargo.toml").exists():

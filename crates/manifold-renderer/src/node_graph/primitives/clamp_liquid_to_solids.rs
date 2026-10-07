@@ -72,7 +72,7 @@ crate::primitive! {
     ],
     depth_rule: Terminal,
     composition_notes: "The last node before node.count_surface_triangles and node.volume_surface_mesh, after the node.smooth_lattice chain. Wire levelset from the last smoothing pass, nodes_x/y/z from node.particle_volume's volume_nodes_x/y/z, and solid, solid_nodes_x/y/z, center/size and cell_size from the same wires node.particle_volume takes. Without it, high Smoothing or Resolution Scale can pull the surface into walls and floating bodies and open it at the lattice edge.",
-    examples: ["WaterDamBreakGpu", "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
+    examples: ["WaterDamBreakGpuFlip", "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Clamp Liquid To Solids", category: Atom },
     summary: "Keeps a liquid surface out of walls and solid bodies and closed at the edge of its grid, after smoothing.",
     category: Particles3D,

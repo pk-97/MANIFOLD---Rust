@@ -42,6 +42,7 @@ pub mod preset_type_id;
 pub mod preset_type_registry;
 pub mod project;
 pub mod recording;
+pub mod retired_cpu_flip;
 pub mod scene_exposure;
 pub mod scene_index;
 pub mod scene_modifier_preset;

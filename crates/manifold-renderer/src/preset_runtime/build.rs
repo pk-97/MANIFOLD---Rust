@@ -286,7 +286,7 @@ impl PresetRuntime {
     /// common graph validation, binding setup, and resource preparation.
     /// `mesh_rules` is the fused view's prepared mesh-revision sidecar
     /// (design §3.3); canonical/unfused defs pass an empty map.
-    pub(super) fn from_render_def(
+    pub(crate) fn from_render_def(
         mut doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
@@ -617,6 +617,7 @@ impl PresetRuntime {
         // rehydrate — its host rebuilds on structure change); the live ones are
         // `bound`, `node_map`, `generator_input_node`, and the preview maps.
         let segment = EffectSlot {
+            #[cfg(feature = "gpu-proofs")]
             physics_sources: Default::default(),
             effect_id: EffectId::default(),
             effect_type: type_id.clone(),

@@ -235,7 +235,7 @@ impl SceneViewportPaint<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_renderer::node_graph::fluid::{FluidDomainState, FluidSettings};
+    use manifold_renderer::node_graph::fluid::{FluidDomainState, domain_layout};
 
     fn target() -> GraphTarget {
         GraphTarget::Generator(manifold_core::LayerId::new("water-layer"))
@@ -324,7 +324,7 @@ mod tests {
         ));
         observations.scratch[0].1.state = FluidDomainState::Ready;
         observations.scratch[0].1.accepted_layout =
-            Some(FluidSettings::default().domain_layout().unwrap());
+            Some(domain_layout(None, 4.0, 24).unwrap());
         observations.record(2, 3, 0, request, Ok(FrameRenderStatus::Complete));
         assert!(!Arc::ptr_eq(
             &initial,

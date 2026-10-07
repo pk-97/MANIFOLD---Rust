@@ -27,7 +27,7 @@ use serde_json::Value;
 
 use crate::harness;
 
-const PRESET: &str = include_str!("../../assets/generator-presets/WaterDamBreakGpu.json");
+const PRESET: &str = include_str!("../fixtures/cpu-flip/WaterDamBreakGpu.json");
 const SURFACE_ATOMS: [&str; 8] = [
     "node.sort_particles_into_cells",
     "node.shape_particle_blobs",
@@ -255,7 +255,7 @@ fn fluid_surface_perf() {
         let json = preset(run);
         let mut runtime = PresetRuntime::from_json_str_with_device(
             &json.to_string(),
-            &PrimitiveRegistry::with_builtin(),
+            &PrimitiveRegistry::with_cpu_flip_reference(),
             std::sync::Arc::clone(device),
             WIDTH,
             HEIGHT,

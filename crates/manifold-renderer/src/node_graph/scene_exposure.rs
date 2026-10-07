@@ -10,7 +10,6 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 mod compound;
 mod fluid_objects;
-mod fluid_quality;
 use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain, liquid_dial_params};
 use manifold_core::scene_exposure::{SceneExposureMetadataProvider, SceneParamMetadata};
 
@@ -90,9 +89,21 @@ const RENDER_SCENE_STAMPED_PARAMS: &[&str] = &[
 /// converting `ParamDef` metadata into the crate-neutral `SceneParamMetadata`
 /// shape. Empty when the type is unknown.
 pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
-    let Some(node) = SCENE_EXPOSURE_REGISTRY.construct(type_id) else {
+    metadata_for_node_type_with_registry(&SCENE_EXPOSURE_REGISTRY, type_id, None)
+}
+
+/// Convert one registry node's descriptors to scene metadata. Proofs may pass
+/// an explicit dial list for a retired solver whose product controls are no
+/// longer exposed by `manifold-core`.
+pub(crate) fn metadata_for_node_type_with_registry(
+    registry: &PrimitiveRegistry,
+    type_id: &str,
+    dial_whitelist: Option<&[&str]>,
+) -> Vec<SceneParamMetadata> {
+    let Some(node) = registry.construct(type_id) else {
         return Vec::new();
     };
+    let dials = dial_whitelist.or_else(|| liquid_dial_params(type_id));
     node.parameters()
         .iter()
         .filter(|pd| {
@@ -103,7 +114,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
         })
         .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "density" | "friction" | "bounce" | "collider_parts"))
         .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
-        .filter(|pd| liquid_dial_params(type_id).is_none_or(|dials| dials.contains(&pd.name.as_ref())))
+        .filter(|pd| dials.is_none_or(|dials| dials.contains(&pd.name.as_ref())))
         .filter(|pd| type_id != "node.whitewater_step" || matches!(pd.name.as_ref(), "enabled" | "amount" | "wavecrest_emission" | "turbulence_emission" | "min_turbulence" | "max_turbulence" | "inside_emission" | "dust_emission" | "boundary_dust" | "dust_rate" | "spray_speed" | "generation_rate" | "influence_base" | "influence_decay"))
         .filter(|pd| type_id != "node.fluid_role_source" || matches!(pd.name.as_ref(),
             "role" | "enabled" | "geometry" | "shape" | "radius"
@@ -172,10 +183,12 @@ pub fn look_metadata() -> Vec<SceneParamMetadata> {
 /// node in `def`. Returns `true` iff anything changed. Safe to run on any graph
 /// (non-scene defs are untouched).
 pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
+    if manifold_core::retired_cpu_flip::graph_contains_retired_cpu_flip_node(def) {
+        return false;
+    }
     let material_migrated = manifold_core::phong_migration::migrate_phong_to_pbr(def);
     let compound = compound::migrate(def);
     let fluid_objects = fluid_objects::migrate(def);
-    let fluid_quality = fluid_quality::migrate(def);
     let repaired = repair_legacy_lens_f_stop(def);
     let provider = PrimitiveRegistrySceneExposureProvider;
     let migrated = manifold_core::scene_exposure::migrate_scene_exposures(
@@ -187,7 +200,6 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
     let bokeh_source_migrated = migrate_bokeh_source_coc(def);
     compound
         || fluid_objects
-        || fluid_quality
         || material_migrated
         || repaired
         || migrated
@@ -709,7 +721,7 @@ mod tests {
         assert_eq!(metadata[0].name, "radius");
         assert_eq!(metadata[0].label, "Size");
         assert!(!SCENE_VOCABULARY_TYPE_IDS.contains(&"node.platonic_solid_mesh"));
-        for preset in ["PhysicsSolids", "PhysicsBoxes", "HoneyDamBreak", "WaterFloatingBoxMatter"] {
+        for preset in ["PhysicsSolids", "PhysicsBoxes", "WaterFloatingBoxMatter"] {
             let def = crate::node_graph::bundled_preset_def(&manifold_core::PresetTypeId::new(preset))
                 .expect("shipped preset");
             assert!(def.preset_metadata.as_ref().unwrap().params.iter().all(|spec| spec.name != "Size"),
@@ -718,186 +730,13 @@ mod tests {
     }
 
     #[test]
-    fn scene_physics_fluid_metadata_exposes_creative_controls_and_trigger() {
-        let metadata = metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID);
-        for name in ["seed", "domain_size", "fill_height", "liquid_density", "viscosity", "surface_tension",
-            "gravity_x", "gravity", "gravity_z", "emission", "inflow_speed", "speed", "surface_subdivisions",
-            "surface_particle_scale", "surface_smoothing", "surface_smoothing_iterations",
-            "closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z",
-            "resolution", "grid_budget_mcells", "transfer", "whitewater", "whitewater_capacity", "whitewater_wavecrest_rate",
-            "whitewater_turbulence_rate", "whitewater_min_energy", "whitewater_max_energy"]
-        {
-            assert!(metadata.iter().any(|param| param.name == name), "missing {name}");
-        }
-        assert!(metadata.iter().find(|param| param.name == "reset").unwrap().is_trigger);
-        let resolution = metadata.iter().find(|param| param.name == "resolution").unwrap();
-        assert!(resolution.whole_numbers);
-        assert!(matches!(resolution.convert, manifold_core::effects::ParamConvert::IntRound));
-        let transfer = metadata.iter().find(|param| param.name == "transfer").unwrap();
-        assert!(transfer.whole_numbers);
-        assert!(matches!(transfer.convert, manifold_core::effects::ParamConvert::EnumRound));
-        assert_eq!(transfer.value_labels, vec!["FLIP".to_string(), "APIC".to_string()]);
-        let whitewater = metadata.iter().find(|param| param.name == "whitewater").unwrap();
-        assert!(!whitewater.whole_numbers);
-        assert!(matches!(whitewater.convert, manifold_core::effects::ParamConvert::Float));
-        assert_eq!(whitewater.value_labels, vec!["Off".to_string(), "On".to_string()]);
-        let capacity = metadata.iter().find(|param| param.name == "whitewater_capacity").unwrap();
-        assert!(capacity.whole_numbers);
-        assert!(matches!(capacity.convert, manifold_core::effects::ParamConvert::IntRound));
-        for name in ["whitewater_wavecrest_rate", "whitewater_turbulence_rate",
-            "whitewater_min_energy", "whitewater_max_energy"]
-        {
-            let param = metadata.iter().find(|param| param.name == name).unwrap();
-            assert!(!param.whole_numbers, "{name} must remain a continuous control");
-            assert!(matches!(param.convert, manifold_core::effects::ParamConvert::Float));
-        }
-        for name in ["max_capacity", "cache_mode", "cache_path"]
-        {
-            assert!(!metadata.iter().any(|param| param.name == name), "internal control {name}");
-        }
-    }
-
-    #[test]
-    fn migrate_fluid_quality_controls_preserves_existing_exposures() {
-        use manifold_core::effect_graph_def::SerializedParamValue;
-        use std::collections::BTreeSet;
-
-        let mut fluid = graph_node(9, "fluid", manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID);
-        fluid.params.insert(
-            "fill_height".to_string(),
-            SerializedParamValue::Float { value: 0.75 },
-        );
-        fluid.params.insert(
-            "resolution".to_string(),
-            SerializedParamValue::Int { value: 32 },
-        );
-        fluid.params.insert(
-            "transfer".to_string(),
-            SerializedParamValue::Enum { value: 1 },
-        );
-        fluid.params.insert(
-            "whitewater".to_string(),
-            SerializedParamValue::Float { value: 1.0 },
-        );
-        fluid.params.insert(
-            "whitewater_capacity".to_string(),
-            SerializedParamValue::Int { value: 4096 },
-        );
+    fn retired_cpu_flip_graph_is_not_migrated_or_exposed() {
+        let fluid = graph_node(9, "fluid", manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID);
         let mut def = graph_def(vec![fluid], Vec::new());
-
-        assert!(migrate_scene_exposures(&mut def));
-        let added_names = [
-            "resolution",
-            "transfer",
-            "whitewater",
-            "whitewater_capacity",
-            "whitewater_wavecrest_rate",
-            "whitewater_turbulence_rate",
-            "whitewater_min_energy",
-            "whitewater_max_energy",
-        ];
-        let metadata = def.preset_metadata.as_ref().unwrap();
-        let old_binding_state: Vec<(String, f32)> = metadata
-            .bindings
-            .iter()
-            .filter(|binding| {
-                !matches!(
-                    &binding.target,
-                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
-                        if node_id.as_str() == "fluid" && added_names.contains(&param.as_str())
-                )
-            })
-            .map(|binding| (binding.id.clone(), binding.default_value))
-            .collect();
-        let old_param_state: Vec<(String, f32)> = metadata
-            .params
-            .iter()
-            .filter(|param| !added_names.iter().any(|name| param.id == format!("9_{name}")))
-            .map(|param| (param.id.clone(), param.default_value))
-            .collect();
-        let existing_fill_binding = metadata
-            .bindings
-            .iter()
-            .find(|binding| {
-                matches!(
-                    &binding.target,
-                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
-                        if node_id.as_str() == "fluid" && param == "fill_height"
-                )
-            })
-            .unwrap();
-        let existing_fill_id = existing_fill_binding.id.clone();
-        let existing_fill_default = existing_fill_binding.default_value;
-
-        // Model a project stamped before the quality controls were exposed.
-        let removed_ids: BTreeSet<String> = metadata
-            .bindings
-            .iter()
-            .filter(|binding| {
-                matches!(
-                    &binding.target,
-                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
-                        if node_id.as_str() == "fluid" && added_names.contains(&param.as_str())
-                )
-            })
-            .map(|binding| binding.id.clone())
-            .collect();
-        let metadata = def.preset_metadata.as_mut().unwrap();
-        metadata.bindings.retain(|binding| !removed_ids.contains(&binding.id));
-        metadata.params.retain(|param| !removed_ids.contains(&param.id));
-
-        assert!(migrate_scene_exposures(&mut def));
-        let metadata = def.preset_metadata.as_ref().unwrap();
-        let new_binding_state: Vec<(String, f32)> = metadata
-            .bindings
-            .iter()
-            .filter(|binding| {
-                !matches!(
-                    &binding.target,
-                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
-                        if node_id.as_str() == "fluid" && added_names.contains(&param.as_str())
-                )
-            })
-            .map(|binding| (binding.id.clone(), binding.default_value))
-            .collect();
-        let new_param_state: Vec<(String, f32)> = metadata
-            .params
-            .iter()
-            .filter(|param| !added_names.iter().any(|name| param.id == format!("9_{name}")))
-            .map(|param| (param.id.clone(), param.default_value))
-            .collect();
-        assert_eq!(new_binding_state, old_binding_state);
-        assert_eq!(new_param_state, old_param_state);
-        assert_eq!(
-            metadata
-                .bindings
-                .iter()
-                .find(|binding| binding.id == existing_fill_id)
-                .unwrap()
-                .default_value,
-            existing_fill_default
-        );
-
-        for name in added_names {
-            let bindings = metadata
-                .bindings
-                .iter()
-                .filter(|binding| {
-                    matches!(
-                        &binding.target,
-                        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
-                            if node_id.as_str() == "fluid" && param == name
-                    )
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(bindings.len(), 1, "{name} must have one binding");
-            let spec_id = format!("9_{name}");
-            let spec = metadata.params.iter().find(|param| param.id == spec_id).unwrap();
-            assert_eq!(spec.default_value, bindings[0].default_value);
-        }
-        assert_eq!(def.nodes[0].params["fill_height"], SerializedParamValue::Float { value: 0.75 });
-        assert_eq!(def.nodes[0].params["resolution"], SerializedParamValue::Int { value: 32 });
+        let before = serde_json::to_vec(&def).unwrap();
         assert!(!migrate_scene_exposures(&mut def));
+        assert_eq!(serde_json::to_vec(&def).unwrap(), before);
+        assert!(metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID).is_empty());
     }
 
     #[test]
