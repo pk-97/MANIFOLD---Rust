@@ -19,6 +19,7 @@
 //! there is nothing left to be "at parity" with.)
 
 mod harness;
+mod generator_provider;
 mod scene_modifier_legacy;
 
 mod alpha_contract;

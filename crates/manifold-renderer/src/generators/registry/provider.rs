@@ -41,17 +41,4 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(provider.create, create as manifold_node_engine::runtime::generator_provider::CreateGenerator));
     }
 
-    #[cfg(feature = "gpu-proofs")]
-    #[test]
-    fn registered_prewarm_preserves_the_direct_pipeline_cache() {
-        let device = manifold_gpu::testkit::test_device();
-        let format = GpuTextureFormat::Rgba16Float;
-        let registry = GeneratorRegistry::new(format);
-        registry.prewarm_all(&device.arc());
-        let before = (device.compute_pipeline_cache_len(), device.render_pipeline_cache_len());
-        let provider = manifold_node_engine::runtime::generator_provider::generator_provider();
-        (provider.prewarm)(&device.arc(), format);
-        assert_eq!(before, (device.compute_pipeline_cache_len(), device.render_pipeline_cache_len()));
-    }
-
 }

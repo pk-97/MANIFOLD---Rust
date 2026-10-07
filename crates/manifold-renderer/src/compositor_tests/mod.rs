@@ -5,5 +5,3 @@ mod liquid_surface;
 
 #[cfg(feature = "gpu-proofs")]
 mod bokeh_gather;
-#[cfg(feature = "gpu-proofs")]
-mod generator_provider;
