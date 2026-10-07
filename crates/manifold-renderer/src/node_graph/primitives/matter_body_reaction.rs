@@ -262,3 +262,6 @@ mod tests {
         assert!(wgsl.contains("buf_forces: array<f32>") && wgsl.contains("buf_impulses: array<f32>"), "{wgsl}");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

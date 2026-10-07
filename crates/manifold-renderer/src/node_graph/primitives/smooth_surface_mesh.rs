@@ -86,3 +86,6 @@ impl Primitive for SmoothSurfaceMesh {
             .run::<RelaxSurfaceMesh>(ctx, strength, iterations as u32, "relaxed");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

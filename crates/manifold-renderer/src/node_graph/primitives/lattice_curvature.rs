@@ -109,3 +109,6 @@ impl Primitive for LatticeCurvature {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

@@ -121,3 +121,6 @@ impl Primitive for EmissionCount {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(crate) mod extent;

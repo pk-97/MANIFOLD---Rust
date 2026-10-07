@@ -235,3 +235,6 @@ impl Primitive for SpawnWhitewater {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

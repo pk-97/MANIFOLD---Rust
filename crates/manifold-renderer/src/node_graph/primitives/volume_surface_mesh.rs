@@ -985,3 +985,6 @@ mod gpu_tests {
         assert!(constrained[0] > unconstrained[0]);
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

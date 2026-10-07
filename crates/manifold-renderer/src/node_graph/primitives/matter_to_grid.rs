@@ -251,3 +251,6 @@ mod tests {
         assert_ne!(rounding_hash(1), rounding_hash(2));
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

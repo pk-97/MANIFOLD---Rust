@@ -171,3 +171,6 @@ impl Primitive for RetypeWhitewater {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

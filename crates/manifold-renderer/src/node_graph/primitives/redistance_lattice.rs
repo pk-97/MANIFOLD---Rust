@@ -146,3 +146,6 @@ impl Primitive for RedistanceLattice {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

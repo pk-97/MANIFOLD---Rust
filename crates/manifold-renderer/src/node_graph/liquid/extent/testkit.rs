@@ -27,6 +27,7 @@ pub(crate) fn inverse_fft_rebind_bytes(preset: &LiquidPreset, padding: u64) -> (
     let spectrum = batch * n * (n / 2 + 1) * 8 + padding;
     let field = batch * n * n * 4 + padding;
     atom.provided = vec![("spectrum", spectrum), ("field", field)];
-    inverse_fft_2d(&mut atom).unwrap();
+    let rule = LIQUID_EXTENT_RULES.iter().find(|rule| rule.type_id == "node.inverse_fft_2d").unwrap();
+    (rule.check)(&mut atom).unwrap();
     (spectrum + field, atom.held)
 }

@@ -317,3 +317,6 @@ mod tests {
         assert_eq!(words.len(), LIQUID_STATS_WORDS as usize);
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

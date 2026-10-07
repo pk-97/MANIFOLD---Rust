@@ -93,3 +93,6 @@ impl Primitive for InverseFft2d {
         fft.encode(gpu.native_enc, spectrum, field);
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

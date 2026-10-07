@@ -175,3 +175,6 @@ impl Primitive for TurbulenceField {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

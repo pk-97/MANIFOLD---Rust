@@ -150,3 +150,6 @@ impl Primitive for WhitewaterType {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

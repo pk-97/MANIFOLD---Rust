@@ -503,3 +503,6 @@ mod tests {
         assert_eq!(state.ticks_done, 6);
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

@@ -156,3 +156,6 @@ impl Primitive for PreserveFoam {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

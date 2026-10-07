@@ -1179,3 +1179,6 @@ mod tests {
         assert!(fraction.contains("Solve Level must be a whole number"), "{fraction}");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

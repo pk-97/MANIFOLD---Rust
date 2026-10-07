@@ -393,3 +393,6 @@ mod tests_support {
         cam
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

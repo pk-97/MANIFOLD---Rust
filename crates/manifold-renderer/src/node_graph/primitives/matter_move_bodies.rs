@@ -170,3 +170,6 @@ mod tests {
         assert!(wgsl.contains("dynamic_count: i32,\n    dispatch_count: u32,\n    _pad0: u32,"), "{wgsl}");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

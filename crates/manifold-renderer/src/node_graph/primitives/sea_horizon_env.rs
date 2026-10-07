@@ -185,3 +185,6 @@ mod gpu_tests {
         assert!(worst < 2e-3, "worst relative error {worst}");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

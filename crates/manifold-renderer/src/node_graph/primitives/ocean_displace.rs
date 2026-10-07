@@ -481,3 +481,6 @@ pub(crate) mod gpu_tests {
         assert!(foamy > 0 && foamy < vertices.len(), "the fixture must exercise both foam and clear water ({foamy})");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

@@ -209,3 +209,6 @@ impl Primitive for KeepWhitewater {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

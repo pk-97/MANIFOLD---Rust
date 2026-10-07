@@ -466,3 +466,6 @@ impl Primitive for WhitewaterLifecycle {
         }
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

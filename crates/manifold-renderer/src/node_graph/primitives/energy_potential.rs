@@ -94,3 +94,6 @@ impl Primitive for EnergyPotential {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

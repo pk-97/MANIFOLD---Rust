@@ -251,3 +251,6 @@ mod tests {
         assert_eq!(std::mem::size_of::<FrameParams>(), 16);
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

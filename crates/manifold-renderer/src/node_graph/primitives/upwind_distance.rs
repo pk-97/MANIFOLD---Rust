@@ -141,3 +141,6 @@ impl Primitive for UpwindDistance {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

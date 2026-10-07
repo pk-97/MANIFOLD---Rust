@@ -818,3 +818,6 @@ mod tests {
         .expect("lattice brick shader validates");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

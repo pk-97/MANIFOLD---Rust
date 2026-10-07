@@ -107,3 +107,6 @@ impl Primitive for TurbulenceEmissionCount {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

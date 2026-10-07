@@ -178,3 +178,6 @@ impl Primitive for SmoothLattice {
         }
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

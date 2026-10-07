@@ -1528,3 +1528,6 @@ mod mesh_asset_source_tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

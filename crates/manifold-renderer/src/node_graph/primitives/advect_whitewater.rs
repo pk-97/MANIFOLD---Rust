@@ -267,3 +267,6 @@ impl Primitive for AdvectWhitewater {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

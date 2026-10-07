@@ -366,3 +366,6 @@ mod shared_shader_tests {
             "32f3b339a2e09d8229b860138cb66127d2d963b8318576b4d79b2fd6cd7ca302");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

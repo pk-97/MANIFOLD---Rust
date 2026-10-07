@@ -89,3 +89,6 @@ impl Primitive for ExtendLattice {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

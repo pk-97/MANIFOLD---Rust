@@ -162,3 +162,6 @@ impl Primitive for SampleFacesAtParticles {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

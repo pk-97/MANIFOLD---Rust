@@ -303,3 +303,6 @@ mod tests {
         assert!(!solid.contains("sin(0.5 * angle)") && !moving.contains("sin(0.5 * angle)"));
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

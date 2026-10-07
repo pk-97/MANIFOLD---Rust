@@ -265,3 +265,6 @@ mod tests {
         assert_eq!(crate::node_graph::matter::VELOCITY_CLAMP_CFL, 0.9);
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

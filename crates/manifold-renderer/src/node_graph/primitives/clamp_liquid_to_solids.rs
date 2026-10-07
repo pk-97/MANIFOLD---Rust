@@ -218,3 +218,6 @@ impl Primitive for ClampLiquidToSolids {
         }
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

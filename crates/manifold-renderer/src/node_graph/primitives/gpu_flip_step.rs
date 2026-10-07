@@ -3098,3 +3098,6 @@ mod tests {
         assert_eq!(band_layers(ENGINE_CFL), 12);
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

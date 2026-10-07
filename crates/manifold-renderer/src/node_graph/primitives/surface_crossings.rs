@@ -129,3 +129,6 @@ impl Primitive for SurfaceCrossings {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

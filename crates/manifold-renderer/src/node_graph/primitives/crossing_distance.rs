@@ -114,3 +114,6 @@ impl Primitive for CrossingDistance {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

@@ -945,3 +945,6 @@ mod gate_gpu_tests {
         let _ = std::fs::remove_dir_all(path_2.parent().unwrap());
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

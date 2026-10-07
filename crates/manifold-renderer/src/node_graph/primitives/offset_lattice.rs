@@ -97,3 +97,6 @@ impl Primitive for OffsetLattice {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(crate) mod extent;

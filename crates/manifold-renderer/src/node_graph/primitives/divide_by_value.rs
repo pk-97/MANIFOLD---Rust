@@ -79,3 +79,6 @@ impl Primitive for DivideByValue {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

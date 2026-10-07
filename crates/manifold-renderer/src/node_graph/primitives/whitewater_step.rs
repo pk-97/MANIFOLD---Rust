@@ -1911,3 +1911,6 @@ impl Primitive for WhitewaterStep {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod copy_tests;
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

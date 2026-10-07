@@ -429,3 +429,6 @@ mod gpu_tests {
         assert_eq!(actual, expected.as_slice());
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

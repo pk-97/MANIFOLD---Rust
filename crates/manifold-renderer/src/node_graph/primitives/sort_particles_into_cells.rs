@@ -520,3 +520,6 @@ impl Primitive for SortParticlesIntoCells {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

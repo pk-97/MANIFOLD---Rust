@@ -857,3 +857,6 @@ mod gpu_tests {
         assert_ne!(frame2, frame3, "one frame after the wire flip, the latch must have caught up to branch 1");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

@@ -600,3 +600,6 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "bokeh_gather_tests.rs"]
 mod gpu_tests;
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

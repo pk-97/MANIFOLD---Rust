@@ -213,3 +213,6 @@ impl Primitive for InsideTurbulencePotential {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

@@ -155,3 +155,6 @@ impl Primitive for CountSurfaceTriangles {
         }
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

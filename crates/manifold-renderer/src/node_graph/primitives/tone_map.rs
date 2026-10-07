@@ -173,3 +173,5 @@ impl Primitive for ToneMap {
     }
 }
 
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

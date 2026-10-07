@@ -9662,3 +9662,6 @@ impl RenderScene {
         self.rt_probe.as_ref()
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

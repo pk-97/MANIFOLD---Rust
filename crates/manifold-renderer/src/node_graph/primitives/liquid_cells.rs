@@ -92,3 +92,6 @@ impl Primitive for LiquidCells {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

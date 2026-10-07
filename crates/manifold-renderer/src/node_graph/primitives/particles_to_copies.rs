@@ -318,3 +318,6 @@ mod gpu_tests {
         assert_eq!(raw(&fused_result), raw(&unfused), "fused against standalone");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

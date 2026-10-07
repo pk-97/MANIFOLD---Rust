@@ -103,3 +103,6 @@ impl Primitive for AgeWhitewater {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

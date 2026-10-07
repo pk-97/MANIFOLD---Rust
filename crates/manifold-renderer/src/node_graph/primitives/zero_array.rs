@@ -99,3 +99,6 @@ mod tests {
         assert_eq!(ZeroArray::TYPE_ID, "node.zero_array");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

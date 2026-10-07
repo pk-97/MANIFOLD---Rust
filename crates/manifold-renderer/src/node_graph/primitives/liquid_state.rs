@@ -981,3 +981,6 @@ mod tests {
         assert_eq!(captures, ["whitewater_pool_in", "whitewater_state_in", "whitewater_counts_in", "foam_particles_in", "bubble_particles_in", "spray_particles_in", "dust_particles_in"]);
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

@@ -779,3 +779,6 @@ mod gpu_tests {
         }
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

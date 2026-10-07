@@ -188,3 +188,6 @@ impl Primitive for RunningTotal {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

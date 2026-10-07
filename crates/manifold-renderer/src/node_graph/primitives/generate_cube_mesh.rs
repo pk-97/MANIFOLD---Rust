@@ -126,3 +126,6 @@ impl Primitive for GenerateCubeMesh {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

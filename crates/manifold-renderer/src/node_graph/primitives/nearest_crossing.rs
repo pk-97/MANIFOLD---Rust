@@ -101,3 +101,6 @@ impl Primitive for NearestCrossing {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

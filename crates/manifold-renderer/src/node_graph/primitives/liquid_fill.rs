@@ -335,3 +335,6 @@ mod tests {
         assert_eq!(site_range(3.0, 1.0, 0.0, 1.0, 8), [6, 6]);
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

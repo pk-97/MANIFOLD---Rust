@@ -98,3 +98,6 @@ impl Primitive for JitterParticles {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

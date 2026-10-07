@@ -170,3 +170,6 @@ impl Primitive for WavecrestPotential {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

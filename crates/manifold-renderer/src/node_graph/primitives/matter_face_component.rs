@@ -136,3 +136,6 @@ mod tests {
         assert_eq!(std::mem::size_of::<ComponentUniforms>(), 32);
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

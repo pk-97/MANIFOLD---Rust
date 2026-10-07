@@ -276,3 +276,6 @@ mod tests {
         assert!(body.contains("select(2.0, 1.0, cohesion <= 0.0)"), "{body}");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

@@ -191,3 +191,6 @@ impl Primitive for WhitewaterEmitterVelocity {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;
