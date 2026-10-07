@@ -1,6 +1,6 @@
 # Renderer Crate Split — one engine crate, node families as leaves
 
-**Status:** PROPOSED · 2026-10-07 · Fable 5.1 with Peter · awaiting Peter's approval of D1 (crate map) and D9 (tiering)
+**Status:** APPROVED · 2026-10-07 · Fable 5.1 with Peter · D1 (crate map) and D9 (tiering) approved by Peter 2026-10-07; Opus 5.5 executes Tier 1 (P0–P4) now, P5 waits for Peter's go
 **Prerequisites:** `feat/godfile-trim` (slot-7, edits in `freeze/codegen` and `preset_runtime`) landed before P1. Nothing else.
 **Work items:** epic BUG-hkbdp (renderer crate split epic); phases BUG-jo1qt (P0 census and seams), BUG-k452g (P1a ui-paint), BUG-9hndn (P1 carve manifold-graph), BUG-vnbdt (P2 leaves), BUG-uones (P3 catalog), BUG-l6ltu (P4 review and measurement), BUG-t2jwg (P5 water seam). Status lives on this line only.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before any phase. Lead: Opus 5.5. Lanes: Astra (Codex) for every mechanical phase (Peter, 2026-10-07: *"please use Astra agents for this work"*); this overrides `feedback_astra_review_only` for this campaign only. Lanes make one commit then stop; the lead lands.
