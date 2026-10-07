@@ -600,7 +600,7 @@ pub fn sync_inspector_data(
                                                     None => (false, None),
                                                 }
                                             };
-                                        let owned = super::scene::object_controls(def.as_ref(), known);
+                                        let owned = super::scene::object_controls(def.as_ref(), known, &vm.objects);
                                         let sections = sections_for_nodes(def.as_ref(), &owned);
                                         let mut parameter_ids = super::scene::parameter_ids_for_nodes(
                                             def.as_ref(), &owned,
