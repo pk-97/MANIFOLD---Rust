@@ -237,7 +237,7 @@ Phasing-completeness check: every D1 crate appears in exactly one phase's delive
     - Metadata reload: invoke fresh loaders from the existing effect, generator and scene-modifier inventories; preserve merged publication before generation advances. Provider names are required for deterministic ordering.
     - Relight augmentation: scene registers graph augmentation and static parameter targets; runtime resolves bindings during preparation.
     - Array scratch: families register checked private-array sizing, resolved during budget preparation with cutter/fused attribution preserved.
-    - Pipeline prewarm: scene registers Math View pipelines; invoke at the existing Math View call site, never device installation.
+    - Pipeline prewarm: scene registers Math View pipelines; retain the existing Math View installation call; do not move it to general device installation or startup.
     - Mesh assets: scene registers decoding, selection, fitting and translation; engine retains fragment selection and collider preparation.
     - Scene exposure: scene registers its curated node and look metadata for graph construction.
     - Physics source identity: fold the engine integration identity, then registered family identities sorted by name. Each crate hashes only its owned inputs; no new cross-crate source reads. Expected hash changes invalidate old identities.
