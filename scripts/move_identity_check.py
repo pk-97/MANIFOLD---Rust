@@ -15,6 +15,10 @@ Crate moves add three separately counted classes: newly added
 workspace members, local path dependencies and feature-forwarding manifest
 entries; and same-file removed/added pairs matching explicit --rewrite maps.
 Rewrite counts are changed lines (two per pair); no map is implicit.
+New-manifest external dependencies equal to parsed old-workspace values and
+transferred bin tables count as crate skeletons; matched bin removals count as
+manifest wiring. Bins preserve name, crate-relative path (defaulting to
+src/bin/<name>.rs), and required-features, with no other table keys allowed.
 Exit code 0 = pure move proven; 1 = residue found (printed); 2 = usage.
 
 Why not `cargo public-api`: not installed, requires a lib target (manifold-app
@@ -633,33 +637,76 @@ def workspace_member(directory: str, root: dict) -> bool:
             and not any(fnmatch.fnmatchcase(directory, member) for member in root.get("exclude", [])))
 
 
-def external_dependency_lines(paths, read_file) -> set[str]:
-    """Exact single-line external dependency precedents in the old workspace."""
+def external_dependency_values(paths, read_file) -> dict[str, list]:
+    """Parsed external dependency precedents in the old workspace."""
     root = tomllib.loads(read_file("Cargo.toml") or "").get("workspace", {})
-    result = set()
+    result = {}
     for path in paths:
         if path != "Cargo.toml" and not workspace_member(posixpath.dirname(path), root):
             continue
-        table = ""
-        for line in read_file(path).splitlines():
-            body = line.strip()
-            if body.startswith("["):
-                table = body.split("#", 1)[0].strip().strip("[]")
-            elif table in {"dependencies", "dev-dependencies", "build-dependencies", "workspace.dependencies"}:
-                try:
-                    entry = tomllib.loads(body)
-                except tomllib.TOMLDecodeError:
-                    continue
-                if len(entry) == 1:
-                    value = next(iter(entry.values()))
+        document = tomllib.loads(read_file(path))
+        scopes = [document, document.get("workspace", {})]
+        scopes.extend(document.get("target", {}).values())
+        for scope in scopes:
+            for table in ("dependencies", "dev-dependencies", "build-dependencies"):
+                for name, value in scope.get(table, {}).items():
                     if isinstance(value, str) or (isinstance(value, dict)
                                                   and not {"path", "workspace"} & value.keys()):
-                        result.add(body)
+                        result.setdefault(name, []).append(value)
+    return result
+
+
+def bin_identity(value):
+    """Only the bounded, crate-relative bin declaration can transfer."""
+    if not isinstance(value, dict) or not set(value) <= {"name", "path", "required-features"}:
+        return None
+    name = value.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    path = value.get("path", f"src/bin/{name}.rs")
+    if not isinstance(path, str) or posixpath.isabs(path):
+        return None
+    path = posixpath.normpath(path)
+    if path == ".." or path.startswith("../"):
+        return None
+    return name, path, value.get("required-features")
+
+
+def transferred_bins(blocks, read_old, read_new) -> dict[tuple[str, str], set[int]]:
+    """Pair each new-crate bin with one removed declaration in another manifest."""
+    removed, added = [], []
+    for lines in blocks:
+        plain = [ANSI.sub("", line) for line in lines]
+        old = next((line[4:].removeprefix("a/") for line in plain if line.startswith("--- ")), None)
+        new = next((line[4:].removeprefix("b/") for line in plain if line.startswith("+++ ")), None)
+        if not ((old and old.endswith("Cargo.toml")) or (new and new.endswith("Cargo.toml"))):
+            continue
+        before = tomllib.loads(read_old(old) or "") if old != "/dev/null" else {}
+        after = tomllib.loads(read_new(new) or "") if new != "/dev/null" else {}
+        surviving_names = {value.get("name") for value in after.get("bin", [])}
+        for index, value in enumerate(before.get("bin", [])):
+            identity = bin_identity(value)
+            if identity is not None and value["name"] not in surviving_names:
+                removed.append((old, index, identity))
+        if old == "/dev/null" and re.fullmatch(r"crates/[^/]+/Cargo.toml", new):
+            for index, value in enumerate(after.get("bin", [])):
+                added.append((new, index, bin_identity(value)))
+    result = {}
+    for path, index, identity in added:
+        if identity is None:
+            continue
+        for candidate, (old, old_index, old_identity) in enumerate(removed):
+            if old != path and identity == old_identity:
+                result.setdefault(("+", path), set()).add(index)
+                result.setdefault(("-", old), set()).add(old_index)
+                removed.pop(candidate)
+                break
     return result
 
 
 def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
-                    new_crate=False, external_lines=frozenset(), other_path=None) -> tuple[set[int], set[int]]:
+                    new_crate=False, external_values=None, other_path=None,
+                    bins=frozenset()) -> tuple[set[int], set[int]]:
     """Eligible physical lines, with table context from the complete revision.
 
     Only added dev-dependencies may select features. Removing feature selectors
@@ -702,7 +749,7 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
     def workspace_dependency(value) -> bool:
         return isinstance(value, dict) and value == {"workspace": True}
 
-    def eligible(table: str, key: str, value, lines) -> bool:
+    def eligible(table: str, key: str, value) -> bool:
         if table == "lints":
             return key == "workspace" and value is True and len(document["lints"]) == 1
         if table == "package" and new_crate:
@@ -724,7 +771,7 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
             return (local_dependency(value, conservative=sign == "+" or key in surviving_dependencies,
                                      dev_features=sign == "+" and table == "dev-dependencies")
                     or (new_crate and (workspace_dependency(value)
-                                       or (len(lines) == 1 and lines[0].strip() in external_lines))))
+                                       or value in (external_values or {}).get(key, []))))
         if table == "features" and key != "default" and isinstance(value, list) and (value or new_crate):
             for feature in value:
                 if not isinstance(feature, str) or not re.fullmatch(r"[\w-]+\??/[\w-]+", feature):
@@ -747,8 +794,22 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
     entries = []
     pending = []
     start = 0
+    bin_index = -1
+    source_lines = source.splitlines()
 
-    def finish_table():
+    def finish_table(end):
+        if table == "[bin]":
+            if bin_index in bins:
+                allowed.update(range(header, end))
+            elif new_crate:
+                forbidden.update(range(header, end))
+            return
+        if new_crate and re.match(r"^(?:dependencies|dev-dependencies|build-dependencies)\.", table):
+            block = tomllib.loads("\n".join(source_lines[header - 1:end - 1]))
+            ok = all(value in (external_values or {}).get(key, [])
+                     for values in block.values() for key, value in values.items())
+            (allowed if ok else forbidden).update(range(header, end))
+            return
         if (header is not None and (table in {"dependencies", "dev-dependencies", "build-dependencies", "features", "lints"}
                                    or (new_crate and table == "package"))
                 and entries and all(entries)):
@@ -756,12 +817,17 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
         elif header is not None and (new_crate or table == "lints"):
             forbidden.add(header)
 
-    for number, line in enumerate(source.splitlines(), 1):
+    for number, line in enumerate(source_lines, 1):
         stripped = line.strip()
         if not pending and stripped.startswith("["):
-            finish_table()
+            finish_table(number)
             table = stripped.split("#", 1)[0].strip().removeprefix("[").removesuffix("]")
             header, entries = number, []
+            if table == "[bin]":
+                bin_index += 1
+            continue
+        if table == "[bin]" or (new_crate and re.match(
+                r"^(?:dependencies|dev-dependencies|build-dependencies)\.", table)):
             continue
         if not pending and (not stripped or stripped.startswith("#")):
             if new_crate:
@@ -774,7 +840,7 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
             entry = tomllib.loads("\n".join(pending))
         except tomllib.TOMLDecodeError:
             continue
-        ok = len(entry) == 1 and all(eligible(table, key, value, pending) for key, value in entry.items())
+        ok = len(entry) == 1 and all(eligible(table, key, value) for key, value in entry.items())
         entries.append(ok)
         if ok:
             allowed.update(range(start, number + 1))
@@ -785,12 +851,12 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
                   and any(isinstance(value, dict) and "path" in value for value in entry.values()))):
             forbidden.update(range(start, number + 1))
         pending = []
-    finish_table()
+    finish_table(len(source_lines) + 1)
     return allowed, forbidden
 
 
 def crate_move_claims(out: str, read_old, read_new, rewrites,
-                      external_lines=frozenset(), hints=None) -> dict[int, str]:
+                      external_values=None, hints=None) -> dict[int, str]:
     """Claim three disjoint classes without changing any legacy allowlist.
 
     Rewrite pairs are restricted to the same diff file (including a git-detected
@@ -806,6 +872,7 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
         if ANSI.sub("", raw).startswith("diff --git "):
             blocks.append([])
         blocks[-1].append(raw)
+    bins = transferred_bins(blocks, read_old, read_new)
     offset = 0
     mapping = dict(rewrites)
     pattern = (re.compile(r"(?<![\w$])(?:" + "|".join(
@@ -833,8 +900,8 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
                 source = reader(file_path) if file_path != "/dev/null" else ""
                 other = read_new if sign == "-" else read_old
                 eligible[sign], forbidden[sign] = manifest_wiring(
-                    source, file_path, reader, other, sign, new_manifest, external_lines,
-                    new_path if sign == "-" else old_path
+                    source, file_path, reader, other, sign, new_manifest, external_values,
+                    new_path if sign == "-" else old_path, bins.get((sign, file_path), set())
                 ) if source else (set(), set())
         numbers = {"-": 0, "+": 0}
         removed, additions = [], []
@@ -938,13 +1005,13 @@ def main() -> int:
 
     # Strip only ANSI for file boundaries; retain moved colors for legacy classes.
     old_reader, new_reader = reader(old_ref), reader(new_ref)
-    external_lines = set()
+    external_values = {}
     if re.search(r"^\+\+\+ b/crates/[^/]+/Cargo.toml$", ANSI.sub("", out), re.MULTILINE):
         paths = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", old_ref], text=True).splitlines()
-        external_lines = external_dependency_lines(
+        external_values = external_dependency_values(
             [path for path in paths if path.endswith("Cargo.toml")], old_reader)
     hints = []
-    claims = crate_move_claims(out, old_reader, new_reader, args.rewrite, external_lines, hints)
+    claims = crate_move_claims(out, old_reader, new_reader, args.rewrite, external_values, hints)
     counts, residue = classify(out, claims)
     residue, vis_pairs = drop_visibility_pairs(residue)
     residue, include_pairs = drop_include_str_prefix_pairs(residue)

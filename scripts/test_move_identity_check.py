@@ -1309,6 +1309,85 @@ def case_new_manifest(repo: Path, mode="exact") -> tuple[bool, str]:
             f"exit={code} {out.splitlines()[0]}")
 
 
+def case_bin_transfer(repo: Path, mode="exact") -> tuple[bool, str]:
+    before = ('[[bin]]\nname = "inspect"\npath = "src/bin/inspect.rs"\n'
+              'required-features = ["proofs"]\n')
+    after = ('[[bin]]\nname = \'inspect\'\npath = \'src/bin/inspect.rs\'\n'
+             'required-features = [\n    "proofs",\n]\n')
+    if mode == "default":
+        after = after.replace("path = 'src/bin/inspect.rs'\n", "")
+    elif mode == "path":
+        after = after.replace("src/bin/inspect.rs", "src/bin/other.rs")
+    elif mode == "key":
+        after += "test = false\n"
+    elif mode == "features":
+        after = after.replace('"proofs",', '"other",')
+    elif mode == "name":
+        after = after.replace("name = 'inspect'", "name = 'other'")
+    elif mode == "old-key":
+        before += "test = false\n"
+    elif mode == "multiple":
+        before += '[[bin]]\nname = "second"\n'
+        after += "[[bin]]\nname = 'second'\n"
+    elif mode == "duplicate":
+        after += after
+    commit_tree(repo, {
+        "Cargo.toml": '[workspace]\nmembers = ["crates/app"]\n',
+        "crates/app/Cargo.toml": MANIFEST_BASE + before,
+        "crates/app/src/bin/inspect.rs": HELPER,
+    }, "base")
+    (repo / "crates/app/src/bin/inspect.rs").unlink()
+    commit_tree(repo, {
+        "crates/app/Cargo.toml": MANIFEST_BASE + (before if mode == "retained" else ""),
+        "crates/new/Cargo.toml": MANIFEST_BASE.replace('"app"', '"new"') + after,
+        "crates/new/src/bin/inspect.rs": HELPER,
+    }, "bin-transfer")
+    code, out = run_checker(repo)
+    drift = mode not in {"exact", "default", "multiple"}
+    ok = code == int(drift) and (field(out, "residue") > 0) == drift
+    if not drift:
+        ok &= field(out, "crate skeletons") > 0 and field(out, "manifest wiring") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_external_dependency(repo: Path, mode="table", table="dependencies") -> tuple[bool, str]:
+    precedent = ('[dependencies.codec]\nversion = "1.2"\n'
+                 'features = ["read", "write"]\ndefault-features = false\n')
+    if mode == "inline":
+        dependency = (f'[{table}]\ncodec = {{ default-features=false, '
+                      'features=["read", "write"], version="1.2" }\n')
+    else:
+        dependency = (f'[{table}.codec]\nfeatures = [\n    "read",\n    "write",\n]\n'
+                      "version = '1.2'\ndefault-features = false\n")
+    if mode == "version":
+        dependency = dependency.replace("'1.2'", "'1.3'")
+    elif mode == "features":
+        dependency = dependency.replace('"write",', '"extra",')
+    elif mode == "name":
+        dependency = dependency.replace(".codec]", ".other]")
+    elif mode == "workspace-root":
+        precedent = precedent.replace("[dependencies.codec]", "[workspace.dependencies.codec]")
+    elif mode == "inline-precedent":
+        precedent = ('[dependencies]\ncodec = { version = "1.2", '
+                     'features = ["read", "write"], default-features = false }\n')
+    root = '[workspace]\nmembers = ["crates/app"]\n'
+    commit_tree(repo, {
+        "Cargo.toml": root + (precedent if mode == "workspace-root" else ""),
+        "crates/app/Cargo.toml": MANIFEST_BASE + ("" if mode == "workspace-root" else precedent),
+        "outside/Cargo.toml": MANIFEST_BASE + precedent,
+    }, "base")
+    if mode == "nonmember":
+        # Only the outside manifest has this precedent at the old revision.
+        commit_tree(repo, {"crates/app/Cargo.toml": MANIFEST_BASE}, "remove-precedent")
+    commit_tree(repo, {"crates/new/Cargo.toml": MANIFEST_BASE.replace('"app"', '"new"') + dependency},
+                "external-dependency")
+    code, out = run_checker(repo)
+    drift = mode in {"version", "features", "name", "nonmember"}
+    return (code == int(drift) and (field(out, "residue") > 0) == drift
+            and field(out, "crate skeletons") > 0,
+            f"exit={code} {out.splitlines()[0]}")
+
+
 def case_members(repo: Path, mode="add") -> tuple[bool, str]:
     workspace = '[workspace]\nmembers = [\n    "crates/app",\n]\n'
     leaf = '[package]\nname = "leaf"\n'
@@ -1367,6 +1446,26 @@ def case_renamed_rewrite(repo: Path, smuggle=False) -> tuple[bool, str]:
 
 
 CASES = [
+    ("bin transfer with reformatted table", case_bin_transfer),
+    ("bin transfer with default path", lambda repo: case_bin_transfer(repo, "default")),
+    ("bin changed path is residue", lambda repo: case_bin_transfer(repo, "path")),
+    ("bin added key is residue", lambda repo: case_bin_transfer(repo, "key")),
+    ("bin changed features is residue", lambda repo: case_bin_transfer(repo, "features")),
+    ("bin changed name is residue", lambda repo: case_bin_transfer(repo, "name")),
+    ("bin without removal is residue", lambda repo: case_bin_transfer(repo, "retained")),
+    ("bin dropping old key is residue", lambda repo: case_bin_transfer(repo, "old-key")),
+    ("multiple bin tables transfer independently", lambda repo: case_bin_transfer(repo, "multiple")),
+    ("bin removal cannot authorize two additions", lambda repo: case_bin_transfer(repo, "duplicate")),
+    ("external dependency multiline table", case_external_dependency),
+    ("external dependency inline reformatted", lambda repo: case_external_dependency(repo, "inline")),
+    ("external dependency from workspace root", lambda repo: case_external_dependency(repo, "workspace-root")),
+    ("external dependency table from inline precedent", lambda repo: case_external_dependency(repo, "inline-precedent")),
+    ("external dev dependency table", lambda repo: case_external_dependency(repo, table="dev-dependencies")),
+    ("external build dependency table", lambda repo: case_external_dependency(repo, table="build-dependencies")),
+    ("external dependency changed version is residue", lambda repo: case_external_dependency(repo, "version")),
+    ("external dependency changed features is residue", lambda repo: case_external_dependency(repo, "features")),
+    ("external dependency changed name is residue", lambda repo: case_external_dependency(repo, "name")),
+    ("external dependency nonmember precedent is residue", lambda repo: case_external_dependency(repo, "nonmember")),
     ("new crate skeletons", case_crate_skeleton),
     ("new lib.rs with function is residue", lambda repo: case_crate_skeleton(repo, True)),
     ("new manifest with bounded dependencies", case_new_manifest),
