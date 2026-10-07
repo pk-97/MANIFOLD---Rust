@@ -18,7 +18,7 @@
 use ahash::{AHashMap, AHashSet};
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
-use manifold_renderer::gpu_readback::f16_to_f32;
+use manifold_node_engine::gpu::gpu_readback::f16_to_f32;
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};

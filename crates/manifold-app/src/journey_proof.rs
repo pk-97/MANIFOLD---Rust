@@ -893,7 +893,7 @@ mod tests {
                     halves[offset + 1],
                 ]))
                 .to_f32();
-                let expected = manifold_renderer::headless_readback::linear_to_srgb8(linear);
+                let expected = manifold_node_engine::gpu::headless_readback::linear_to_srgb8(linear);
                 let error = pixel.0[channel].abs_diff(expected);
                 sum += f32::from(error);
                 max = max.max(error);
@@ -1458,7 +1458,7 @@ mod tests {
             &aces_hdr_workspace_mapped,
         )
         .expect("compare HDR-workspace ACES to mapped SDR");
-        let hdr_scene_delta = manifold_renderer::headless_readback::mean_abs_half_diff(
+        let hdr_scene_delta = manifold_node_engine::gpu::headless_readback::mean_abs_half_diff(
             &hdr_off_scene,
             &hdr_agx_scene,
         );

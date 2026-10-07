@@ -70,7 +70,7 @@ fn render(def: EffectGraphDef, context: &PresetContext) -> Vec<u8> {
             runtime.errors()
         );
     }
-    manifold_renderer::headless_readback::readback_tonemapped_rgba8(
+    manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(
         &device,
         &target.texture,
         256,

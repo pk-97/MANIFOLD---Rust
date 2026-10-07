@@ -216,9 +216,7 @@ mod gpu {
         GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage,
     };
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-    use manifold_renderer::headless_readback::{
-        encode_rgba8_png, readback_raw_halves, readback_srgb_rgba8,
-    };
+    use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, readback_raw_halves, readback_srgb_rgba8};
     use manifold_node_engine::freeze::install::fused_view_for;
     use manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id;
     use manifold_node_engine::gpu::render_target::RenderTarget;

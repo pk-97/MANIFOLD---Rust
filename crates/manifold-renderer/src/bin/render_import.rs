@@ -69,9 +69,7 @@ use std::path::PathBuf;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuDevice;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::headless_readback::{
-    encode_rgba8_png, mean_abs_half_diff, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8,
-};
+use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, mean_abs_half_diff, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8};
 use manifold_renderer::compositor::{Compositor, CompositorFrame, CompositeLayerDescriptor};
 use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback};
 use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerCompositor};

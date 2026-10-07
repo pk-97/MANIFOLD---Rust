@@ -2463,6 +2463,7 @@ dependencies = [
  "manifold-playback",
  "naga",
  "objc2 0.6.4",
+ "png",
  "serde",
  "serde_json",
  "sha2",

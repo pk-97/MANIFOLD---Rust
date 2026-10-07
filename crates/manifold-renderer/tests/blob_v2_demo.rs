@@ -19,7 +19,7 @@ use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_renderer::headless_readback::{readback_raw_halves, readback_to_srgb_png_linear};
+use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_to_srgb_png_linear};
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::{ChainBuildInputs, PresetRuntime};

@@ -13,7 +13,7 @@ use manifold_core::params::ParamManifest;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::headless_readback::{readback_raw_halves, readback_to_srgb_png};
+use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_to_srgb_png};
 use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, ports::NodeInput, ports::NodeOutput, ports::NodePort, parameters::ParamDef, parameters::ParamValue, ports::PortKind, ports::PortType, persistence::PrimitiveRegistry, water::physics::PhysicsStepScope};
 use manifold_node_engine::scene::depth_rule::DepthRule;
 use manifold_node_engine::scene::transform::Transform;
@@ -795,13 +795,13 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let lines = manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines(domain);
     let projected = manifold_renderer::node_graph::project_lines(&camera.to_camera(), WIDTH, HEIGHT, &lines);
     assert_eq!(projected.len(), 12, "container entirely in the editor view");
-    let mut pixels = manifold_renderer::headless_readback::readback_tonemapped_rgba8(&harness.device, &target.texture, WIDTH, HEIGHT);
+    let mut pixels = manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(&harness.device, &target.texture, WIDTH, HEIGHT);
     let clean = pixels.clone();
     manifold_renderer::node_graph::composite_overlay_lines_rgba8(&mut pixels, WIDTH, HEIGHT, &projected);
     assert!(clean.chunks_exact(4).zip(pixels.chunks_exact(4)).filter(|(a,b)| a != b).count() > 100,
         "domain must be visibly outlined");
     std::fs::write("/tmp/manifold_assigned_fluid.png",
-        manifold_renderer::headless_readback::encode_rgba8_png(&pixels, WIDTH, HEIGHT)).unwrap();
+        manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&pixels, WIDTH, HEIGHT)).unwrap();
 }
 
 #[test]
@@ -870,6 +870,6 @@ fn scene_physics_modifier_impulse_changes_rendered_liquid() {
         receipts += 1;
     });
     assert_eq!(receipts, 1);
-    assert!(manifold_renderer::headless_readback::mean_abs_half_diff(&before, &after) > 0.0001,
+    assert!(manifold_node_engine::gpu::headless_readback::mean_abs_half_diff(&before, &after) > 0.0001,
         "a fired field must visibly change the liquid");
 }

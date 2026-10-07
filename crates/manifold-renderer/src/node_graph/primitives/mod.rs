@@ -188,7 +188,6 @@ mod magnitude_db;
 mod lut1d;
 mod matcap_two_tone;
 mod math;
-mod grid_to_matter;
 mod particles_to_copies;
 mod zero_array;
 mod unlit_material;
@@ -303,13 +302,8 @@ mod trigger_ease_to;
 mod trigger_gate;
 mod transform_3d;
 mod transform_components;
-pub mod blob_bounds;
 pub(crate) mod divide_by_value;
 // Standalone staged encoder; the step keeps its existing pressure path.
-#[cfg(test)]
-mod face_grid_extent_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod face_grid_tests;
 mod smooth_surface_mesh;
 mod surface_mesh_normals;
 #[cfg(test)]
@@ -926,8 +920,6 @@ use super::*;
     }
 }
 
-mod rigid_body;
-mod fluid_role_source;
 mod platonic_mesh;
 
 mod interpolate_particle_frames;

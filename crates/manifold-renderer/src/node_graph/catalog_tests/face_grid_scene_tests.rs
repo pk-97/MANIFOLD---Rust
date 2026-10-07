@@ -352,7 +352,7 @@ fn face_grid_demo_gpu_flip_and_matter_side_by_side() {
     }
     println!("colour scale: white = {top:.3} m/s");
     if let Ok(path) = std::env::var("FACE_GRID_DEMO_PNG") {
-        std::fs::write(&path, crate::headless_readback::encode_rgba8_png(&rgba, w as u32, h as u32)).expect("demo PNG writes");
+        std::fs::write(&path, manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, w as u32, h as u32)).expect("demo PNG writes");
         println!("wrote {path}");
     }
 }

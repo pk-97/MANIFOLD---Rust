@@ -22,7 +22,7 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effect_graph_def::ParamSpecDef;
 use manifold_core::params::{Param, ParamManifest};
-use manifold_renderer::headless_readback::encode_rgba8_png;
+use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
 use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_renderer::node_graph::ViewportOverlayConfig, manifold_renderer::node_graph::ViewportSession};
 use manifold_node_engine::water::fluid::{FluidDomainSnapshot, FluidDomainState, FluidSettings};
 use manifold_node_engine::runtime::preset_context::PresetContext;
@@ -154,7 +154,7 @@ fn shared_scene_viewport_navigates_without_advancing_fluid_or_changing_show() {
     use manifold_gpu::GpuTextureFormat;
     use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-    use manifold_renderer::headless_readback::{readback_raw_halves, readback_srgb_rgba8};
+    use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_srgb_rgba8};
     use manifold_node_engine::scene::viewport_camera::ViewportCamera;
     use manifold_node_engine::water::physics::PhysicsStepScope;
     use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportError};
@@ -331,7 +331,7 @@ fn shared_scene_viewport_preserves_rt_and_temporal_show_history() {
     use manifold_gpu::GpuTextureFormat;
     use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-    use manifold_renderer::headless_readback::readback_raw_halves;
+    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
     use manifold_node_engine::scene::scene_viewport::SceneViewportConfig;
     use manifold_node_engine::runtime::PresetRuntime;
     use manifold_node_engine::gpu::render_target::RenderTarget;

@@ -18,7 +18,7 @@ use manifold_node_engine::testkit::liquid_surface::*;
 pub(crate) fn blob_bounds(harness: &mut Harness, blobs: Slot) -> Slot {
     let (bounds, _) = harness.array::<f32>(&[], 2);
     // The executor prepares the reduction before its first run; so does this.
-    let mut node = crate::node_graph::primitives::blob_bounds::BlobBounds::new();
+    let mut node = manifold_node_engine::water::primitives::blob_bounds::BlobBounds::new();
     node.prepare_pipelines(&harness.device);
     let (_, errors) = harness.run(
         &mut node,

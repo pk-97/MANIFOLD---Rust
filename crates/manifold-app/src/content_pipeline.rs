@@ -739,7 +739,7 @@ pub struct ContentPipeline {
     /// Holds the in-flight blit between `submit_still_readback` (one tick) and
     /// `take_still_readback` (the next). Idle except during a still capture.
     #[cfg(target_os = "macos")]
-    still_readback: manifold_renderer::gpu_readback::ReadbackRequest,
+    still_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest,
     /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
     /// MetalFX Spatial full-frame upscaler. Present only when render_scale < 1.0
@@ -877,7 +877,7 @@ pub struct ContentPipeline {
     clip_thumb_cache: Option<crate::clip_thumb_cache::ClipThumbCache>,
     /// Async RGBA8 readback of the persistent atlas for the debounced disk save.
     #[cfg(target_os = "macos")]
-    clip_atlas_readback: manifold_renderer::gpu_readback::ReadbackRequest,
+    clip_atlas_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest,
     /// Fill-frame at which a debounced save should fire (0 = none scheduled).
     clip_atlas_persist_due: u64,
     /// `(layout, clip→hash)` snapshot captured when the save readback was submitted,
@@ -1120,7 +1120,7 @@ impl ContentPipeline {
             sdr_output: None,
             pq_encoder: None,
             #[cfg(target_os = "macos")]
-            still_readback: manifold_renderer::gpu_readback::ReadbackRequest::new(),
+            still_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest::new(),
             shared_output: shared,
             #[cfg(target_os = "macos")]
             metalfx: None,
@@ -1185,7 +1185,7 @@ impl ContentPipeline {
                 CLIP_ATLAS_CELL_H,
             ),
             #[cfg(target_os = "macos")]
-            clip_atlas_readback: manifold_renderer::gpu_readback::ReadbackRequest::new(),
+            clip_atlas_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest::new(),
             clip_atlas_persist_due: 0,
             clip_atlas_persist_pending: None,
             #[cfg(target_os = "macos")]

@@ -295,7 +295,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
     );
     std::fs::write(
         "/tmp/standard-box3d-shatter-released.png",
-        manifold_renderer::headless_readback::readback_to_srgb_png(
+        manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(
             &h.device,
             &target.texture,
             h.width,
@@ -323,7 +323,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
     );
     std::fs::write(
         "/tmp/standard-box3d-shatter-intact.png",
-        manifold_renderer::headless_readback::readback_to_srgb_png(
+        manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(
             &h.device,
             &target.texture,
             h.width,
@@ -475,7 +475,7 @@ fn imported_flower_submesh_controls_preserve_siblings_and_parent_visibility() {
     render_frame_with_params(&mut runtime, &target, 4, h.width, h.height, &h.device, &edited);
     assert!(mean_abs_diff(&original, &h.readback(&target.texture)) > 0.001, "local child transform changes the render");
     assert!(runtime.errors().is_empty(), "{:?}", runtime.errors());
-    std::fs::write("/tmp/flower-submesh-controls.png", manifold_renderer::headless_readback::readback_to_srgb_png(&h.device, &target.texture, h.width, h.height)).unwrap();
+    std::fs::write("/tmp/flower-submesh-controls.png", manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(&h.device, &target.texture, h.width, h.height)).unwrap();
 }
 
 #[test]
@@ -592,7 +592,7 @@ fn imported_flower_physics_off_renders_authored_transform() {
     runtime.apply_inner_param_overrides(&def);
     render_frame(&mut runtime, &target, 0, h.width, h.height, &h.device);
     let after = h.readback(&target.texture);
-    std::fs::write("/tmp/flower-live-physics-off.png", manifold_renderer::headless_readback::readback_to_srgb_png(&h.device, &target.texture, h.width, h.height)).unwrap();
+    std::fs::write("/tmp/flower-live-physics-off.png", manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(&h.device, &target.texture, h.width, h.height)).unwrap();
     assert!(mean_abs_diff(&before, &after) < 0.002,
         "paused Physics OFF must preserve appearance: diff={}", mean_abs_diff(&before, &after));
     assert!(
@@ -739,7 +739,7 @@ fn physics_solids_renders_finite_nonempty_scene_and_moves() {
     let initial = harness.readback(&target.texture);
     std::fs::write(
         "/tmp/physics_solids_initial.png",
-        manifold_renderer::headless_readback::readback_to_srgb_png(
+        manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(
             &harness.device,
             &target.texture,
             harness.width,
@@ -762,7 +762,7 @@ fn physics_solids_renders_finite_nonempty_scene_and_moves() {
 
     std::fs::write(
         "/tmp/physics_solids_settled.png",
-        manifold_renderer::headless_readback::readback_to_srgb_png(
+        manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(
             &harness.device,
             &target.texture,
             harness.width,

@@ -9,9 +9,7 @@ use std::path::{Path, PathBuf};
 
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::headless_readback::{
-    encode_rgba8_png, non_black_fraction, readback_tonemapped_rgba8,
-};
+use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, non_black_fraction, readback_tonemapped_rgba8};
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::gltf_import::{
     MaterialUpgradeCache, assemble_import_graph, upgrade_material_graph,

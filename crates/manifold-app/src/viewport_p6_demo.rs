@@ -25,7 +25,7 @@ use std::sync::Arc;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_gpu::GpuDevice;
-use manifold_renderer::headless_readback::encode_rgba8_png;
+use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
 use manifold_renderer::node_graph::scene_vm::SceneVm;
 use {manifold_renderer::node_graph::GizmoMode, manifold_node_engine::persistence::PrimitiveRegistry, manifold_renderer::node_graph::ViewportOverlayConfig, manifold_renderer::node_graph::ViewportSession, manifold_renderer::node_graph::drag_write, manifold_renderer::node_graph::gizmo_lines, manifold_renderer::node_graph::gizmo_target_for, manifold_renderer::node_graph::pick_object};
 use manifold_node_engine::runtime::preset_context::PresetContext;

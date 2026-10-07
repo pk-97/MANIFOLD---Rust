@@ -33,7 +33,7 @@
 
 use std::path::PathBuf;
 
-use manifold_renderer::headless_readback::{encode_rgba8_png, linear_to_srgb8};
+use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, linear_to_srgb8};
 use manifold_renderer::node_graph::primitives::{arm_rt_capture, take_rt_captures, RtCaptureSlot};
 use crate::content_command::ContentCommand;
 use crate::headless_harness::headless_content_thread;

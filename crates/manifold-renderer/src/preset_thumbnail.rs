@@ -325,12 +325,12 @@ fn render_generator(
     }
 
     let mut rgba = if linear {
-        crate::headless_readback::readback_srgb_rgba8(device, &target.texture, width, height)
+        manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(device, &target.texture, width, height)
     } else {
-        crate::headless_readback::readback_tonemapped_rgba8(device, &target.texture, width, height)
+        manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(device, &target.texture, width, height)
     };
     flatten_over_black(&mut rgba);
-    Ok(crate::headless_readback::encode_rgba8_png(&rgba, width, height))
+    Ok(manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, width, height))
 }
 
 // ---------------------------------------------------------------------------
@@ -533,12 +533,12 @@ fn render_effect(
         .texture_2d(output_slot)
         .ok_or_else(|| "output texture missing after execute".to_string())?;
     let mut rgba = if linear {
-        crate::headless_readback::readback_srgb_rgba8(device, tex, width, height)
+        manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(device, tex, width, height)
     } else {
-        crate::headless_readback::readback_tonemapped_rgba8(device, tex, width, height)
+        manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(device, tex, width, height)
     };
     flatten_over_black(&mut rgba);
-    Ok(crate::headless_readback::encode_rgba8_png(&rgba, width, height))
+    Ok(manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, width, height))
 }
 
 // ---------------------------------------------------------------------------

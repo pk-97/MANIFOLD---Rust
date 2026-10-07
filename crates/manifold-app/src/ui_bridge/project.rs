@@ -3461,7 +3461,7 @@ mod tests {
     #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
     #[test]
     fn add_fluid_gpu_flip_renders_falls_and_holds_on_pause() {
-        use manifold_renderer::headless_readback::{encode_rgba8_png, linear_to_srgb8, readback_raw_halves};
+        use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, linear_to_srgb8, readback_raw_halves};
         const W: u32 = 640;
         const H: u32 = 360;
         let dir = std::path::PathBuf::from("/tmp/add_fluid_gpu");

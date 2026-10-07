@@ -4462,7 +4462,7 @@ mod led_composite_pixel_tests {
 
     use super::*;
     use crate::compositor::CompositeLayerDescriptor;
-    use crate::headless_readback::readback_raw_halves;
+    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
     use half::f16;
 
     const LED_W: u32 = 8;
@@ -4947,7 +4947,7 @@ mod scene_linear_presentation_gpu_tests {
 
     use super::*;
     use crate::compositor::{Compositor, CompositorFrame};
-    use crate::headless_readback::readback_raw_halves;
+    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
     use crate::presentation::{
         DisplayCapabilities, DisplayPlan, LinearPresentationTarget, LinearSceneFrame,
         PresentationPipeline, UI_FORMAT,
