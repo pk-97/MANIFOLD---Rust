@@ -7,8 +7,6 @@
 //! not a structural divide.
 
 mod abs_texture;
-#[cfg(feature = "gpu-proofs")]
-pub(crate) mod fluid_surface;
 mod glyph_atlas;
 mod render_glyph_grid;
 pub(crate) mod terminal_analysis;
@@ -69,7 +67,6 @@ mod coc_from_depth;
 mod color;
 mod color_sample;
 mod colorize;
-mod compose;
 mod compressor_envelope;
 mod consecutive_edges;
 mod contrast;
@@ -124,7 +121,6 @@ mod container_bounds_3d;
 mod flatten_to_camera_plane;
 mod apply_radial_burst_3d_to_particles;
 mod scatter_particles_camera;
-mod gain;
 pub mod gaussian_blur_variable_width;
 mod edges_from_grid_uv;
 mod edges_from_mesh;
@@ -187,24 +183,12 @@ mod lic_integrate;
 mod light;
 mod lightning_bolt;
 mod linear_gradient;
-mod liquid_solid_distance;
 mod luminance;
 mod magnitude_db;
 mod lut1d;
-mod masked_mix;
 mod matcap_two_tone;
 mod math;
 mod grid_to_matter;
-mod matter_body_reaction;
-mod matter_common;
-pub(crate) mod matter_domain;
-pub(crate) mod matter_fill;
-mod matter_frame;
-mod matter_grid_update;
-mod matter_move_bodies;
-mod matter_state;
-mod matter_stats;
-mod matter_to_grid;
 mod particles_to_copies;
 mod zero_array;
 mod unlit_material;
@@ -222,7 +206,6 @@ mod push_along_normals;
 mod mesh_snapshot;
 mod mux_array;
 mod mux_scalar;
-mod mux_texture;
 mod neighbor_smooth;
 mod nested_cubes_geometry;
 mod normalize_vec2;
@@ -289,7 +272,6 @@ mod simplex_field_2d;
 mod slice_mesh;
 mod simplex_noise_force_at_particles;
 mod spawn_from_mesh;
-pub mod standalone_pipeline;
 mod scatter_on_mesh;
 mod simplex_per_instance;
 mod affine_scalar;
@@ -321,155 +303,33 @@ mod trigger_ease_to;
 mod trigger_gate;
 mod transform_3d;
 mod transform_components;
-pub(crate) mod prefix_scan;
-pub(crate) mod sort_particles_into_cells;
-mod running_total;
-mod shape_particle_blobs;
 pub(crate) mod blob_bounds;
-pub(crate) mod particle_volume;
-pub(crate) mod lattice_bricks;
-pub(crate) mod liquid_bricks;
-mod smooth_lattice;
-pub(crate) mod dot_products;
 pub(crate) mod divide_by_value;
-pub(crate) mod gpu_flip_bodies;
 // Standalone staged encoder; the step keeps its existing pressure path.
-pub mod gpu_flip_lentine;
-pub(crate) mod gpu_flip_pressure;
-pub(crate) mod gpu_flip_step;
-pub(crate) mod gpu_flip_sheeting;
-#[cfg(test)]
-mod gpu_flip_sheeting_cpu_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_sheeting_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_sheeting_step_tests;
-pub(crate) mod gpu_flip_clock;
-pub(crate) mod gpu_flip_narrow_band;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_pressure_tests;
-pub(crate) mod liquid_fill;
-pub(crate) mod liquid_state;
-pub mod liquid_stats;
-pub(crate) mod liquid_frame;
-pub(crate) mod particle_identity;
-pub(crate) mod particle_publication;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod particle_publication_gpu_tests;
-pub(crate) mod gpu_flip_domain;
-pub(crate) mod face_sample_component;
-pub(crate) mod matter_face_component;
-mod surface_crossings;
-mod nearest_crossing;
-mod crossing_distance;
-mod liquid_cells;
-mod lattice_curvature;
-mod extend_lattice;
-mod jitter_particles;
-mod sample_faces_at_particles;
-mod energy_potential;
-mod turbulence_field;
-mod whitewater_obstacle_source;
-mod whitewater_emitter_dispatch;
-mod whitewater_influence;
-mod dust_potential;
-mod whitewater_emitter_velocity;
-mod inside_turbulence_potential;
-mod turbulence_emission_count;
-#[cfg(test)]
-mod whitewater_emitter_cpu;
-#[cfg(test)]
-mod whitewater_engine_cpu;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod whitewater_emitter_gpu_tests;
-mod wavecrest_potential;
-mod emission_count;
-mod spawn_whitewater;
-mod whitewater_type;
-mod advect_whitewater;
-mod retype_whitewater;
-mod age_whitewater;
-mod preserve_foam;
-mod keep_whitewater;
-#[cfg(test)]
-mod whitewater_pool_cpu;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod whitewater_pool_tests;
-pub(crate) mod whitewater_lifecycle;
-pub(crate) mod whitewater_step;
-mod pad_distance_lattice;
-#[cfg(test)]
-mod whitewater_step_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod whitewater_handoff_tests;
-#[cfg(test)]
-mod whitewater_cpu;
-#[cfg(test)]
-mod whitewater_particle_cpu;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod whitewater_particle_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod whitewater_grid_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod whitewater_field_tests;
-#[cfg(test)]
-mod whitewater_extent_tests;
 #[cfg(test)]
 mod face_grid_extent_tests;
-#[cfg(any(test, feature = "gpu-proofs"))]
-pub(crate) mod face_grid_scenes;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_scene_tests;
-pub mod gpu_flip_preset;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_atom_tests;
-#[cfg(test)]
-mod gpu_flip_extension_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_step_tests;
-#[cfg(test)]
-mod gpu_flip_narrow_band_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_scene_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_tile_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod whitewater_golden_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) mod gpu_flip_volume;
-#[cfg(all(test, feature = "water-race-probes"))]
-pub(crate) mod gpu_flip_race_tests;
-#[cfg(all(test, feature = "water-race-probes"))]
-pub(crate) mod gpu_flip_still;
-mod clamp_liquid_to_solids;
-mod count_surface_triangles;
-mod count_surface_edges;
-pub(crate) mod volume_surface_mesh;
-mod relax_surface_mesh;
 mod smooth_surface_mesh;
 mod surface_mesh_normals;
 #[cfg(test)]
-mod surface_mesh_parity;
-#[cfg(test)]
 mod surface_mesh_freeze_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod liquid_surface_tests;
 mod transform_shake;
 mod scene_object;
 mod revolve_curve;
 mod extrude_curve;
 mod uv_displace_by_flow;
 mod uv_field;
-mod value;
 mod compose_vec3;
 mod vignette;
 mod voronoi_2d;
 mod voxelize_mesh;
 // Crate-visible so the snapshot builder can key the `(WGSL)` header marker on
 // the canonical `TYPE_ID` rather than a duplicated string literal.
-pub(crate) mod wgsl_compute;
 pub mod watercolor;
 mod wet_dry_mix;
 
@@ -773,10 +633,7 @@ mod tests {
 
     use manifold_core::{Beats, Seconds};
 
-    use crate::node_graph::{
-        EffectNode, Executor, FinalOutput, FrameTime, Graph, ParamType, ParamValue, Source,
-        compile, validate,
-    };
+    use manifold_node_engine::{exec::effect_node::EffectNode, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, parameters::ParamType, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile, validate};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -790,7 +647,7 @@ mod tests {
     /// One boxed instance per registered factory, paired with the id the
     /// factory registered under. Covers every primitive, present and future.
     fn registered_nodes() -> Vec<(&'static str, Box<dyn EffectNode>)> {
-        inventory::iter::<crate::node_graph::persistence::PrimitiveFactory>
+        inventory::iter::<manifold_node_engine::persistence::PrimitiveFactory>
             .into_iter()
             .map(|f| (f.type_id, (f.create)()))
             .collect()
@@ -899,7 +756,7 @@ mod tests {
     /// params cannot be driven by a scalar wire, so they are never shadowed.
     #[test]
     fn port_shadow_inputs_are_optional_and_typed_like_their_param() {
-        use crate::node_graph::ports::{PortType, ScalarType};
+        use manifold_node_engine::ports::{PortType, ScalarType};
         let mut violations = Vec::new();
         let mut unbounded_seen = 0;
         for (type_id, node) in registered_nodes() {
@@ -998,7 +855,7 @@ mod tests {
         // Don't wire either of mix's inputs.
         assert!(matches!(
             validate(&g),
-            Err(crate::node_graph::GraphError::RequiredInputUnwired { .. })
+            Err(manifold_node_engine::validation::GraphError::RequiredInputUnwired { .. })
         ));
     }
 
@@ -1026,8 +883,8 @@ mod tests {
     /// primitives are picked up automatically.
     #[test]
     fn every_conventional_array_port_declares_a_channels_signature() {
-        use super::super::PrimitiveRegistry;
-        use super::super::ports::PortType;
+        use manifold_node_engine::persistence::PrimitiveRegistry;
+        use manifold_node_engine::ports::PortType;
 
         let registry = PrimitiveRegistry::with_builtin();
         let mut violations: Vec<String> = Vec::new();
@@ -1047,7 +904,7 @@ mod tests {
             let mut check_port = |kind_label: &str, port_name: &str, ty: &PortType| {
                 if let PortType::Array(layout) = ty
                     && layout.specs.is_empty()
-                    && layout.match_mode != super::super::ports::MatchMode::Permissive
+                    && layout.match_mode != manifold_node_engine::ports::MatchMode::Permissive
                 {
                     violations.push(format!(
                         "{type_id}: {kind_label} `{port_name}` is Array<…> \
@@ -1089,11 +946,9 @@ mod tests {
 
 mod rigid_body;
 mod fluid_role_source;
-pub(crate) mod physics_world;
 mod platonic_mesh;
 
 mod interpolate_particle_frames;
-pub(crate) mod push_out_of_solid;
 mod mix_arrays;
 pub use interpolate_particle_frames::InterpolateParticleFrames;
 pub use push_out_of_solid::PushOutOfSolid;
@@ -1102,18 +957,7 @@ pub use mix_arrays::MixArrays;
 #[cfg(test)]
 mod particle_frame_blend_tests;
 
-pub mod offset_lattice;
-pub mod redistance_lattice;
 
-#[cfg(test)]
-mod lattice_closing_tests;
 
-pub mod upwind_distance;
-pub(crate) mod whitewater_distance;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod whitewater_engine_gpu_tests;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-#[doc(hidden)]
-pub(crate) mod testkit;

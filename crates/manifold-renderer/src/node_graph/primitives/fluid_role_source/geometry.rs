@@ -10,12 +10,10 @@ use ahash::AHashMap;
 use manifold_physics::TriangleMesh;
 
 use super::{CompoundPreparation, WiredPreparation};
-use crate::mesh::MeshVertex;
-use crate::generators::platonic_geometry::{platonic_mesh, platonic_points};
-use crate::node_graph::physics_mesh::{
-    MeshSelection, load_compound_materials, prepare_colliders, transform_vertices,
-};
-use crate::node_graph::transform::Transform;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::platonic::{platonic_mesh, platonic_points};
+use manifold_node_engine::scene::physics_mesh::{MeshSelection, load_compound_materials, prepare_colliders, transform_vertices};
+use manifold_node_engine::scene::transform::Transform;
 
 /// The two preparation modes exposed by the source node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,7 +213,7 @@ fn canonical_bits(value: f32) -> u32 {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use crate::node_graph::mesh_source::MeshSource;
+    use manifold_node_engine::scene::mesh_source::MeshSource;
     use std::fs;
 
     pub(crate) fn write_two_material_cube_fixture() -> (std::path::PathBuf, CompoundPreparation) {

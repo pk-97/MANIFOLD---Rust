@@ -11,8 +11,8 @@ use manifold_core::scene_modifier_preset::{
 };
 
 use super::expand_compiler_tests::fixture;
-use crate::node_graph::scene_modifier_expand::{SceneModifierExpandError, expand_scene_modifiers};
-use crate::node_graph::persistence::PrimitiveRegistry;
+use manifold_node_engine::load::expand::{SceneModifierExpandError, expand_scene_modifiers};
+use manifold_node_engine::persistence::PrimitiveRegistry;
 
 fn registry() -> PrimitiveRegistry {
     PrimitiveRegistry::with_builtin()

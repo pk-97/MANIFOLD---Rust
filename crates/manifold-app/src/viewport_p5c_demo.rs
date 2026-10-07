@@ -29,8 +29,8 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::GpuDevice;
 use manifold_renderer::headless_readback::encode_rgba8_png;
-use manifold_renderer::node_graph::{PrimitiveRegistry, ViewportOverlayConfig, ViewportSession};
-use manifold_renderer::preset_context::PresetContext;
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_renderer::node_graph::ViewportOverlayConfig, manifold_renderer::node_graph::ViewportSession};
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 use crate::viewport_input::{ViewportGesture, ViewportInputSensitivity, apply, classify_mouse_drag};
 

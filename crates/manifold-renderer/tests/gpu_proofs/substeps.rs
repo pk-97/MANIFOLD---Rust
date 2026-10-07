@@ -10,18 +10,13 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::particles::Particle;
-use manifold_renderer::gpu_encoder::GpuEncoder;
-use manifold_renderer::node_graph::freeze::install::fuse_generator_view;
-use manifold_renderer::node_graph::ports::PortType;
-use manifold_renderer::node_graph::resource_allocation::plan_array_allocations;
-use manifold_renderer::testkit::substep_nodes::{
-    particle_step_dt, register_substep_test_nodes,
-};
-use manifold_renderer::node_graph::{
-    Backend, EffectGraphDefExt, ExecutionPlan, Executor, FrameTime, Graph, MetalBackend,
-    NodeInstanceId, PrimitiveRegistry, ResourceId, StateStore, compile, pre_allocate_resources,
-};
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::freeze::install::fuse_generator_view;
+use manifold_node_engine::ports::PortType;
+use manifold_node_engine::exec::resource_allocation::plan_array_allocations;
+use manifold_node_engine::testkit::substep_nodes::{particle_step_dt, register_substep_test_nodes};
+use manifold_node_engine::{exec::backend::Backend, persistence::EffectGraphDefExt, exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
 use crate::harness;
 

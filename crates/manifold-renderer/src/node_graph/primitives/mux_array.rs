@@ -14,15 +14,15 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const PORT_NAMES: [&str; 8] = [
     "in_0", "in_1", "in_2", "in_3", "in_4", "in_5", "in_6", "in_7",
 ];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MuxArray,
     type_id: "node.switch_array",
     purpose: "N-way Array<f32> selector. Routes one of in_0..in_7 (Array f32) to the output buffer based on the selector input (rounded, clamped). Output capacity = max of all wired input capacities at chain-build time. Completes the mux family alongside node.switch_value / node.switch_texture; primary use is mode-switching at the value-array level (e.g., NestedCubes Envelope vs Pose target_angles).",
@@ -64,7 +64,7 @@ crate::primitive! {
 impl Primitive for MuxArray {
     fn selected_input_branch(
         &self,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         wired_inputs: &[&str],
     ) -> Option<&'static str> {
         // Same wired-selector rule as MuxTexture — see that primitive's
@@ -83,7 +83,7 @@ impl Primitive for MuxArray {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn array_output_capacity_is_max_of_wired_inputs() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = MuxArray::new();
         let params = ParamValues::default();
         // Two inputs wired with different capacities; out should
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn array_output_capacity_defaults_to_one_when_no_inputs_wired() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = MuxArray::new();
         let params = ParamValues::default();
         // No inputs wired — capacity must still be ≥ 1 so the

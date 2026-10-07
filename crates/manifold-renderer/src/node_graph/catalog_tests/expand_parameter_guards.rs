@@ -1,7 +1,7 @@
-use crate::node_graph::scene_modifier_expand::testkit::GuardFixture as PreparedModifierParameterGuards;
+use manifold_node_engine::load::expand::testkit::GuardFixture as PreparedModifierParameterGuards;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::NodeId;
-    use crate::node_graph::persistence::EffectGraphDefExt;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
 
     const LEGACY_SURFACE_PEEL: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -23,8 +23,8 @@ use manifold_core::NodeId;
 
         let mut graph = owner
             .into_graph(
-                &crate::node_graph::persistence::PrimitiveRegistry::with_builtin(),
-                &crate::node_graph::mesh_change::PreparedMeshRules::default(),
+                &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin(),
+                &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
             )
             .expect("legacy fixture graph builds");
         let scene = graph
@@ -33,15 +33,15 @@ use manifold_core::NodeId;
         graph.set_param_unchecked(
             scene,
             "rt_enabled",
-            crate::node_graph::ParamValue::Bool(true),
+            manifold_node_engine::parameters::ParamValue::Bool(true),
         );
         guards
             .install(&mut graph)
             .expect("RT-enabled legacy scene remains admissible");
         assert!(graph
-            .set_param(scene, "rt_enabled", crate::node_graph::ParamValue::Bool(false))
+            .set_param(scene, "rt_enabled", manifold_node_engine::parameters::ParamValue::Bool(false))
             .is_ok());
         assert!(graph
-            .set_param(scene, "rt_enabled", crate::node_graph::ParamValue::Bool(true))
+            .set_param(scene, "rt_enabled", manifold_node_engine::parameters::ParamValue::Bool(true))
             .is_ok());
     }

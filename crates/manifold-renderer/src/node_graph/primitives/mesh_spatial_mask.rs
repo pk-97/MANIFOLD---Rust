@@ -5,11 +5,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const SHAPES: &[&str] = &["Band", "Sphere", "Half Space"];
 const SAMPLE_MODES: &[&str] = &["Vertex", "Triangle Centroid", "Patch Cell"];
@@ -40,7 +40,7 @@ struct MeshSpatialMaskUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MeshSpatialMask,
     type_id: "node.mesh_spatial_mask",
     purpose: "Generate scene-relative Array<f32> weights from an Array<MeshVertex>. A Band uses signed distance abs(dot(p, direction)) - width, a Sphere uses length(p) - width, and a Half Space uses dot(p, direction) - width, with p = (sample_position + source_offset) / scene_radius - center. Vertex, triangle-centroid, or fixed patch-cell sampling is selectable; amount maps the post-invert mask from low to high and blends that result against one.",
@@ -115,7 +115,7 @@ crate::primitive! {
 // `run()` does). The marker carries the member→fused-port mapping for the
 // `weights` port (fused kernels rename inputs to `src_<k>`).
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.mesh_spatial_mask",
         array_ports: &["weights"],
         recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
@@ -126,7 +126,7 @@ impl Primitive for MeshSpatialMask {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "weights")
@@ -247,12 +247,10 @@ impl Primitive for MeshSpatialMask {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::effect_node::NodeInstanceId;
-    use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
-    };
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     fn vertex(position: [f32; 3]) -> MeshVertex {
         MeshVertex {
@@ -272,7 +270,7 @@ mod gpu_tests {
         u: MeshSpatialMaskUniforms,
         label: &str,
     ) -> Vec<f32> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
         let src = device.create_buffer_shared(std::mem::size_of_val(src_vertices) as u64);
         let dst = device.create_buffer_shared(src_vertices.len() as u64 * 4);
@@ -345,7 +343,7 @@ mod gpu_tests {
             vertex([0.2, 0.8, 0.0]),
             vertex([0.0, 1.2, 0.0]),
         ];
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<MeshSpatialMask>()
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MeshSpatialMask>()
             .expect("mask codegen");
         let mut band = uniforms(0, 0, 1.0);
         // Pitch Y into Z, then yaw Z into X; yaw alone leaves Y unchanged.
@@ -403,7 +401,7 @@ mod gpu_tests {
             vertex([0.13, 0.11, 0.0]),
             vertex([0.13, 0.11, 0.0]),
         ];
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<MeshSpatialMask>()
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MeshSpatialMask>()
             .expect("mask codegen");
         let mut shared = uniforms(2, 2, 1.0);
         shared.scale = 2.0;
@@ -491,7 +489,7 @@ mod gpu_tests {
             "fused gathered mask kernel parses:\n{}",
             g.wgsl
         );
-        use crate::node_graph::freeze::markers::Marker;
+        use manifold_node_engine::freeze::markers::Marker;
         let expected = Marker::DerivedUniformMember {
             first_field: "n0_weights_len".to_string(),
             words: 1,
@@ -506,14 +504,14 @@ mod gpu_tests {
             g.wgsl
         );
         let prim = MeshSpatialMask::new();
-        let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+        let node: &dyn manifold_node_engine::exec::effect_node::EffectNode = &prim;
         assert_eq!(
             node.array_output_capacity("weights", &Default::default(), &[("in", 1009), ("weights", 2009)]),
             Some(1009),
             "identity capacity — passes the gather identity probe"
         );
         assert!(
-            crate::node_graph::freeze::derived_uniform_registry::has_recompute(
+            manifold_node_engine::freeze::derived_uniform_registry::has_recompute(
                 MeshSpatialMask::TYPE_ID
             ),
             "weights_len has a registered recompute — install admits the region"

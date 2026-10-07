@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue,
 };
-use manifold_renderer::node_graph::PrimitiveRegistry;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
 
 const PRESETS: &[(&str, &str)] = &[
     (

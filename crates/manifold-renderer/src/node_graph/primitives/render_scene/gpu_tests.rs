@@ -1,6 +1,6 @@
     use super::*;
-    use crate::mesh::InstanceTransform;
-    use crate::node_graph::light::{Light, LightMode, ShadowSoftness};
+    use manifold_node_engine::mesh::InstanceTransform;
+    use manifold_node_engine::scene::light::{Light, LightMode, ShadowSoftness};
     use bytemuck::Zeroable;
     use half::f16;
     use manifold_gpu::{
@@ -266,7 +266,7 @@
         bias: f32,
         occluder_ndc_z: f32,
     ) -> [f32; 3] {
-        let view_z = crate::node_graph::camera::linearize_depth(raw_depth, near, far);
+        let view_z = manifold_node_engine::scene::camera::linearize_depth(raw_depth, near, far);
         let uv = [(x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32];
         let ndc_x = uv[0] * 2.0 - 1.0;
         let ndc_y = 1.0 - uv[1] * 2.0;
@@ -356,7 +356,7 @@
     /// attenuation/phase math), flat scene depth.
     #[test]
     fn shaft_march_matches_cpu_reference() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let raw_depth = 0.5f32;
         let half_depth_raw = vec![raw_depth; (w * h) as usize];
@@ -632,7 +632,7 @@
     /// visibility input does not alter vertex positions or triangle topology.
     #[test]
     fn appearance_weights_discard_zero_triangle_in_shadow_depth() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (8u32, 4u32);
         let identity = [
             [1.0, 0.0, 0.0, 0.0],
@@ -722,7 +722,7 @@
 
     #[test]
     fn shadow_alpha_mask_preserves_uv_selection_transform_factor_and_mirror() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let identity = [
             [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0],
@@ -801,7 +801,7 @@
 
     #[test]
     fn render_scene_vertex_color_interpolation_and_albedo_product() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let vertices = [
             MeshVertex {
                 position: [-1.0, -1.0, 0.0],
@@ -929,7 +929,7 @@ fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
     #[test]
     fn extension_map_sampling_metadata_matches_production_helper() {
         use bytemuck::Zeroable;
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pixels = [
             [0.1, 0.1, 0.0, 1.0],
             [0.2, 0.1, 0.0, 1.0],
@@ -943,7 +943,7 @@ fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
         let map = upload_rgba16f(&device, 4, 2, &pixels, "extension-map-proof");
 
         let sampler = |wrap_u, wrap_v, mag_filter, min_filter, mip_filter| {
-            crate::node_graph::material::MapSamplerDesc {
+            manifold_node_engine::scene::material::MapSamplerDesc {
                 wrap_u,
                 wrap_v,
                 mag_filter,
@@ -952,7 +952,7 @@ fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
             }
         };
         let info = |uv_transform, tex_coord, sampler| {
-            crate::node_graph::material::MaterialMapInfo { uv_transform, tex_coord, sampler }
+            manifold_node_engine::scene::material::MaterialMapInfo { uv_transform, tex_coord, sampler }
         };
         let nearest = manifold_gpu::GpuFilterMode::Nearest;
         let linear = manifold_gpu::GpuFilterMode::Linear;
@@ -1085,7 +1085,7 @@ fn fs_extension_map_probe(in: VsOut) -> @location(0) vec4<f32> {
 
     #[test]
     fn prewarm_pipelines_populates_the_shared_render_cache() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         // Order-independent (BUG-144): the cache is process-global and shared
         // with other gpu_tests, so another test's prewarm may already have
         // populated the exact entries this call would add — an
@@ -1197,7 +1197,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     #[test]
     fn extension_map_mip_filters_follow_authored_choice() {
         use bytemuck::Zeroable;
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let map = device.create_texture(&GpuTextureDesc {
             width: 4, height: 4, depth: 1, format: GpuTextureFormat::Rgba8Unorm,
             dimension: GpuTextureDimension::D2,
@@ -1238,8 +1238,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             (Some(manifold_gpu::GpuFilterMode::Nearest), 0.5),
             (Some(manifold_gpu::GpuFilterMode::Linear), 0.3)] {
             let mut maps = [MaterialMapUniform::zeroed(); 19];
-            maps[5] = MaterialMapUniform::from(crate::node_graph::material::MaterialMapInfo {
-                sampler: crate::node_graph::material::MapSamplerDesc {
+            maps[5] = MaterialMapUniform::from(manifold_node_engine::scene::material::MaterialMapInfo {
+                sampler: manifold_node_engine::scene::material::MapSamplerDesc {
                     min_filter: manifold_gpu::GpuFilterMode::Nearest,
                     mag_filter: manifold_gpu::GpuFilterMode::Nearest,
                     mip_filter: filter,
@@ -1338,7 +1338,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// identically.
     #[test]
     fn sampler_aniso_one_is_byte_identical() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let tex = make_striped_grazing_texture(&device);
 
         let untouched = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
@@ -1380,7 +1380,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// "did anisotropic filtering keep this sharp."
     #[test]
     fn aniso_sharpens_grazing_minification() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let tex = make_striped_grazing_texture(&device);
 
         let aniso_1 = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
@@ -1420,7 +1420,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     #[test]
     fn rt_denoise_feed_off_forces_nothing() {
         let s = RenderScene::new();
-        let mut params = crate::node_graph::effect_node::ParamValues::default();
+        let mut params = manifold_node_engine::exec::effect_node::ParamValues::default();
         // Default: rt_enabled=false, temporal_upscale=false, rt_denoise_feed=false
         let forced = s.force_consumed_outputs(&params);
         assert!(forced.is_empty(), "default scene must force no outputs");
@@ -1437,7 +1437,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     #[test]
     fn rt_denoise_feed_on_forces_all_feeds() {
         let s = RenderScene::new();
-        let mut params = crate::node_graph::effect_node::ParamValues::default();
+        let mut params = manifold_node_engine::exec::effect_node::ParamValues::default();
         params.insert("rt_denoise_feed".into(), ParamValue::Bool(true));
         let forced = s.force_consumed_outputs(&params);
         let expected: &[&str] = &[
@@ -1469,7 +1469,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             .expect("rt_denoise_feed param must exist");
         assert_eq!(param.name, "rt_denoise_feed");
         assert_eq!(param.default, ParamValue::Bool(false));
-        assert_eq!(param.ty, crate::node_graph::parameters::ParamType::Bool);
+        assert_eq!(param.ty, manifold_node_engine::parameters::ParamType::Bool);
     }
 
     /// RT_QUALITY_SETTINGS_DESIGN.md I3: a ray-resolution change reallocates
@@ -1478,7 +1478,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// dims still reallocates the full-res targets.
     #[test]
     fn ray_resolution_or_canvas_change_fires_rt_realloc_reset() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut s = RenderScene::new();
 
         // First allocation resets.
@@ -1583,7 +1583,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         const FRAME_COUNT: usize = 4;
         const POST_FRAME_COUNT: usize = FRAME_COUNT - 1;
         let pixel_count = (W * H) as usize;
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut scene = RenderScene::new();
         assert!(scene.ensure_rt_irradiance(&device, W, H, W, H));
 
@@ -1934,7 +1934,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         const H: u32 = 9;
         const FRAME_COUNT: usize = 4;
         let pixel_count = (W * H) as usize;
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut scene = RenderScene::new();
         assert!(scene.ensure_rt_irradiance(&device, W, H, W, H));
         assert!(!scene.ensure_rt_irradiance(&device, W, H, W, H));

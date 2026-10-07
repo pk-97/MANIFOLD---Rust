@@ -15,10 +15,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: `grid_size` (Int → i32) then the
 /// codegen-injected `dispatch_count` element count, padded to 16 bytes.
@@ -31,7 +31,7 @@ struct GridUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GridUvField,
     type_id: "node.grid_uv_field",
     purpose: "Emit an Array<vec2<f32>> of UV positions on an N×N grid in [0,1]² space, sampling each cell at its centre: for idx = row*N + col, uv = ((col+0.5)/N, (row+0.5)/N). Foundational producer for per-instance noise samplers (simplex/fbm per_instance) and topology-wrap primitives (cylinder/torus wrap field). Output capacity equals grid_size² and is pre-allocated at chain-build time from the `grid_size` param.",
@@ -65,7 +65,7 @@ impl Primitive for GridUvField {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "uv" {
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn grid_uv_field_capacity_is_grid_size_squared() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = GridUvField::new();
         let mut params = ParamValues::default();
         params.insert(std::borrow::Cow::Borrowed("grid_size"), ParamValue::Float(400.0));

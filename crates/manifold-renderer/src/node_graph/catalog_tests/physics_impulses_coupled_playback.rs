@@ -1,7 +1,7 @@
 //! Exercise real paired native playback through the ordinary graph executor.
 use super::*;
-use crate::node_graph::fluid::CoupledRigidFrame;
-use crate::node_graph::physics::{PhysicsStepScope, RigidImpulseTargets};
+use manifold_node_engine::water::fluid::CoupledRigidFrame;
+use manifold_node_engine::water::physics::{PhysicsStepScope, RigidImpulseTargets};
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::types::LayerType;

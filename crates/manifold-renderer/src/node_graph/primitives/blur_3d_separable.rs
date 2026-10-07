@@ -14,10 +14,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuAddressMode, GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 pub const BLUR_3D_MODES: &[&str] = &["Scalar (density)", "Vector (force field)"];
 pub const BLUR_3D_AXES: &[&str] = &["X", "Y", "Z"];
@@ -35,7 +35,7 @@ struct Blur3DUniforms {
     radius: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Blur3DSeparable,
     type_id: "node.blur_3d",
     purpose: "Single-axis separable Gaussian blur on a Texture3D. Mode selects scalar (samples .r, writes single channel) or vector (samples .rgba, writes all channels). For a full 3-axis separable blur, wire three instances with ping-pong textures (axis=X(a→b), axis=Y(b→a), axis=Z(a→b)). Bilinear tap-pairing halves the sample count vs a naive Gaussian.",
@@ -166,9 +166,9 @@ impl Primitive for Blur3DSeparable {
                 },
             ],
             [
-                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
-                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
-                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
             ],
             "node.blur_3d",
         );

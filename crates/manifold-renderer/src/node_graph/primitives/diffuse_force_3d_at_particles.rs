@@ -23,11 +23,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`diffusion`
 /// f32, `active_count` Int → i32) then the derived `frame_count` (u32, exact
@@ -41,7 +41,7 @@ struct DiffuseUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: DiffuseForce3DAtParticles,
     type_id: "node.spread_out_3d",
     purpose: "Per-particle incoherent 3D random kick added in-place to an Array<[f32; 3]> force buffer, weighted by local density. forces[i] += (hash_float3(i, frame) - 0.5) * diffusion * capped(density). Reseeds the hash each frame (Brownian, not drift); the density weighting concentrates the kick where particles clump (anti-clumping diffusion). Decomposed from the diffusion step of the fused node.fluid_simulate_3d.",
@@ -92,7 +92,7 @@ crate::primitive! {
 // `UniformMemberType::U32` (`.max(0.0) as u32`), so this stays an exact
 // integer the same way the standalone path always has.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.spread_out_3d",
         array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.frame_count as f32]),
@@ -103,7 +103,7 @@ impl Primitive for DiffuseForce3DAtParticles {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

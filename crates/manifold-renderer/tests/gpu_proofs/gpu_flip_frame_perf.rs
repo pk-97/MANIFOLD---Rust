@@ -34,12 +34,12 @@ use std::time::Instant;
 use manifold_core::effect_graph_def::ParamSpecDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::{GpuDevice, GpuTextureFormat, GpuTimestampSampler};
-use manifold_renderer::frame_status::FrameRenderStatus;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::{PrimitiveRegistry, physics::PhysicsStepScope};
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::{persistence::PrimitiveRegistry, water::physics::PhysicsStepScope};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::Value;
 
 use crate::harness;

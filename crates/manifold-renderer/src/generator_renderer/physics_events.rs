@@ -1,6 +1,6 @@
 //! Content-owned manual event delivery into live generator physics.
 use super::*;
-use crate::preset_context::ProjectTempo;
+use manifold_node_engine::runtime::preset_context::ProjectTempo;
 
 impl GeneratorRenderer {
     pub fn has_scene_impulse(layer: &Layer, param: &str) -> bool {
@@ -40,7 +40,7 @@ impl GeneratorRenderer {
         &mut self,
         layer: &Layer,
         param: &str,
-        source: crate::node_graph::FrameTime,
+        source: manifold_node_engine::exec::effect_node::FrameTime,
         project_tempo: Option<&ProjectTempo>,
     ) -> Result<bool, String> {
         if !Self::has_scene_impulse(layer, param) {
@@ -83,7 +83,7 @@ impl GeneratorRenderer {
             .fire_scene_impulse(param, source, &mut self.next_physics_event)
     }
 
-    pub fn scene_impulse_diagnostics(&self) -> crate::preset_runtime::SceneImpulseDiagnostics {
+    pub fn scene_impulse_diagnostics(&self) -> manifold_node_engine::water::runtime::scene_impulses::SceneImpulseDiagnostics {
         self.scene_impulse_diagnostics
     }
 }

@@ -7,11 +7,11 @@
 //! "object_0: missing required `vertices` input".
 
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
-use manifold_renderer::node_graph::PrimitiveRegistry;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
@@ -120,7 +120,7 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
         .set_param(
             scene_node,
             "temporal_upscale",
-            manifold_renderer::node_graph::ParamValue::Bool(true),
+            manifold_node_engine::parameters::ParamValue::Bool(true),
         )
         .expect("temporal_upscale exists");
     for f in 4..8 {
@@ -131,7 +131,7 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
         .set_param(
             scene_node,
             "rt_enabled",
-            manifold_renderer::node_graph::ParamValue::Bool(false),
+            manifold_node_engine::parameters::ParamValue::Bool(false),
         )
         .expect("rt_enabled exists");
     for f in 8..12 {
@@ -142,7 +142,7 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
         .set_param(
             scene_node,
             "rt_enabled",
-            manifold_renderer::node_graph::ParamValue::Bool(true),
+            manifold_node_engine::parameters::ParamValue::Bool(true),
         )
         .expect("rt_enabled exists");
     for f in 12..18 {
@@ -224,7 +224,7 @@ fn live_temporal_upscale_off_from_reduced_import_scene_stays_finite() {
         .set_param(
             scene_node,
             "temporal_upscale",
-            manifold_renderer::node_graph::ParamValue::Bool(false),
+            manifold_node_engine::parameters::ParamValue::Bool(false),
         )
         .expect("temporal_upscale exists");
     frame(&mut runtime, h, &target.texture, 4, &manifest);
@@ -298,7 +298,7 @@ fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
         .set_param(
             scene_node,
             "rt_enabled",
-            manifold_renderer::node_graph::ParamValue::Bool(true),
+            manifold_node_engine::parameters::ParamValue::Bool(true),
         )
         .expect("rt_enabled exists");
     for f in 4..10 {

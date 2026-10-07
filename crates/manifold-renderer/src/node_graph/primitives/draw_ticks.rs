@@ -8,10 +8,10 @@
 use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: PARAMS order — `color` (Color param → 4
 /// consecutive f32 fields, reassembled as `vec4<f32>` at the body call
@@ -34,7 +34,7 @@ struct TicksUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: DrawTicks,
     type_id: "node.draw_ticks",
     purpose: "Draw four alternating long/short tick marks down the right side of every detection in a Channels[X, Y, WIDTH, HEIGHT] array, additively over the source at half intensity. Tick spacing follows the detection's height; lengths and offset are in 1080p-reference pixels. The scale-readout garnish of a tracking HUD.",

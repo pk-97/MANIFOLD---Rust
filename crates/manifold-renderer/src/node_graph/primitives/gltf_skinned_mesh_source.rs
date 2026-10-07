@@ -22,11 +22,11 @@
 use std::borrow::Cow;
 use std::sync::mpsc;
 
-use crate::mesh::{MeshVertex, Vec4Vertex};
-use crate::node_graph::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, DEFAULT_MATERIAL_SENTINEL, load_gltf_skinned_mesh};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Preserve the pre-COLOR_0 importer contract for saved graphs that do not
 /// carry the opt-in `vertex_colors` parameter. New imports set the parameter
@@ -40,7 +40,7 @@ fn apply_vertex_color_compat(mut verts: Vec<MeshVertex>, vertex_colors: bool) ->
     verts
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GltfSkinnedMeshSource,
     type_id: "node.gltf_skinned_mesh_source",
     purpose: "Read a glTF/.glb file's sole skinned mesh-owning node contributing `material_index` and emit its LOCAL-space (bind-pose) geometry as Array(MeshVertex), plus coincident per-vertex JOINTS_0 (as f32 indices) and WEIGHTS_0 arrays. NO node transform is applied (glTF skinning ignores the mesh node's own transform) — wire `vertices`/`joints`/`weights` into node.skin_mesh along with a node.gltf_skeleton_pose's joint-matrix palette to deform the mesh per frame.",
@@ -339,7 +339,7 @@ impl Primitive for GltfSkinnedMeshSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn vertex_colors_defaults_off_for_saved_graph_compatibility() {
@@ -378,13 +378,13 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::ParamValues;
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::{FrameTime, MetalBackend};
-    use crate::TestDevice;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::ParamValues;
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
+    use manifold_gpu::testkit::TestDevice;
     use manifold_core::{Beats, Seconds};
 
     const CAPACITY: u32 = 20_000;
@@ -516,7 +516,7 @@ mod gpu_tests {
             println!("frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping", path.display());
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (backend, vs, js, ws) = make_buffer_backend(&device);
         let params = params_at(path.to_str().unwrap(), 0.0);
         let mut prim = GltfSkinnedMeshSource::new();
@@ -552,7 +552,7 @@ mod gpu_tests {
             println!("gate_is_unaffected_by_playhead_on_an_animated_fixture: fixture not found at {}, skipping", path.display());
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (backend, vs, js, ws) = make_buffer_backend(&device);
         let params = params_at(path.to_str().unwrap(), 0.0);
         let mut prim = GltfSkinnedMeshSource::new();
@@ -596,7 +596,7 @@ mod gpu_tests {
         );
 
         let count = authored.len();
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (backend, vs, js, ws) = make_buffer_backend(&device);
         let params_legacy = params_at(path.to_str().unwrap(), DEFAULT_MATERIAL_MESH_PARAM as f32);
         let mut prim = GltfSkinnedMeshSource::new();

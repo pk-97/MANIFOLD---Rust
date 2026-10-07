@@ -1,11 +1,11 @@
 use manifold_core::scene_modifier_preset::{SceneStageScope, SceneEndpoint, SceneModifierInstanceDef, SceneNodeRef};
-use crate::node_graph::scene_modifier_expand::{LegacyMathViewScope, PreparedSceneModifierGraph};
+use manifold_node_engine::load::expand::{LegacyMathViewScope, PreparedSceneModifierGraph};
 use std::collections::BTreeSet;
-use crate::node_graph::scene_modifier_expand::*;
+use manifold_node_engine::load::expand::*;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphWire, SerializedParamValue};
 use manifold_core::NodeId;
-use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
-use crate::node_graph::scene_modifier_expand::SceneModifierExpandError;
+use manifold_node_engine::persistence::{EffectGraphDefExt, PrimitiveRegistry};
+use manifold_node_engine::load::expand::SceneModifierExpandError;
 use manifold_core::effect_graph_def::BindingTarget;
 use manifold_core::scene_modifier_preset::{
     SceneModifierRecipe, SceneModifierStageDef, SceneStageInput, SceneStageOutput,
@@ -202,13 +202,13 @@ pub(super) fn fusion_fixture() -> EffectGraphDef {
 
 #[test]
 fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
-    use crate::node_graph::ParamValue;
+    use manifold_node_engine::parameters::ParamValue;
     let registry = PrimitiveRegistry::with_builtin();
     for fused_mode in [false, true] {
         let mut owner = fusion_fixture();
         let original = owner.clone();
         let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
-        let mut runtime = crate::preset_runtime::PresetRuntime::from_def_for_render(
+        let mut runtime = manifold_node_engine::runtime::PresetRuntime::from_def_for_render(
             owner.clone(),
             &registry,
             None,
@@ -241,7 +241,7 @@ fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
             );
         runtime.apply_inner_param_overrides(&owner);
         let fused = fused_mode.then(|| {
-            crate::node_graph::freeze::install::fused_generator_view_for(&prepared.def).unwrap()
+            manifold_node_engine::freeze::install::fused_generator_view_for(&prepared.def).unwrap()
         });
         for copy in copies {
             let (target, param) = match &fused {
@@ -269,7 +269,7 @@ fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
             "loading never mutates the canonical snapshot"
         );
     }
-    let graph = fusion_fixture().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
+    let graph = fusion_fixture().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
     assert!(
         graph.modifier_buffer_budget().is_some(),
         "direct host graph loads retain admission metadata too"
@@ -319,7 +319,7 @@ fn scene_modifier_expand_runtime_accepts_ray_tracing_enabled_by_live_manifest() 
         prepare_scene_modifiers(&owner, &registry).is_ok(),
         "authored RT default is off"
     );
-    let runtime = crate::preset_runtime::PresetRuntime::from_def(owner, &registry, Some(&manifest))
+    let runtime = manifold_node_engine::runtime::PresetRuntime::from_def(owner, &registry, Some(&manifest))
         .expect("live RT toggle remains admissible");
     let scene = runtime
         .graph
@@ -327,14 +327,14 @@ fn scene_modifier_expand_runtime_accepts_ray_tracing_enabled_by_live_manifest() 
         .expect("render scene");
     assert_eq!(
         runtime.graph.get_node(scene).unwrap().params.get("rt_enabled"),
-        Some(&crate::node_graph::ParamValue::Bool(true))
+        Some(&manifold_node_engine::parameters::ParamValue::Bool(true))
     );
 }
 
 #[test]
 fn scene_modifier_expand_cached_values_reach_copies_and_restore_first_edit() {
-    use crate::node_graph::ParamValue;
-    use crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
+    use manifold_node_engine::parameters::ParamValue;
+    use manifold_node_engine::load::expand::PreparedGraphValueWrites;
     let mut owner = fixture();
     let registry = PrimitiveRegistry::with_builtin();
     let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
@@ -344,7 +344,7 @@ fn scene_modifier_expand_cached_values_reach_copies_and_restore_first_edit() {
         .find(|route| route.local.node.as_str() == "shear_x")
         .unwrap();
     assert_eq!(route.copies.len(), 2);
-    let mut graph = prepared.def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
+    let mut graph = prepared.def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
     let writes = PreparedGraphValueWrites::prepare(
         &owner,
         &prepared.routes,
@@ -427,19 +427,19 @@ fn scene_modifier_expand_cached_values_reach_copies_and_restore_first_edit() {
 
 #[test]
 fn scene_modifier_expand_cached_values_follow_fused_mesh_uniforms() {
-    use crate::node_graph::ParamValue;
-    use crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
+    use manifold_node_engine::parameters::ParamValue;
+    use manifold_node_engine::load::expand::PreparedGraphValueWrites;
     let mut owner = fusion_fixture();
     let registry = PrimitiveRegistry::with_builtin();
     let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
-    let fused = crate::node_graph::freeze::install::fused_generator_view_for(&prepared.def)
+    let fused = manifold_node_engine::freeze::install::fused_generator_view_for(&prepared.def)
         .expect("existing elastic mesh atoms fuse");
-    let mut graph = (*fused.def).clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
-    use crate::node_graph::resource_allocation::plan_array_allocations;
-    use crate::node_graph::scene_modifier_expand::PreparedModifierBufferBudget;
+    let mut graph = (*fused.def).clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
+    use manifold_node_engine::exec::resource_allocation::plan_array_allocations;
+    use manifold_node_engine::load::expand::PreparedModifierBufferBudget;
     let allocation = plan_array_allocations(
         &graph,
-        &crate::node_graph::compile(&graph).unwrap(),
+        &manifold_node_engine::exec::execution_plan::compile(&graph).unwrap(),
         (1024, 1024),
         &ahash::AHashMap::default(),
     )
@@ -454,10 +454,10 @@ fn scene_modifier_expand_cached_values_follow_fused_mesh_uniforms() {
     let fused_usage = budget.account(&allocation).unwrap();
     let scene = &owner.scene_modifiers[0].scene;
     assert!(fused_usage.modifier_bytes[scene] > 0);
-    let unfused_graph = prepared.def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
+    let unfused_graph = prepared.def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
     let unfused_allocation = plan_array_allocations(
         &unfused_graph,
-        &crate::node_graph::compile(&unfused_graph).unwrap(),
+        &manifold_node_engine::exec::execution_plan::compile(&unfused_graph).unwrap(),
         (1024, 1024),
         &ahash::AHashMap::default(),
     )
@@ -520,8 +520,8 @@ fn scene_modifier_expand_compiler_attaches_preserves_host_and_is_idempotent() {
     let registry = PrimitiveRegistry::with_builtin();
     let expanded = expand_scene_modifiers(&owner, &registry).unwrap();
     assert_eq!(
-        crate::node_graph::freeze::fusion_report::fusion_report(&owner, &registry),
-        crate::node_graph::freeze::fusion_report::fusion_report(&expanded, &registry),
+        manifold_node_engine::freeze::fusion_report::fusion_report(&owner, &registry),
+        manifold_node_engine::freeze::fusion_report::fusion_report(&expanded, &registry),
         "diagnostics inspect the same prepared graph as rendering"
     );
     assert!(expanded.scene_modifiers.is_empty());
@@ -684,11 +684,11 @@ fn scene_modifier_expand_compiler_macro_fanout_keeps_real_leaf_conversion() {
             SerializedParamValue::Float { value: 0.3 }
         );
     }
-    use crate::node_graph::bound_graph::BoundGraph;
-    use crate::node_graph::param_binding::{BindingSource, ResolvedBinding, ResolvedTarget};
-    use crate::node_graph::ParamValue;
+    use manifold_node_engine::exec::bound_graph::BoundGraph;
+    use manifold_node_engine::param_binding::{BindingSource, ResolvedBinding, ResolvedTarget};
+    use manifold_node_engine::parameters::ParamValue;
     use manifold_core::params::{Param, ParamManifest};
-    let mut graph = expanded.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
+    let mut graph = expanded.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
     let resolved = bindings
         .iter()
         .map(|binding| {
@@ -713,7 +713,7 @@ fn scene_modifier_expand_compiler_macro_fanout_keeps_real_leaf_conversion() {
         })
         .collect();
     let mut bound = BoundGraph::new(resolved, &mut graph, Some(expanded));
-    let writes = crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites::prepare(
+    let writes = manifold_node_engine::load::expand::PreparedGraphValueWrites::prepare(
         &owner,
         &prepared.routes,
         &graph,
@@ -837,8 +837,8 @@ fn scene_modifier_math_view_legacy_scope_keeps_carrier_boundaries() {
                 "legacy arrows start at the carrier input, not always the original mesh");
         }
         let graph = prepared.def.into_graph(&registry,
-            &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
-        let plan = crate::node_graph::compile(&graph).unwrap();
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
+        let plan = manifold_node_engine::exec::execution_plan::compile(&graph).unwrap();
         live_counts.push(plan.steps().iter().filter(|step| {
             graph.get_node(step.node).unwrap().node.type_id().as_str() == "node.transform_mesh_patches"
         }).count());
@@ -886,7 +886,7 @@ fn scene_modifier_math_view_is_sparse_and_cuts_final_output_at_requested_stage()
         let expected: std::collections::HashSet<_> = modifier
             .mesh_frames
             .iter()
-            .map(|frame| crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&modifier.id, &frame.target, role))
+            .map(|frame| manifold_node_engine::load::expand::testkit::resource_node_id(&modifier.id, &frame.target, role))
             .collect();
         let actual: std::collections::HashSet<_> = prepared
             .def
@@ -961,7 +961,7 @@ fn scene_modifier_math_view_routes_one_shared_grid_control() {
         .mesh_frames
         .iter()
         .map(|frame| {
-            crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&modifier.id, &frame.target, "diagram")
+            manifold_node_engine::load::expand::testkit::resource_node_id(&modifier.id, &frame.target, "diagram")
         })
         .collect();
     let diagrams: Vec<_> = prepared
@@ -1005,7 +1005,7 @@ fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
         .iter()
         .map(|frame| {
             let export_id =
-                crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&modifier.id, &frame.target, "export");
+                manifold_node_engine::load::expand::testkit::resource_node_id(&modifier.id, &frame.target, "export");
             let export = parent
                 .def
                 .nodes
@@ -1038,7 +1038,7 @@ fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
     let surfaces: Vec<_> = frames
         .iter()
         .map(|frame| {
-            let id = crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&modifier.id, &frame.target, "surface");
+            let id = manifold_node_engine::load::expand::testkit::resource_node_id(&modifier.id, &frame.target, "surface");
             prepared
                 .def
                 .nodes
@@ -1050,7 +1050,7 @@ fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
     let diagrams: Vec<_> = frames
         .iter()
         .map(|frame| {
-            let id = crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&modifier.id, &frame.target, "diagram");
+            let id = manifold_node_engine::load::expand::testkit::resource_node_id(&modifier.id, &frame.target, "diagram");
             prepared
                 .def
                 .nodes
@@ -1450,9 +1450,9 @@ fn scene_modifier_math_view_post_view_modifiers_do_not_leak_into_capture() {
     let graph = prepared
         .def
         .clone()
-        .into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default())
+        .into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
         .unwrap();
-    let plan = crate::node_graph::compile(&graph).unwrap();
+    let plan = manifold_node_engine::exec::execution_plan::compile(&graph).unwrap();
     for step in plan.steps() {
         let node = graph.get_node(step.node).unwrap();
         assert!(
@@ -1564,7 +1564,7 @@ fn scene_modifier_math_view_instance_only_chain_never_partially_connects() {
         .map(|node| node.id)
         .collect();
     for frame in &view.mesh_frames {
-        let mask_id = crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&view.id, &frame.target, "weights");
+        let mask_id = manifold_node_engine::load::expand::testkit::resource_node_id(&view.id, &frame.target, "weights");
         let mask = parent
             .def
             .nodes
@@ -1580,7 +1580,7 @@ fn scene_modifier_math_view_instance_only_chain_never_partially_connects() {
         // Without a qualified patch carrier the mask stays presentation-only:
         // it feeds the view's export boundary for the derived view to read,
         // never the scene object itself.
-        let export_id = crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&view.id, &frame.target, "export");
+        let export_id = manifold_node_engine::load::expand::testkit::resource_node_id(&view.id, &frame.target, "export");
         let export = parent
             .def
             .nodes

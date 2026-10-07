@@ -23,11 +23,11 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::InstanceTransform;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`frequency`,
 /// `amplitude`, `time_uvx_drift`, `z_coord`, `axis_seed`), then the codegen-
@@ -48,7 +48,7 @@ struct Uniforms {
 
 const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: InstancePositionJitter,
     type_id: "node.position_jitter",
     purpose: "Add 3-axis 3D-simplex position noise to each InstanceTransform's pos.xyz, leaving scale and rotation unchanged. base = (uv.x*freq + time_uvx_drift, uv.y*freq, z_coord); pos += amp · (simplex(base), simplex(base + (seed,0,0)), simplex(base + (0,seed,0))). Generic — any instanced field that wants organic per-instance position wobble. Reproduces both legacy DigitalPlants detail- and micro-noise patterns when parameterised.",
@@ -123,7 +123,7 @@ impl Primitive for InstancePositionJitter {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "instances" {

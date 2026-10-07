@@ -15,10 +15,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `fixed_point_scale` param (f32) + pad
 /// to 16 bytes. The generated kernel derives its dims (and thus the dispatch
@@ -34,7 +34,7 @@ struct ResolveUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ResolveAccumulator,
     type_id: "node.resolve_scatter",
     purpose: "Read a u32 fixed-point accumulator buffer (produced by node.draw_particles), divide by `fixed_point_scale`, and write the result as a grayscale density texture. The bridge from Array(u32) back to Texture2D for downstream texture-domain primitives. Dimensions are taken from the output Texture2D — which the backend allocates at canvas size — so resolve always covers every pixel of the density texture, matching whatever scatter wrote (also canvas-sized via `canvas_sized_array_outputs()`).",
@@ -130,11 +130,11 @@ mod gpu_tests {
     use half::f16;
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     #[test]
     fn generated_resolve_divides_and_self_clears() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 2u32);
         let cells = (w * h) as usize;
         let scale = 4096.0f32;
@@ -150,7 +150,7 @@ mod gpu_tests {
             RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "resolve-out");
 
         let gen_wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<ResolveAccumulator>()
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<ResolveAccumulator>()
                 .expect("resolve_accumulator codegen");
         assert!(
             gen_wgsl.contains("array<atomic<u32>>"),
@@ -158,7 +158,7 @@ mod gpu_tests {
         );
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "resolve-oracle",
         );
 

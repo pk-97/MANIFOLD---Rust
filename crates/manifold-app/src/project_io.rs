@@ -57,7 +57,7 @@ pub(crate) fn install_embedded_presets(presets: &[manifold_core::project::Embedd
             PresetKind::SceneModifier => scene_modifier.push((id.as_str().to_string(), json, p.origin)),
         }
     }
-    manifold_renderer::preset_loader::set_project_presets(effect, generator, scene_modifier);
+    manifold_node_engine::load::preset_loader::set_project_presets(effect, generator, scene_modifier);
 }
 
 /// Self-containment snapshot (PRESET_LIBRARY_DESIGN D5, P2). Called
@@ -523,7 +523,7 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         install_project_preset_overlay(project);
         project.load_report.unresolved_preset_templates = project.reconcile_param_manifests();
     }
-    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     for layer in &mut project.timeline.layers {
         let Some(host) = layer.gen_params_mut() else { continue; };
         if host.graph.is_none() { continue; }
@@ -731,7 +731,7 @@ impl ProjectIOService {
                 // preset) now, before the project goes live, so a grouped
                 // inner node keeps driving its card slider. Idempotent and
                 // renderer-side (it needs the bundled preset graphs).
-                manifold_renderer::node_graph::migrate_user_param_bindings_to_node_id(
+                manifold_node_engine::load::binding_migration::migrate_user_param_bindings_to_node_id(
                     &mut project,
                 );
 

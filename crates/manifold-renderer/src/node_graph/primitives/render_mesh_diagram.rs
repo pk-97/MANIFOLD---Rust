@@ -5,12 +5,12 @@
 //! arrows, axes, the infinite world grid, and temporal trails share one bounded
 //! instanced pass. The grid uses the scene camera without the object transform.
 
-use crate::mesh::{InstanceTransform, MeshVertex};
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::{Primitive, PrimitiveSpec};
-use crate::node_graph::transform::Transform;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
+use manifold_node_engine::scene::transform::Transform;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction, GpuSamplerDesc,
     GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -84,7 +84,7 @@ struct HistoryCaptureUniforms {
     _pad: [u32; 2],
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RenderMeshDiagram,
     type_id: "node.render_mesh_diagram",
     purpose: "Render sparse evaluated MeshVertex samples as a diagram or current-surface depth through the authored Camera. Optional shared surface and scene depth occlude diagram marks; an optional InstanceTransform array repeats fragments, ghosts, displacement arrows and motion trails per copy so echo chains are visible. This presentation node contains no modifier math.",
@@ -193,8 +193,8 @@ const SHADER: &str = concat!(include_str!("shaders/sample_face_common.wgsl"), "\
 const CAPTURE_SHADER: &str = include_str!("shaders/history_capture.wgsl");
 
 inventory::submit! {
-    crate::plugin_prewarm::PipelinePrewarm {
-        purpose: crate::plugin_prewarm::PipelinePrewarmPurpose::MathView,
+    manifold_node_engine::runtime::plugin_prewarm::PipelinePrewarm {
+        purpose: manifold_node_engine::runtime::plugin_prewarm::PipelinePrewarmPurpose::MathView,
         run: RenderMeshDiagram::prewarm_pipelines,
     }
 }
@@ -730,7 +730,7 @@ impl Primitive for RenderMeshDiagram {
     fn output_canvas_scale(
         &self,
         port: &str,
-        _p: &crate::node_graph::effect_node::ParamValues,
+        _p: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         matches!(port, "color" | "depth").then_some((1, 1))
     }
@@ -791,8 +791,8 @@ mod depth_tests;
 mod prewarm_source_tests {
     #[test]
     fn pipeline_prewarm_registration_uses_direct_prewarmer() {
-        let entries: Vec<_> = inventory::iter::<crate::plugin_prewarm::PipelinePrewarm>
-            .into_iter().filter(|entry| entry.purpose == crate::plugin_prewarm::PipelinePrewarmPurpose::MathView).collect();
+        let entries: Vec<_> = inventory::iter::<manifold_node_engine::runtime::plugin_prewarm::PipelinePrewarm>
+            .into_iter().filter(|entry| entry.purpose == manifold_node_engine::runtime::plugin_prewarm::PipelinePrewarmPurpose::MathView).collect();
         assert_eq!(entries.len(), 1);
         assert!(std::ptr::fn_addr_eq(entries[0].run,
             super::RenderMeshDiagram::prewarm_pipelines as fn(&manifold_gpu::GpuDevice)));

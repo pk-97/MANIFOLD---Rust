@@ -1,10 +1,10 @@
-use crate::node_graph::freeze::region::testkit::cycle_contains_array;
-use crate::node_graph::freeze::region::*;
+use manifold_node_engine::freeze::region::testkit::cycle_contains_array;
+use manifold_node_engine::freeze::region::*;
 
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphWire};
 
-use crate::node_graph::PrimitiveRegistry;
-use crate::node_graph::ports::PortType;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::ports::PortType;
 
 fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
 

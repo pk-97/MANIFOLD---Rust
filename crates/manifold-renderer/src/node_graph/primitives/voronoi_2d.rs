@@ -18,10 +18,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -36,7 +36,7 @@ struct VoronoiUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Voronoi2D,
     type_id: "node.voronoi_2d",
     purpose: "Pure generator. 2D Worley / Voronoi cellular noise. `out` packs F1 in R (distance to nearest feature point), F2 in G (second-nearest), F2-F1 in B (cell-edge factor — high at boundaries), and a per-cell stable random hash in A (same value across every pixel inside a cell, uncorrelated between cells — drives per-cell variation: density threshold, twinkle frequency, per-cell colour, per-cell size). `cell_id` carries the F1-winning cell's integer coordinate in RG (constant within a Voronoi region) — feed RG + a seed into node.hash_field_by_seed for beat-reseeded per-cell composites (Voronoi Prism). Both outputs are independently optional: read only what you need and the other slot isn't allocated. Foundation for cellular patterns, cracked-glass, stained-glass, stars (sparse jitter + per-star twinkle), foam, fire embers, procedural tiles.",
@@ -192,12 +192,12 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::Voronoi2D;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId, compile};
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::parameters::ParamValue;
-    use crate::node_graph::{Executor, FinalOutput, FrameTime, MetalBackend, NodeInstanceId};
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::parameters::ParamValue;
+    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -224,7 +224,7 @@ mod gpu_tests {
     /// Render one Voronoi2D frame at the given params; return raw fp16
     /// pixels in row-major rgba order.
     fn run_voronoi(scale: f32, jitter: f32, w: u32, h: u32) -> Vec<u16> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();

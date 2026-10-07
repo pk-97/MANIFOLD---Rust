@@ -28,7 +28,7 @@ use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::PresetTypeId;
-use manifold_renderer::preset_loader::clear_project_presets;
+use manifold_node_engine::load::preset_loader::clear_project_presets;
 
 #[test]
 fn stock_preset_outer_params_and_driver_survive_project_reload() {

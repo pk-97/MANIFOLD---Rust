@@ -13,8 +13,8 @@ mod fluid_objects;
 use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain, liquid_dial_params};
 use manifold_core::scene_exposure::{SceneExposureMetadataProvider, SceneParamMetadata};
 
-use crate::node_graph::parameters::ParamType;
-use crate::node_graph::persistence::PrimitiveRegistry;
+use manifold_node_engine::parameters::ParamType;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use crate::node_graph::material_inspector::material_param_role;
 
 static SCENE_EXPOSURE_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> =
@@ -1088,7 +1088,7 @@ mod tests {
 }
 
 inventory::submit! {
-    crate::node_graph::exposure_source::SceneExposureSource {
+    manifold_node_engine::scene::exposure_source::SceneExposureSource {
         metadata: metadata_for_node_type,
         look: look_metadata,
     }
@@ -1098,10 +1098,10 @@ inventory::submit! {
 mod exposure_source_tests {
     #[test]
     fn scene_exposure_registration_preserves_metadata() {
-        assert_eq!(super::look_metadata(), crate::node_graph::exposure_source::look_metadata());
+        assert_eq!(super::look_metadata(), manifold_node_engine::scene::exposure_source::look_metadata());
         for type_id in ["node.scene_object", "node.pbr_material", "node.camera", "missing"] {
             assert_eq!(super::metadata_for_node_type(type_id),
-                crate::node_graph::exposure_source::metadata_for_node_type(type_id));
+                manifold_node_engine::scene::exposure_source::metadata_for_node_type(type_id));
         }
     }
 }

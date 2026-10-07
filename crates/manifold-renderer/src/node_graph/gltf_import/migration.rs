@@ -396,18 +396,18 @@ fn migrate_gltf_ao_mask(def: &mut EffectGraphDef) -> bool {
 
 
 inventory::submit! {
-    crate::node_graph::migration::GraphMigration {
+    manifold_node_engine::load::migration::GraphMigration {
         name: "migrate_gltf_anim_v2",
-        stage: crate::node_graph::migration::MigrationStage::BeforeFlatten,
+        stage: manifold_node_engine::load::migration::MigrationStage::BeforeFlatten,
         order: 200,
         apply: migrate_gltf_anim_v2,
     }
 }
 
 inventory::submit! {
-    crate::node_graph::migration::GraphMigration {
+    manifold_node_engine::load::migration::GraphMigration {
         name: "migrate_gltf_ao_mask",
-        stage: crate::node_graph::migration::MigrationStage::BeforeFlatten,
+        stage: manifold_node_engine::load::migration::MigrationStage::BeforeFlatten,
         order: 210,
         apply: migrate_gltf_ao_mask,
     }

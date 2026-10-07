@@ -12,11 +12,11 @@
 //! CPU-write into shared MTLBuffer, sentinel-padded inactive tail —
 //! same family as `node.grid_edges` / `node.platonic_solid_edges`.
 
-use crate::mesh::{EdgePair, MeshVertex};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::{EdgePair, MeshVertex};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: EdgesFromMesh,
     type_id: "node.mesh_edges",
     purpose: "Emit the per-triangle wireframe edge topology of a flat triangle-list Array<MeshVertex> as Array<EdgePair>: triangle t contributes (3t, 3t+1), (3t+1, 3t+2), (3t+2, 3t). Pure index arithmetic — glTF meshes are unindexed flat triangle lists (gltf_load expands indices), so no vertex data is read and edge count equals vertex count. Pair with node.flatten_3d (same mesh) into node.draw_lines for a true mesh wireframe of any imported or procedural triangle mesh. Interior edges shared by two triangles are emitted twice (flat verts carry no adjacency) — under draw_lines' additive blend shared edges draw ~2x brighter; dedup would need adjacency reconstruction (future work if renders demand it). `active_count` (input-only) overrides the vertex count used for topology when the source buffer's capacity exceeds the asset's real loaded vertex count — when unwired, edge count tracks the BUFFER capacity, which produces degenerate (0,0)-style dot edges from the zero-filled tail if max_capacity was sized larger than the asset.",
@@ -58,7 +58,7 @@ impl Primitive for EdgesFromMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "edges" {
@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn output_capacity_matches_vertex_capacity() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = EdgesFromMesh::new();
         let params = ParamValues::default();
 

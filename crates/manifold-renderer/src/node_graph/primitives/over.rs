@@ -10,11 +10,11 @@
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Over,
     type_id: "node.over",
     purpose: "Porter-Duff over for premultiplied colour: out = top + bottom·(1 − top.a), alpha included. Puts `top` in front of `bottom` using top's own coverage. render_scene's colour is premultiplied with alpha 0 where nothing was drawn, so over(top: scene, bottom: node.camera_sky) draws a sky behind a 3D scene. Straight-alpha (unpremultiplied) inputs give fringed edges.",
@@ -82,8 +82,8 @@ mod gpu_tests {
     };
 
     use super::Over;
-    use crate::node_graph::primitives::standalone_pipeline::standalone_pipeline;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn upload(device: &GpuDevice, w: u32, h: u32, px: &[[f32; 4]]) -> GpuTexture {
         let halves: Vec<f16> = px.iter().flatten().map(|&v| f16::from_f32(v)).collect();
@@ -106,7 +106,7 @@ mod gpu_tests {
     /// whose coverage runs 0 → 1 across x, over an opaque bottom.
     #[test]
     fn over_matches_cpu() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (32u32, 16u32);
         let n = (w * h) as usize;
         let top: Vec<[f32; 4]> = (0..n)

@@ -17,10 +17,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -31,7 +31,7 @@ struct RadialOffsetFieldUniforms {
     _pad0: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RadialOffsetField,
     type_id: "node.radial_offset_field",
     purpose: "Directional displacement field generator. Radial mode: per-pixel direction points outward from the center, scaled by a center→edge falloff mask. Linear mode: a uniform direction at `angle` degrees. Output R = dir.x, G = dir.y (signed), B = 0, A = 1; |dir| ≤ 1. The reusable direction field behind the radial-warp family — feed it as the velocity field to node.rgb_split (chromatic aberration), node.uv_displace_by_flow (lens / zoom warp), node.texture_advect. The displacement magnitude and ± sign are applied by the consumer.",

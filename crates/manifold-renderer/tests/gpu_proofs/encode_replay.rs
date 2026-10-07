@@ -7,14 +7,11 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuReplayStats, GpuTextureFormat};
-use manifold_renderer::gpu_encoder::GpuEncoder;
-use manifold_renderer::node_graph::matter::MatterTickStats;
-use manifold_renderer::node_graph::{
-    Backend, EffectGraphDefExt, Executor, FrameTime, Graph, MetalBackend, ParamValue,
-    StateStore, compile, pre_allocate_resources,
-};
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::water::matter::MatterTickStats;
+use manifold_node_engine::{exec::backend::Backend, persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, parameters::ParamValue, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 use crate::substeps::{
@@ -98,7 +95,7 @@ fn run_graph(
         Dump::All => exec.set_dump_all(true),
     }
     let mut state = StateStore::new();
-    let particle_bytes = N * std::mem::size_of::<manifold_renderer::particles::Particle>();
+    let particle_bytes = N * std::mem::size_of::<manifold_node_engine::particles::Particle>();
     let mut outcome = Outcome { frames: Vec::new(), stats: GpuReplayStats::default(), stats_by_frame: Vec::new() };
     for frame in 0..frames {
         change(frame, &mut graph);
@@ -326,7 +323,7 @@ fn run_preset(
     let mut manifest = ParamManifest::from_params(
         def.preset_metadata.as_ref().map(|m| m.params.iter().cloned().map(Param::bundled).collect()).unwrap_or_default(),
     );
-    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &json,
         &registry,

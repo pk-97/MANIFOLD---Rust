@@ -2,11 +2,11 @@ use super::*;
 use super::assembly::*;
 use super::merge::*;
 use super::scene::*;
-use crate::node_graph::PrimitiveRegistry;
-use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
 use crate::node_graph::gltf_load::GltfImportSummary;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
-use crate::preset_runtime::PresetRuntime;
+use manifold_node_engine::runtime::PresetRuntime;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::BindingTarget;
 use super::synthetic_glbs::*;
@@ -773,7 +773,7 @@ fn tiger_lily_compound_import_preserves_material_sources_and_totals() {
 
 #[test]
 fn legacy_compound_import_migrates_to_editable_children_once() {
-    use crate::node_graph::persistence::EffectGraphDefExt;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
     let path = azalea_fixture_path();
     let (mut def, _) = assemble_import_graph(&path).unwrap();
     let group = def.nodes.iter_mut().find(|node| node.node_id.as_str().starts_with("object_") && node.group.is_some()).unwrap().group.as_mut().unwrap();
@@ -872,7 +872,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         anisotropy_texture: None,
         dispersion: 0.0,
         volume_thickness_factor: 0.0,
-        volume_attenuation_distance: crate::node_graph::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+        volume_attenuation_distance: manifold_node_engine::scene::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
         volume_attenuation_color: [1.0, 1.0, 1.0],
         volume_thickness_texture: None,
         was_blend: false,
@@ -884,7 +884,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
         occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
         emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
-        extension_maps: [crate::node_graph::material::MaterialMapInfo::default(); 14],
+        extension_maps: [manifold_node_engine::scene::material::MaterialMapInfo::default(); 14],
         animations: Vec::new(),
         skin: None,
         morph: None,
@@ -1044,7 +1044,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
     // material producers while AO/DOF remain separate presentation boxes —
     // not a flat wall of nodes. This is the legibility payoff, verified at the
     // snapshot layer (the pixels still want Peter's eyes on a real model).
-    let snap = crate::node_graph::GraphSnapshot::from_def(&def)
+    let snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(&def)
         .expect("editor snapshot builds from the grouped def");
     let snap_groups: Vec<_> =
         snap.nodes.iter().filter(|n| n.group.is_some()).collect();
@@ -1305,7 +1305,7 @@ pub(super) fn full_material(material_index: u32, name: &str, verts: u32) -> supe
         anisotropy_texture: None,
         dispersion: 0.0,
         volume_thickness_factor: 0.0,
-        volume_attenuation_distance: crate::node_graph::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+        volume_attenuation_distance: manifold_node_engine::scene::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
         volume_attenuation_color: [1.0, 1.0, 1.0],
         volume_thickness_texture: None,
         was_blend: false,
@@ -1317,7 +1317,7 @@ pub(super) fn full_material(material_index: u32, name: &str, verts: u32) -> supe
         mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
         occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
         emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
-        extension_maps: [crate::node_graph::material::MaterialMapInfo::default(); 14],
+        extension_maps: [manifold_node_engine::scene::material::MaterialMapInfo::default(); 14],
         animations: Vec::new(),
         skin: None,
         morph: None,
@@ -1660,7 +1660,7 @@ fn bug303_stamped_transform_survives_preset_runtime_instantiation() {
                 .get_node(inst)
                 .and_then(|n| n.params.get(*param).cloned())
                 .unwrap_or_else(|| panic!("transform_0.{param} readable post-build"));
-            let crate::node_graph::parameters::ParamValue::Float(got) = got else {
+            let manifold_node_engine::parameters::ParamValue::Float(got) = got else {
                 panic!("transform_0.{param} is a Float param, got {got:?}");
             };
             assert!(
@@ -3142,10 +3142,10 @@ fn animation_cards_are_one_linked_section_per_glb() {
     assert_eq!(targets.len(), 2, "the two bindings target distinct nodes");
 
     // The fan-out shape must be lint-legal end to end.
-    use crate::node_graph::persistence::EffectGraphDefExt;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
     let registry = PrimitiveRegistry::with_builtin();
-    let graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("import graph must build");
-    let (errors, _warnings) = crate::node_graph::validate::check_card_lints(&def, Some(&graph));
+    let graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("import graph must build");
+    let (errors, _warnings) = manifold_node_engine::validate::check_card_lints(&def, Some(&graph));
     assert!(errors.is_empty(), "card lints must accept the shared-anim import: {errors:?}");
 
     // Merging the SAME animated file into this scene must mint its own
@@ -3175,15 +3175,15 @@ fn animation_cards_are_one_linked_section_per_glb() {
 /// the same lint the import path uses.
 #[test]
 fn animated_and_rigged_import_passes_card_lints() {
-    use crate::node_graph::persistence::EffectGraphDefExt;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/skeleton_animated.glb");
     let (def, _report) =
         super::assemble_import_graph(&path).expect("assemble skeleton_animated.glb");
     let registry = PrimitiveRegistry::with_builtin();
-    let graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("import graph must build");
+    let graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("import graph must build");
     let (errors, _warnings) =
-        crate::node_graph::validate::check_card_lints(&def, Some(&graph));
+        manifold_node_engine::validate::check_card_lints(&def, Some(&graph));
     assert!(
         errors.is_empty(),
         "card lints must accept the assembled animated+rigged import: {errors:?}"
@@ -3374,7 +3374,7 @@ fn hostile_fixture_paths() -> Vec<std::path::PathBuf> {
 
 #[test]
 fn hostile_fixtures_assemble_validate_and_build() {
-    use crate::node_graph::persistence::EffectGraphDefExt;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
     for path in hostile_fixture_paths() {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         let (def, _report) = super::assemble_import_graph(&path)
@@ -3382,10 +3382,10 @@ fn hostile_fixtures_assemble_validate_and_build() {
         let registry = PrimitiveRegistry::with_builtin();
         let graph = def
             .clone()
-            .into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default())
+            .into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
             .unwrap_or_else(|e| panic!("{name}: import graph failed to build: {e:?}"));
         let (errors, _warnings) =
-            crate::node_graph::validate::check_card_lints(&def, Some(&graph));
+            manifold_node_engine::validate::check_card_lints(&def, Some(&graph));
         assert!(errors.is_empty(), "{name}: card lints rejected the import: {errors:?}");
         PresetRuntime::from_def(def, &registry, None)
             .unwrap_or_else(|e| panic!("{name}: PresetRuntime::from_def failed: {e:?}"));
@@ -3401,7 +3401,7 @@ fn hostile_fixtures_assemble_validate_and_build() {
 /// its skeleton pose and must NOT get a rigid animation source.
 #[test]
 fn hostile_fixtures_merge_into_existing_scene() {
-    use crate::node_graph::persistence::EffectGraphDefExt;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
     let (target, _report) = super::assemble_import_graph(&azalea_fixture_path())
         .expect("assemble azalea target scene");
     let (render_id, existing_objects) = render_scene_objects(&target);
@@ -3440,10 +3440,10 @@ fn hostile_fixtures_merge_into_existing_scene() {
         let registry = PrimitiveRegistry::with_builtin();
         let graph = merged
             .clone()
-            .into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default())
+            .into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
             .unwrap_or_else(|e| panic!("{name}: merged graph failed to build: {e:?}"));
         let (errors, _warnings) =
-            crate::node_graph::validate::check_card_lints(&merged, Some(&graph));
+            manifold_node_engine::validate::check_card_lints(&merged, Some(&graph));
         assert!(errors.is_empty(), "{name}: card lints rejected the merged def: {errors:?}");
         PresetRuntime::from_def(merged, &registry, None)
             .unwrap_or_else(|e| panic!("{name}: merged PresetRuntime build failed: {e:?}"));
@@ -3471,7 +3471,7 @@ fn hostile_fixtures_merge_into_existing_scene() {
 /// covered by `hostile_fixtures_merge_into_existing_scene`'s general sweep).
 #[test]
 fn merge_local_k_offset_avoids_colliding_with_the_targets_own_material_handle() {
-    use crate::node_graph::persistence::EffectGraphDefExt;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
     // Target: one object, its own material's color_r = 0.8 (full_material's
     // default) — this is what a colliding resolution would WRONGLY return.
     let target = scene_def_with_bbox_half_extent(1.0);
@@ -3514,8 +3514,8 @@ fn merge_local_k_offset_avoids_colliding_with_the_targets_own_material_handle() 
     }
 
     let registry = PrimitiveRegistry::with_builtin();
-    let graph = merged.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("merged graph must build");
-    let (errors, _warnings) = crate::node_graph::validate::check_card_lints(&merged, Some(&graph));
+    let graph = merged.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("merged graph must build");
+    let (errors, _warnings) = manifold_node_engine::validate::check_card_lints(&merged, Some(&graph));
     assert!(errors.is_empty(), "card lints rejected the merged def: {errors:?}");
 
     // The incoming material's own "color_r" binding must resolve to ITS OWN
@@ -3536,7 +3536,7 @@ fn merge_local_k_offset_avoids_colliding_with_the_targets_own_material_handle() 
     assert!(
         matches!(
             instance.params.get("color_r"),
-            Some(crate::node_graph::parameters::ParamValue::Float(v)) if (*v - 0.15).abs() < 1e-6
+            Some(manifold_node_engine::parameters::ParamValue::Float(v)) if (*v - 0.15).abs() < 1e-6
         ),
         "color_r binding must resolve to the INCOMING material's own node (0.15), not the \
          target's colliding one (0.8) — got {:?}",
@@ -3788,7 +3788,7 @@ fn round_trip_preserves_blend_alpha_mode_and_opacity_binding() {
 #[test]
 fn corrupted_assembler_output_fails_validation_naming_the_node() {
     use super::gltf_load::GltfMaterialInfo;
-    use crate::node_graph::{ValidateKind, validate_def};
+    use manifold_node_engine::validate::{ValidateKind, validate_def};
 
     let mat = |material_index: u32, name: &str, verts: u32, tex: Option<u32>| GltfMaterialInfo {
         material_index,
@@ -3847,7 +3847,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         anisotropy_texture: None,
         dispersion: 0.0,
         volume_thickness_factor: 0.0,
-        volume_attenuation_distance: crate::node_graph::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+        volume_attenuation_distance: manifold_node_engine::scene::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
         volume_attenuation_color: [1.0, 1.0, 1.0],
         volume_thickness_texture: None,
         was_blend: false,
@@ -3859,7 +3859,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
         occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
         emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
-        extension_maps: [crate::node_graph::material::MaterialMapInfo::default(); 14],
+        extension_maps: [manifold_node_engine::scene::material::MaterialMapInfo::default(); 14],
         animations: Vec::new(),
         skin: None,
         morph: None,
@@ -3911,7 +3911,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
     }
 
     let registry = PrimitiveRegistry::with_builtin();
-    let device = crate::gpu::test_gpu_device("gltf_import tests");
+    let device = manifold_node_engine::gpu::context::test_gpu_device("gltf_import tests");
     let report = validate_def(&def, &registry, ValidateKind::Generator, &device);
 
     assert!(
@@ -3960,7 +3960,7 @@ fn render_scene_with_three_objects_loads_object_port() {
     // that only exists once render_scene reconfigures to objects >= 3,
     // must load clean (reconfigure runs before port validation) —
     // same proof, new port.
-    use crate::node_graph::persistence::EffectGraphDefExt;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
 
     let mut render = plain_node(0, "render", "node.render_scene", "render");
     render.params.insert("objects".to_string(), int(3));
@@ -3984,7 +3984,7 @@ fn render_scene_with_three_objects_loads_object_port() {
     // wiring, which this minimal two-node def deliberately omits — out
     // of scope for the port-surface regression.)
     let registry = PrimitiveRegistry::with_builtin();
-    let graph = def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect(
+    let graph = def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect(
         "render_scene with objects=3 must accept an object_2 wire at load \
          (reconfigure runs before port validation)",
     );
@@ -4271,15 +4271,15 @@ fn render_import_def_at_progress(
     duration_s: f32,
     label: &str,
 ) -> Vec<u8> {
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::preset_context::PresetContext;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::runtime::preset_context::PresetContext;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_gpu::GpuTextureFormat;
 
     let beats = progress * duration_s * 2.0;
     let seconds = (beats * 0.5) as f64;
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let format = GpuTextureFormat::Rgba16Float;
     let registry = PrimitiveRegistry::with_builtin();
     let mut generator =
@@ -4656,9 +4656,9 @@ fn rigid_multi_node_held_out_fixture_renders_four_distinct_poses() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn skinned_import_hot_path_stays_under_20ms_per_frame() {
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::preset_context::PresetContext;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::runtime::preset_context::PresetContext;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_gpu::GpuTextureFormat;
 
     for asset in ["CesiumMan.glb", "Fox.glb"] {
@@ -4670,7 +4670,7 @@ fn skinned_import_hot_path_stays_under_20ms_per_frame() {
         let (def, _report) = assemble_import_graph(&path).expect("assemble skinned import");
 
         let (w, h) = (512u32, 512u32);
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let format = GpuTextureFormat::Rgba16Float;
         let registry = PrimitiveRegistry::with_builtin();
         let mut generator =
@@ -4981,9 +4981,9 @@ fn build_out_of_range_uv_glb() -> Vec<u8> {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn material_maps_repeat_out_of_range_uvs() {
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::preset_context::PresetContext;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::runtime::preset_context::PresetContext;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_gpu::GpuTextureFormat;
 
     let glb = build_out_of_range_uv_glb();
@@ -4993,7 +4993,7 @@ fn material_maps_repeat_out_of_range_uvs() {
     let (def, _report) = assemble_import_graph(&path).expect("assemble uv-wrap fixture");
 
     let (w, h) = (128u32, 128u32);
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let mut generator = PresetRuntime::from_def_with_device(
         def,
@@ -5100,9 +5100,9 @@ fn amg_gt3_fixture_path() -> std::path::PathBuf {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate() {
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::preset_context::PresetContext;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::runtime::preset_context::PresetContext;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_core::flatten::flatten_groups;
     use manifold_gpu::GpuTextureFormat;
 
@@ -5142,7 +5142,7 @@ fn damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate() {
     }
 
     let (w, h) = (512u32, 512u32);
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let format = GpuTextureFormat::Rgba16Float;
     let registry = PrimitiveRegistry::with_builtin();
     let mut generator =
@@ -5289,9 +5289,9 @@ fn damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn amg_gt3_glb_imports_and_renders_without_error_if_present() {
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::preset_context::PresetContext;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::runtime::preset_context::PresetContext;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_gpu::GpuTextureFormat;
 
     let path = amg_gt3_fixture_path();
@@ -5315,7 +5315,7 @@ fn amg_gt3_glb_imports_and_renders_without_error_if_present() {
     assert_eq!(report.material_count, 78);
 
     let (w, h) = (512u32, 512u32);
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let format = GpuTextureFormat::Rgba16Float;
     let registry = PrimitiveRegistry::with_builtin();
     let mut generator =
@@ -5432,9 +5432,9 @@ fn rosetta_stone_imports_scene_object_shaped_with_no_migration_needed() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn rosetta_stone_import_renders_gpu_proof() {
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::preset_context::PresetContext;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::runtime::preset_context::PresetContext;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_gpu::GpuTextureFormat;
 
     let path = rosetta_stone_fixture_path();
@@ -5450,7 +5450,7 @@ fn rosetta_stone_import_renders_gpu_proof() {
     println!("the_rosetta_stone import report: object_count={}", report.object_count);
 
     let (w, h) = (512u32, 512u32);
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let format = GpuTextureFormat::Rgba16Float;
     let registry = PrimitiveRegistry::with_builtin();
     let mut generator =
@@ -5563,12 +5563,12 @@ fn rosetta_stone_import_renders_gpu_proof() {
 /// numeric gate) — renders `def` at time 0 into a fresh RGBA buffer.
 #[cfg(feature = "gpu-proofs")]
 fn render_once(def: EffectGraphDef, w: u32, h: u32, label: &str) -> Vec<u8> {
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::preset_context::PresetContext;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::runtime::preset_context::PresetContext;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_gpu::GpuTextureFormat;
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let format = GpuTextureFormat::Rgba16Float;
     let registry = PrimitiveRegistry::with_builtin();
     let mut generator =

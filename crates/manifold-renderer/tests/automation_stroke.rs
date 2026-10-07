@@ -3,7 +3,7 @@
 #![cfg(all(target_os = "macos", feature = "gpu-proofs"))]
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTextureFormat};
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::Color32;
 

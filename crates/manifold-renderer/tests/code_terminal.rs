@@ -7,11 +7,9 @@
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
-use manifold_renderer::node_graph::loaded_preset_view_by_id;
-use manifold_renderer::node_graph::mesh_change::PreparedMeshRules;
-use manifold_renderer::node_graph::{
-    BoundGraph, EffectGraphDefExt, PrimitiveRegistry, ResolvedBinding, compile,
-};
+use manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id;
+use manifold_node_engine::scene::mesh_change::PreparedMeshRules;
+use manifold_node_engine::{exec::bound_graph::BoundGraph, persistence::EffectGraphDefExt, persistence::PrimitiveRegistry, param_binding::ResolvedBinding, exec::execution_plan::compile};
 
 const PRESET_JSON: &str = include_str!("../assets/effect-presets/CodeTerminal.json");
 
@@ -44,7 +42,7 @@ fn manifest(def: &EffectGraphDef, values: &[(&str, f32)]) -> ParamManifest {
 fn binding_graph(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
-) -> (manifold_renderer::node_graph::Graph, BoundGraph) {
+) -> (manifold_node_engine::graph::Graph, BoundGraph) {
     let mut graph = def
         .clone()
         .into_graph(registry, &PreparedMeshRules::default())
@@ -80,7 +78,7 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
     compile(&graph).expect("CodeTerminal graph compiles");
     let base = loaded_preset_view_by_id(&manifold_core::PresetTypeId::new("CodeTerminal")).unwrap();
     assert!(
-        manifold_renderer::node_graph::freeze::install::fused_view_for(&roundtrip, base).is_some(),
+        manifold_node_engine::freeze::install::fused_view_for(&roundtrip, base).is_some(),
         "CodeTerminal graph supports fusion"
     );
     assert!(
@@ -129,7 +127,7 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
             .expect("bound target node exists");
         let node = graph.get_node(instance).expect("bound target node live");
         let actual = match node.params.get(param).expect("bound target param") {
-            manifold_renderer::node_graph::ParamValue::Float(value) => *value,
+            manifold_node_engine::parameters::ParamValue::Float(value) => *value,
             value => panic!("{node_id}.{param} has unexpected value {value:?}"),
         };
         assert!(
@@ -147,7 +145,7 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
             .expect("terminal node live")
             .params
             .get("layout"),
-        Some(&manifold_renderer::node_graph::ParamValue::Enum(2)),
+        Some(&manifold_node_engine::parameters::ParamValue::Enum(2)),
         "terminal.layout binding"
     );
 
@@ -199,7 +197,7 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
         .expect("legacy terminal node live");
     assert_eq!(
         terminal.params.get("layout"),
-        Some(&manifold_renderer::node_graph::ParamValue::Enum(0)),
+        Some(&manifold_node_engine::parameters::ParamValue::Enum(0)),
         "absent layout defaults to Single"
     );
 }
@@ -207,9 +205,7 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
 #[cfg(feature = "gpu-proofs")]
 mod gpu {
     use super::*;
-    use manifold_renderer::node_graph::{
-        Backend, Executor, FrameTime, MetalBackend, StateStore, pre_allocate_resources,
-    };
+    use manifold_node_engine::{exec::backend::Backend, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, state_store::StateStore, load::graph_loader::pre_allocate_resources};
     const W: u32 = 960;
     const H: u32 = 540;
     const FMT: manifold_gpu::GpuTextureFormat = manifold_gpu::GpuTextureFormat::Rgba16Float;
@@ -218,13 +214,13 @@ mod gpu {
     use manifold_gpu::{
         GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage,
     };
-    use manifold_renderer::gpu_encoder::GpuEncoder;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_renderer::headless_readback::{
         encode_rgba8_png, readback_raw_halves, readback_srgb_rgba8,
     };
-    use manifold_renderer::node_graph::freeze::install::fused_view_for;
-    use manifold_renderer::node_graph::loaded_preset_view_by_id;
-    use manifold_renderer::render_target::RenderTarget;
+    use manifold_node_engine::freeze::install::fused_view_for;
+    use manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     #[derive(Clone, Copy)]
     struct Controls {
@@ -412,15 +408,15 @@ mod gpu {
     struct Harness {
         device: std::sync::Arc<GpuDevice>,
         input: GpuTexture,
-        graph: manifold_renderer::node_graph::Graph,
-        plan: manifold_renderer::node_graph::ExecutionPlan,
+        graph: manifold_node_engine::graph::Graph,
+        plan: manifold_node_engine::exec::execution_plan::ExecutionPlan,
         bound: BoundGraph,
         executor: Executor,
         state: StateStore,
-        output_slot: manifold_renderer::node_graph::Slot,
-        cells_resource: manifold_renderer::node_graph::ResourceId,
-        columns_resource: manifold_renderer::node_graph::ResourceId,
-        rows_resource: manifold_renderer::node_graph::ResourceId,
+        output_slot: manifold_node_engine::bindings::Slot,
+        cells_resource: manifold_node_engine::exec::execution_plan::ResourceId,
+        columns_resource: manifold_node_engine::exec::execution_plan::ResourceId,
+        rows_resource: manifold_node_engine::exec::execution_plan::ResourceId,
     }
 
     impl Harness {
@@ -526,8 +522,8 @@ mod gpu {
             for resource in [columns_resource, rows_resource] {
                 let slot = backend.acquire(
                     resource,
-                    manifold_renderer::node_graph::ports::PortType::Scalar(
-                        manifold_renderer::node_graph::ports::ScalarType::F32,
+                    manifold_node_engine::ports::PortType::Scalar(
+                        manifold_node_engine::ports::ScalarType::F32,
                     ),
                     None,
                     (W, H),

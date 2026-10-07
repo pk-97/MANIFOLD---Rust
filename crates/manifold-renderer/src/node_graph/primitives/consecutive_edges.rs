@@ -18,10 +18,10 @@
 
 use std::borrow::Cow;
 
-use crate::mesh::EdgePair;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::EdgePair;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Largest legal vertex count and matching output capacity. 64 covers
 /// the Circle variant of ConcentricTunnel (a 64-gon approximation)
@@ -29,7 +29,7 @@ use crate::node_graph::primitive::Primitive;
 /// the legacy `polygon_shape` primitive whose role this atom takes over.
 pub const CONSECUTIVE_EDGES_MAX_CAPACITY: u32 = 64;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ConsecutiveEdges,
     type_id: "node.edge_pairs",
     purpose: "Generate consecutive-pair edge topology [(0,1), (1,2), …, (N-2, N-1)] from a vertex count, optionally closed via (N-1, 0). The polyline-topology atom: pair with a points source (generate_range + array_math + pack_curve_xy, or any custom CurvePoint producer) and node.draw_lines to draw a closed regular polygon, an open polyline, or any topology where edges connect consecutive vertex indices. `count` is port-shadow-param so an upstream variable-N source (e.g. a mux driving the active polygon side count) drives the active edge count. Output capacity is `max_capacity`; slots beyond the active count are EdgePair::SENTINEL so downstream draw_lines filters them out — drawing exactly the active topology, never garbage from the inactive tail.",
@@ -80,7 +80,7 @@ impl Primitive for ConsecutiveEdges {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "edges" {
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn output_capacity_reads_max_capacity_param() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = ConsecutiveEdges::new();
 
         let mut params = ParamValues::default();

@@ -7,8 +7,8 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use crate::mesh::{MeshVertex, Vec4Vertex};
-use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
+use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
+use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
 use crate::node_graph::primitives::{
     MeshSpatialMask, MeshStaggerEnvelope, MorphMesh, RemapCutWeights, RemapMeshCut,
 };
@@ -578,7 +578,7 @@ const RECON_STOCKS: &[(&str, &str)] = &[
 
 #[test]
 fn stock_fragment_masks_are_vertex_continuous_through_cut_remap_and_morph() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let source = source_mesh();
     let target = shifted_fragment_mesh();
     let maps = cut_maps();
@@ -631,7 +631,7 @@ fn stock_fragment_masks_are_vertex_continuous_through_cut_remap_and_morph() {
 
 #[test]
 fn recon_stagger_modes_are_vertex_continuous_through_cut_remap_and_morph() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let source = source_mesh();
     let target = shifted_fragment_mesh();
     let maps = cut_maps();

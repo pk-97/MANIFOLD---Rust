@@ -1,15 +1,15 @@
-use crate::node_graph::primitives::testkit as water_nodes;
+use manifold_node_engine::water::primitives::testkit as water_nodes;
 use std::borrow::Cow;
 
 
-use crate::node_graph::primitives::particle_volume::ParticleVolume;
-use crate::node_graph::Slot;
-use crate::node_graph::ParamValues;
-use crate::node_graph::fluid_particles::{CellRange, FluidBlob, FluidParticle};
-use crate::node_graph::ParamValue;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::water::primitives::particle_volume::ParticleVolume;
+use manifold_node_engine::bindings::Slot;
+use manifold_node_engine::exec::effect_node::ParamValues;
+use manifold_node_engine::water::fluid_particles::{CellRange, FluidBlob, FluidParticle};
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::primitive::Primitive;
 
-use crate::testkit::liquid_surface::*;
+use manifold_node_engine::testkit::liquid_surface::*;
 
 
 
@@ -46,11 +46,11 @@ fn fluid_fill_pits_expanded_band_matches_all_blobs() {
 /// liquid into solid padding before the final clamp.
 #[test]
 fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
-    use crate::node_graph::liquid::lattice::{LiquidLattice, PADDING_NODES};
+    use manifold_node_engine::water::liquid::lattice::{LiquidLattice, PADDING_NODES};
 
     const OPEN_TOP: u32 = 63 & !(1 << 3);
     let mut harness = Harness::new();
-    let layout = crate::node_graph::fluid::domain_layout(None, 1.0, 8).expect("layout");
+    let layout = manifold_node_engine::water::fluid::domain_layout(None, 1.0, 8).expect("layout");
     let domain = LiquidLattice::from_layout(&layout);
     let (cell, solid_nodes, cells) = (domain.cell_size(), domain.nodes(), domain.cells());
     let bounds = domain.bounds();
@@ -163,8 +163,8 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
 
 #[test]
 fn fluid_mesh_grid_native_particle_field_matches_reference() {
-    let layout = crate::node_graph::fluid::domain_layout(None, 2.0, 8).unwrap();
-    let mesh = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+    let layout = manifold_node_engine::water::fluid::domain_layout(None, 2.0, 8).unwrap();
+    let mesh = manifold_node_engine::water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
     // Odd cell count, even node count and native half-cell origin, including
     // sparse blob bounds and the expanded closing band at subdivision two.
     for band in [0.0, 0.5] {
@@ -251,16 +251,16 @@ fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
     use manifold_core::effect_graph_def::EffectGraphDef;
     use serde_json::{Value, json};
 
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let json = crate::node_graph::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
         "WaterDamBreakGpuFlip",
     ))
     .expect("Dam Break bundled");
     let mut preset: Value = serde_json::from_str(&json).expect("Dam Break parses");
-    let surface = crate::node_graph::liquid::conformance::json_node_mut(&mut preset, "surface")
+    let surface = manifold_node_engine::water::liquid::conformance::json_node_mut(&mut preset, "surface")
         .expect("the Liquid Surface group");
     let group = &mut surface["group"];
-    let last = crate::node_graph::liquid::conformance::json_node_mut(group, "liquid_normals")
+    let last = manifold_node_engine::water::liquid::conformance::json_node_mut(group, "liquid_normals")
         .expect("surface normals")["id"].clone();
     let out = group["nodes"].as_array().expect("group nodes").iter()
         .find(|node| node["typeId"] == "system.group_output")
@@ -282,7 +282,7 @@ fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
     let def: EffectGraphDef = serde_json::from_value(preset).expect("the variant loads");
     // No region anywhere in the graph means the unfused graph renders, where
     // each relax pass is trivially its own dispatch.
-    let Some(view) = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry) else {
+    let Some(view) = manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry) else {
         return;
     };
     let relaxes = view.def.nodes.iter().filter(|n| matches!(n.type_id.as_str(), "node.smooth_surface_mesh" | "node.surface_mesh_normals")).count();
@@ -407,7 +407,7 @@ fn volume_distance_on_lattice(band_extra: f32, lattice: Lattice, solid_nodes: [u
     }
     let levelset: Vec<f32> = read(&levelset_buf, total);
     if band_extra > 0.0 {
-        use crate::node_graph::primitives::lattice_bricks::{LatticeBricks, brick_layout};
+        use manifold_node_engine::water::primitives::lattice_bricks::{LatticeBricks, brick_layout};
         let layout = brick_layout(solid_nodes, scale).unwrap();
         let (bricks, _) = harness.array::<u32>(&[], layout.words as usize);
         let (_, errors) = harness.run(

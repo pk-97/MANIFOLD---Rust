@@ -24,13 +24,13 @@
 use std::borrow::Cow;
 use std::sync::mpsc;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, DEFAULT_MATERIAL_SENTINEL, load_gltf_morph_deltas};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GltfMorphDeltasSource,
     type_id: "node.gltf_morph_deltas_source",
     purpose: "Read a glTF/.glb file's sole mesh-owning node contributing `material_index` and emit its morph-target POSITION/NORMAL deltas as a flattened target-major Array(MeshVertex) — deltas[target_index * vertex_count + vertex_index]. Wire into node.morph_targets_blend's `deltas` input alongside node.gltf_mesh_source's base geometry (`in`) and node.gltf_morph_weights' sampled weights.",
@@ -224,13 +224,13 @@ impl Primitive for GltfMorphDeltasSource {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::ParamValues;
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::{FrameTime, MetalBackend};
-    use crate::TestDevice;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::ParamValues;
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
+    use manifold_gpu::testkit::TestDevice;
     use manifold_core::{Beats, Seconds};
 
     const CAPACITY: u32 = 4_000;
@@ -334,7 +334,7 @@ mod gpu_tests {
             println!("frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping", path.display());
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (backend, _r_out, slot) = make_buffer_backend(&device);
         let scratch: Vec<(&'static str, Slot)> = vec![("deltas", slot)];
 

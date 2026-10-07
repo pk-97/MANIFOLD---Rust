@@ -13,11 +13,11 @@
 //! scalar source the way generators do — wire `system.source`'s output
 //! into this primitive's `in` and the aspect comes out the other side.
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TextureDimensions,
     type_id: "node.texture_size",
     purpose: "Read the input texture's pixel dimensions. Outputs `width`, `height`, and `aspect` (= width / height) as scalars. No GPU dispatch — values are CPU-accessible from the bound texture, so the read is zero-latency. Use to feed aspect-correction into a downstream effect-graph chain (e.g. wire `aspect` into `distance_to_point.scale_x` to make a radial mask circular on a non-square canvas).",

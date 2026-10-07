@@ -23,10 +23,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::dispatch_standalone_2d;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::dispatch_standalone_2d;
 
 // Layout matches the WGSL struct: two vec3<f32> components (each padded
 // to 16 bytes via a trailing f32). Total 32 bytes — same size as the
@@ -45,7 +45,7 @@ struct LambertUniforms {
     ambient: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: LambertDirectional,
     type_id: "node.basic_light",
     purpose: "Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multiplied by the light's colour. The basic directional-lighting atom — pair with `node.gradient_map` to tint further, or sum with `node.rim_light` / `node.shininess` for stylized PBR. Two ways to drive the light: scattered `light_x/y/z` scalars (output grayscale, white tint), or wire a `node.light` into `light` (output picks up the light's premultiplied colour). The scalar fallback keeps every existing OilyFluid-shaped consumer working unchanged.",

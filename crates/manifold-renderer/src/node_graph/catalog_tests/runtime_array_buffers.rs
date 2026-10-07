@@ -1,15 +1,15 @@
 //! Array-buffer allocation, aliasing, and live resize regressions.
-use crate::render_target::RenderTarget;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_gpu::GpuTextureFormat;
-use crate::preset_runtime::*;
+use manifold_node_engine::runtime::*;
 use crate::node_graph::*;
-use crate::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn resize_re_pre_allocates_array_buffers() {
-    use crate::node_graph::{Backend, PortType};
-    let device = crate::test_device();
+    use manifold_node_engine::{exec::backend::Backend, ports::PortType};
+    let device = manifold_gpu::testkit::test_device();
     let json = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/Lissajous.json"));
     let mut g = PresetRuntime::from_json_str_with_device(
         json,
@@ -32,7 +32,7 @@ fn resize_re_pre_allocates_array_buffers() {
     );
 
     {
-        let metal = crate::preset_runtime::testkit::metal_backend(&mut g);
+        let metal = manifold_node_engine::runtime::testkit::metal_backend(&mut g);
         for &res in &array_resources {
             let slot = metal
                 .slot_for(res)
@@ -55,7 +55,7 @@ fn resize_re_pre_allocates_array_buffers() {
         assert!(before.ptr_eq(after), "resolution-independent arrays must keep physical storage");
     }
 
-    let metal = crate::preset_runtime::testkit::metal_backend(&mut g);
+    let metal = manifold_node_engine::runtime::testkit::metal_backend(&mut g);
     for &res in &array_resources {
         let slot = metal
             .slot_for(res)
@@ -77,8 +77,8 @@ fn resize_re_pre_allocates_array_buffers() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn cymatics_survives_live_resize() {
-    use crate::preset_context::PresetContext;
-    let device = crate::test_device();
+    use manifold_node_engine::runtime::preset_context::PresetContext;
+    let device = manifold_gpu::testkit::test_device();
     let json = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/Cymatics.json"));
     let registry = PrimitiveRegistry::with_builtin();
     let format = GpuTextureFormat::Rgba16Float;
@@ -108,7 +108,7 @@ fn cymatics_survives_live_resize() {
             };
             let mut enc = device.create_encoder("cymatics-resize-frame");
             {
-                let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+                let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
                 g.render(
                     &mut gpu,
                     &target.texture,
@@ -151,8 +151,8 @@ fn cymatics_survives_live_resize() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
-    use crate::node_graph::Backend;
-    let device = crate::test_device();
+    use manifold_node_engine::exec::backend::Backend;
+    let device = manifold_gpu::testkit::test_device();
     let json = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/StrangeAttractor.json"));
     let mut g = PresetRuntime::from_json_str_with_device(
         json,
@@ -198,7 +198,7 @@ fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
     let integrate_out_res = resource_for(integrate_node, "particles", false);
     let scatter_in_res = resource_for(scatter_node, "particles", true);
 
-    let metal = crate::preset_runtime::testkit::metal_backend(&mut g);
+    let metal = manifold_node_engine::runtime::testkit::metal_backend(&mut g);
 
     let in_slot = metal.slot_for(integrate_in_res).expect("integrate.in bound");
     let out_slot = metal.slot_for(integrate_out_res).expect("integrate.out bound");
@@ -218,8 +218,8 @@ fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn canvas_sized_array_outputs_scale_buffer_with_backend_canvas_dims() {
-    use crate::node_graph::Backend;
-    let device = crate::test_device();
+    use manifold_node_engine::exec::backend::Backend;
+    let device = manifold_gpu::testkit::test_device();
     let json = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/StrangeAttractor.json"));
 
     let cases = [(1280u32, 720u32), (3840u32, 2160u32)];
@@ -257,7 +257,7 @@ fn canvas_sized_array_outputs_scale_buffer_with_backend_canvas_dims() {
             panic!("scatter.accum resource missing");
         })();
 
-        let metal = crate::preset_runtime::testkit::metal_backend(&mut g);
+        let metal = manifold_node_engine::runtime::testkit::metal_backend(&mut g);
         let slot = metal.slot_for(accum_res).expect("scatter.accum unbound");
         let buf = Backend::array_buffer(metal, slot).expect("no backing buffer");
         let expected = (w as u64) * (h as u64) * 4;

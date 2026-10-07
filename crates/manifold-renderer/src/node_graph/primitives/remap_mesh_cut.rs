@@ -5,12 +5,12 @@
 
 use std::borrow::Cow;
 
-use crate::mesh::{MeshVertex, Vec4Vertex};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::freeze::classify::FusedOutputCapacity;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::freeze::classify::FusedOutputCapacity;
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RemapMeshCut,
     type_id: "node.remap_mesh_cut",
     purpose: "Gather an Array<MeshVertex> through an Array<Vec4Vertex> cut map. Each map entry stores barycentric x/y/z and an exact source triangle index in w; invalid entries with w < 0 produce finite zero-area geometry. Positions, UVs, normals, and tangents are interpolated and the shading frame is orthonormalized.",
@@ -40,7 +40,7 @@ impl Primitive for RemapMeshCut {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "out")
@@ -60,10 +60,8 @@ impl Primitive for RemapMeshCut {
     /// the `map` input (see `array_output_capacity` above) — so topology
     /// depends on the source's topology plus the map's content, and
     /// positions are Written.
-    fn mesh_output_rule(&self, port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
-        use crate::node_graph::mesh_change::{
-            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
-        };
+    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule};
         if port == "out" {
             return MeshOutputRule {
                 topology: MeshRevisionRule::Dependencies(&[

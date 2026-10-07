@@ -1,8 +1,8 @@
-use crate::node_graph::{Graph, compile};
+use manifold_node_engine::{graph::Graph, exec::execution_plan::compile};
 
     #[test]
     fn provided_texture_outputs_are_held_but_feedback_back_edges_stay_writable() {
-        use crate::node_graph::boundary_nodes::FinalOutput;
+        use manifold_node_engine::scene::boundary_nodes::FinalOutput;
         use crate::node_graph::primitives::{GltfTextureSource, Feedback};
         for feedback in [false, true] {
             let mut graph = Graph::new();

@@ -487,9 +487,7 @@ fn calibrated_legacy_fixture() -> (PathBuf, EffectGraphDef) {
 
 #[test]
 fn calibrated_material_upgrade_preserves_modifiers_and_survives_reload() {
-    use crate::node_graph::{
-        PrimitiveRegistry, scene_modifier_expand::validate_modifier_mesh_frames,
-    };
+    use manifold_node_engine::{persistence::PrimitiveRegistry, load::expand::validate_modifier_mesh_frames};
     for varying in [false, true] {
         let (path, mut graph) = calibrated_legacy_fixture();
         let saved_modifiers = graph.scene_modifiers.clone();
@@ -526,7 +524,7 @@ fn calibrated_material_upgrade_preserves_modifiers_and_survives_reload() {
             Default::default()
         );
         assert_eq!(serde_json::to_string(&reloaded).unwrap(), encoded);
-        crate::preset_runtime::PresetRuntime::from_def(
+        manifold_node_engine::runtime::PresetRuntime::from_def(
             reloaded,
             &PrimitiveRegistry::with_builtin(),
             None,
@@ -568,7 +566,7 @@ fn calibrated_material_upgrade_refuses_stale_sources_without_partial_edits() {
 
 #[test]
 fn project_upgrade_preserves_calibrated_inline_and_embedded_graphs() {
-    use crate::node_graph::scene_modifier_expand::validate_modifier_mesh_frames;
+    use manifold_node_engine::load::expand::validate_modifier_mesh_frames;
     use manifold_core::{
         layer::Layer,
         preset_def::PresetKind,

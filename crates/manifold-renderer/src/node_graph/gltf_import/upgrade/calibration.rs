@@ -4,7 +4,7 @@ use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, Serialize
 use manifold_core::flatten::flatten_groups;
 use manifold_core::scene_source_identity::{effective_source_params, scene_source_definition_hash};
 
-use crate::node_graph::scene_modifier_expand::validate_modifier_mesh_frames;
+use manifold_node_engine::load::expand::validate_modifier_mesh_frames;
 
 /// Project traversal upgrades nested modifier definitions separately.
 pub(super) fn has_saved_frames(def: &EffectGraphDef) -> bool {

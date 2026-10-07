@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 
-use crate::preset_runtime::testkit::prepare_sources as prepare;
-use crate::node_graph::PrimitiveRegistry;
+use manifold_node_engine::runtime::testkit::prepare_sources as prepare;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 
 #[path = "physics_source_path_tests.rs"]
 mod paths;
@@ -20,7 +20,7 @@ const UNIFORM_FORCE: &str = include_str!(concat!(
 
 fn prepared_uniform_force() -> (
     EffectGraphDef,
-    crate::node_graph::scene_modifier_expand::PreparedSceneModifierGraph,
+    manifold_node_engine::load::expand::PreparedSceneModifierGraph,
 ) {
     let mut host: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS).expect("physics fixture");
     let next_id = host.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
@@ -62,7 +62,7 @@ fn prepared_uniform_force() -> (
     let owner = manifold_core::scene_modifier_edit::insert_scene_modifier(&host, 0, instance)
         .expect("force inserts")
         .graph;
-    let prepared = crate::node_graph::scene_modifier_expand::prepare_scene_modifiers(
+    let prepared = manifold_node_engine::load::expand::prepare_scene_modifiers(
         &owner,
         &PrimitiveRegistry::with_cpu_flip_reference(),
     )

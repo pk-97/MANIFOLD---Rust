@@ -13,10 +13,10 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -27,7 +27,7 @@ struct LinearGradientUniforms {
     softness: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: LinearGradient,
     type_id: "node.linear_gradient",
     purpose: "Directional 0→1 ramp in UV space. Output: RGB = ramp value (0 on the negative side of the rotated axis, 1 on the positive side, smoothstep transition of width `softness` centred at (cx, cy)), A = 1. The straight-line gradient — pairs with masked_mix for fades / wipes, with node.invert to flip direction, or with a 1D LUT (node.lut1d) to remap the ramp into arbitrary value curves.",

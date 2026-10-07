@@ -21,11 +21,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 const BEND_AXES: &[&str] = &["X", "Y", "Z"];
 
@@ -47,7 +47,7 @@ struct BendUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BendMesh,
     type_id: "node.bend_mesh",
     purpose: "Classic per-vertex bend of an Array<MeshVertex>. axis selects the bend coordinate A (X/Y/Z); the rotation happens about the third axis B (the one that is neither A nor its cyclic-next companion C), pivoting A's own coordinate by `center`: axis=X rotates (x,y) about Z pivoting x; axis=Y rotates (y,z) about X pivoting y; axis=Z rotates (z,x) about Y pivoting z. theta = angle * (coord(A) - center) * w, where w is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). Position AND normal rotate by the same theta — exact, not approximate (normal has no center pivot, since it's a direction not a point). `angle` is UNBOUNDED (range None) — a saw LFO doing full revolutions is a valid performer gesture, never clamp it.",
@@ -110,7 +110,7 @@ crate::primitive! {
 // `run()` does). The marker carries the member→fused-port mapping for the
 // `weights` port (fused kernels rename inputs to `src_<k>`).
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.bend_mesh",
         array_ports: &["weights"],
         recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
@@ -123,7 +123,7 @@ impl Primitive for BendMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -226,7 +226,7 @@ mod gpu_tests {
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<BendMesh>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<BendMesh>()
             .expect("bend_mesh buffer codegen")
     }
 
@@ -279,7 +279,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "bend-mesh-test",
         );
         let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
@@ -334,7 +334,7 @@ mod gpu_tests {
 
     #[test]
     fn exact_normals_match_analytic_rotation() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src = vec![
             mk_vertex([0.5, -0.3, 1.2], [0.267, 0.535, 0.802], [0.1, 0.2]),
@@ -367,7 +367,7 @@ mod gpu_tests {
 
     #[test]
     fn count_order_and_uv_are_preserved() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src = vec![
             mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.1, 0.2]),
@@ -383,7 +383,7 @@ mod gpu_tests {
 
     #[test]
     fn short_weights_degrade_to_one_for_the_tail() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         // 12 identical vertices at x=1.0 so the bend amount along Y directly
         // reads off the effective weight. weights_len forced short (2)

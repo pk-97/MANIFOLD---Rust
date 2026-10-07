@@ -6,12 +6,12 @@
         use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
         use manifold_core::preset_def::PresetKind;
 
-        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
         let mut hosts = Vec::new();
         for kind in [PresetKind::Effect, PresetKind::Generator] {
             for type_id in bundled_preset_type_ids(kind) {
                 let def = bundled_preset_def(&type_id).expect("bundled preset");
-                let expanded = crate::node_graph::scene_modifier_expand::expand_scene_modifiers(def, &registry)
+                let expanded = manifold_node_engine::load::expand::expand_scene_modifiers(def, &registry)
                     .unwrap_or_else(|error| panic!("{type_id}: {error}"));
                 let flat = manifold_core::flatten::flatten_groups(&expanded)
                     .unwrap_or_else(|error| panic!("{type_id}: {error}"));

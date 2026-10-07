@@ -18,11 +18,11 @@ use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
-use manifold_renderer::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_renderer::headless_readback::{readback_raw_halves, readback_to_srgb_png_linear};
-use manifold_renderer::node_graph::PrimitiveRegistry;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::{ChainBuildInputs, PresetRuntime};
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::{ChainBuildInputs, PresetRuntime};
 
 const WIDTH: u32 = 256;
 const HEIGHT: u32 = 160;
@@ -1175,7 +1175,7 @@ fn blob_v2_shared_mask_detection() {
     let dry = source_bytes(&source);
     // Seed the normal effect-view cache so the unwatched path really uses
     // fusion, instead of merely testing the async worker's initial fallback.
-    let fused = manifold_renderer::node_graph::freeze::install::fused_view_by_id(
+    let fused = manifold_node_engine::freeze::install::fused_view_by_id(
         &PresetTypeId::new("MaskBlob"),
     );
     assert!(fused.is_some(), "the composed mask must remain fusable");

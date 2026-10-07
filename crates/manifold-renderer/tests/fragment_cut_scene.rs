@@ -2,9 +2,9 @@
 use std::path::{Path, PathBuf};
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
-use manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers;
+use manifold_node_engine::load::expand::prepare_scene_modifiers;
 
 #[path = "common/scene_modifier.rs"]
 mod common;
@@ -89,9 +89,9 @@ fn set_leaf(
 
 #[test]
 fn cut_partition_controls_update_motion_and_map_without_reprepare() {
-    use manifold_renderer::node_graph::EffectGraphDefExt;
-    use manifold_renderer::node_graph::ParamValue;
-    use manifold_renderer::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
+    use manifold_node_engine::parameters::ParamValue;
+    use manifold_node_engine::load::expand::PreparedGraphValueWrites;
     let registry = PrimitiveRegistry::with_builtin();
     for (preset, motion, cutter, controls) in [
         (
@@ -140,7 +140,7 @@ fn cut_partition_controls_update_motion_and_map_without_reprepare() {
             host_metadata.bindings.push(binding);
         }
         let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
-        let mut graph = prepared.def.clone().into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
+        let mut graph = prepared.def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
         let writes = PreparedGraphValueWrites::prepare(
             &owner,
             &prepared.routes,
@@ -192,7 +192,7 @@ fn cut_partition_controls_update_motion_and_map_without_reprepare() {
 
 #[test]
 fn mixed_fragment_wave_and_mask_stack_shares_cut_maps() {
-    use manifold_renderer::node_graph::EffectGraphDefExt;
+    use manifold_node_engine::persistence::EffectGraphDefExt;
     let registry = PrimitiveRegistry::with_builtin();
     let mut owner = fixture();
     for preset in [
@@ -207,7 +207,7 @@ fn mixed_fragment_wave_and_mask_stack_shares_cut_maps() {
     prepared
         .def
         .clone()
-        .into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default())
+        .into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
         .expect("mixed stack has valid typed wires");
     let incoming = |id, port: &str| {
         prepared
@@ -250,8 +250,8 @@ fn mixed_fragment_wave_and_mask_stack_shares_cut_maps() {
 
 #[test]
 fn legacy_cut_preparation_is_idempotent_and_keeps_inner_controls_live() {
-    use manifold_renderer::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
-    use manifold_renderer::node_graph::{EffectGraphDefExt, ParamValue};
+    use manifold_node_engine::load::expand::PreparedGraphValueWrites;
+    use manifold_node_engine::{persistence::EffectGraphDefExt, parameters::ParamValue};
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/scene-modifiers/surface_peel_applied_v2.json");
     let mut owner: EffectGraphDef = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
@@ -270,7 +270,7 @@ fn legacy_cut_preparation_is_idempotent_and_keeps_inner_controls_live() {
         prepared.def, second.def,
         "derived preparation must be an exact no-op"
     );
-    let mut graph = prepared.def.clone().into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
+    let mut graph = prepared.def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
     let writes =
         PreparedGraphValueWrites::prepare(&owner, &prepared.routes, &graph, &Default::default())
             .unwrap();

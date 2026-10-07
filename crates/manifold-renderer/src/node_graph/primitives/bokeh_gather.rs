@@ -1,9 +1,9 @@
 //! Layered, tile-bounded depth of field. See CINEMATIC_POST_DESIGN.md D10.
 //! Runtime and proofs use the same encoding method; caches belong to the node.
-use super::standalone_pipeline::dispatch_standalone_2d;
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::dispatch_standalone_2d;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use manifold_gpu::{
     GpuBinding, GpuComputePipeline, GpuDevice, GpuFilterMode, GpuSamplerDesc, GpuTexture,
     GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -88,7 +88,7 @@ pub struct BokehPipelines {
     reconstruct: GpuComputePipeline,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BokehGather,
     type_id: "node.bokeh_gather",
     purpose: "Layered depth of field with half-resolution aperture gathers, separate premultiplied near/far color pyramids, conservative tile bounds and depth-aware full-resolution reconstruction. Signed CoC: R is blur magnitude in [0,1], G is 1 for foreground and 0 for background/in-focus. max_radius uses source pixels and must match the CoC producer. In-focus color is preserved. blur_alpha filters scene transparency in premultiplied space; its legacy false default preserves source alpha. Circle, hexagonal and octagonal apertures are supported. Disabled aliases input to output. Internal dependent mip/tile passes retain the BarrieredReduction fusion exemption.",
@@ -241,11 +241,11 @@ impl BokehResources {
 impl BokehGather {
     pub fn prewarm_pipelines(device: &GpuDevice) {
         let _ = BokehPipelines::new(device);
-        let source = crate::node_graph::freeze::codegen::standalone_for_boundary_spec::<Self>()
+        let source = manifold_node_engine::freeze::codegen::standalone_for_boundary_spec::<Self>()
             .expect("bokeh gather codegen");
         let _ = device.create_compute_pipeline(
             &source,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "node.bokeh_gather",
         );
     }
@@ -253,7 +253,7 @@ impl BokehGather {
     // Shared production encoding seam for the node and image/performance proofs.
     pub(super) fn encode(
         &mut self,
-        gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
+        gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
         source: &GpuTexture,
         width_tex: &GpuTexture,
         out: &GpuTexture,
@@ -280,11 +280,11 @@ impl BokehGather {
             .pipelines
             .get_or_insert_with(|| BokehPipelines::new(gpu.device));
         let gather = self.pipeline.get_or_insert_with(|| {
-            let shader = crate::node_graph::freeze::codegen::standalone_for_boundary_spec::<Self>()
+            let shader = manifold_node_engine::freeze::codegen::standalone_for_boundary_spec::<Self>()
                 .expect("bokeh gather codegen");
             gpu.device.create_compute_pipeline(
                 &shader,
-                crate::node_graph::freeze::codegen::ENTRY,
+                manifold_node_engine::freeze::codegen::ENTRY,
                 "node.bokeh_gather",
             )
         });
@@ -592,7 +592,7 @@ mod tests {
     #[test]
     fn boundary_atom_still_generates_standalone_kernel() {
         let shader =
-            crate::node_graph::freeze::codegen::standalone_for_boundary_spec::<BokehGather>()
+            manifold_node_engine::freeze::codegen::standalone_for_boundary_spec::<BokehGather>()
                 .unwrap();
         assert!(shader.contains("textureSampleLevel(tex_in, samp, tap_uv, lod)"));
     }

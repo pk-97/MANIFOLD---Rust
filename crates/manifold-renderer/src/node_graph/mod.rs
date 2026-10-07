@@ -7,100 +7,26 @@
 //! runtime (topological sort, execution plan, lifetime planner, resource
 //! bindings) lands in subsequent steps.
 
-pub mod catalog_source;
-pub mod augmentation;
-pub mod mesh_asset_source;
-pub mod exposure_source;
-pub mod atomic;
-mod backend;
-mod bindings;
-pub mod atmosphere;
-pub mod camera;
-pub mod light;
 pub mod material_inspector;
-pub mod material;
-pub mod live_extent;
-pub mod mesh_source;
-pub mod source_asset;
-pub mod render_mode;
 pub mod scene_exposure;
-pub mod scene_object;
-pub mod transform;
-pub mod viewport_camera;
 pub mod viewport_gizmo;
 pub mod viewport_overlay;
 pub mod viewport_render;
 pub mod viewport_session;
-pub mod scene_viewport;
-pub mod vector_field;
-mod binding_migration;
-pub mod content_revision;
-mod boundary_nodes;
-mod mesh_boundary;
-pub mod mesh_change;
-mod bound_graph;
 pub(crate) mod bundled_presets;
 pub mod catalog_gen;
-mod chain_spec;
 pub mod composites;
-pub mod depth_rule;
 pub(crate) mod decode_cache;
-pub mod descriptor;
-pub mod preview_encoding;
-pub(crate) mod effect_node;
-pub(crate) mod execution;
-pub(crate) mod execution_plan;
-pub mod freeze;
-pub mod fluid;
-pub(crate) mod physics_scene;
-pub mod fluid_role;
-pub mod fluid_particles;
-pub mod liquid;
-pub mod whitewater;
-pub(crate) mod whitewater_handoff;
-#[cfg(feature = "gpu-proofs")]
-pub(crate) mod fluid_cache;
-#[cfg(feature = "gpu-proofs")]
-pub(crate) mod fluid_mesh_upload;
-pub(crate) mod instance_upload;
-mod graph;
-mod graph_loader;
-pub mod resource_allocation;
 mod gltf_anim_cache;
 mod gltf_anim_identity;
 pub mod gltf_import;
 mod gltf_load;
-mod loaded_preset_view;
-mod metal_backend;
-mod palette;
-mod param_binding;
-pub mod param_doc;
-mod param_tooltips_bulk;
-mod param_tooltips_table;
-pub(crate) mod parameters;
-pub(crate) mod persistence;
-pub mod ports;
-pub mod primitive;
 pub mod primitives;
 pub mod relight;
 pub mod scene_modifier_authoring;
-pub mod scene_modifier_expand;
 pub mod scene_modifier_legacy_migration;
 pub mod scene_vm;
-mod snapshot;
-mod state_store;
-pub mod matter;
-pub mod substeps;
-pub mod temporal_reset;
-pub mod trigger_shadow_lint;
-pub mod validate;
-mod validation;
 
-#[doc = "Canonical channel-name registry for the Channel type system. The"]
-#[doc = "`well_known_channels!` macro generates the constants and the"]
-#[doc = "collision-check test from a single source list; see the module"]
-#[doc = "docs and `docs/CHANNEL_TYPE_SYSTEM.md` section 7."]
-pub mod channel_names;
 
 pub use backend::{Backend, MockBackend};
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
@@ -201,16 +127,8 @@ pub use validation::{
     topological_sort, validate,
 };
 
-pub mod mesh_partition;
-pub mod physics_mesh;
-pub mod physics;
-pub mod physics_events;
-pub mod physics_metrics;
 
-pub(crate) mod migration;
 
-#[cfg(test)]
-mod builtins;
 
 #[cfg(test)]
 mod catalog_tests;

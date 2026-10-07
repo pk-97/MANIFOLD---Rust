@@ -22,15 +22,12 @@ use manifold_gpu::{
     GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
-use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::node_graph::{
-    EffectGraphDefExt, Executor, FrameTime, MetalBackend, NodeInstanceId, PrimitiveRegistry,
-    ResourceId, StateStore, compile,
-};
-use crate::preset_context::PresetContext;
-use crate::preset_runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 use manifold_core::params::ParamManifest;
-use crate::render_target::RenderTarget;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 /// Thumbnail dimensions (STATIC_THUMBNAILS_DESIGN §3.1): 16:9, matching the
 /// browser cells (170×96).
@@ -178,7 +175,7 @@ fn pump_warmup_frames(
 /// graph containing an audio visual source, regardless of whether the graph is
 /// rendered as an effect or a generator.
 fn thumbnail_audio_visuals(
-    graph: &crate::node_graph::Graph,
+    graph: &manifold_node_engine::graph::Graph,
 ) -> Option<manifold_core::audio_visual::AudioVisualRegistry> {
     graph
         .nodes()
@@ -439,7 +436,7 @@ pub(crate) fn build_test_card_input(
 /// produced. Small plan-walk helper, duplicated (not shared) across this
 /// crate's headless-render call sites — same rationale `preset_runtime.rs`'s
 /// own copy states: a 5-line utility, not worth a cross-module dependency.
-pub(crate) fn output_resource(plan: &crate::node_graph::ExecutionPlan, node: NodeInstanceId, port: &str) -> Option<ResourceId> {
+pub(crate) fn output_resource(plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan, node: NodeInstanceId, port: &str) -> Option<ResourceId> {
     for step in plan.steps() {
         if step.node == node {
             for &(name, id) in &step.outputs {
@@ -468,18 +465,18 @@ fn render_effect(
 
     let mut graph = def
         .clone()
-        .into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default())
+        .into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
         .map_err(|e| format!("graph load failed: {e}"))?;
     let plan = compile(&graph).map_err(|e| format!("compile failed: {e:?}"))?;
 
     let source_id = graph
         .nodes()
-        .find(|n| n.node.type_id().as_str() == crate::node_graph::SOURCE_TYPE_ID)
+        .find(|n| n.node.type_id().as_str() == manifold_node_engine::scene::boundary_nodes::SOURCE_TYPE_ID)
         .map(|n| n.id)
         .ok_or_else(|| "preset has no system.source node".to_string())?;
     let final_id = graph
         .nodes()
-        .find(|n| n.node.type_id().as_str() == crate::node_graph::FINAL_OUTPUT_TYPE_ID)
+        .find(|n| n.node.type_id().as_str() == manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID)
         .map(|n| n.id)
         .ok_or_else(|| "preset has no system.final_output node".to_string())?;
 
@@ -508,7 +505,7 @@ fn render_effect(
         backend.pre_bind_texture_2d(final_in, out_target)
     };
 
-    crate::node_graph::pre_allocate_resources(&mut graph, &plan, device, &mut backend)
+    manifold_node_engine::load::graph_loader::pre_allocate_resources(&mut graph, &plan, device, &mut backend)
         .map_err(|error| format!("effect resource allocation failed: {error:?}"))?;
 
     let audio_preview = thumbnail_audio_visuals(&graph);
@@ -642,7 +639,7 @@ mod tests {
     /// `graph_dump.rs` tests use to catch a broken dispatch.
     #[test]
     fn render_effect_thumbnail_produces_non_trivial_png() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let def = bloom_def();
         let png = render_preset_thumbnail(&device.arc(), PresetKind::Effect, &def, 96, 54, false)
             .expect("effect thumbnail render");
@@ -666,7 +663,7 @@ mod tests {
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn render_generator_thumbnail_produces_non_trivial_png() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let def = generator_def("BlackHole");
         let png = render_preset_thumbnail(&device.arc(), PresetKind::Generator, &def, 96, 54, false)
             .expect("generator thumbnail render");
@@ -686,7 +683,7 @@ mod tests {
     /// recipe, must produce byte-identical PNGs with every pixel opaque.
     #[test]
     fn thumbnail_render_deterministic() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
 
         let bloom = bloom_def();
         let a = render_preset_thumbnail(&device.arc(), PresetKind::Effect, &bloom, 128, 72, false)

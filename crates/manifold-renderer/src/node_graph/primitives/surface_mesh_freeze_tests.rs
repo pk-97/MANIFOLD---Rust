@@ -12,11 +12,11 @@ fn smoothed_surface_with_pointwise_tail() -> manifold_core::effect_graph_def::Ef
     )
     .expect("WaterDamBreakGpuFlip bundled");
     let mut preset: Value = serde_json::from_str(&source).expect("WaterDamBreakGpuFlip parses");
-    let surface = crate::node_graph::liquid::conformance::json_node_mut(&mut preset, "surface")
+    let surface = manifold_node_engine::water::liquid::conformance::json_node_mut(&mut preset, "surface")
         .expect("Liquid Surface group");
     let group = &mut surface["group"];
     let (normals, output) = {
-        let normals = crate::node_graph::liquid::conformance::json_node_mut(group, "liquid_normals")
+        let normals = manifold_node_engine::water::liquid::conformance::json_node_mut(group, "liquid_normals")
             .expect("surface normals")
             .get("id")
             .cloned()
@@ -65,8 +65,8 @@ fn smoothed_surface_with_pointwise_tail() -> manifold_core::effect_graph_def::Ef
 #[test]
 fn freeze_keeps_surface_stages_and_fuses_the_real_pointwise_tail() {
     let def = smoothed_surface_with_pointwise_tail();
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
-    let view = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry)
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
+    let view = manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry)
         .expect("the two rotate nodes must produce a frozen region");
 
     for type_id in ["node.volume_surface_mesh", "node.smooth_surface_mesh", "node.surface_mesh_normals"] {
@@ -102,17 +102,15 @@ fn freeze_keeps_surface_stages_and_fuses_the_real_pointwise_tail() {
 
 #[cfg(feature = "gpu-proofs")]
 mod gpu_tests {
-    use crate::testkit::liquid_surface::{Harness, params, read};
+    use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
     use super::super::rotate_3d::Rotate3D;
     use super::super::smooth_surface_mesh::SmoothSurfaceMesh;
     use super::super::surface_mesh_normals::SurfaceMeshNormals;
-    use super::super::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
-    use crate::mesh::MeshVertex;
-    use crate::node_graph::effect_node::NodeInstanceId;
-    use crate::node_graph::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
-    };
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::water::primitives::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
+    use manifold_node_engine::mesh::MeshVertex;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use glam::DVec3;
     use manifold_gpu::GpuBinding;
 

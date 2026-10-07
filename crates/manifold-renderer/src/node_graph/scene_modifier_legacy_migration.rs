@@ -10,7 +10,7 @@ mod sources;
 use fragment_masks::migrate_stock_fragment_masks;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
-use super::{PrimitiveRegistry, scene_modifier_expand::prepare_scene_modifiers};
+use manifold_node_engine::{persistence::PrimitiveRegistry, load::expand::prepare_scene_modifiers};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SceneModifierMigrationReport {

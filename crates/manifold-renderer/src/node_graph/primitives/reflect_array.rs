@@ -38,12 +38,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::InstanceTransform;
-use crate::node_graph::content_revision::ContentVersion;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::freeze::classify::FusedOutputCapacity;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::content_revision::ContentVersion;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::freeze::classify::FusedOutputCapacity;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Generated-codegen uniform layout. Params in PARAMS order:
 /// axis (Enum→u32), plane_offset (f32), enabled (f32), then the
@@ -76,7 +76,7 @@ pub struct ReflectStasisKey {
     pub rebuild_epoch: u64,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ReflectArray,
     type_id: "node.reflect_array",
     purpose: "Reflect an Array<InstanceTransform> across an axis-aligned plane: slots [0, cap) pass the input through (live slots only), slots [cap, 2cap) are the planar reflections (live sources only, gate on). pos' = M(pos - d a) + d a with M = I - 2 a a^T; rotation stored as the proper conjugation R' = M R M (sign map on the Euler triple); scale kept positive (the mirror flip rides on the vertex in render_scene.wgsl, not on the scale); rot_pad.w carries the mirror marker — 0 = original, k > 0 = mirrored across the plane perpendicular to component k-1. Output capacity is fixed at 2x the input capacity so axis/plane_offset/enabled are live writes, never a rebuild. The scene-mirror atom (SCENE_MIRROR D3/D4/D5) — pair upstream with node.scene_array; unwired in = one identity instance.",
@@ -135,7 +135,7 @@ impl Primitive for ReflectArray {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -217,9 +217,9 @@ impl Primitive for ReflectArray {
             // standalone codegen). Bindings match: uniform(0), buf_in(1),
             // buf_out(2).
             self.pipeline = Some(gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                &manifold_node_engine::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.reflect_array standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
+                manifold_node_engine::freeze::codegen::ENTRY,
                 "node.reflect_array",
             ));
         }
@@ -448,7 +448,7 @@ mod tests {
     /// (the BUG-757c rule applied up front).
     #[test]
     fn output_capacity_is_twice_input_capacity_not_param_dependent() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = ReflectArray::new();
         let params = ParamValues::default();
 
@@ -483,9 +483,9 @@ mod tests {
     /// gpu_tests module's `fused_region_matches_unfused_chain`.
     #[test]
     fn reflect_array_enters_a_fused_region_with_widened_count() {
-        use crate::node_graph::freeze::classify::CapacityExpr;
-        use crate::node_graph::freeze::region::partition_regions;
-        use crate::node_graph::persistence::PrimitiveRegistry;
+        use manifold_node_engine::freeze::classify::CapacityExpr;
+        use manifold_node_engine::freeze::region::partition_regions;
+        use manifold_node_engine::persistence::PrimitiveRegistry;
         use manifold_core::effect_graph_def::EffectGraphDef;
 
         let json = r#"{
@@ -649,12 +649,12 @@ mod gpu_tests {
     /// the true planar reflection).
     #[test]
     fn exact_reflection_matches_cpu_all_six_axes() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ReflectArray>()
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ReflectArray>()
             .expect("reflect_array codegen");
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "reflect_array_test",
         );
 
@@ -680,12 +680,12 @@ mod gpu_tests {
     /// marker 0). Off must never delete the scene.
     #[test]
     fn identity_at_off_passes_originals_through() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ReflectArray>()
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ReflectArray>()
             .expect("reflect_array codegen");
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "reflect_array_test",
         );
 
@@ -726,12 +726,12 @@ mod gpu_tests {
     /// axis value (the marker encodes the plane, which is sign-blind).
     #[test]
     fn marker_discipline_plane_component_plus_one() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ReflectArray>()
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ReflectArray>()
             .expect("reflect_array codegen");
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "reflect_array_test",
         );
 
@@ -766,12 +766,12 @@ mod gpu_tests {
     /// values (the BUG-757c test shape, applied up front).
     #[test]
     fn live_writes_without_rebuild() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ReflectArray>()
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ReflectArray>()
             .expect("reflect_array codegen");
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "reflect_array_test",
         );
 
@@ -806,12 +806,12 @@ mod gpu_tests {
     /// on either half.
     #[test]
     fn liveness_by_scale_partially_masked_input() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ReflectArray>()
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ReflectArray>()
             .expect("reflect_array codegen");
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "reflect_array_test",
         );
 
@@ -865,12 +865,12 @@ mod gpu_tests {
     /// lands every vertex 180-degree-rotated about the mirror normal).
     #[test]
     fn rotated_instance_floor_mirror_is_true_planar_reflection() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ReflectArray>()
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ReflectArray>()
             .expect("reflect_array codegen");
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "reflect_array_test",
         );
 
@@ -931,12 +931,12 @@ mod gpu_tests {
     /// negated scale, marker = plane component + 1).
     #[test]
     fn unwired_in_is_one_live_identity_instance() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ReflectArray>()
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ReflectArray>()
             .expect("reflect_array codegen");
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "reflect_array_test",
         );
 
@@ -966,12 +966,10 @@ mod gpu_tests {
     /// threads and left the mirrored half stale (garbage transforms on screen).
     #[test]
     fn fused_region_matches_unfused_chain() {
-        use crate::node_graph::effect_node::NodeInstanceId;
-        use crate::node_graph::freeze::classify::CapacityExpr;
-        use crate::node_graph::freeze::codegen::{
-            FusionRegion, InputSource, RegionNode, generate_fused,
-        };
-        use crate::node_graph::primitive::PrimitiveSpec;
+        use manifold_node_engine::exec::effect_node::NodeInstanceId;
+        use manifold_node_engine::freeze::classify::CapacityExpr;
+        use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
+        use manifold_node_engine::primitive::PrimitiveSpec;
 
         let id = NodeInstanceId;
         let region = FusionRegion {
@@ -1024,10 +1022,10 @@ mod gpu_tests {
             g.wgsl
         );
 
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(
             &g.wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "reflect_fused_test",
         );
 

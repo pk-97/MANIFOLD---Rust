@@ -27,9 +27,9 @@
 use std::borrow::Cow;
 use std::f32::consts::TAU;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use crate::node_graph::primitives::note_rates::NOTE_RATE_VALUES;
 
 /// Display labels for the `rate` enum. Indices match
@@ -46,7 +46,7 @@ pub const LFO_SHAPES: &[&str] = &["Sine", "Triangle", "Saw", "Square"];
 /// cycles-per-second.
 pub const LFO_RATE_MODES: &[&str] = &["Musical", "Free"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Lfo,
     type_id: "node.lfo",
     purpose: "Low-frequency oscillator. Emits a scalar on `out`, shaped sine / triangle / saw / square. `rate_mode=Musical` locks the cycle to a musical note rate (1/4, 1/8, etc.); `rate_mode=Free` runs at a continuous `Speed` set in Hz in the editor (stored internally as rad/s — the underlying sine is `sin(seconds * angular_rate)`, matching the legacy generator convention). Output maps the internal `[0, 1]` shape onto `[min, max]` so a single LFO can drive bipolar, biased, or amplitude-scaled targets without a downstream `node.math`. Stateless and seek-safe.",
@@ -125,7 +125,7 @@ crate::primitive! {
     boundary_reason: NonGpu,
 }
 
-crate::param_tooltips!("node.lfo", {
+manifold_node_engine::param_tooltips!("node.lfo", {
     "rate_mode" => "Locks the cycle to the song tempo, or lets it run free in Hz.",
     "rate" => "How fast it cycles. When synced you pick a note value like 1/4 or 1/8, otherwise it is measured in cycles per second.",
     "angular_rate" => "The free-running speed in Hz, used only when Sync is off.",
@@ -214,14 +214,12 @@ mod tests {
     use super::*;
     use manifold_core::{Beats, Seconds};
 
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::effect_node::{
-        EffectNode, EffectNodeType, FrameTime, NodeInstanceId,
-    };
-    use crate::node_graph::execution_plan::compile;
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-    use crate::node_graph::Executor;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeType, FrameTime, NodeInstanceId};
+    use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+    use manifold_node_engine::exec::execution::Executor;
 
     fn frame_at_beats(b: f32) -> FrameTime {
         FrameTime {
@@ -238,8 +236,8 @@ mod tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
     }
     impl EffectNode for Capture {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
@@ -373,7 +371,7 @@ mod tests {
         let v = drive_lfo(2, 2, 0.25, 0.0);
         assert!((v - 0.25).abs() < 1e-4, "saw phase=0.25 at beats=0 should be 0.25, got {v}");
         let _ = NodeInstanceId(0);
-        let _: &dyn Backend = &crate::node_graph::backend::MockBackend::new();
+        let _: &dyn Backend = &manifold_node_engine::exec::backend::MockBackend::new();
     }
 
     /// Free mode reads seconds, not beats. Lock that in: identical

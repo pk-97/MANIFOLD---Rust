@@ -104,7 +104,7 @@ use manifold_core::effect_graph_def::*;
             .clone()
             .into_graph(&PrimitiveRegistry::with_builtin(), &Default::default())
             .unwrap();
-        crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites::prepare(
+        manifold_node_engine::load::expand::PreparedGraphValueWrites::prepare(
             &owner,
             &prepared.routes,
             &graph,
@@ -280,10 +280,10 @@ use manifold_core::effect_graph_def::*;
 
 use manifold_core::{NodeId, scene_modifier_preset::{SceneModifierInstanceDef, SceneNodeRef}};
 use std::collections::BTreeSet;
-use crate::node_graph::PrimitiveRegistry;
-use crate::node_graph::scene_modifier_expand::{prepare_scene_modifiers, resolve_modifier_mesh_frames};
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::load::expand::{prepare_scene_modifiers, resolve_modifier_mesh_frames};
 
-use crate::node_graph::EffectGraphDefExt;
+use manifold_node_engine::persistence::EffectGraphDefExt;
 
 fn float(value: f32) -> SerializedParamValue {
     SerializedParamValue::Float { value }

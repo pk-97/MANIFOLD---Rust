@@ -16,11 +16,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 const RAMP_AXES: &[&str] = &["X", "Y", "Z", "Radial XZ", "Distance"];
 
@@ -46,7 +46,7 @@ struct MeshRampUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MeshRamp,
     type_id: "node.mesh_ramp",
     purpose: "Compute a per-vertex growth-mask weight from a spatial axis sweep over an Array<MeshVertex>. Source of weights, not a deformer: m = measure(pos - origin) along `axis` (X/Y/Z signed coordinate, Radial XZ cylindrical radius, or full Distance magnitude), t = clamp((m - bound_min) / (bound_max - bound_min), 0, 1), w = 1 - smoothstep(phase, phase + feather, t), optionally inverted. Wire the `weights` output into any deformer's optional weights port and sweep `phase` (e.g. from a beat ramp) so the effect grows progressively across the mesh instead of applying uniformly everywhere.",
@@ -155,7 +155,7 @@ impl Primitive for MeshRamp {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "weights" {
@@ -260,7 +260,7 @@ mod gpu_tests {
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<MeshRamp>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<MeshRamp>()
             .expect("mesh_ramp buffer codegen")
     }
 
@@ -291,7 +291,7 @@ mod gpu_tests {
     ) -> Vec<f32> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "mesh-ramp-test",
         );
         let src = device.create_buffer_shared(std::mem::size_of_val(vertices) as u64);
@@ -336,7 +336,7 @@ mod gpu_tests {
 
     #[test]
     fn axis_y_ramp_matches_hand_formula_and_is_monotonic() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let ys = [0.0f32, 1.0, 2.0, 3.0];
         let vertices: Vec<MeshVertex> = ys.iter().map(|&y| mk_vertex(y)).collect();
@@ -384,7 +384,7 @@ mod gpu_tests {
 
     #[test]
     fn invert_flips_the_mask() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let vertices: Vec<MeshVertex> = [0.0f32, 3.0].iter().map(|&y| mk_vertex(y)).collect();
         let (phase, feather, bound_min, bound_max) = (0.0f32, 0.5f32, 0.0f32, 3.0f32);

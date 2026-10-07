@@ -7,8 +7,8 @@
     /// cross-session pipeline-cache key, so "zero bytes changed" is checked at
     /// the text level, not "compiles" or "renders the same".
     fn capture_all_fused_wgsl() -> String {
-        use crate::node_graph::PrimitiveRegistry;
-        use crate::node_graph::freeze::install::{fuse_canonical_def, fuse_generator_view};
+        use manifold_node_engine::persistence::PrimitiveRegistry;
+        use manifold_node_engine::freeze::install::{fuse_canonical_def, fuse_generator_view};
         use manifold_core::effect_graph_def::EffectGraphDef;
         use manifold_core::preset_def::PresetKind;
 
@@ -20,7 +20,7 @@
                 .collect();
         effect_ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         for type_id in effect_ids {
-            let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
+            let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&type_id) else {
                 continue;
             };
             let Some(fused) = fuse_canonical_def(&view.canonical_def, &registry) else {

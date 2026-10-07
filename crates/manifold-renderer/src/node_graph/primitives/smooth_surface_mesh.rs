@@ -1,13 +1,13 @@
 //! FLIP Fluids trianglemesh.cpp smooth(value, iterations), using the shared
 //! generated relaxation pass. Iteration dependencies materialize between passes.
-use super::relax_surface_mesh::{RelaxSurfaceMesh, SurfaceMeshPass};
-use super::sort_particles_into_cells::float_param;
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::water::primitives::relax_surface_mesh::{RelaxSurfaceMesh, SurfaceMeshPass};
+use manifold_node_engine::water::primitives::sort_particles_into_cells::float_param;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use std::borrow::Cow;
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SmoothSurfaceMesh,
     type_id: "node.smooth_surface_mesh",
     purpose: "FLIP Fluids Jacobi mesh smoothing: strength times the incident-triangle neighbour mean displacement, repeated iterations times on a welded marching-cubes mesh. Each pass reads the previous pass. Zero iterations copies the input.",

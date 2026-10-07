@@ -14,7 +14,7 @@
 //! `GPU_FLIP_SMOKE_DIR` names the output directory (stills, mp4, timing CSV);
 //! `GPU_FLIP_SMOKE_FRAMES` the run length (900 when unset).
 
-use crate::node_graph::primitives::gpu_flip_preset::testkit::rendered_scene_bytes;
+use manifold_node_engine::water::primitives::gpu_flip_preset::testkit::rendered_scene_bytes;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -24,18 +24,18 @@ use manifold_core::params::{Param, ParamManifest};
 use serde_json::{Value, json};
 use manifold_gpu::GpuTextureFormat;
 
-use crate::node_graph::primitives::gpu_flip_preset::{WaterScene, render_def};
-use crate::frame_status::FrameRenderStatus;
-use crate::mesh::MeshVertex;
-use crate::gpu_encoder::GpuEncoder;
-use crate::testkit::gpu::{encode_rgba8_png, readback_srgb_rgba8};
-use crate::node_graph::fluid_particles::FluidParticle;
-use crate::testkit::substep_nodes::register_substep_test_nodes;
-use crate::node_graph::{NodeInstanceId, PrimitiveRegistry};
-use crate::preset_context::PresetContext;
-use crate::preset_runtime::PresetRuntime;
+use manifold_node_engine::water::primitives::gpu_flip_preset::{WaterScene, render_def};
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::testkit::gpu::{encode_rgba8_png, readback_srgb_rgba8};
+use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
+use manifold_node_engine::{exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 use crate::reference_fixtures::cpu_flip_preset_json;
-use crate::render_target::RenderTarget;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
@@ -169,7 +169,7 @@ fn particle_health(particles: &[FluidParticle], min: [f64; 3]) -> ParticleHealth
 
 /// One scene through the render graph, frame by frame.
 struct Smoke {
-    device: crate::TestDevice,
+    device: manifold_gpu::testkit::TestDevice,
     runtime: PresetRuntime,
     target: RenderTarget,
     scene: WaterScene,
@@ -215,7 +215,7 @@ impl Smoke {
         let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
         register_substep_test_nodes(&mut registry);
         let def = render_def(scene);
-        let Some(view) = crate::node_graph::primitives::gpu_flip_preset::testkit::fused_as_rendered(&def, &registry) else {
+        let Some(view) = manifold_node_engine::water::primitives::gpu_flip_preset::testkit::fused_as_rendered(&def, &registry) else {
             return Self::with_def(scene, def);
         };
         let mut smoke = Self::with_def(scene, (*view.def).clone());
@@ -236,7 +236,7 @@ impl Smoke {
     fn with_def(scene: WaterScene, def: EffectGraphDef) -> Self {
         let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
         register_substep_test_nodes(&mut registry);
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let manifest = ParamManifest::from_params(
             def.preset_metadata.iter().flat_map(|metadata| metadata.params.iter().cloned().map(Param::bundled)).collect(),
         );
@@ -458,7 +458,7 @@ impl Smoke {
         let name = self.surface_name("liquid_mesh");
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).expect("mesh node");
         match node.params.get("max_capacity") {
-            Some(crate::node_graph::ParamValue::Float(v)) => (v.clamp(3.0, 16_777_215.0) as usize / 3) * 3,
+            Some(manifold_node_engine::parameters::ParamValue::Float(v)) => (v.clamp(3.0, 16_777_215.0) as usize / 3) * 3,
             other => panic!("mesh max_capacity is {other:?}"),
         }
     }
@@ -539,9 +539,9 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
     // admits graphs by (75% of the working set): a scene past it is refused
     // by name, never tried.
     let needs = rendered_scene_bytes(scene);
-    let snapshot = crate::test_device().modifier_memory_snapshot().expect("Metal reports its memory");
+    let snapshot = manifold_gpu::testkit::test_device().modifier_memory_snapshot().expect("Metal reports its memory");
     println!("SMOKE {tag}: arrays need {:.2} GB", needs as f64 / 1e9);
-    if let Err(refusal) = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(Some(snapshot), needs) {
+    if let Err(refusal) = manifold_node_engine::load::expand::admit_candidate_bytes(Some(snapshot), needs) {
         println!("SMOKE {tag}: refused, device memory: {refusal:?}");
         return;
     }
@@ -886,7 +886,7 @@ fn preset_def_from(file: &str, left_out: &[&str], overrides: &Value) -> EffectGr
 /// Stills of the shipped preset's own water at `stills`, as `preset_<name>_frameNNNN.png`.
 fn render_preset(name: &str, overrides: &Value, stills: &[usize], dir: &Path) {
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let mut runtime = PresetRuntime::from_def_with_device(preset_def(overrides), &registry, device.arc(), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None)
         .expect("preset builds on the device");
     let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "preset-look");
@@ -901,7 +901,7 @@ fn render_preset(name: &str, overrides: &Value, stills: &[usize], dir: &Path) {
 
 /// One 60 fps frame of a preset, `frame` counted from 1.
 fn render_preset_frame(runtime: &mut PresetRuntime, target: &RenderTarget, frame: usize) {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     objc2::rc::autoreleasepool(|_| {
         let time = frame as f64 / 60.0;
         let ctx = PresetContext {
@@ -953,7 +953,7 @@ fn write_frame(encoder: &mut std::process::Child, rgba: &[u8]) {
 /// of the race clip.
 fn record_preset(def: EffectGraphDef, name: &str, frames: usize, stills: &[usize], dir: &Path) -> PathBuf {
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let mut runtime = PresetRuntime::from_def_with_device(def, &registry, device.arc(), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None)
         .expect("preset builds on the device");
     let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "race-clip");
@@ -1044,7 +1044,7 @@ fn contact_sheet(stills: &[PathBuf], cols: usize, scale: f64, out: &Path) {
 fn with_params(def: EffectGraphDef, overrides: &Value) -> EffectGraphDef {
     let mut v = serde_json::to_value(def).expect("def serialises");
     for (name, params) in overrides.as_object().expect("overrides by node") {
-        let node = crate::node_graph::liquid::conformance::json_node_mut(&mut v, name)
+        let node = manifold_node_engine::water::liquid::conformance::json_node_mut(&mut v, name)
             .unwrap_or_else(|| panic!("no node {name}"));
         if !node["params"].is_object() {
             node["params"] = json!({});

@@ -1,6 +1,6 @@
 //! Buffer extent rule owned by this node.
-use crate::node_graph::liquid::EXACT_F32_COUNT;
-use crate::node_graph::liquid::extent::{AtomExtent, ExtentRule, PARTICLE, Verdict};
+use manifold_node_engine::water::liquid::EXACT_F32_COUNT;
+use manifold_node_engine::water::liquid::extent::{AtomExtent, ExtentRule, PARTICLE, Verdict};
 
 fn interpolate_particle_frames(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // Output follows B's capacity, never A+B. Count tails are explicitly zeroed.

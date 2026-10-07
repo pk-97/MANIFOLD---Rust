@@ -4,9 +4,9 @@
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated uniform: no params, then `dispatch_count`, padded to 16 bytes.
 #[repr(C)]
@@ -18,7 +18,7 @@ struct ZeroUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ZeroArray,
     type_id: "node.zero_array",
     purpose: "Set every element of a signed-integer array to zero, in place. Clears an accumulator before a scatter adds into it again.",
@@ -45,7 +45,7 @@ impl Primitive for ZeroArray {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "out")
@@ -86,11 +86,11 @@ impl Primitive for ZeroArray {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn matter_zero_array_generates_an_in_place_i32_kernel() {
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ZeroArray>()
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ZeroArray>()
             .expect("zero_array codegen");
         assert!(wgsl.contains("var<storage, read> buf_in: array<i32>"), "{wgsl}");
         assert!(wgsl.contains("var<storage, read_write> buf_out: array<i32>"), "{wgsl}");

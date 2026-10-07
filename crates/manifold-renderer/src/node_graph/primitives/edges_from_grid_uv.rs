@@ -16,16 +16,16 @@
 //! `node.draw_lines`.
 
 use std::borrow::Cow;
-use crate::mesh::EdgePair;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::EdgePair;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 pub use crate::node_graph::primitives::generate_grid_uv::{
     GRID_UV_DEFAULT_SIZE, GRID_UV_MAX_SIZE,
 };
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: EdgesFromGridUv,
     type_id: "node.grid_edges",
     purpose: "Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. Pairs with node.grid_points + node.combine_xyzw to author any (u, v)-parametric surface in the graph (Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh). Each (iu, iv) cell emits two edges: one toward the next u (with modular wrap) and one toward the next v (with modular wrap). Total edge count = n² × 2. Vertex indexing matches generate_grid_uv's row-major convention (idx = iu * n + iv) so the same grid_size scalar should drive both atoms. CPU-write — sentinel-padded inactive tail, same pattern as node.platonic_solid_edges.",
@@ -76,7 +76,7 @@ fn read_grid_size(ctx: &EffectNodeContext<'_, '_>) -> u32 {
     raw.min(GRID_UV_MAX_SIZE)
 }
 
-fn plan_time_grid_size(params: &crate::node_graph::effect_node::ParamValues) -> u32 {
+fn plan_time_grid_size(params: &manifold_node_engine::exec::effect_node::ParamValues) -> u32 {
     match params.get("grid_size") {
         Some(ParamValue::Float(n)) => n.round().max(2.0) as u32,
         _ => GRID_UV_DEFAULT_SIZE,
@@ -88,7 +88,7 @@ impl Primitive for EdgesFromGridUv {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "edges" {
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn output_capacity_is_two_n_squared() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = EdgesFromGridUv::new();
 
         let default = ParamValues::default();

@@ -1,5 +1,5 @@
-use crate::node_graph::atomic::FluidSim2D;
-use crate::node_graph::{Graph, Source, FinalOutput, FrameTime, Executor, compile, validate};
+use manifold_node_engine::atomic::FluidSim2D;
+use manifold_node_engine::{graph::Graph, scene::boundary_nodes::Source, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, exec::execution::Executor, exec::execution_plan::compile, validate};
 use manifold_core::{Beats, Seconds};
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -18,7 +18,7 @@ use manifold_core::{Beats, Seconds};
     /// its main composited output.
     #[test]
     fn fluid_sim_density_can_be_wired_downstream() {
-        use crate::node_graph::primitives::{Mix, Threshold};
+        use {manifold_node_engine::primitives::mix::Mix, crate::node_graph::primitives::Threshold};
 
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));

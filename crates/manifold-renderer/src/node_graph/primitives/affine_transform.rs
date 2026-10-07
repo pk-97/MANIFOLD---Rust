@@ -19,13 +19,13 @@
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::dispatch_standalone_2d;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::dispatch_standalone_2d;
 use std::borrow::Cow;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: AffineTransform,
     type_id: "node.transform",
     purpose: "2D UV affine: translate, scale, rotate around the center. Aspect-correct rotation; out-of-bounds samples return transparent black. Every affine param has a same-named scalar input port (port-shadows-param) — wire `translate_x`, `translate_y`, or `rotation` to drive the transform from a control producer (LFO, Color Compass, Math, …).",
@@ -196,8 +196,8 @@ mod port_shadow_tests {
     //! which is the failure mode we want to catch here.
 
     use super::*;
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::primitives::Value;
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::primitives::value::Value;
 
     #[test]
     fn can_connect_value_into_each_scalar_input_port() {

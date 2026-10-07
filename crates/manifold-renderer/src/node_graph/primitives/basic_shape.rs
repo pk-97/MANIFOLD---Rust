@@ -19,10 +19,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 pub const BASIC_SHAPE_SHAPES: &[&str] = &["Square", "Diamond", "Octagon"];
 
@@ -44,7 +44,7 @@ struct BasicShapeUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BasicShape,
     type_id: "node.basic_shape",
     purpose: "Single-dispatch 2D SDF shape — Square / Diamond / Octagon — rasterised into an RGBA16F texture with anti-aliased edges. One instance draws one shape; pick which via the static `shape` enum param. `rotation`, `is_wireframe`, and the geometric params (aspect/scale/line) are port-shadows-param so cycling and easing live in the outer graph. Mux multiple `node.basic_shape` instances at the output for runtime shape selection (the BasicShapes.json pattern).",

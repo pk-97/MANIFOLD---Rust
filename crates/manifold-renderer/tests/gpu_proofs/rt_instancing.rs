@@ -32,7 +32,7 @@ use manifold_gpu::{
     GpuBuffer, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
-use manifold_renderer::mesh::InstanceTransform;
+use manifold_node_engine::mesh::InstanceTransform;
 
 use crate::harness;
 
@@ -623,7 +623,7 @@ fn probe_worker_static_frames() {
         return;
     }
     let h = harness::shared();
-    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let json = r#"{"version":2,"name":"RtInstancingProbeWorker","nodes":[
         {"id":0,"typeId":"system.generator_input","nodeId":"input"},
         {"id":1,"typeId":"node.cube_mesh","nodeId":"cube"},
@@ -654,7 +654,7 @@ fn probe_worker_static_frames() {
         {"fromNode":5,"fromPort":"out","toNode":6,"toPort":"camera"},
         {"fromNode":6,"fromPort":"color","toNode":99,"toPort":"in"}
         ]}"#;
-    let mut runtime = manifold_renderer::preset_runtime::PresetRuntime::from_json_str_with_device(
+    let mut runtime = manifold_node_engine::runtime::PresetRuntime::from_json_str_with_device(
         json,
         &registry,
         std::sync::Arc::clone(&h.device),
@@ -669,7 +669,7 @@ fn probe_worker_static_frames() {
     // static frames covers request -> enqueue -> completion with margin
     // (same count as RT_WARMUP-ish precedents).
     for frame in 0..8i64 {
-        let ctx = manifold_renderer::preset_context::PresetContext {
+        let ctx = manifold_node_engine::runtime::preset_context::PresetContext {
             time: 0.1,
             beat: 0.2,
             dt: 1.0 / 60.0,
@@ -687,7 +687,7 @@ fn probe_worker_static_frames() {
         let mut enc = h.device.create_encoder("rt-instancing-probe-worker");
         {
             let mut gpu =
-                manifold_renderer::gpu_encoder::GpuEncoder::new(&mut enc, &h.device);
+                manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &h.device);
             runtime.render(
                 &mut gpu,
                 &target.texture,

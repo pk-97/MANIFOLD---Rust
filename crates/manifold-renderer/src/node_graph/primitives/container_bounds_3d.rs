@@ -15,13 +15,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 use super::container_repel_force_3d::CONTAINER_3D_MODES;
-use super::standalone_pipeline::{standalone_pipeline, active_elements};
+use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`container`
 /// Enum → u32, `ctr_scale` f32, `active_count` Int → i32) then the codegen-
@@ -35,7 +35,7 @@ struct BoundsUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ContainerBounds3D,
     type_id: "node.keep_in_box_3d",
     purpose: "Post-integration hard containment for 3D particles: toroidal wrap (container = None) or SDF reflect + clamp (Cube/Sphere/Torus). For None: position = fract(position + 1). For an SDF container: when a particle escapes (d > 0) it's pushed back inside along the surface normal, then clamped to [0.001, 0.999]. The 3D sibling of node.wrap_around (torus-only); decomposed from the containment step of the fused node.fluid_simulate_3d. Particle velocity is not touched (the legacy velocity-bounce write was dead state).",
@@ -89,7 +89,7 @@ impl Primitive for ContainerBounds3D {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

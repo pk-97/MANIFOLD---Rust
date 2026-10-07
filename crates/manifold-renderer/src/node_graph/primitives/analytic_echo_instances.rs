@@ -11,12 +11,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::mesh::InstanceTransform;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::freeze::classify::FusedOutputCapacity;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::freeze::classify::FusedOutputCapacity;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 pub const ECHO_CAPACITY: u32 = 8;
 
@@ -39,7 +39,7 @@ struct EchoUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: AnalyticEchoInstances,
     type_id: "node.analytic_echo_instances",
     purpose: "Expand each source InstanceTransform into up to eight shared-mesh echo slots along a scene-space analytic arc/helix. Echo 0 is the exact source; later slots translate coherently around sourceOffsetXYZ while preserving orientation, reflection marker, and inactive holes while taper scales the complete object transform. Count, radius, rise, phase, arc, taper, and enabled are port-shadowed live controls; radius and rise are relative to sceneRadius.",
@@ -149,7 +149,7 @@ impl Primitive for AnalyticEchoInstances {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "instances" {

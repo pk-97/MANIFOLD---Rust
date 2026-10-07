@@ -21,9 +21,9 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Op enum labels. **Indices are public API** — saved in JSON presets —
 /// never reorder; append new ops at the end.
@@ -91,7 +91,7 @@ fn eval_op(op: u32, a: f32, b: f32, scale: f32, offset: f32, exp: f32, bias: f32
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ArrayMath,
     type_id: "node.array_math",
     purpose: "Element-wise math over Array<f32>. One bundled primitive (op enum) covering the common shaping vocabulary: binary (Add/Subtract/Multiply/Divide/Min/Max/Mix read `a` + `b`); unary (ScaleOffset, ShapePowClip, MirrorRamp, Clamp01, Abs, Sin, Cos — read `a` only, ignore `b`). Op-specific scalars (scale / offset / exp / bias) are port-shadow-param so they can be modulated by control wires. Divide-by-near-zero clamps to 0 to keep NaN/Inf out of downstream consumers. CPU-only — runs on the content thread so downstream CPU readers see same-frame writes.",
@@ -163,7 +163,7 @@ impl Primitive for ArrayMath {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {

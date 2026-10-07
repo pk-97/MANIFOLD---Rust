@@ -10,11 +10,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 const RIPPLE_AXES: &[&str] = &["X", "Y", "Z"];
 
@@ -36,7 +36,7 @@ struct RippleUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RippleMesh,
     type_id: "node.ripple_mesh",
     purpose: "Per-vertex sinusoidal ripple of an Array<MeshVertex>. pos += normal * amplitude * sin(dot(pos, dir) * frequency - time * speed), where dir is the unit vector along the chosen axis. `w` is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). Normals, uv, and tangent pass through unchanged. `time` is port-shadowed and defaults to the playback clock when unwired.",
@@ -118,7 +118,7 @@ crate::primitive! {
 // weight to 1.0, exactly what `run()` does), `time` is the frame clock
 // `run()` packs when the input is unwired.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.ripple_mesh",
         // The recompute consults the `weights` array input's live length —
         // the marker carries the member→fused-port mapping for this port.
@@ -136,7 +136,7 @@ impl Primitive for RippleMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {

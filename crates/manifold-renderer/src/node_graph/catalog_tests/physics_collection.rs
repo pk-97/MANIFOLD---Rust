@@ -1,10 +1,10 @@
 //! Collect/load portability for a published native FLIP source identity.
 
-use crate::preset_runtime::*;
-use crate::testkit::physics_history::*;
+use manifold_node_engine::runtime::*;
+use manifold_node_engine::testkit::physics_history::*;
 use crate::node_graph::*;
 
-use crate::node_graph::source_asset::SourceAssetIdentity;
+use manifold_node_engine::scene::source_asset::SourceAssetIdentity;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::layer::Layer;
 use manifold_core::preset_def::PresetKind;
@@ -39,7 +39,7 @@ fn published_identity(runtime: &PresetRuntime) -> Option<Result<[u8; 32], String
         .graph
         .instance_by_node_id(&NodeId::new("fluid"))
         .expect("fluid node");
-    crate::preset_runtime::testkit::published_identity(runtime, fluid)
+    manifold_node_engine::runtime::testkit::published_identity(runtime, fluid)
 }
 
 fn settle_source_at(runtime: &mut PresetRuntime, seconds: f64) -> [u8; 32] {

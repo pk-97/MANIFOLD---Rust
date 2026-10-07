@@ -1,14 +1,11 @@
-use crate::mesh::PLATONIC_SHAPES;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::mesh_source::MeshSource;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::physics::{ColliderGeometry, RigidBody};
-use crate::node_graph::physics_mesh::{
-    MeshSelection, PART_PORTS, load_compound_materials, parse_compound_materials,
-    prepare_colliders, transform_vertices, validate_transform,
-};
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::transform::Transform;
+use manifold_node_engine::mesh::PLATONIC_SHAPES;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::scene::mesh_source::MeshSource;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::water::physics::{ColliderGeometry, RigidBody};
+use manifold_node_engine::scene::physics_mesh::{MeshSelection, PART_PORTS, load_compound_materials, parse_compound_materials, prepare_colliders, transform_vertices, validate_transform};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::transform::Transform;
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 
@@ -73,7 +70,7 @@ fn same_optional_selection(left: Option<MeshSelection>, right: Option<MeshSelect
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
  name: RigidBodyNode,
  type_id: "node.rigid_body",
  purpose: "Describe a rigid body's shape, starting transform, motion type, density and contact properties; Box3D gives it density times its installed hull volume as mass. Wire body into a shared Physics World. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
@@ -155,7 +152,7 @@ params: [
 ParamDef { name: Cow::Borrowed("enabled"), label: "Physics", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
 ParamDef { name: Cow::Borrowed("shape"), label: "Shape", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, 4.0)), enum_values: PLATONIC_SHAPES },
 ParamDef { name: Cow::Borrowed("motion"), label: "Motion", ty: ParamType::Enum, default: ParamValue::Enum(1), range: Some((0.0, 2.0)), enum_values: &["Fixed", "Moving", "Animated"] },
-ParamDef { name: Cow::Borrowed("density"), label: "Density (kg/m³)", ty: ParamType::Float, default: ParamValue::Float(crate::node_graph::physics::DEFAULT_DENSITY), range: Some((1.0, 25_000.0)), enum_values: &[] },
+ParamDef { name: Cow::Borrowed("density"), label: "Density (kg/m³)", ty: ParamType::Float, default: ParamValue::Float(manifold_node_engine::water::physics::DEFAULT_DENSITY), range: Some((1.0, 25_000.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("friction"), label: "Friction", ty: ParamType::Float, default: ParamValue::Float(0.5), range: Some((0.0, 1.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("bounce"), label: "Bounce", ty: ParamType::Float, default: ParamValue::Float(0.15), range: Some((0.0, 1.0)), enum_values: &[] },
 ParamDef { name: Cow::Borrowed("release_count"), label: "Release", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1_000_000.0)), enum_values: &[] },
@@ -203,11 +200,11 @@ impl Primitive for RigidBodyNode {
 
     fn source_asset_identity(
         &self,
-        _: &crate::node_graph::ParamValues,
-    ) -> crate::node_graph::source_asset::SourceAssetIdentity<'_> {
+        _: &manifold_node_engine::exec::effect_node::ParamValues,
+    ) -> manifold_node_engine::scene::source_asset::SourceAssetIdentity<'_> {
         // The paired take compares the installed native hulls, including all
         // compound members, before publishing any cached frame.
-        crate::node_graph::source_asset::SourceAssetIdentity::PreparedGeometry
+        manifold_node_engine::scene::source_asset::SourceAssetIdentity::PreparedGeometry
     }
 
     fn warmup_pending(&self) -> bool {
@@ -266,7 +263,7 @@ impl Primitive for RigidBodyNode {
                 fragment_parent,
                 shape: selector("shape"),
                 kind: selector("motion"),
-                density: ctx.scalar_or_param("density", crate::node_graph::physics::DEFAULT_DENSITY),
+                density: ctx.scalar_or_param("density", manifold_node_engine::water::physics::DEFAULT_DENSITY),
                 friction: ctx.scalar_or_param("friction", 0.5),
                 bounce: ctx.scalar_or_param("bounce", 0.15),
                 collider: self.collider.clone(),
@@ -485,7 +482,7 @@ impl Primitive for RigidBodyNode {
             fragment_parent,
             shape: selector("shape"),
             kind: selector("motion"),
-            density: ctx.scalar_or_param("density", crate::node_graph::physics::DEFAULT_DENSITY),
+            density: ctx.scalar_or_param("density", manifold_node_engine::water::physics::DEFAULT_DENSITY),
             friction: ctx.scalar_or_param("friction", 0.5),
             bounce: ctx.scalar_or_param("bounce", 0.15),
             collider: self.collider.clone(),
@@ -501,12 +498,12 @@ impl Primitive for RigidBodyNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::ports::{PortType, ScalarType};
-    use crate::node_graph::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::{PortType, ScalarType};
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {

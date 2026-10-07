@@ -14,10 +14,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 pub const HASH_FIELD_MODES: &[&str] = &["Hash2", "Hash1"];
 
@@ -30,7 +30,7 @@ struct HashFieldUniforms {
     mode: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: HashFieldBySeed,
     type_id: "node.hash_field_by_seed",
     purpose: "Hash an input value-field's RG channels with an added scalar seed: seeded = field.rg + seed·(seed_x, seed_y); Hash2 (mode 0) → out.rg = hash2(seeded) in [0,1]^2, Hash1 (mode 1) → out.rgb = hash1(seeded) in [0,1]. The 're-hash a value field by a seed' atom — feed node.voronoi_2d's cell_id output (RG) + a beat_floor seed to get per-cell randoms that re-roll each beat (Voronoi Prism's per-beat content shuffle / visibility). General: any value field, any seed.",

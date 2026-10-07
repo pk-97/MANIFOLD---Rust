@@ -33,12 +33,12 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::camera::{Camera, LensParams};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::scene::camera::{Camera, LensParams};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CameraLens,
     type_id: "node.camera_lens",
     purpose: "Physical lens for a Camera wire: focus_distance / f_stop / shutter_angle / exposure_ev, all four port-shadowed scalar params. Pure CPU pass-through — takes a Camera in, rewrites ONLY its lens block, passes every other field (position, basis vectors, near/far, projection mode, cached view matrix) through unchanged. Insert once between a camera source (node.orbit_camera / node.free_camera / node.look_at_camera) and its consumers so depth-of-field, motion blur, and node.render_scene's exposure all read the same lens instead of duplicating params. focus_distance is world units along the camera's fwd axis (<= 0 = hyperfocal/neutral); f_stop is the aperture N (large = shallow-DoF off); shutter_angle is degrees 0..=360 (0 = no motion blur, 180 = default per P4); exposure_ev is stops (0 = neutral, render_scene multiplies its final straight rgb by 2^exposure_ev). Defaults reproduce a cinematic lens (shutter 180 smears motion by default), so an untouched camera_lens node already carries a 180-degree shutter.",
@@ -145,12 +145,12 @@ mod run_tests {
     //! (shutter 180 default), (c) a wired scalar overrides its same-named
     //! param (port-shadow precedence, D4).
     use super::*;
-    use crate::node_graph::MockBackend;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::{FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::ports::PortType;
+    use manifold_node_engine::exec::backend::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::PortType;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -198,7 +198,7 @@ mod run_tests {
         for &(name, value) in wires {
             let slot = backend.acquire(
                 ResourceId(next_id),
-                crate::node_graph::ports::PortType::Scalar(crate::node_graph::ports::ScalarType::F32),
+                manifold_node_engine::ports::PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
                 None,
                 (0, 0),
             );

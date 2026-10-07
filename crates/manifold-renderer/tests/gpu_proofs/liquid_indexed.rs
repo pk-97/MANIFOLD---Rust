@@ -6,14 +6,11 @@
 //! no CPU mesh is substituted for the actual marching-cubes output.
 
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::depth_rule::DepthRule;
-use manifold_renderer::node_graph::{
-    ArrayType, EffectNode, EffectNodeContext, EffectNodeType, NodeInput, NodeOutput, NodePort,
-    ParamDef, ParamValues, PortKind, PortType, PrimitiveRegistry,
-};
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::scene::depth_rule::DepthRule;
+use manifold_node_engine::{ports::ArrayType, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, ports::NodeInput, ports::NodeOutput, ports::NodePort, parameters::ParamDef, exec::effect_node::ParamValues, ports::PortKind, ports::PortType, persistence::PrimitiveRegistry};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 use serde_json::{json, Value};
 
 use crate::harness;
@@ -318,7 +315,7 @@ fn smoothed_graph_json(fixture: Fixture) -> String {
 
 fn fused_smoothed_graph(fixture: Fixture) -> String {
     let def = serde_json::from_str(&smoothed_graph_json(fixture)).unwrap();
-    let view = manifold_renderer::node_graph::freeze::install::fuse_generator_view(&def, &registry_for(fixture))
+    let view = manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry_for(fixture))
         .expect("the downstream pointwise pair must fuse");
     for ty in ["node.smooth_surface_mesh", "node.surface_mesh_normals"] {
         assert_eq!(view.def.nodes.iter().filter(|n| n.type_id == ty).count(),1,"{ty} survives freezing");
@@ -419,7 +416,7 @@ fn render(json: &str, registry: &PrimitiveRegistry) -> Vec<u8> {
                 &context(frame, h.width, h.height),
                 &manifold_core::params::ParamManifest::default(),
             );
-            assert_eq!(gpu.frame_status(), manifold_renderer::frame_status::FrameRenderStatus::Complete,
+            assert_eq!(gpu.frame_status(), manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
                 "liquid indexed image proof frame {frame} must complete");
         }
         encoder.commit_and_wait_completed();

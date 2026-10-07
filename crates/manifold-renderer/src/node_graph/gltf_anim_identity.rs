@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 #[cfg(feature = "gpu-proofs")]
 inventory::submit! {
-    super::fluid::identity::PhysicsSourceIdentity {
+    manifold_node_engine::water::fluid::identity::PhysicsSourceIdentity {
         name: "gltf_animation",
         identity: env!("MANIFOLD_PHYSICS_FAMILY_IDENTITY"),
     }
@@ -89,7 +89,7 @@ fn floats(hash: &mut Sha256, values: &[f32]) {
 mod source_identity_tests {
     #[test]
     fn physics_source_identity_registration_matches_family_build() {
-        let entries: Vec<_> = inventory::iter::<super::super::fluid::identity::PhysicsSourceIdentity>
+        let entries: Vec<_> = inventory::iter::<manifold_node_engine::water::fluid::identity::PhysicsSourceIdentity>
             .into_iter().filter(|entry| entry.name == "gltf_animation").collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].identity, env!("MANIFOLD_PHYSICS_FAMILY_IDENTITY"));

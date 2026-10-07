@@ -1,5 +1,5 @@
-use crate::node_graph::freeze::region::census::*;
-use crate::node_graph::PrimitiveRegistry;
+use manifold_node_engine::freeze::region::census::*;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 
     /// The invariant `classify_refusal` must never violate: it agrees with
     /// `classify_node` on every node of every bundled preset — `Some(_)` iff
@@ -14,7 +14,7 @@ use crate::node_graph::PrimitiveRegistry;
         for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(
             manifold_core::preset_def::PresetKind::Effect,
         ) {
-            if let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) {
+            if let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&type_id) {
                 defs.push((*view.canonical_def).clone());
             }
         }
@@ -55,5 +55,5 @@ use crate::node_graph::PrimitiveRegistry;
         assert!(checked > 100, "sweep too small to trust ({checked} nodes) — bundled preset enumeration broke");
     }
 
-use crate::node_graph::{SOURCE_TYPE_ID, FINAL_OUTPUT_TYPE_ID};
-use crate::node_graph::freeze::region::{classify_node, NodeClass};
+use manifold_node_engine::scene::boundary_nodes::{SOURCE_TYPE_ID, FINAL_OUTPUT_TYPE_ID};
+use manifold_node_engine::freeze::region::{classify_node, NodeClass};

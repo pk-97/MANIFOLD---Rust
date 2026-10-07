@@ -14,15 +14,15 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-use crate::preset_runtime::beat_envelope::{BeatEnvelopeState, BeatEnvelopeDurations};
+use manifold_node_engine::runtime::beat_envelope::{BeatEnvelopeState, BeatEnvelopeDurations};
 
 const DEFAULT_WINDOW_BEATS: f32 = 0.25;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: EnvelopeBeats,
     type_id: "node.envelope_beats",
     purpose: "Emit a beat-based attack/hold/release event on each integer trigger change. The first observed trigger arms silently unless `initial_count` explicitly differs; completed events stay complete across backward seeks, and `elapsed_beats` remains available during the optional tail.",
@@ -132,12 +132,10 @@ mod tests {
     use super::*;
     use manifold_core::{Beats, Seconds};
 
-    use crate::node_graph::effect_node::{EffectNode, EffectNodeType, FrameTime};
-    use crate::node_graph::execution_plan::compile;
-    use crate::node_graph::ports::{
-        NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
-    };
-    use crate::node_graph::{Executor, Graph};
+    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeType, FrameTime};
+    use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+    use manifold_node_engine::{exec::execution::Executor, graph::Graph};
 
     struct ScalarSink {
         type_id: EffectNodeType,
@@ -145,8 +143,8 @@ mod tests {
     }
 
     impl EffectNode for ScalarSink {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-            crate::node_graph::depth_rule::DepthRule::Terminal
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+            manifold_node_engine::scene::depth_rule::DepthRule::Terminal
         }
 
         fn type_id(&self) -> &EffectNodeType {
@@ -184,10 +182,10 @@ mod tests {
 
     struct Harness {
         graph: Graph,
-        plan: crate::node_graph::execution_plan::ExecutionPlan,
+        plan: manifold_node_engine::exec::execution_plan::ExecutionPlan,
         executor: Executor,
-        trigger: crate::node_graph::NodeInstanceId,
-        envelope: crate::node_graph::NodeInstanceId,
+        trigger: manifold_node_engine::exec::effect_node::NodeInstanceId,
+        envelope: manifold_node_engine::exec::effect_node::NodeInstanceId,
         seen: std::sync::Arc<std::sync::atomic::AtomicU32>,
         elapsed_seen: std::sync::Arc<std::sync::atomic::AtomicU32>,
     }
@@ -206,7 +204,7 @@ mod tests {
         ) -> Self {
             let mut graph = Graph::new();
             let trigger =
-                graph.add_node(Box::new(crate::node_graph::primitives::value::Value::new()));
+                graph.add_node(Box::new(manifold_node_engine::primitives::value::Value::new()));
             let envelope = graph.add_node(Box::new(EnvelopeBeats::new()));
             let seen = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(f32::NAN.to_bits()));
             let elapsed_seen =
@@ -239,7 +237,7 @@ mod tests {
                 .unwrap();
             if let Some(value) = initial_count {
                 let source =
-                    graph.add_node(Box::new(crate::node_graph::primitives::value::Value::new()));
+                    graph.add_node(Box::new(manifold_node_engine::primitives::value::Value::new()));
                 graph
                     .set_param(source, "value", ParamValue::Float(value))
                     .unwrap();

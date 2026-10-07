@@ -20,12 +20,12 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: EdgeDetect,
     type_id: "node.edge_detect",
     purpose: "Sobel 3×3 edge detection with smoothstep threshold, crossfaded against the source by amount. Brightness-based; no glow — chain with Bloom or Halation for glow.",

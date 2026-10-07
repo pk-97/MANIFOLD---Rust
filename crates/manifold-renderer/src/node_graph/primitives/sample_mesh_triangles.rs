@@ -4,12 +4,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::{Primitive, PrimitiveSpec};
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
 
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 pub const SAMPLE_MESH_TRIANGLES_CAPACITY: u32 = 512 * 3;
 
@@ -22,7 +22,7 @@ struct SampleMeshTrianglesUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SampleMeshTriangles,
     type_id: "node.sample_mesh_triangles",
     purpose: "Select at most 512 complete triangles, evenly distributed by original face index, without changing any vertex attributes. Inactive output triangles are zero. This preserves original face correspondence for sparse mesh diagnostics.",
@@ -44,7 +44,7 @@ impl Primitive for SampleMeshTriangles {
     fn array_output_capacity(
         &self,
         port: &str,
-        _: &crate::node_graph::effect_node::ParamValues,
+        _: &manifold_node_engine::exec::effect_node::ParamValues,
         _: &[(&str, u32)],
     ) -> Option<u32> {
         (port == "vertices").then_some(SAMPLE_MESH_TRIANGLES_CAPACITY)
@@ -93,10 +93,8 @@ impl Primitive for SampleMeshTriangles {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::{
-        FusionRegion, InputSource, RegionNode, generate_fused,
-    };
+    use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
+    use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
 
     fn source_face_index(sample: u32, source_count: u32, sample_count: u32) -> u32 {
         sample * (source_count / sample_count)
@@ -161,7 +159,7 @@ mod tests {
     /// a region containing this atom renders unfused — always correct.
     #[test]
     fn fixed_output_capacity_refuses_the_gather_identity_probe() {
-        let id = |n| crate::node_graph::effect_node::NodeInstanceId(n);
+        let id = |n| manifold_node_engine::exec::effect_node::NodeInstanceId(n);
         let region = FusionRegion {
             nodes: vec![RegionNode {
                 node_id: id(0),
@@ -196,7 +194,7 @@ mod tests {
         // containing it and it renders unfused.
         assert!(generate_fused(&region).is_ok());
         let prim = SampleMeshTriangles::new();
-        let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+        let node: &dyn manifold_node_engine::exec::effect_node::EffectNode = &prim;
         assert_eq!(
             node.array_output_capacity("vertices", &Default::default(), &[("in", 1009)]),
             Some(SAMPLE_MESH_TRIANGLES_CAPACITY),
@@ -208,7 +206,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::freeze::codegen::ENTRY;
+    use manifold_node_engine::freeze::codegen::ENTRY;
 
     fn vertex(face: u32, corner: u32) -> MeshVertex {
         let n = face as f32 * 3.0 + corner as f32;
@@ -235,7 +233,7 @@ mod gpu_tests {
         output_len: usize,
         label: &str,
     ) -> Vec<MeshVertex> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
         let src = device.create_buffer_shared(std::mem::size_of_val(source) as u64);
         let dst = device
@@ -289,7 +287,7 @@ mod gpu_tests {
         let source: Vec<_> = (0..10)
             .flat_map(|face| (0..3).map(move |corner| vertex(face, corner)))
             .collect();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SampleMeshTriangles>()
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SampleMeshTriangles>()
             .expect("sample mesh triangles codegen");
         let sampled = dispatch(&wgsl, &source, 24, "sample-mesh-triangles");
         let selected_faces = [0, 1, 2, 3, 5, 6, 7, 8];

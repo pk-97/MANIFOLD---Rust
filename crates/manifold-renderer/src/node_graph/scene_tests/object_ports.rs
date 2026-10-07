@@ -5,8 +5,8 @@
 //! `ALLOWED_OBJECT_CONSUMERS` the day a second one ships).
 
 
-use crate::node_graph::persistence::PrimitiveFactory;
-    use crate::node_graph::ports::PortType;
+use manifold_node_engine::persistence::PrimitiveFactory;
+    use manifold_node_engine::ports::PortType;
 
     /// `type_id`s allowed to declare an `Object`-typed INPUT port. Extending
     /// this list is itself the design's named escalation trigger ("any need
@@ -44,7 +44,7 @@ use crate::node_graph::persistence::PrimitiveFactory;
         // showing up as a generic registry-walk failure.
         let node = crate::node_graph::primitives::SceneObjectNode::new();
         assert!(
-            !crate::node_graph::EffectNode::inputs(&node)
+            !manifold_node_engine::exec::effect_node::EffectNode::inputs(&node)
                 .iter()
                 .any(|i| i.ty == PortType::Object),
             "node.scene_object must not take an Object input — Object wires never chain"

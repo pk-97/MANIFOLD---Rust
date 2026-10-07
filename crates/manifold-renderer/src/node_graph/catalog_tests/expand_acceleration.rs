@@ -1,14 +1,14 @@
 use manifold_core::NodeId;
 #[cfg(feature = "gpu-proofs")]
-use crate::node_graph::scene_modifier_expand::testkit::authoring_objects;
+use manifold_node_engine::load::expand::testkit::authoring_objects;
 
-    use crate::node_graph::scene_modifier_expand::testkit::{recipient_key, impulse_recipients_with_index};
+    use manifold_node_engine::load::expand::testkit::{recipient_key, impulse_recipients_with_index};
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::liquid_domain_of;
 use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
-use crate::node_graph::persistence::PrimitiveRegistry;
-    use crate::node_graph::physics_events::ImpulseTarget;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+    use manifold_node_engine::water::physics_events::ImpulseTarget;
 
     fn preset(json: &str) -> EffectGraphDef {
         serde_json::from_str(json).expect("preset parses")

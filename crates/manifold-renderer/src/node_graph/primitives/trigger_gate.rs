@@ -20,11 +20,11 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TriggerGate,
     type_id: "node.trigger_gate",
     purpose: "Gate a trigger_count scalar stream. When `enable` is true, advances pass through (output += input - previous_input) and emit a one-frame `pulse`; when false, advances are absorbed — output stays frozen and re-enabling does NOT fire a backlog. Equivalent to the legacy `if triggered { advance }` gate pattern, expressed as a graph wire instead of consumer-internal state.",
@@ -126,13 +126,13 @@ impl Primitive for TriggerGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::MockBackend;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
-    use crate::node_graph::effect_node::{FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::ports::{PortType, ScalarType};
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::exec::backend::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs};
+    use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::{PortType, ScalarType};
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use manifold_core::{Beats, Seconds};
 
     #[test]

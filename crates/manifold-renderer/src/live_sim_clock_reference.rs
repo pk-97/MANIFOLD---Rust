@@ -502,7 +502,7 @@ fn live_sim_clock_hits_land_inside_long_steps() {
 
 #[test]
 fn live_sim_clock_pause_seek_speed_reset_match_today() {
-    use crate::node_graph::liquid::clock::LiquidClock;
+    use manifold_node_engine::water::liquid::clock::LiquidClock;
     let mut current = LiquidClock::default();
     let mut reference = Clock::default();
     let controls = [
@@ -602,7 +602,7 @@ fn live_sim_clock_cfl_reference_rule() {
 
 #[test]
 fn live_sim_clock_gpu_shader_parses_and_validates() {
-    let source = include_str!("node_graph/primitives/shaders/gpu_flip_clock.wgsl");
+    let source = include_str!("../../manifold-node-engine/src/water/primitives/shaders/gpu_flip_clock.wgsl");
     let module = naga::front::wgsl::parse_str(source).expect("live clock WGSL must parse");
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),

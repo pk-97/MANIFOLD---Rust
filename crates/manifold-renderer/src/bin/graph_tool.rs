@@ -36,7 +36,7 @@ use std::process::ExitCode;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::GpuDevice;
-use manifold_renderer::node_graph::{PrimitiveRegistry, ValidateKind, fusion_report, validate_def};
+use manifold_node_engine::{persistence::PrimitiveRegistry, validate::ValidateKind, freeze::fusion_report, validate::validate_def};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -294,7 +294,7 @@ fn run_render(args: &[String]) -> ExitCode {
     }
 }
 
-fn print_human(file: &std::path::Path, report: &manifold_renderer::node_graph::ValidationReport) {
+fn print_human(file: &std::path::Path, report: &manifold_node_engine::validate::ValidationReport) {
     if report.is_valid() && report.warnings.is_empty() {
         println!("OK {}", file.display());
         return;
@@ -312,7 +312,7 @@ fn print_human(file: &std::path::Path, report: &manifold_renderer::node_graph::V
     }
 }
 
-fn format_issue(issue: &manifold_renderer::node_graph::ValidationIssue) -> String {
+fn format_issue(issue: &manifold_node_engine::validate::ValidationIssue) -> String {
     let mut loc = String::new();
     if let Some(node_id) = issue.node_id {
         loc.push_str(&format!("node {node_id}"));
@@ -399,7 +399,7 @@ fn run_fusion(args: &[String]) -> ExitCode {
 
 fn print_fusion_human(
     file: &std::path::Path,
-    report: &manifold_renderer::node_graph::FusionReport,
+    report: &manifold_node_engine::freeze::FusionReport,
 ) {
     println!(
         "{}: {} node(s), {} region(s), estimated {} dispatch(es)",

@@ -19,8 +19,8 @@ use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::preset_type_id::PresetTypeId;
-use manifold_renderer::node_graph::{PrimitiveRegistry, render_viewport_frame};
-use manifold_renderer::preset_context::PresetContext;
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_renderer::node_graph::render_viewport_frame};
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 fn node(
     id: u32,

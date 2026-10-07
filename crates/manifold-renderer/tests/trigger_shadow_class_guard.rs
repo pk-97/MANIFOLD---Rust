@@ -40,11 +40,8 @@ use std::collections::HashSet;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::flatten::flatten_groups;
-use manifold_renderer::node_graph::trigger_shadow_lint::{
-    DISCRETE_REPLACE_ALLOWLIST, find_trigger_driven_switch_value_node_ids,
-    find_trigger_shadow_findings, is_allowlisted,
-};
-use manifold_renderer::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG};
+use manifold_node_engine::trigger_shadow_lint::{DISCRETE_REPLACE_ALLOWLIST, find_trigger_driven_switch_value_node_ids, find_trigger_shadow_findings, is_allowlisted};
+use manifold_node_engine::load::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG};
 
 fn audit_def(
     preset_id: &str,

@@ -12,12 +12,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::fluid_particles::FluidParticle;
-use crate::node_graph::freeze::classify::FusedOutputCapacity;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::freeze::classify::FusedOutputCapacity;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Generated-codegen uniform layout: the scalar params in declaration order,
 /// then the injected dispatch count.  All seam metadata is carried as f32
@@ -40,7 +40,7 @@ struct InterpolationUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: InterpolateParticleFrames,
     type_id: "node.interpolate_particle_frames",
     purpose: "Present frame B's liquid particles at display time. Matching nonzero ids in the same identity epoch use cubic Hermite interpolation with span-scaled endpoint velocities; births are rewound from B by the remaining time and grow in with radius × blend. The output has one slot per particles_b record. An unwired or empty particles_a is an intentional empty-A path: every B particle is rewound like a birth but keeps its radius.",
@@ -234,9 +234,9 @@ impl Primitive for InterpolateParticleFrames {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::freeze::classify::{FusedOutputCapacity, FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::freeze::classify::{FusedOutputCapacity, FusionKind, InputAccess};
+    use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn interpolate_particle_frames_codegen_contract() {
@@ -296,9 +296,9 @@ mod tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    use crate::testkit::liquid_surface::{Harness, params, read};
+    use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
     use super::*;
-    use crate::node_graph::bindings::Slot;
+    use manifold_node_engine::bindings::Slot;
 
     fn particle(position: [f32; 3], velocity: [f32; 3], radius: f32, id: u32) -> FluidParticle {
         FluidParticle {

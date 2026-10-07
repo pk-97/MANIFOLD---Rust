@@ -12,12 +12,12 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::headless_readback::{
     encode_rgba8_png, non_black_fraction, readback_tonemapped_rgba8,
 };
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::gltf_import::{
     MaterialUpgradeCache, assemble_import_graph, upgrade_material_graph,
 };
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
@@ -129,7 +129,7 @@ fn render_graph(def: EffectGraphDef, label: &str) -> Vec<u8> {
         };
         let mut enc = h.device.create_encoder(label);
         {
-            let mut gpu = manifold_renderer::gpu_encoder::GpuEncoder::new(&mut enc, &h.device);
+            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &h.device);
             runtime.render(
                 &mut gpu,
                 &target.texture,

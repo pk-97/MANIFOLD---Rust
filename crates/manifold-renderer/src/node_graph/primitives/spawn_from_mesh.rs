@@ -35,11 +35,11 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const SPAWN_MODES: &[&str] = &["vertices", "surface"];
 
@@ -56,7 +56,7 @@ struct SpawnFromMeshUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SpawnFromMesh,
     type_id: "node.spawn_from_mesh",
     purpose: "Seed particles from a mesh's own geometry (Array<MeshVertex>) so an imported or procedural model can dissolve/explode into the existing 3D particle stack. `vertices` mode: one particle per vertex, exact silhouette. `surface` mode: area-weighted random triangle sampling for uniform surface density regardless of triangulation (three-pass dispatch: per-triangle area, prefix-sum scan, barycentric place). Positions are emitted in the mesh's LOCAL space, same convention as the mesh itself — an upstream transform applies later. Pair with node.apply_radial_burst_3d_to_particles + node.euler_step_particles_3d to blow the seeded cloud apart, crossfading the intact mesh render out as the particles render in.",
@@ -394,7 +394,7 @@ mod gpu_tests {
 
     #[test]
     fn surface_mode_samples_stay_on_the_single_triangle() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let wgsl = include_str!("shaders/spawn_from_mesh.wgsl");
 
         // One right triangle in the z=0 plane: v0=(0,0,0), v1=(4,0,0), v2=(0,3,0).
@@ -446,7 +446,7 @@ mod gpu_tests {
 
     #[test]
     fn vertices_mode_on_cube_dedups_to_eight_corners() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let wgsl = include_str!("shaders/spawn_from_mesh.wgsl");
 
         // Same 36 triangle-list positions node.cube_mesh emits (unit cube,

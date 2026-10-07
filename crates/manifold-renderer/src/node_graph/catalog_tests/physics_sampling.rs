@@ -1,9 +1,9 @@
-use crate::preset_runtime::*;
+use manifold_node_engine::runtime::*;
 #[cfg(feature = "gpu-proofs")]
 use crate::node_graph::*;
 #[cfg(feature = "gpu-proofs")]
 use manifold_core::{Beats, Seconds};
-    use crate::node_graph::PrimitiveRegistry;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
 
     #[cfg(feature = "gpu-proofs")]
     #[test]
@@ -36,7 +36,7 @@ use manifold_core::{Beats, Seconds};
             .plan
             .steps()
             .iter()
-            .zip(crate::preset_runtime::testkit::sampling_mask(&runtime).unwrap())
+            .zip(manifold_node_engine::runtime::testkit::sampling_mask(&runtime).unwrap())
         {
             let kind = runtime.graph.get_node(step.node).unwrap().node.type_id();
             match kind.as_str() {
@@ -63,7 +63,7 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_cpu_flip_reference(),
         )
         .expect("WaterBasin loads");
-        let mask = crate::preset_runtime::testkit::sampling_mask(&runtime)
+        let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime)
             .expect("fluid ancestry");
         let sampled: Vec<_> = runtime
             .plan
@@ -97,7 +97,7 @@ use manifold_core::{Beats, Seconds};
         .expect("WaterFloatingBoxMatter loads");
         let pairs = runtime.plan.coupled_scenes();
         assert!(!pairs.is_empty(), "the box and the liquid are one coupled scene");
-        let mask = crate::preset_runtime::testkit::sampling_mask(&runtime).expect("the liquid samples its field per tick");
+        let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime).expect("the liquid samples its field per tick");
         for pair in pairs {
             assert!(mask[pair.fluid_step], "the liquid samples");
             assert!(mask[pair.rigid_step], "its owned world's scene samples per tick");
@@ -133,7 +133,7 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("PhysicsSolids with an LFO-authored body loads");
-        let mask = crate::preset_runtime::testkit::sampling_mask(&runtime)
+        let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime)
             .expect("physics ancestry");
         let sampled: Vec<_> = runtime
             .plan
@@ -181,7 +181,7 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("rigid body source graph loads");
-        let mask = crate::preset_runtime::testkit::sampling_mask(&runtime)
+        let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime)
             .expect("physics ancestry");
         let sampled: Vec<_> = runtime
             .plan
@@ -216,14 +216,14 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("PhysicsSolids loads");
-        crate::preset_runtime::testkit::set_last_physics_frame_time(&mut runtime, Some(FrameTime {
+        manifold_node_engine::runtime::testkit::set_last_physics_frame_time(&mut runtime, Some(FrameTime {
             beats: Beats(1.0),
             seconds: Seconds(1.0),
             delta: Seconds(1.0),
             frame_count: 1,
         }));
-        runtime.reset_state(&crate::test_device());
-        assert!(crate::preset_runtime::testkit::last_physics_frame_time(&runtime).is_none());
+        runtime.reset_state(&manifold_gpu::testkit::test_device());
+        assert!(manifold_node_engine::runtime::testkit::last_physics_frame_time(&runtime).is_none());
     }
 
     #[test]
@@ -253,7 +253,7 @@ use manifold_core::{Beats, Seconds};
             .plan
             .steps()
             .iter()
-            .zip(crate::preset_runtime::testkit::sampling_mask(&runtime).unwrap())
+            .zip(manifold_node_engine::runtime::testkit::sampling_mask(&runtime).unwrap())
         {
             if step.node == event {
                 assert!(!sampled);
@@ -282,7 +282,7 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("OceanCliff loads");
-        let mask = crate::preset_runtime::testkit::sampling_mask(&runtime).expect("the paddle is physics ancestry");
+        let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime).expect("the paddle is physics ancestry");
         let sampled = |node_id: &str| {
             let node = runtime
                 .graph

@@ -12,10 +12,10 @@ use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue,
 };
 use manifold_core::effects::ParamConvert;
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures;
 use manifold_renderer::node_graph::scene_vm::{MaterialVm, SceneObjectVm, SceneVm};
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::runtime::PresetRuntime;
 
 const PHYSICS_SOLIDS_JSON: &str = include_str!("../assets/generator-presets/PhysicsSolids.json");
 const PHYSICS_BOXES_JSON: &str = include_str!("../assets/generator-presets/PhysicsBoxes.json");
@@ -69,8 +69,8 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
 #[test]
 fn physics_boxes_contacts_deflect_the_pile_sideways() {
     use manifold_core::Seconds;
-    use manifold_renderer::node_graph::physics::{MAX_BODIES, RigidBody, RigidSimulation};
-    use manifold_renderer::node_graph::transform::Transform;
+    use manifold_node_engine::water::physics::{MAX_BODIES, RigidBody, RigidSimulation};
+    use manifold_node_engine::scene::transform::Transform;
 
     let def: EffectGraphDef = serde_json::from_str(PHYSICS_BOXES_JSON).unwrap();
     let nodes = nodes_by_id(&def);

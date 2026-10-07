@@ -11,15 +11,13 @@
 
 use std::borrow::Cow;
 
-use crate::mesh::{
-    EdgePair, PLATONIC_MAX_EDGES, PLATONIC_SHAPES, platonic_edges,
-};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::{EdgePair, PLATONIC_MAX_EDGES, PLATONIC_SHAPES, platonic_edges};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use crate::node_graph::primitives::polytope_vertices::read_shape;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: PolytopeEdges,
     type_id: "node.platonic_solid_edges",
     purpose: "Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. Curated-enum atom — one CPU write of a static per-shape adjacency table, sentinel-padded for the inactive tail. Pair with node.platonic_solid_points (driving both from the same shape scalar) and feed both into node.draw_lines (vertices → points, edges → edges) for a 3D wireframe.",
@@ -57,7 +55,7 @@ impl Primitive for PolytopeEdges {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "edges" {

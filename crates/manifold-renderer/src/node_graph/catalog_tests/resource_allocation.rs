@@ -1,15 +1,12 @@
-    use crate::node_graph::resource_allocation::*;
-use crate::node_graph::{Graph, ExecutionPlan, NodeInstanceId, ResourceId};
-use crate::node_graph::PreAllocationError;
+    use manifold_node_engine::exec::resource_allocation::*;
+use manifold_node_engine::{graph::Graph, exec::execution_plan::ExecutionPlan, exec::effect_node::NodeInstanceId, exec::execution_plan::ResourceId};
+use manifold_node_engine::load::graph_loader::PreAllocationError;
 use ahash::AHashMap;
-    use crate::node_graph::compile;
+    use manifold_node_engine::exec::execution_plan::compile;
 
-    use crate::node_graph::ports::PortType;
-    use crate::node_graph::primitives::{
-        ArrayFeedback, ContainerBounds3D, GenerateCubeMesh, ResolveAccumulator, ScatterParticles,
-        SceneObjectNode, SeedParticles, Value, WaveShearMesh,
-    };
-    use crate::mesh::MeshVertex;
+    use manifold_node_engine::ports::PortType;
+    use {crate::node_graph::primitives::ArrayFeedback, crate::node_graph::primitives::ContainerBounds3D, crate::node_graph::primitives::GenerateCubeMesh, crate::node_graph::primitives::ResolveAccumulator, crate::node_graph::primitives::ScatterParticles, crate::node_graph::primitives::SceneObjectNode, crate::node_graph::primitives::SeedParticles, manifold_node_engine::primitives::value::Value, crate::node_graph::primitives::WaveShearMesh};
+    use manifold_node_engine::mesh::MeshVertex;
 
 
 
@@ -127,15 +124,15 @@ use ahash::AHashMap;
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn temporary_arrays_match_dedicated_storage_across_animated_and_repeat_frames() {
-        use crate::gpu_encoder::GpuEncoder;
-        use crate::node_graph::Backend;
-        use crate::node_graph::pre_allocate_resources;
-        use crate::node_graph::ParamValue;
-        use crate::node_graph::{Executor, FrameTime, MetalBackend};
+        use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+        use manifold_node_engine::exec::backend::Backend;
+        use manifold_node_engine::load::graph_loader::pre_allocate_resources;
+        use manifold_node_engine::parameters::ParamValue;
+        use manifold_node_engine::exec::{execution::Executor, effect_node::FrameTime, metal_backend::MetalBackend};
         use manifold_core::{Beats, Seconds};
         use manifold_gpu::GpuTextureFormat;
 
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let make_runtime = |dedicated| {
             let (mut graph, waves) = wave_graph();
             let plan = compile(&graph).unwrap();
@@ -295,7 +292,7 @@ use ahash::AHashMap;
     #[test]
     fn math_view_borrowed_arrays_keep_owner_storage_and_capacity() {
         let mut graph = Graph::new();
-        let registry = crate::node_graph::persistence::PrimitiveRegistry::with_builtin();
+        let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
         let source = graph.add_node(registry.construct("system.mesh_input").unwrap());
         let mask = graph.add_node(Box::new(crate::node_graph::primitives::MeshSpatialMask::new()));
         graph.connect((source, "vertices"), (mask, "in")).unwrap();
@@ -435,7 +432,7 @@ use ahash::AHashMap;
     #[test]
     fn bundled_presets_share_only_dead_roots() {
         use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
-        use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
+        use manifold_node_engine::persistence::{EffectGraphDefExt, PrimitiveRegistry};
         use manifold_core::preset_def::PresetKind;
         let registry = PrimitiveRegistry::with_builtin();
         let mut planned = 0;

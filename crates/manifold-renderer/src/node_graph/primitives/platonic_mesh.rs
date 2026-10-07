@@ -10,14 +10,14 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
-use crate::mesh::{MeshVertex, PLATONIC_SHAPES};
-use crate::generators::platonic_geometry::{platonic_mesh_upload_bytes, PLATONIC_MESH_CAPACITY};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::mesh_source::MeshSource;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::{MeshVertex, PLATONIC_SHAPES};
+use manifold_node_engine::platonic::{platonic_mesh_upload_bytes, PLATONIC_MESH_CAPACITY};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::scene::mesh_source::MeshSource;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: PlatonicMesh,
     type_id: "node.platonic_solid_mesh",
     purpose: "Emit a closed, outward-wound flat-normal triangle mesh for one of the five Platonic solids as Array(MeshVertex). Shape selects the reusable Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron topology; radius scales its circumradius-one source. Pair with node.render_3d_mesh or any mesh transform chain.",
@@ -74,7 +74,7 @@ impl Primitive for PlatonicMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "vertices").then_some(PLATONIC_MESH_CAPACITY as u32)
@@ -149,11 +149,11 @@ fn platonic_mesh_upload_count(shape: u32) -> u32 {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::generators::platonic_geometry::platonic_mesh;
+    use manifold_node_engine::platonic::platonic_mesh;
 
     #[test]
     fn upload_matches_cpu_mesh_and_zero_padding() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(
             include_str!("shaders/platonic_mesh_upload.wgsl"),
             "cs_main",

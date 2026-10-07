@@ -19,14 +19,14 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 pub const LOOP_CAMERA_AXIS_LABELS: &[&str] = &["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: LoopCamera,
     type_id: "node.loop_camera",
     purpose: "Beat-locked flythrough camera for scene looping. Emits one Camera on `out` from phase (0..1, wired from beat_ramp at attack=1 rate=1/bars), cell_size, axis (+X/-X/+Y/-Y/+Z/-Z), lateral/height offsets, and fov. Travel = home + d(phase)·patterns_per_loop·pattern_length·cell_size along axis, where d(p) = p − flow·sin(2πp)/(2π) eases the flight (equal seam slope, INV-3 wrap purity); travel per loop is a whole number of pattern_length cells, so the wrap is pure by construction for any integers (corridor D3). Sway drifts the lateral/height offsets, the look sweep weaves the target laterally, and the zoom pulse breathes the fov — all phase-periodic. The frame at phase 0 equals the frame at phase 1 by construction. CPU-only, no GPU dispatch.",
@@ -440,11 +440,11 @@ mod tests {
     // scalar input so both the fract()'d seam path and the movement terms
     // are exercised end to end.
 
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
-    use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::{MockBackend, ports::ScalarType};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs};
+    use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::{exec::backend::MockBackend, ports::ScalarType};
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -481,12 +481,12 @@ mod tests {
         let mut backend = MockBackend::new();
         let phase_slot = backend.acquire(
             ResourceId(0),
-            crate::node_graph::ports::PortType::Scalar(ScalarType::F32),
+            manifold_node_engine::ports::PortType::Scalar(ScalarType::F32),
             None,
             (0, 0),
         );
         backend.set_scalar(phase_slot, ParamValue::Float(phase));
-        let out_slot = backend.acquire(ResourceId(1), crate::node_graph::ports::PortType::Camera, None, (0, 0));
+        let out_slot = backend.acquire(ResourceId(1), manifold_node_engine::ports::PortType::Camera, None, (0, 0));
 
         let mut params = ParamValues::default();
         for &(name, default) in defaults {
@@ -501,9 +501,9 @@ mod tests {
         // +Z (the standalone default) applies unless a test wires otherwise.
         params.insert(Cow::Borrowed("axis"), ParamValue::Enum(4)); // +Z
 
-        let wire_slots: &[(&'static str, crate::node_graph::bindings::Slot)] =
+        let wire_slots: &[(&'static str, manifold_node_engine::bindings::Slot)] =
             &[("phase", phase_slot)];
-        let outputs_bindings: &[(&'static str, crate::node_graph::bindings::Slot)] =
+        let outputs_bindings: &[(&'static str, manifold_node_engine::bindings::Slot)] =
             &[("out", out_slot)];
         let mut scalar_scratch = Vec::new();
         let mut camera_scratch = Vec::new();

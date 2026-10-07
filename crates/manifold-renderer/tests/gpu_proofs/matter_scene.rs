@@ -5,16 +5,12 @@
 
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuFrameProfile, GpuTextureFormat, GpuTimestampSampler};
-use manifold_renderer::gpu_encoder::GpuEncoder;
-use manifold_renderer::node_graph::fluid::{TICK, domain_layout};
-use manifold_renderer::node_graph::fluid_particles::{CellRange, FluidParticle};
-use manifold_renderer::node_graph::liquid::lattice::LiquidLattice;
-use manifold_renderer::node_graph::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
-use manifold_renderer::node_graph::{
-    ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId,
-    ParamValue, PrimitiveRegistry, ResourceId, StateStore, Transform, compile,
-    pre_allocate_resources,
-};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::water::fluid::{TICK, domain_layout};
+use manifold_node_engine::water::fluid_particles::{CellRange, FluidParticle};
+use manifold_node_engine::water::liquid::lattice::LiquidLattice;
+use manifold_node_engine::water::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
+use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, scene::transform::Transform, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
 use crate::harness;
 
@@ -571,11 +567,8 @@ fn matter_deterministic_under_seed() {
 /// fixed-point unit when export groups both into one display frame.
 #[test]
 fn matter_variable_speed_export_grouping_matches_raw_points() {
-    use manifold_renderer::node_graph::matter::{
-        MAX_SUBSTEPS, WATER_DENSITY, free_fall_speed, momentum_unit,
-        substeps_for_interval, substeps_per_tick, water_lambda, wave_speed,
-    };
-    use manifold_renderer::node_graph::physics::PhysicsStepScope;
+    use manifold_node_engine::water::matter::{MAX_SUBSTEPS, WATER_DENSITY, free_fall_speed, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
+    use manifold_node_engine::water::physics::PhysicsStepScope;
 
     let _offline = PhysicsStepScope::for_render(true);
     let settings = SceneSettings { resolution: 16, domain_size: 1.0, stiffness: 1.0, ..SceneSettings::default() };
@@ -764,7 +757,7 @@ fn matter_fixed_point_headroom() {
 /// discards excess elapsed time, so the next frame owes only its own tick.
 #[test]
 fn matter_domain_holds_on_nonfinite_gravity() {
-    let _live = manifold_renderer::node_graph::physics::PhysicsStepScope::for_render(false);
+    let _live = manifold_node_engine::water::physics::PhysicsStepScope::for_render(false);
     let mut scene = MatterScene::new(&small_dam_break());
     for _ in 0..5 {
         scene.tick();

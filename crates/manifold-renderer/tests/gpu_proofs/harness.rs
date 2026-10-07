@@ -30,12 +30,9 @@ use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_gpu::raytrace::{EmissiveAliasEntry, EmissiveTriangleGpu};
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::{
-    Backend, EffectNode, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
-    NodeInstanceId, PortType, ResourceId, Slot, Source, compile,
-};
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::{exec::backend::Backend, exec::effect_node::EffectNode, exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, ports::PortType, exec::execution_plan::ResourceId, bindings::Slot, scene::boundary_nodes::Source, exec::execution_plan::compile};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 /// Fixed render dimensions. Small enough that readbacks finish in
 /// milliseconds; large enough to exercise non-trivial dispatch shapes
@@ -119,7 +116,7 @@ pub fn import_rt_manifest(
 /// measurement is secretly of the card default" into a failure at the point of
 /// the mistake, instead of a wrong number read as a conclusion.
 pub fn assert_no_shadowed_def_params(
-    runtime: &manifold_renderer::preset_runtime::PresetRuntime,
+    runtime: &manifold_node_engine::runtime::PresetRuntime,
     context: &str,
 ) {
     let findings: Vec<String> = runtime
@@ -212,7 +209,7 @@ impl ParityHarness {
         // processors again — `mem::forget` keeps them alive without
         // storing them in `ParityHarness` (which lives in a `OnceLock`
         // and would need `Sync`, but `PostProcessEffect` is only `Send`).
-        std::mem::forget(manifold_renderer::plugin_prewarm::prewarm_all(&device));
+        std::mem::forget(manifold_node_engine::runtime::plugin_prewarm::prewarm_all(&device));
         Self {
             device,
             width: PARITY_WIDTH,
@@ -482,7 +479,7 @@ impl BackgroundWait {
 
     /// Call once per rendered frame. True while `runtime` has background work
     /// in flight, after yielding to its worker threads.
-    pub fn pending(&self, runtime: &manifold_renderer::preset_runtime::PresetRuntime) -> bool {
+    pub fn pending(&self, runtime: &manifold_node_engine::runtime::PresetRuntime) -> bool {
         let pending = runtime.io_pending() || runtime.warmup_pending();
         if pending {
             self.hold();

@@ -39,7 +39,7 @@ fn gltf_fixture_project() -> manifold_core::project::Project {
     // the whole body is the renderer's preset overlay call.
     let id = embedded.id().expect("preset id");
     let json = serde_json::to_string(&embedded.def).expect("serialize embedded preset");
-    manifold_renderer::preset_loader::set_project_presets(
+    manifold_node_engine::load::preset_loader::set_project_presets(
         Vec::new(),
         vec![(id.as_str().to_string(), json, embedded.origin)],
         Vec::new(),

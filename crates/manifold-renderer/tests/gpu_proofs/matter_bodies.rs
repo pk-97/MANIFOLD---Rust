@@ -4,19 +4,16 @@
 
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_physics::sdf::signed_distance_lattice;
-use manifold_renderer::node_graph::fluid::{TICK, domain_layout};
-use manifold_renderer::node_graph::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
-use manifold_renderer::node_graph::liquid::fields::FieldLattice;
-use manifold_renderer::node_graph::liquid::lattice::LiquidLattice;
-use manifold_renderer::node_graph::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, momentum_unit};
-use manifold_renderer::node_graph::{
-    ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId,
-    PrimitiveRegistry, ResourceId, StateStore, compile, pre_allocate_resources,
-};
+use manifold_node_engine::water::fluid::{TICK, domain_layout};
+use manifold_node_engine::water::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
+use manifold_node_engine::water::liquid::fields::FieldLattice;
+use manifold_node_engine::water::liquid::lattice::LiquidLattice;
+use manifold_node_engine::water::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, momentum_unit};
+use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
-use manifold_renderer::node_graph::Transform;
+use manifold_node_engine::scene::transform::Transform;
 
 use crate::harness;
 use crate::matter_scene::{MatterScene, SceneSettings};

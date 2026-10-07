@@ -8,20 +8,12 @@ use std::borrow::Cow;
 
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder;
-use manifold_renderer::node_graph::fluid::domain_layout;
-use manifold_renderer::node_graph::liquid::lattice::LiquidLattice;
-use manifold_renderer::node_graph::matter::reference::{self, Params, Point};
-use manifold_renderer::node_graph::matter::{
-    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, block_sort_box, lattice_blocks, mass_unit,
-    momentum_unit, rounding_hash, water_lambda,
-};
-use manifold_renderer::node_graph::{
-    ArrayType, Backend, EffectNode, EffectNodeContext, EffectNodeType, ExecutionPlan, Executor,
-    FrameTime, Graph, KnownItem, MetalBackend, NodeInput, NodeInstanceId, NodeOutput, NodePort,
-    ParamDef, ParamType, ParamValue, PortKind, PortType, PrimitiveRegistry, ResourceId, StateStore,
-    compile, pre_allocate_resources,
-};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::water::fluid::domain_layout;
+use manifold_node_engine::water::liquid::lattice::LiquidLattice;
+use {manifold_node_engine::water::matter::reference, manifold_node_engine::water::matter::reference::Params, manifold_node_engine::water::matter::reference::Point};
+use manifold_node_engine::water::matter::{MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, block_sort_box, lattice_blocks, mass_unit, momentum_unit, rounding_hash, water_lambda};
+use manifold_node_engine::{ports::ArrayType, exec::backend::Backend, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, ports::KnownItem, exec::metal_backend::MetalBackend, ports::NodeInput, exec::effect_node::NodeInstanceId, ports::NodeOutput, ports::NodePort, parameters::ParamDef, parameters::ParamType, parameters::ParamValue, ports::PortKind, ports::PortType, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
 use crate::harness;
 
@@ -55,8 +47,8 @@ impl HostArray {
 }
 
 impl EffectNode for HostArray {
-    fn depth_rule(&self) -> manifold_renderer::node_graph::depth_rule::DepthRule {
-        manifold_renderer::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id

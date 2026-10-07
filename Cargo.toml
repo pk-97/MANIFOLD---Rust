@@ -11,6 +11,7 @@ members = [
     "crates/manifold-editing",
     "crates/manifold-io",
     "crates/manifold-renderer",
+    "crates/manifold-node-engine",
     "crates/manifold-native",
     "crates/manifold-profiler",
     "crates/manifold-media",

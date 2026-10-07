@@ -9,11 +9,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::{CurvePoint, Vec4Vertex};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::{CurvePoint, Vec4Vertex};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`proj_scale`,
 /// `proj_dist`), then the derived `active_count` (declared `derived_uniforms`,
@@ -30,7 +30,7 @@ struct Project4DUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Project4D,
     type_id: "node.flatten_4d",
     purpose: "Project an Array<Vec4Vertex> to Array<CurvePoint> via two-stage perspective (4D → 3D collapse with f = proj_dist / (proj_dist - w), then 3D → 2D with s = proj_dist / (proj_dist + p3z)). Bit-exact port of generator_math::project_4d. The 4D-equivalent of node.flatten_3d for Tesseract / Duocylinder decomposition.",
@@ -77,7 +77,7 @@ impl Primitive for Project4D {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {
@@ -159,20 +159,13 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use crate::generators::generator_math::project_4d as legacy_project_4d;
-    use crate::mesh::{CurvePoint, Vec4Vertex};
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::effect_node::{
-        EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
-    };
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::parameters::ParamDef;
-    use crate::node_graph::ports::{
-        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
-    };
-    use crate::node_graph::{
-        ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue,
-        compile,
-    };
+    use manifold_node_engine::mesh::{CurvePoint, Vec4Vertex};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::parameters::ParamDef;
+    use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
+    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
 
     use super::Project4D;
 
@@ -204,7 +197,7 @@ mod gpu_tests {
     }
 
     impl EffectNode for Vec4Source {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -258,7 +251,7 @@ mod gpu_tests {
     }
 
     impl EffectNode for CurvePointSink {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -312,7 +305,7 @@ mod gpu_tests {
         proj_dist: f32,
     ) -> Vec<CurvePoint> {
         assert!(verts.len() as u32 <= capacity);
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();

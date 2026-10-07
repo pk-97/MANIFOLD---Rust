@@ -14,11 +14,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`src_cols`,
 /// `src_rows`, both Int → i32) then the codegen-injected `dispatch_count`
@@ -32,7 +32,7 @@ struct TriangulateUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TriangulateGrid,
     type_id: "node.make_triangles",
     purpose: "Convert a positions-only NxM Array<MeshVertex> grid into a triangle-list (N-1)*(M-1)*6 vertex stream with finite-difference normals. The adapter primitive between node.grid_mesh (positions) and node.render_mesh (triangle list). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
@@ -80,7 +80,7 @@ impl Primitive for TriangulateGrid {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -163,10 +163,10 @@ mod gpu_tests {
     }
 
     fn dispatch_tri(grid: &[MeshVertex], dst_cap: u32, uniform: &TriangulateUniforms) -> Vec<MeshVertex> {
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<TriangulateGrid>().expect("make_triangles codegen");
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<TriangulateGrid>().expect("make_triangles codegen");
         let uniform = bytemuck::bytes_of(uniform);
-        let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "tri-oracle");
+        let device = manifold_gpu::testkit::test_device();
+        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "tri-oracle");
         let src_buf = device.create_buffer_shared(std::mem::size_of_val(grid) as u64);
         let dst_buf = device.create_buffer_shared(u64::from(dst_cap) * std::mem::size_of::<MeshVertex>() as u64);
         unsafe {

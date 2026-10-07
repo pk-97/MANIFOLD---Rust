@@ -1,4 +1,4 @@
-use crate::node_graph::loaded_preset_view::outer_routings_from_view;
+use manifold_node_engine::load::loaded_preset_view::outer_routings_from_view;
 use manifold_core::PresetTypeId;
 
     /// BUG-103 regression: a glTF-imported scene's per-object card knobs can
@@ -34,7 +34,7 @@ use manifold_core::PresetTypeId;
         // canonical_def + owned bindings that `build_view` produces, just from
         // the imported def instead of a bundled catalog entry.
         let meta = def.preset_metadata.clone().expect("import def carries metadata");
-        let view = crate::node_graph::loaded_preset_view::testkit::imported_view(
+        let view = manifold_node_engine::load::loaded_preset_view::testkit::imported_view(
             PresetTypeId::from_string("test.gltf_import".to_string()), def,
         );
 

@@ -27,13 +27,13 @@
 
 use std::borrow::Cow;
 
-use crate::mesh::{InstanceTransform, MeshVertex, Vec4Vertex};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::scene_object::SceneObject;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex, Vec4Vertex};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::scene_object::SceneObject;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SceneObjectNode,
     type_id: "node.scene_object",
     purpose: "Binds one scene object's mesh vertices, transform, material, nineteen maps (base colour / normal / metallic-roughness / occlusion / emissive / sheen colour / sheen roughness / iridescence / iridescence thickness / anisotropy / clearcoat / clearcoat roughness / clearcoat normal / specular / specular colour / transmission / diffuse transmission / diffuse transmission colour / volume thickness), instances, and an optional live instance count into a single Object wire consumed by render_scene's object_k ports. Object wires never chain — this is the sole producer, and it takes no Object input (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1's single-hop invariant). `visible` is port-shadowed so muting the object is a MIDI/LFO binding, not a graph edit; false means no draw AND no shadow cast. CPU-only bridge: no GPU dispatch of its own — mesh/map/instance resources are forwarded as Slots, resolved by the consumer exactly as render_scene resolves them today.",
@@ -223,13 +223,13 @@ impl Primitive for SceneObjectNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::MockBackend;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::{FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::ports::{ArrayType, PortType};
+    use manifold_node_engine::exec::effect_node::EffectNode;
+    use manifold_node_engine::exec::backend::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::{ArrayType, PortType};
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -287,7 +287,7 @@ mod tests {
 
         let object = backend.object(out_slot).expect("object should be set");
         assert!(object.visible);
-        assert_eq!(object.transform, crate::node_graph::transform::Transform::default());
+        assert_eq!(object.transform, manifold_node_engine::scene::transform::Transform::default());
         assert!(object.material.is_none());
         assert!(object.mesh.is_none());
         assert!(object.instances.is_none());
@@ -313,13 +313,13 @@ mod tests {
         );
         let topology_slot = backend.acquire(
             ResourceId(4),
-            PortType::Array(ArrayType::of_known::<crate::mesh::Vec4Vertex>()),
+            PortType::Array(ArrayType::of_known::<manifold_node_engine::mesh::Vec4Vertex>()),
             None,
             (0, 0),
         );
         let count_slot = backend.acquire(
             ResourceId(5),
-            PortType::Scalar(crate::node_graph::ports::ScalarType::F32),
+            PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
             None,
             (0, 0),
         );
@@ -392,14 +392,14 @@ mod tests {
 mod gpu_tests {
     use std::sync::{Arc, Mutex};
 
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::MetalBackend;
-    use crate::node_graph::compile;
-    use crate::node_graph::effect_node::{EffectNodeContext, EffectNodeType, FrameTime};
-    use crate::node_graph::execution::Executor;
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::parameters::ParamDef;
-    use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
+    use manifold_node_engine::exec::effect_node::EffectNode;
+    use manifold_node_engine::exec::metal_backend::MetalBackend;
+    use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::exec::effect_node::{EffectNodeContext, EffectNodeType, FrameTime};
+    use manifold_node_engine::exec::execution::Executor;
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::parameters::ParamDef;
+    use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
@@ -421,11 +421,11 @@ mod gpu_tests {
     struct MeshSourceNode {
         type_id: EffectNodeType,
         /// Published on `out` when set, as a GPU-counted producer does.
-        live: Option<crate::node_graph::live_extent::LiveExtent>,
+        live: Option<manifold_node_engine::scene::live_extent::LiveExtent>,
     }
 
     impl EffectNode for MeshSourceNode {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -464,7 +464,7 @@ mod gpu_tests {
     }
 
     impl EffectNode for ObjectConsumerNode {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -504,7 +504,7 @@ mod gpu_tests {
 
     #[test]
     fn object_wire_carries_real_mesh_slot_end_to_end() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();
@@ -560,10 +560,10 @@ mod gpu_tests {
     /// producer that publishes none leaves the whole array live.
     #[test]
     fn object_wire_carries_the_mesh_live_extent() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         for publish in [true, false] {
             let mut g = Graph::new();
-            let live = publish.then(|| crate::node_graph::live_extent::LiveExtent {
+            let live = publish.then(|| manifold_node_engine::scene::live_extent::LiveExtent {
                 counts: device.create_buffer_shared(16),
                 offset: 8,
                 per_item: 3,

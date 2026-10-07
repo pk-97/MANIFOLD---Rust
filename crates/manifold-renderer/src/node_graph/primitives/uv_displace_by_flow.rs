@@ -13,10 +13,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -27,7 +27,7 @@ struct DisplaceUniforms {
     _pad1: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: UvDisplaceByFlow,
     type_id: "node.uv_displace_by_flow",
     purpose: "Sample a source texture at UVs displaced by a 2D flow vector field. offset = (flow.rb - bias) * weight. Pair with node.flow_field_noise upstream for procedural distortion (Watercolor-style), or with any other primitive that emits 2-channel offsets packed in R/B (e.g. an upstream node.custom_convolution configured as a gradient).",

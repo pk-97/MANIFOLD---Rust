@@ -180,11 +180,11 @@ pub(crate) fn run_import_worker(
         path: path.clone(),
         stage: ImportStage::Validating,
     });
-    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
-    let validation = manifold_renderer::node_graph::validate_def(
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
+    let validation = manifold_node_engine::validate::validate_def(
         &graph,
         &registry,
-        manifold_renderer::node_graph::ValidateKind::Generator,
+        manifold_node_engine::validate::ValidateKind::Generator,
         &device,
     );
     if !validation.is_valid() {

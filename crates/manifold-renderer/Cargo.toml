@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-physics = { path = "../manifold-physics" }
 manifold-fluids = { path = "../manifold-fluids" }
 zstd = "0.13.3"
@@ -91,6 +92,7 @@ core-foundation = "0.9"
 sha2 = "0.10"
 
 [dev-dependencies]
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
 manifold-ui = { path = "../manifold-ui" }
 manifold-ui-paint = { path = "../manifold-ui-paint" }
 # Independent f64 FLIP surface reconstruction reference fixtures.
@@ -166,20 +168,20 @@ required-features = ["gpu-proofs"]
 # deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,
 # every `mod gpu_tests`, the `gpu_proofs` integration binary above, and the
 # counters and error tap the liquid conformance suite reads.
-gpu-proofs = ["manifold-gpu/gpu-proofs", "manifold-editing/gpu-proofs"]
+gpu-proofs = ["manifold-node-engine/testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-editing/gpu-proofs"]
 # Bounded dynamic-RT timing is opt-in, separate from correctness gates.
-rt-perf-proofs = ["gpu-proofs"]
+rt-perf-proofs = ["manifold-node-engine/rt-perf-proofs", "gpu-proofs"]
 # GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.
-fluid-perf-proofs = ["gpu-proofs"]
+fluid-perf-proofs = ["manifold-node-engine/fluid-perf-proofs", "gpu-proofs"]
 # GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.
-matter-perf-proofs = ["gpu-proofs"]
+matter-perf-proofs = ["manifold-node-engine/matter-perf-proofs", "gpu-proofs"]
 # Water race probes (GPU_FLIP_PRESSURE_SOLVE.md): minutes-long Dam Break
 # runs of GPU FLIP and the FLIP Fluids engine, opt-in. The frame probe reads
 # render_scene::water_perf.
-water-race-probes = ["gpu-proofs", "fluid-perf-proofs", "manifold-fluids/face-oracle"]
+water-race-probes = ["manifold-node-engine/water-race-probes", "gpu-proofs", "fluid-perf-proofs", "manifold-fluids/face-oracle"]
 # The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),
 # opt-in: builds FLIP's oracle entries into manifold-fluids.
-whitewater-oracle = ["gpu-proofs", "manifold-fluids/whitewater-oracle"]
+whitewater-oracle = ["manifold-node-engine/whitewater-oracle", "gpu-proofs", "manifold-fluids/whitewater-oracle"]
 [lints]
 workspace = true
 

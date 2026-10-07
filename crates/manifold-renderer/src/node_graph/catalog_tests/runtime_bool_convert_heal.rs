@@ -8,9 +8,9 @@
     //! dead and the effect stuck on. The cure is a load-time heal:
     //! Float/IntRound → BoolThreshold when the target param is declared
     //! Bool (`heal_bool_convert_bindings`, called at the top of `from_def`).
-    use crate::preset_runtime::*;
+    use manifold_node_engine::runtime::*;
 use crate::node_graph::*;
-    use crate::node_graph::ParamValue;
+    use manifold_node_engine::parameters::ParamValue;
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_core::effects::ParamConvert;
 
@@ -36,7 +36,7 @@ use crate::node_graph::*;
     #[test]
     fn poisoned_binding_without_heal_is_refused_by_into_graph() {
         let def = poisoned_lissajous();
-        match def.into_graph(&PrimitiveRegistry::with_builtin(), &crate::node_graph::mesh_change::PreparedMeshRules::default()) {
+        match def.into_graph(&PrimitiveRegistry::with_builtin(), &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) {
             Err(err @ LoadError::BindingConvertTypeMismatch { .. }) => {
                 let _ = err;
             }
@@ -89,7 +89,7 @@ use crate::node_graph::*;
         };
         meta.bindings.push(orphan);
 
-        let healed = crate::preset_runtime::testkit::heal_bool_convert_bindings(
+        let healed = manifold_node_engine::runtime::testkit::heal_bool_convert_bindings(
             &mut def,
             &PrimitiveRegistry::with_builtin(),
         );

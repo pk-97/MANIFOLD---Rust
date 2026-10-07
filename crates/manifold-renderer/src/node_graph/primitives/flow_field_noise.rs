@@ -9,10 +9,10 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Output-resolution options. The flow field is low-frequency, so it
 /// tolerates being generated at reduced resolution and sampled back
@@ -23,7 +23,7 @@ pub const FLOW_RESOLUTIONS: &[&str] = &["full", "half", "quarter"];
 
 /// Decode the `resolution` enum into a `(num, denom)` canvas scale, or
 /// `None` for full-res (canvas-default).
-fn resolution_scale(params: &crate::node_graph::effect_node::ParamValues) -> Option<(u32, u32)> {
+fn resolution_scale(params: &manifold_node_engine::exec::effect_node::ParamValues) -> Option<(u32, u32)> {
     match resolution_index(params) {
         1 => Some((1, 2)), // half
         2 => Some((1, 4)), // quarter
@@ -31,7 +31,7 @@ fn resolution_scale(params: &crate::node_graph::effect_node::ParamValues) -> Opt
     }
 }
 
-fn resolution_index(params: &crate::node_graph::effect_node::ParamValues) -> u32 {
+fn resolution_index(params: &manifold_node_engine::exec::effect_node::ParamValues) -> u32 {
     match params.get("resolution") {
         Some(ParamValue::Enum(n)) => *n,
         Some(ParamValue::Float(f)) => f.round() as u32,
@@ -48,7 +48,7 @@ struct FlowFieldUniforms {
     resolution: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: FlowFieldNoise,
     type_id: "node.flow_field_noise",
     purpose: "Generate a 2D flow vector field from domain-warped fBM Perlin noise. Zero inputs. Output: Rgba16Float texture with flow_x in R, flow_y in B (G=0, A=1.0) — matches the Watercolor flow-map convention so it composes with UV displacement primitives that read .rb as offset.",
@@ -108,7 +108,7 @@ crate::primitive! {
 // D7/P0: per-frame recompute for a FUSED region's `time` field — `run()` packs
 // `ctx.time.seconds.0` into the `time` uniform when the input is unwired.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.flow_field_noise",
         array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32]),
@@ -119,7 +119,7 @@ impl Primitive for FlowFieldNoise {
     fn output_canvas_scale(
         &self,
         port: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         if port != "flow" {
             return None;
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn resolution_param_drives_output_canvas_scale() {
-        use crate::node_graph::EffectNode;
+        use manifold_node_engine::exec::effect_node::EffectNode;
         let prim = FlowFieldNoise::new();
         let node: &dyn EffectNode = &prim;
         for (enum_v, expected) in [

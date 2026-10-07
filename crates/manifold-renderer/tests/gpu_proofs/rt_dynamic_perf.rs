@@ -18,12 +18,12 @@ use manifold_gpu::raytrace::{
     ShadowRayTracer, ensure_normal_sources,
 };
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuTextureFormat};
-use manifold_renderer::frame_status::FrameRenderStatus;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::{ParamValue, PrimitiveRegistry};
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 

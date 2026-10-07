@@ -3,13 +3,13 @@
     //! constructors and the `render`/`apply_param_values`/`resize`/preview
     //! surface of the unified [`PresetRuntime`].
     #[cfg(feature = "gpu-proofs")]
-use crate::render_target::RenderTarget;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_core::params::ParamManifest;
 #[cfg(feature = "gpu-proofs")]
 use manifold_gpu::GpuTextureFormat;
-use crate::preset_runtime::*;
+use manifold_node_engine::runtime::*;
 use crate::node_graph::*;
-    use crate::node_graph::PrimitiveRegistry;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_core::Beats;
     use manifold_core::Seconds;
     use manifold_core::effect_graph_def::ParamSpecDef;
@@ -56,7 +56,7 @@ use crate::node_graph::*;
 
     #[test]
     fn native_flip_grid_shared_solid_keeps_live_card_binding_fanout() {
-        use crate::node_graph::primitives::gpu_flip_preset::{render_def, WaterScene};
+        use manifold_node_engine::water::primitives::gpu_flip_preset::{render_def, WaterScene};
         use manifold_core::effect_graph_def::{BindingTarget, EffectGraphWire, SerializedParamValue};
         // This migration fixture reconstructs the old flat authored solid.
         let mut def = manifold_core::flatten::flatten_groups(&render_def(WaterScene::still_pool(16))).unwrap();
@@ -162,7 +162,7 @@ use crate::node_graph::*;
     /// `clear_trigger_state` never touches the backend.
     #[test]
     fn clear_trigger_state_purges_only_flagged_nodes_state_store_buckets() {
-        use crate::node_graph::NodeState;
+        use manifold_node_engine::state_store::NodeState;
 
         struct Probe;
         impl NodeState for Probe {}
@@ -192,17 +192,17 @@ use crate::node_graph::*;
         // Seed a StateStore bucket under BOTH node ids (owner_key 0, the
         // generator convention) — clear_trigger_state must purge only the
         // one belonging to the flagged node.
-        crate::preset_runtime::testkit::insert_state(&mut g, ratio_id, 0, Probe);
-        crate::preset_runtime::testkit::insert_state(&mut g, render_id, 0, Probe);
+        manifold_node_engine::runtime::testkit::insert_state(&mut g, ratio_id, 0, Probe);
+        manifold_node_engine::runtime::testkit::insert_state(&mut g, render_id, 0, Probe);
 
         g.clear_trigger_state();
 
         assert!(
-            !crate::preset_runtime::testkit::has_state::<Probe>(&mut g, ratio_id, 0),
+            !manifold_node_engine::runtime::testkit::has_state::<Probe>(&mut g, ratio_id, 0),
             "trigger-latch node's StateStore bucket must be purged"
         );
         assert!(
-            crate::preset_runtime::testkit::has_state::<Probe>(&mut g, render_id, 0),
+            manifold_node_engine::runtime::testkit::has_state::<Probe>(&mut g, render_id, 0),
             "non-latch node's StateStore bucket must survive a trigger-only clear"
         );
     }
@@ -1073,7 +1073,7 @@ use crate::node_graph::*;
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn bundled_strange_attractor_loads_and_compiles() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let json = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/StrangeAttractor.json"));
         let preset = PresetRuntime::from_json_str_with_device(
             json,
@@ -1091,7 +1091,7 @@ use crate::node_graph::*;
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn bundled_plasma_loads_and_compiles() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let json = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/Plasma.json"));
         let preset = PresetRuntime::from_json_str_with_device(
             json,
@@ -1119,8 +1119,8 @@ use crate::node_graph::*;
     #[test]
     #[ignore = "BUG-175: FluidSim2D stays black after live resize; reproducer kept as the fix's acceptance gate"]
     fn fluidsim2d_survives_live_resize() {
-        use crate::preset_context::PresetContext;
-        let device = crate::test_device();
+        use manifold_node_engine::runtime::preset_context::PresetContext;
+        let device = manifold_gpu::testkit::test_device();
         let json = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/FluidSim2D.json"));
         let registry = PrimitiveRegistry::with_builtin();
         let format = GpuTextureFormat::Rgba16Float;
@@ -1150,7 +1150,7 @@ use crate::node_graph::*;
                 };
                 let mut enc = device.create_encoder("fluid-resize-frame");
                 {
-                    let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+                    let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
                     g.render(
                         &mut gpu,
                         &target.texture,
@@ -1269,7 +1269,7 @@ use crate::node_graph::*;
             "group container should have no runtime instance after flattening"
         );
 
-        let (producer, port) = crate::preset_runtime::testkit::group_preview(&g, &manifold_core::NodeId::new("Flow Field"))
+        let (producer, port) = manifold_node_engine::runtime::testkit::group_preview(&g, &manifold_core::NodeId::new("Flow Field"))
             .expect("Flow Field group must be in the preview map");
         assert_eq!(
             producer,
@@ -1278,8 +1278,8 @@ use crate::node_graph::*;
         );
         assert_eq!(port, "forceField", "the group's primary output port name");
         assert_eq!(
-            crate::node_graph::PreviewEncoding::derive("node.gaussian_blur", &port),
-            crate::node_graph::PreviewEncoding::VectorField,
+            manifold_node_engine::preview_encoding::PreviewEncoding::derive("node.gaussian_blur", &port),
+            manifold_node_engine::preview_encoding::PreviewEncoding::VectorField,
         );
         assert!(
             g.graph.instance_by_node_id(&producer).is_some(),

@@ -20,12 +20,12 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::render_mode::{RENDER_MODE_LABELS, RenderMode};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::render_mode::{RENDER_MODE_LABELS, RenderMode};
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RenderModeNode,
     type_id: "node.render_mode",
     purpose: "Scene-wide viewport shading-mode producer: Blender-style Rendered/Solid/Wireframe/Points as a performable scene modifier, emitted as a single RenderMode struct consumed by render_scene's optional `render_mode` input (SCENE_RENDER_MODE_DESIGN.md). Wireframe draws the color pass as triangle lines with an unlit line_color × line_brightness material; Solid substitutes a flat clay PBR material; Points draws the mesh as points. Every param is port-shadowed by a same-named optional scalar input, so the mode row on a MIDI pad or line brightness on the kick is a live look switch. Unwired into render_scene = Rendered = byte-identical to no render_mode.",
@@ -168,12 +168,12 @@ impl Primitive for RenderModeNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::MockBackend;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::{FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::ports::PortType;
+    use manifold_node_engine::exec::backend::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::PortType;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -218,7 +218,7 @@ mod tests {
             .map(|(i, (name, value))| {
                 let slot = backend.acquire(
                     ResourceId(1 + i as u32),
-                    PortType::Scalar(crate::node_graph::ports::ScalarType::F32),
+                    PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
                     None,
                     (0, 0),
                 );

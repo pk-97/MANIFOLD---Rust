@@ -12,14 +12,14 @@
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuReplayCache};
 use manifold_physics::coupled_motion::{Held, Mobility, SupportPoint, constrained_mobility, mobility_index};
 
-use crate::testkit::atom::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
-use crate::node_graph::primitives::gpu_flip_bodies::{BodyPasses, Bodies};
-use crate::node_graph::primitives::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
-use crate::node_graph::primitives::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison};
-use crate::testkit::liquid_surface::read;
-use crate::node_graph::liquid::bodies::LiquidBody;
-use crate::node_graph::liquid::coupling::coupled_start;
-use crate::node_graph::primitives::liquid_stats::SOLVER_WORDS;
+use manifold_node_engine::testkit::atom::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
+use manifold_node_engine::water::primitives::gpu_flip_bodies::{BodyPasses, Bodies};
+use manifold_node_engine::water::primitives::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
+use manifold_node_engine::water::primitives::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison};
+use manifold_node_engine::testkit::liquid_surface::read;
+use manifold_node_engine::water::liquid::bodies::LiquidBody;
+use manifold_node_engine::water::liquid::coupling::coupled_start;
+use manifold_node_engine::water::primitives::liquid_stats::SOLVER_WORDS;
 
 /// Tail index of stats word 16 (active-tile share): the tail starts at stats word 10 (liquid_stats.rs `SOLVER_WORDS`).
 const TILE_SHARE: usize = 16 - 10;
@@ -286,7 +286,7 @@ fn assert_sums(got: &[f32], want: &[f64], scale: &[f64], what: &str) {
 }
 
 struct Scene {
-    device: crate::TestDevice,
+    device: manifold_gpu::testkit::TestDevice,
     open: Vec<f32>,
     solid: Vec<f32>,
     water: Vec<f32>,
@@ -309,7 +309,7 @@ impl Scene {
     }
 
     fn with_water(seed: u64, water: Vec<f32>, all: bool) -> Self {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (open, solid) = fixture(seed);
         let rows = bodies();
         let mobility: Vec<Mobility> = rows.iter().map(|row| constrained_mobility(&coupled_start(row), &[], Held::default())).collect();
@@ -712,9 +712,9 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
 /// by frame through the preset runtime, offline, every frame under the
 /// levers it was built with.
 struct BoxRun {
-    device: crate::TestDevice,
-    runtime: crate::preset_runtime::PresetRuntime,
-    target: crate::render_target::RenderTarget,
+    device: manifold_gpu::testkit::TestDevice,
+    runtime: manifold_node_engine::runtime::PresetRuntime,
+    target: manifold_node_engine::gpu::render_target::RenderTarget,
     manifest: manifold_core::params::ParamManifest,
     frame: i64,
     all: bool,
@@ -724,12 +724,12 @@ struct BoxRun {
     /// Ticks each `step` frame covers; above 1 the coupled pair host-syncs
     /// between them.
     ticks_per_frame: u32,
-    _scope: crate::node_graph::physics::PhysicsStepScope,
+    _scope: manifold_node_engine::water::physics::PhysicsStepScope,
 }
 
 const BOX_SIZE: u32 = 64;
 
-fn box_def(fixture: crate::node_graph::liquid::conformance::Fixture) -> manifold_core::effect_graph_def::EffectGraphDef {
+fn box_def(fixture: manifold_node_engine::water::liquid::conformance::Fixture) -> manifold_core::effect_graph_def::EffectGraphDef {
     use crate::node_graph::liquid_conformance_fixtures::LIQUID_SOLVERS;
     let row = LIQUID_SOLVERS
         .iter()
@@ -739,19 +739,19 @@ fn box_def(fixture: crate::node_graph::liquid::conformance::Fixture) -> manifold
 }
 
 impl BoxRun {
-    fn new(fixture: crate::node_graph::liquid::conformance::Fixture, all: bool, poison: bool, level: i32) -> Self {
+    fn new(fixture: manifold_node_engine::water::liquid::conformance::Fixture, all: bool, poison: bool, level: i32) -> Self {
         Self::of(Self::at_level(fixture, level), all, poison)
     }
 
     /// The scene with every pass of an inactive clock slot run, as before
     /// the slots were gated.
-    fn ungated(fixture: crate::node_graph::liquid::conformance::Fixture, level: i32) -> Self {
+    fn ungated(fixture: manifold_node_engine::water::liquid::conformance::Fixture, level: i32) -> Self {
         Self::with_levers(Self::at_level(fixture, level), false, false, true)
     }
 
-    fn at_level(fixture: crate::node_graph::liquid::conformance::Fixture, level: i32) -> manifold_core::effect_graph_def::EffectGraphDef {
+    fn at_level(fixture: manifold_node_engine::water::liquid::conformance::Fixture, level: i32) -> manifold_core::effect_graph_def::EffectGraphDef {
         let mut def = box_def(fixture);
-        crate::node_graph::liquid::conformance::set_node_param(
+        manifold_node_engine::water::liquid::conformance::set_node_param(
             &mut def,
             "domain",
             "solve_level",
@@ -766,16 +766,16 @@ impl BoxRun {
 
     fn with_levers(def: manifold_core::effect_graph_def::EffectGraphDef, all: bool, poison: bool, ungated: bool) -> Self {
         let fixture = "box scene";
-        let device = crate::test_device();
-        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
-        let scope = crate::node_graph::physics::PhysicsStepScope::for_render(true);
+        let device = manifold_gpu::testkit::test_device();
+        let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
+        let scope = manifold_node_engine::water::physics::PhysicsStepScope::for_render(true);
         let manifest = manifold_core::params::ParamManifest::from_params(
             def.preset_metadata
                 .iter()
                 .flat_map(|metadata| metadata.params.iter().cloned().map(manifold_core::params::Param::bundled))
                 .collect(),
         );
-        let mut runtime = crate::preset_runtime::PresetRuntime::from_def_with_device(
+        let mut runtime = manifold_node_engine::runtime::PresetRuntime::from_def_with_device(
             def,
             &registry,
             device.arc(),
@@ -787,7 +787,7 @@ impl BoxRun {
         .unwrap_or_else(|error| panic!("{fixture:?} builds: {error}"));
         runtime.set_dump_all(true);
         let target =
-            crate::render_target::RenderTarget::new(&device, BOX_SIZE, BOX_SIZE, manifold_gpu::GpuTextureFormat::Rgba16Float, "body sparse");
+            manifold_node_engine::gpu::render_target::RenderTarget::new(&device, BOX_SIZE, BOX_SIZE, manifold_gpu::GpuTextureFormat::Rgba16Float, "body sparse");
         let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, ungated, ticks_per_frame: 1, _scope: scope };
         let started = std::time::Instant::now();
         loop {
@@ -802,10 +802,10 @@ impl BoxRun {
     }
 
     fn render(&mut self, warming: bool) {
-        use crate::node_graph::fluid::TICK;
+        use manifold_node_engine::water::fluid::TICK;
         let frame_seconds = f64::from(self.ticks_per_frame) * TICK;
         let time = self.frame as f64 * frame_seconds;
-        let ctx = crate::preset_context::PresetContext {
+        let ctx = manifold_node_engine::runtime::preset_context::PresetContext {
             time,
             beat: time * 2.0,
             dt: if warming { 0.0 } else { frame_seconds as f32 },
@@ -825,7 +825,7 @@ impl BoxRun {
         set_poison(self.poison);
         set_gate_off(self.ungated);
         let status = {
-            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &self.device);
+            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut encoder, &self.device);
             self.runtime.render(&mut gpu, &self.target.texture, &ctx, &self.manifest);
             gpu.frame_status()
         };
@@ -833,7 +833,7 @@ impl BoxRun {
         set_all_tiles(false);
         set_poison(false);
         set_gate_off(false);
-        use crate::frame_status::FrameRenderStatus;
+        use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
         assert!(
             status == FrameRenderStatus::Complete || (warming && status == FrameRenderStatus::PendingGeometry),
             "frame {} rendered with status {status:?}",
@@ -880,7 +880,7 @@ impl BoxRun {
         };
         let capped = self.words("node.gpu_flip_step", "capped");
         let particles = (capped.len() - SOLVER_WORDS as usize) / 2;
-        let particle_words = std::mem::size_of::<crate::node_graph::fluid_particles::FluidParticle>() / 4;
+        let particle_words = std::mem::size_of::<manifold_node_engine::water::fluid_particles::FluidParticle>() / 4;
         // The active-tile share differs between sparse and all-tiles by design
         // (see `tile_share`); every other solver word must match bit for bit.
         let mut solver = capped[2 * particles..].to_vec();
@@ -902,7 +902,7 @@ impl BoxRun {
 /// NaN into every body partial slot before the solve.
 #[test]
 fn gpu_flip_body_step_sparse_matches_all_tiles() {
-    use crate::node_graph::liquid::conformance::Fixture;
+    use manifold_node_engine::water::liquid::conformance::Fixture;
     for (fixture, level) in [(Fixture::SubmergedBox, 0), (Fixture::FloatingBox, 0), (Fixture::SubmergedBox, 1), (Fixture::FloatingBox, 1)] {
         let mut dense = BoxRun::new(fixture, true, false, level);
         let mut sparse = BoxRun::new(fixture, false, false, level);
@@ -950,7 +950,7 @@ fn gpu_flip_body_step_sparse_matches_all_tiles() {
 /// so it kept a stale φ outside C; now the next active step retires it.
 #[test]
 fn gpu_flip_inactive_slots_match_the_ungated_step() {
-    use crate::node_graph::liquid::conformance::Fixture;
+    use manifold_node_engine::water::liquid::conformance::Fixture;
     const STEP: &str = "node.gpu_flip_step";
     const TICKS: u32 = 30;
     for (fixture, level) in [(Fixture::SubmergedBox, 0), (Fixture::FloatingBox, 0), (Fixture::FloatingBox, 1)] {
@@ -1012,7 +1012,7 @@ fn gpu_flip_fresh_speed_preserves_coupled_bodies_two_ticks_a_frame() {
 }
 
 fn fresh_speed_preserves_coupled_bodies(ticks_per_frame: u32) {
-    use crate::node_graph::liquid::conformance::Fixture;
+    use manifold_node_engine::water::liquid::conformance::Fixture;
     const STEP: &str = "node.gpu_flip_step";
     const TICKS: u32 = 8;
     fn baseline(def: manifold_core::effect_graph_def::EffectGraphDef) -> manifold_core::effect_graph_def::EffectGraphDef {
@@ -1100,7 +1100,7 @@ impl BoxRun {
 /// the coupled pressure solve must lift it out of the pool.
 #[test]
 fn gpu_flip_rising_box_clears_the_surface() {
-    use crate::node_graph::liquid::conformance::{BoxScene, Fixture, set_node_param};
+    use manifold_node_engine::water::liquid::conformance::{BoxScene, Fixture, set_node_param};
     let scene = BoxScene::of(Fixture::SubmergedBox).expect("the submerged box");
     let mut def = box_def(Fixture::SubmergedBox);
     set_node_param(&mut def, "box_body", "density", manifold_core::effect_graph_def::SerializedParamValue::Float { value: 250.0 });
@@ -1252,9 +1252,9 @@ fn gpu_flip_body_golden_holds_profiled() {
 /// matches main bit for bit.
 #[test]
 fn gpu_flip_body_rounds_past_the_stop_write_nothing() {
-    crate::node_graph::primitives::gpu_flip_pressure::set_keep_ranges(true);
+    manifold_node_engine::water::primitives::gpu_flip_pressure::set_keep_ranges(true);
     let lines = body_golden_lines();
-    crate::node_graph::primitives::gpu_flip_pressure::set_keep_ranges(false);
+    manifold_node_engine::water::primitives::gpu_flip_pressure::set_keep_ranges(false);
     let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
     let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
     let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
@@ -1268,7 +1268,7 @@ fn gpu_flip_body_chunk_sizes_match_main_golden() {
     let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
     let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
     for chunk in [1, 3, 32] {
-        let _chunk = crate::node_graph::primitives::gpu_flip_pressure::set_round_chunk(chunk);
+        let _chunk = manifold_node_engine::water::primitives::gpu_flip_pressure::set_round_chunk(chunk);
         let lines = body_golden_lines();
         let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
         assert!(moved.is_empty(), "chunk {chunk}: {} body golden cases moved:\n{}", moved.len(), moved.join("\n"));

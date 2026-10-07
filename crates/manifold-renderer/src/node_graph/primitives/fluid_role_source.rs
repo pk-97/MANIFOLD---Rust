@@ -8,14 +8,14 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
-use crate::mesh::PLATONIC_SHAPES;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
-use crate::node_graph::mesh_source::MeshSource;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::physics_mesh::{MeshSelection, PART_PORTS, parse_compound_materials};
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::transform::Transform;
+use manifold_node_engine::mesh::PLATONIC_SHAPES;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::water::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
+use manifold_node_engine::scene::mesh_source::MeshSource;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::scene::physics_mesh::{MeshSelection, PART_PORTS, parse_compound_materials};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::transform::Transform;
 use geometry::{GeometryMode, prepare_geometry, prepare_wired_geometry};
 
 const GEOMETRY_MODES: &[&str] = &["Collision Proxy", "Closed Mesh"];
@@ -78,7 +78,7 @@ impl PreparationKey {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: FluidRoleSource,
     type_id: "node.fluid_role_source",
     purpose: "Prepare one built-in or imported closed volume as a CPU FluidRole wire. Collision Proxy cooks reusable Box3D hulls; Closed Mesh preserves the exact indexed surface after exact-coordinate welding and validates it as a closed volume. Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
@@ -289,10 +289,10 @@ impl Primitive for FluidRoleSource {
 
     fn source_asset_identity(
         &self,
-        _: &crate::node_graph::ParamValues,
-    ) -> crate::node_graph::source_asset::SourceAssetIdentity<'_> {
+        _: &manifold_node_engine::exec::effect_node::ParamValues,
+    ) -> manifold_node_engine::scene::source_asset::SourceAssetIdentity<'_> {
         // Native take preflight compares the complete accepted role mesh.
-        crate::node_graph::source_asset::SourceAssetIdentity::PreparedGeometry
+        manifold_node_engine::scene::source_asset::SourceAssetIdentity::PreparedGeometry
     }
 
     fn warmup_pending(&self) -> bool {
@@ -368,7 +368,7 @@ impl Primitive for FluidRoleSource {
 
         // Historical samples update live controls against the last prepared
         // source. Setup edits are discrete and must not recook past geometry.
-        if crate::node_graph::physics::authored_sample_only() {
+        if manifold_node_engine::water::physics::authored_sample_only() {
             self.publish_role(
                 ctx,
                 role,
@@ -522,7 +522,7 @@ impl Primitive for FluidRoleSource {
         if let Some(rx) = &self.pending_geometry {
             // Offline waits for the preparation, so the liquid's first tick
             // never depends on how fast the worker ran.
-            let received = if crate::node_graph::physics::offline_simulation() {
+            let received = if manifold_node_engine::water::physics::offline_simulation() {
                 rx.recv().map_err(|_| mpsc::TryRecvError::Disconnected)
             } else {
                 rx.try_recv()
@@ -599,8 +599,8 @@ impl FluidRoleSource {
         ctx.error(error);
         ctx.mark_outputs_pending();
         if let Some(gpu) = ctx.gpu.as_deref_mut() {
-            gpu.merge_frame_status(crate::frame_status::FrameRenderStatus::Failed(
-                crate::frame_status::FrameRenderFailure::InvalidGeometry,
+            gpu.merge_frame_status(manifold_node_engine::runtime::frame_status::FrameRenderStatus::Failed(
+                manifold_node_engine::runtime::frame_status::FrameRenderFailure::InvalidGeometry,
             ));
         }
     }
@@ -850,14 +850,14 @@ fn resolve_selection(ctx: &EffectNodeContext<'_, '_>) -> Result<MeshSelection, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::parameters::TableData;
-    use crate::node_graph::ports::PortType;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::parameters::TableData;
+    use manifold_node_engine::ports::PortType;
+    use manifold_node_engine::primitive::PrimitiveSpec;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -1002,7 +1002,7 @@ mod tests {
         );
         backend.set_mesh_source(mesh, MeshSource::Cube { size: 3.0 });
         {
-            let _sample = crate::node_graph::physics::PhysicsAuthoredSampleScope::new();
+            let _sample = manifold_node_engine::water::physics::PhysicsAuthoredSampleScope::new();
             // Source slots may be unbound in the CPU-only historical pass.
             let historical = [("transform", transform), ("mesh_0", missing)];
             assert!(!run_inputs(

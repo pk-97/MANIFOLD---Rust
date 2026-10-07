@@ -20,9 +20,9 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use crate::text_rasterizer::{HAlign, RasterizeOptions, TextRasterizer};
 
 #[repr(C)]
@@ -48,7 +48,7 @@ struct RenderTextUniforms {
     stroke_color: [f32; 4],
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RenderText,
     type_id: "node.render_text",
     purpose: "Render a text string to the output texture. The host wires `text` and `fontFamily` through preset stringBindings; size/position/scale/alignment/spacing/stroke_width are port-shadows-param scalars; fill_color and stroke_color are editor-set Color params. CPU-rasterizes the glyphs via CoreText into internal R8Unorm coverage bitmaps — a fill mask always, plus an outline mask when stroke_width > 0 (both dirty-cached — only re-rasterized when text/font/size/style change). A compute kernel composites them as premultiplied alpha (fill over stroke over transparent) with aspect correction, so the text keys cleanly over the layer below. Single-node text generator: drop it between `system.generator_input` and `system.final_output`.",
@@ -466,12 +466,10 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::RenderText;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::Slot;
-    use crate::node_graph::{
-        Executor, FinalOutput, FrameTime, Graph, MetalBackend, ParamValue, compile,
-    };
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, parameters::ParamValue, exec::execution_plan::compile};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -487,7 +485,7 @@ mod gpu_tests {
     /// texel, so we require at least 0.1% of the texture to be lit.
     #[test]
     fn hello_writes_glyph_pixels_to_output() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (256u32, 128u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -575,7 +573,7 @@ mod gpu_tests {
     /// stale bitmap — or an opaque black box — on screen.
     #[test]
     fn empty_text_clears_to_transparent() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (32u32, 32u32);
         let format = GpuTextureFormat::Rgba16Float;
 

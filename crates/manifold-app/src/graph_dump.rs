@@ -206,7 +206,7 @@ pub fn write_graph_dump(
 /// image representation. Returns the per-array manifest entry.
 fn dump_one_array(
     device: &GpuDevice,
-    a: &manifold_renderer::preset_runtime::instrumentation::ArrayDump<'_>,
+    a: &manifold_node_engine::runtime::instrumentation::ArrayDump<'_>,
 ) -> serde_json::Value {
     let size = a.buffer.size();
     let item_count = if a.item_size == 0 {
@@ -307,7 +307,7 @@ fn dump_one_array(
 /// Dump every array output to `dir/arrays.json` (schema + stats + samples).
 pub fn write_array_dump(
     device: &GpuDevice,
-    arrays: &[manifold_renderer::preset_runtime::instrumentation::ArrayDump<'_>],
+    arrays: &[manifold_node_engine::runtime::instrumentation::ArrayDump<'_>],
     dir: &Path,
 ) -> std::io::Result<()> {
     if arrays.is_empty() {
@@ -371,11 +371,11 @@ mod tests {
     #[ignore = "headless GPU dump; run manually with --ignored"]
     fn dump_blackhole_headless() {
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
-        use manifold_renderer::preset_runtime::PresetRuntime;
-        use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
-        use manifold_renderer::preset_context::PresetContext;
-        use manifold_renderer::node_graph::PrimitiveRegistry;
-        use manifold_renderer::render_target::RenderTarget;
+        use manifold_node_engine::runtime::PresetRuntime;
+        use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RGpuEncoder;
+        use manifold_node_engine::runtime::preset_context::PresetContext;
+        use manifold_node_engine::persistence::PrimitiveRegistry;
+        use manifold_node_engine::gpu::render_target::RenderTarget;
         use manifold_core::params::ParamManifest;
 
         const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
@@ -476,11 +476,11 @@ mod tests {
     #[ignore = "headless GPU sweep; run manually with --ignored"]
     fn sweep_blackhole_cloud() {
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
-        use manifold_renderer::preset_runtime::PresetRuntime;
-        use manifold_renderer::gpu_encoder::GpuEncoder as RGpuEncoder;
-        use manifold_renderer::preset_context::PresetContext;
-        use manifold_renderer::node_graph::PrimitiveRegistry;
-        use manifold_renderer::render_target::RenderTarget;
+        use manifold_node_engine::runtime::PresetRuntime;
+        use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RGpuEncoder;
+        use manifold_node_engine::runtime::preset_context::PresetContext;
+        use manifold_node_engine::persistence::PrimitiveRegistry;
+        use manifold_node_engine::gpu::render_target::RenderTarget;
         use manifold_core::params::ParamManifest;
 
         // Set a node param's `value` (preserving its type tag) by numeric id.

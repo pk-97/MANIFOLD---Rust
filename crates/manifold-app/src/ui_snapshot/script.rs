@@ -153,7 +153,7 @@ const BATCH_RECORD: &str = "@@ui-snap-batch@@";
 pub fn run_batch(flows: &[(String, String)]) {
     let mut order: Vec<usize> = (0..flows.len()).collect();
     order.sort_by_key(|&i| super::fixtures::installs_preset_overlay(&flows[i].0));
-    let fresh_generation = manifold_renderer::preset_loader::catalog_generation();
+    let fresh_generation = manifold_node_engine::load::preset_loader::catalog_generation();
     let mut device = None;
     for index in order {
         let (scene, script) = &flows[index];
@@ -186,7 +186,7 @@ fn run_flow(
     device: &mut Option<GpuDevice>,
     batch_generation: Option<u64>,
 ) -> FlowOutcome {
-    let generation_before = manifold_renderer::preset_loader::catalog_generation();
+    let generation_before = manifold_node_engine::load::preset_loader::catalog_generation();
     let Some(mut data) = super::fixtures::build(scene) else {
         return setup_error(format!(
             "ui-snap --script: unknown scene '{scene}' (known: timeline, states, inspector, dmxcard, \
@@ -195,7 +195,7 @@ fn run_flow(
         ));
     };
     if let Some(fresh) = batch_generation {
-        let installed = manifold_renderer::preset_loader::catalog_generation() != generation_before;
+        let installed = manifold_node_engine::load::preset_loader::catalog_generation() != generation_before;
         if !installed && generation_before != fresh {
             return FlowOutcome::Requeue(format!(
                 "scene '{scene}' built against a preset registry an earlier flow changed"

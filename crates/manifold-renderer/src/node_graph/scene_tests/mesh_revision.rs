@@ -1,12 +1,12 @@
 
         use crate::node_graph::*;
-use crate::node_graph::execution_plan::CompiledMeshRevisionRule;
-use crate::node_graph::mesh_change::MeshAspect;
+use manifold_node_engine::exec::execution_plan::CompiledMeshRevisionRule;
+use manifold_node_engine::scene::mesh_change::MeshAspect;
 
-        use crate::node_graph::mesh_change::{MeshOutputRule, MeshRevisionRule};
+        use manifold_node_engine::scene::mesh_change::{MeshOutputRule, MeshRevisionRule};
 
 
-use crate::testkit::mesh_revision::*;
+use manifold_node_engine::testkit::mesh_revision::*;
         /// Wraps a real stock primitive so its DECLARED
         /// `mesh_output_rule` is compiled into the plan and driven
         /// through the executor on `MockBackend`. `evaluate` is a
@@ -26,7 +26,7 @@ use crate::testkit::mesh_revision::*;
         /// doc).
         #[test]
         fn mesh_change_declared_deformer_tracks_input_topology() {
-            use crate::node_graph::mesh_change::MeshAspect;
+            use manifold_node_engine::scene::mesh_change::MeshAspect;
             use crate::node_graph::primitives::NormalWaveMesh;
 
             let (src, (_unchanged, _pending, src_rule)) = MeshNode::producer(Some(fixed_rule()));
@@ -149,13 +149,11 @@ use crate::testkit::mesh_revision::*;
         #[test]
         fn mesh_change_surface_waves_fused_sidecar_is_refit_eligible() {
             use crate::node_graph::bundled_presets::bundled_preset_json;
-            use crate::node_graph::freeze::install::fuse_canonical_def;
-            use crate::node_graph::mesh_change::{
-                PreparedMeshOutputRule, PreparedMeshRevisionRule,
-            };
-            use crate::node_graph::persistence::EffectGraphDefExt;
-            use crate::node_graph::primitive::Primitive;
-            use crate::node_graph::PrimitiveRegistry;
+            use manifold_node_engine::freeze::install::fuse_canonical_def;
+            use manifold_node_engine::scene::mesh_change::{PreparedMeshOutputRule, PreparedMeshRevisionRule};
+            use manifold_node_engine::persistence::EffectGraphDefExt;
+            use manifold_node_engine::primitive::Primitive;
+            use manifold_node_engine::persistence::PrimitiveRegistry;
             use manifold_core::PresetTypeId;
             use manifold_core::effect_graph_def::EffectGraphDef;
 
@@ -268,7 +266,7 @@ use crate::testkit::mesh_revision::*;
                 }
                 let graph = fused.def.into_graph(&registry, &fused.mesh_rules).unwrap();
                 let plan = compile(&graph).unwrap();
-                let compiled: Vec<&crate::node_graph::execution_plan::CompiledMeshOutputRule> = plan
+                let compiled: Vec<&manifold_node_engine::exec::execution_plan::CompiledMeshOutputRule> = plan
                     .steps()
                     .iter()
                     .flat_map(|s| s.outputs.iter())

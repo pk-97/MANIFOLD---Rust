@@ -8,10 +8,8 @@ use std::collections::BTreeMap;
 
 use manifold_core::Seconds;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
-use manifold_renderer::node_graph::physics::{
-    MAX_BODIES, PhysicsStepScope, RigidBody, RigidSimulation,
-};
-use manifold_renderer::node_graph::transform::Transform;
+use manifold_node_engine::water::physics::{MAX_BODIES, PhysicsStepScope, RigidBody, RigidSimulation};
+use manifold_node_engine::scene::transform::Transform;
 
 const JSON: &str = include_str!("../assets/generator-presets/PhysicsBoxes.json");
 const FRAME: f64 = 1.0 / 60.0;

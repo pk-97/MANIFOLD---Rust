@@ -157,7 +157,7 @@ impl TerminalAnalysis {
     /// is returned unchanged.
     pub(super) fn sample(
         &mut self,
-        gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
+        gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
         texture: &GpuTexture,
     ) -> &[[f32; 4]; SAMPLE_COUNT] {
         self.install(gpu.device);
@@ -226,7 +226,7 @@ mod gpu_tests {
     };
 
     use super::TerminalAnalysis;
-    use crate::gpu_encoder::GpuEncoder;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 
     const WIDTH: u32 = 192;
     const HEIGHT: u32 = 72;
@@ -277,7 +277,7 @@ mod gpu_tests {
 
     #[test]
     fn constant_rgb_has_expected_mean_and_zero_contrast() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let texture = source_texture(&device, "terminal-analysis-constant", |_, _| {
             [64, 128, 192, 255]
         });
@@ -316,7 +316,7 @@ mod gpu_tests {
 
     #[test]
     fn nine_taps_report_contrast_inside_a_split_cell() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         // Grid cell 32 spans x=96..98. The split at x=97 makes its nine taps
         // observe both sides, proving the analysis is cell-local rather than
         // one representative texel per cell.
@@ -356,7 +356,7 @@ mod gpu_tests {
 
     #[test]
     fn first_sample_is_zero_then_completed_result_is_visible() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let texture = source_texture(&device, "terminal-analysis-latency", |_, _| {
             [255, 32, 16, 255]
         });
@@ -387,7 +387,7 @@ mod gpu_tests {
 
     #[test]
     fn fine_grid_reports_localized_source_detail() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let texture = source_texture(&device, "terminal-analysis-detail", |x, y| {
             if (48..56).contains(&x) && (18..24).contains(&y) {
                 [255, 128, 0, 255]
@@ -428,7 +428,7 @@ mod gpu_tests {
 
     #[test]
     fn reset_discards_pending_result_and_preserves_allocations() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let old_texture = source_texture(&device, "terminal-analysis-reset-old", |_, _| {
             [255, 0, 0, 255]
         });

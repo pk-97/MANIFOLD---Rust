@@ -34,12 +34,12 @@ use manifold_gpu::{
 };
 use manifold_native::depth_estimator::DepthEstimator;
 
-use crate::background_worker::BackgroundWorker;
-use crate::gpu_encoder::GpuEncoder;
+use manifold_node_engine::runtime::background_worker::BackgroundWorker;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 struct DepthRequest {
     pixel_data: Vec<u8>,
@@ -77,7 +77,7 @@ struct DepthState {
     first_response_delivered: bool,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: DepthEstimateMidas,
     type_id: "node.depth_map",
     purpose: "MiDaS monocular depth estimation via FFI native plugin, wrapped as a primitive. Input: any Texture2D frame. Output: depth map (R = G = B = depth ∈ [0, 1], near = 1, far = 0; A = 1). Inference runs on a background worker thread with ~2-3 frame latency; output is bilinear-upsampled from an analysis-resolution staging texture into the runtime-allocated output. Until first inference completes, the output is black.",

@@ -1,8 +1,8 @@
 //! Numerical GPU proofs for `node.analytic_echo_instances`.
 
 use super::{AnalyticEchoInstances, ECHO_CAPACITY, EchoUniforms as Uniforms};
-use crate::mesh::InstanceTransform;
-use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
 use manifold_gpu::GpuBinding;
 
 fn zero_instance() -> InstanceTransform {
@@ -53,7 +53,7 @@ fn cpu_echo(src: InstanceTransform, echo_idx: usize, uniforms: Uniforms) -> Inst
 }
 
 fn dispatch(src: &[InstanceTransform], uniforms: Uniforms) -> Vec<InstanceTransform> {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let wgsl =
         standalone_for_spec::<AnalyticEchoInstances>().expect("analytic echo standalone codegen");
     let pipeline =
@@ -205,10 +205,10 @@ fn structured_modifier_echo_gpu_disabled_and_count_one_keep_only_present_copy() 
     }
 }
 
-use crate::node_graph::NodeInstanceId;
-use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-use crate::node_graph::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
-use crate::node_graph::primitive::PrimitiveSpec;
+use manifold_node_engine::exec::effect_node::NodeInstanceId;
+use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
+use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
+use manifold_node_engine::primitive::PrimitiveSpec;
 
 /// BUG-orm4: the echo's multiplicative capacity no longer refuses fusion —
 /// the atom DECLARES it (`FusedOutputCapacity::MultipleOf { instances, 8 }`),
@@ -251,9 +251,9 @@ fn structured_modifier_echo_indexed_capacity_widens_the_fused_count() {
         camera_externals: 0,
         // What `build_region` composes for a region whose output member
         // declares MultipleOf { instances, ECHO_CAPACITY }.
-        output_capacity: Some(crate::node_graph::freeze::classify::CapacityExpr::Mul(
+        output_capacity: Some(manifold_node_engine::freeze::classify::CapacityExpr::Mul(
             ECHO_CAPACITY,
-            Box::new(crate::node_graph::freeze::classify::CapacityExpr::Slot(0)),
+            Box::new(manifold_node_engine::freeze::classify::CapacityExpr::Slot(0)),
         )),
     };
     let g = generate_fused(&region).expect("the widened gathered echo kernel fuses");
@@ -275,7 +275,7 @@ fn structured_modifier_echo_indexed_capacity_widens_the_fused_count() {
         g.wgsl
     );
     let prim = AnalyticEchoInstances::new();
-    let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+    let node: &dyn manifold_node_engine::exec::effect_node::EffectNode = &prim;
     assert_eq!(
         node.array_output_capacity("instances", &Default::default(), &[("instances", 1009)]),
         Some(1009 * ECHO_CAPACITY),

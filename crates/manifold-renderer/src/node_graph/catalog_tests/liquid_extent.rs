@@ -1,8 +1,8 @@
-    use crate::node_graph::liquid::extent::*;
-use crate::node_graph::liquid::lattice::LiquidLattice;
+    use manifold_node_engine::water::liquid::extent::*;
+use manifold_node_engine::water::liquid::lattice::LiquidLattice;
 use manifold_core::effect_graph_def::EffectGraphDef;
     use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
-    use crate::node_graph::fluid::domain_layout;
+    use manifold_node_engine::water::fluid::domain_layout;
 
 
     use manifold_core::preset_def::PresetKind;
@@ -96,10 +96,10 @@ use manifold_core::effect_graph_def::EffectGraphDef;
         let mut preset = LiquidPreset::build(&particle_blend_preset()).unwrap();
         let rules: Vec<_> = LIQUID_EXTENT_RULES.iter().map(|rule| {
             if rule.type_id == "node.liquid_frame" {
-                ExtentRule { type_id: rule.type_id, check: crate::node_graph::liquid::extent::testkit::malformed_frame }
+                ExtentRule { type_id: rule.type_id, check: manifold_node_engine::water::liquid::extent::testkit::malformed_frame }
             } else { *rule }
         }).collect();
-        match crate::node_graph::liquid::extent::testkit::check_with_rules(&mut preset, &rules) {
+        match manifold_node_engine::water::liquid::extent::testkit::check_with_rules(&mut preset, &rules) {
             Err(ExtentError::Refused { node, reason }) => {
                 assert!(node.contains("node.mix_arrays"), "{node}");
                 assert!(reason.contains("input capacities must match"), "{reason}");
@@ -206,7 +206,7 @@ use manifold_core::liquid_domain::is_liquid_domain;
         let mut preset = LiquidPreset::build(def).expect("builds");
         let rules: Vec<ExtentRule> =
             LIQUID_EXTENT_RULES.iter().filter(|rule| rule.type_id != "node.matter_to_grid").copied().collect();
-        match crate::node_graph::liquid::extent::testkit::check_with_rules(&mut preset, &rules) {
+        match manifold_node_engine::water::liquid::extent::testkit::check_with_rules(&mut preset, &rules) {
             Err(ExtentError::NoRule { type_id, .. }) => assert_eq!(type_id, "node.matter_to_grid"),
             other => panic!("expected a missing rule, got {other:?}"),
         }
@@ -251,7 +251,7 @@ use manifold_core::liquid_domain::is_liquid_domain;
         let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
         let preset = LiquidPreset::build(def).unwrap();
         for padding in [0, 4096] {
-            let (bound, held) = crate::node_graph::liquid::extent::testkit::inverse_fft_rebind_bytes(&preset, padding);
+            let (bound, held) = manifold_node_engine::water::liquid::extent::testkit::inverse_fft_rebind_bytes(&preset, padding);
             // Four cached pairs plus a distinct incoming pair before eviction.
             assert_eq!(bound + held, 5 * bound);
         }

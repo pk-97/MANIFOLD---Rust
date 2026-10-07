@@ -168,7 +168,7 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
         .fire_scene_impulse(&fire, time(0.0), &mut 0)
         .unwrap();
     // CPU equivalent of reset_state's identity and native reset; no GPU device needed.
-    crate::preset_runtime::testkit::reset_impulse_routes(&mut runtime);
+    manifold_node_engine::runtime::testkit::reset_impulse_routes(&mut runtime);
     for node in runtime.graph.nodes_mut() {
         node.node.clear_state();
     }

@@ -15,15 +15,15 @@ use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_gpu::GpuBuffer;
 use manifold_gpu::GpuTextureFormat;
 use manifold_gpu::raytrace::{DebugRayQueryHit, DebugRayQueryRay};
-use manifold_renderer::frame_status::FrameRenderStatus;
-use manifold_renderer::mesh::InstanceTransform;
-use manifold_renderer::mesh::MeshVertex;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::loaded_scene_modifier_presets_from_bundled;
 use manifold_renderer::node_graph::primitives::{RtProbeObject, RtProbeScene};
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
@@ -195,7 +195,7 @@ fn attach(mut owner: EffectGraphDef, ids: &[&str]) -> EffectGraphDef {
             graph: Box::new(graph),
         };
         instance.mesh_frames =
-            match manifold_renderer::node_graph::scene_modifier_expand::resolve_modifier_mesh_frames(
+            match manifold_node_engine::load::expand::resolve_modifier_mesh_frames(
                 &owner, &instance,
             ) {
                 Ok(frames) => frames,
@@ -679,7 +679,7 @@ fn render_and_witness_controlled(
                 .set_param(
                     writer,
                     "offset",
-                    manifold_renderer::node_graph::ParamValue::Float(writer_offsets.map_or(
+                    manifold_node_engine::parameters::ParamValue::Float(writer_offsets.map_or(
                         frame as f32 * 0.25,
                         |values| {
                             assert_eq!(

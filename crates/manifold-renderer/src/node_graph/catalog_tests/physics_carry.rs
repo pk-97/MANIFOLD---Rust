@@ -1,5 +1,5 @@
 #![cfg(feature = "gpu-proofs")]
-use crate::preset_runtime::*;
+use manifold_node_engine::runtime::*;
 use crate::node_graph::*;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
@@ -37,12 +37,12 @@ fn physics_carry_matches_owners_across_actual_fused_topology() {
     let mut prior =
         PresetRuntime::from_def_for_render(def.clone(), &registry, None, false).unwrap();
     // The product cache excludes retired nodes; fuse with the proof registry.
-    let view = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry)
+    let view = manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry)
         .expect("reference fixture fuses");
     let mut fused = PresetRuntime::from_render_def(
         (*view.def).clone(), &registry, None, &view.mesh_rules, &[],
     ).unwrap();
-    crate::preset_runtime::testkit::set_reference_fusion(&mut fused, &prior, view.retarget);
+    manifold_node_engine::runtime::testkit::set_reference_fusion(&mut fused, &prior, view.retarget);
     assert!(
         fused.graph.nodes().count() < prior.graph.nodes().count(),
         "fixture must really fuse"
@@ -56,7 +56,7 @@ fn physics_carry_matches_owners_across_actual_fused_topology() {
     };
     let native_owner = owner(&prior);
     assert_ne!(owner(&fused), native_owner);
-    crate::preset_runtime::testkit::set_last_physics_frame_time(&mut prior, Some(FrameTime {
+    manifold_node_engine::runtime::testkit::set_last_physics_frame_time(&mut prior, Some(FrameTime {
         seconds: Seconds(0.5),
         beats: Beats(1.0),
         delta: Seconds(1.0 / 30.0),
@@ -64,7 +64,7 @@ fn physics_carry_matches_owners_across_actual_fused_topology() {
     }));
     fused.carry_generator_state_from(&mut prior);
     assert_eq!(owner(&fused), native_owner);
-    assert_eq!(crate::preset_runtime::testkit::last_physics_frame_time(&fused).unwrap().seconds, Seconds(0.5));
+    assert_eq!(manifold_node_engine::runtime::testkit::last_physics_frame_time(&fused).unwrap().seconds, Seconds(0.5));
 }
 
 use manifold_core::NodeId;

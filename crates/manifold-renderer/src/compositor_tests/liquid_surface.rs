@@ -6,14 +6,14 @@ fn fluid_clamp_scheduled_boundary_renders_like_unfrozen() {
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_core::preset_def::PresetKind;
 
-    let device = crate::test_device();
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let device = manifold_gpu::testkit::test_device();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let json = crate::node_graph::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
         "WaterStillPoolMatter",
     ))
     .expect("Still Pool bundled");
     let canonical: EffectGraphDef = serde_json::from_str(&json).expect("Still Pool parses");
-    let fused = crate::node_graph::freeze::install::fuse_generator_view(&canonical, &registry)
+    let fused = manifold_node_engine::freeze::install::fuse_generator_view(&canonical, &registry)
         .expect("the Still Pool fuses and builds");
     assert!(
         !fused.def.nodes.iter().any(|n| n.type_id == "node.clamp_liquid_to_solids"),

@@ -44,13 +44,13 @@ use std::sync::{Arc, mpsc};
 use super::gltf_anim_shared::{
     LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_quat_slice, sample_vec3_slice,
 };
-use crate::mesh::JointMatrix;
-use crate::node_graph::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::JointMatrix;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_anim_cache::{AnimClip, GltfAnimSet, LoadedAnimSet, spawn_load};
 use crate::node_graph::gltf_load::{Mat4, MAT4_IDENTITY, mat4_from_trs, mat4_mul};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::source_asset::loaded_identity;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue, TableData};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::source_asset::loaded_identity;
 
 /// Maximum joints this primitive will pose in one frame — generous past
 /// the spec-typical ≤256 (BrainStem is the documented stress case);
@@ -58,7 +58,7 @@ use crate::node_graph::source_asset::loaded_identity;
 /// unbounded size.
 const MAX_JOINTS: usize = 512;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GltfSkeletonPose,
     type_id: "node.gltf_skeleton_pose",
     purpose: "Samples a parsed glTF skeleton's per-joint TRS keyframe tracks (or static bind pose, for an unanimated joint) at a live `progress` (0..1) and emits the joint palette as Array(JointMatrix) — one skin matrix (jointWorldMatrix * inverseBindMatrix) per joint, in skin.joints() order. Wire the output straight into node.skin_mesh's `matrices` input. LINEAR interpolation only (A1/A2 scope): lerp for translation/scale, slerp for rotation. `progress` port-shadowed with the same default beat-drive as node.gltf_animation_source: wrap(beats*rate/clip_beats), always wrapping into [0,1), never clamping.",
@@ -513,7 +513,7 @@ impl Primitive for GltfSkeletonPose {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "joint_matrices" {
@@ -684,8 +684,8 @@ impl Primitive for GltfSkeletonPose {
 
     fn source_asset_identity(
         &self,
-        params: &crate::node_graph::effect_node::ParamValues,
-    ) -> crate::node_graph::source_asset::SourceAssetIdentity<'_> {
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
+    ) -> manifold_node_engine::scene::source_asset::SourceAssetIdentity<'_> {
         loaded_identity(params, "path", &self.last_path, self.anim_set.as_deref(), self.load_error.as_deref())
     }
 
@@ -699,8 +699,8 @@ mod tests {
     use super::*;
     use crate::node_graph::gltf_anim_cache::{BindTrs, Channel, ChannelKind, SkinTopology};
 
-    fn identity_params(path: &str) -> crate::node_graph::effect_node::ParamValues {
-        let mut params = crate::node_graph::effect_node::ParamValues::default();
+    fn identity_params(path: &str) -> manifold_node_engine::exec::effect_node::ParamValues {
+        let mut params = manifold_node_engine::exec::effect_node::ParamValues::default();
         params.insert(Cow::Borrowed("path"), ParamValue::String(Arc::new(path.to_owned())));
         params
     }
@@ -721,17 +721,17 @@ mod tests {
 
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("skeleton-a.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Ready(fingerprint)
         );
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("skeleton-b.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Pending
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Pending
         );
 
         prim.load_error = Some("skeleton load failed".to_owned());
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("skeleton-a.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Failed("skeleton load failed")
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Failed("skeleton load failed")
         );
 
         Primitive::clear_state(&mut prim);
@@ -739,7 +739,7 @@ mod tests {
         assert_eq!(prim.anim_set.as_ref().map(|set| set.identity()), Some(fingerprint));
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("skeleton-a.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Ready(fingerprint)
         );
     }
 

@@ -126,12 +126,12 @@ impl UserLibrary {
         }
         match kind {
             PresetKind::Effect => {
-                manifold_renderer::preset_loader::EFFECT_CATALOG.load().json(id).is_some()
+                manifold_node_engine::load::preset_loader::EFFECT_CATALOG.load().json(id).is_some()
             }
             PresetKind::Generator => {
-                manifold_renderer::preset_loader::GENERATOR_CATALOG.load().json(id).is_some()
+                manifold_node_engine::load::preset_loader::GENERATOR_CATALOG.load().json(id).is_some()
             }
-            PresetKind::SceneModifier => manifold_renderer::preset_loader::SCENE_MODIFIER_CATALOG
+            PresetKind::SceneModifier => manifold_node_engine::load::preset_loader::SCENE_MODIFIER_CATALOG
                 .load()
                 .json(id)
                 .is_some(),

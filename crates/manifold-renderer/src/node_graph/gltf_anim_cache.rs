@@ -28,7 +28,7 @@ use std::sync::{Arc, LazyLock, Mutex, Weak, mpsc};
 
 use super::gltf_load::{self, GltfInterp, Mat4};
 
-pub(crate) type LoadedAnimSet = super::source_asset::LoadedAsset<GltfAnimSet>;
+pub(crate) type LoadedAnimSet = manifold_node_engine::scene::source_asset::LoadedAsset<GltfAnimSet>;
 
 impl From<GltfAnimSet> for LoadedAnimSet {
     fn from(set: GltfAnimSet) -> Self {

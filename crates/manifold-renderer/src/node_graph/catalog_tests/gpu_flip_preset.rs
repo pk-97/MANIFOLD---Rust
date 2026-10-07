@@ -1,21 +1,21 @@
-use crate::node_graph::primitives::gpu_flip_preset::testkit::{family_outputs, surface_detail_offset, assert_preset_root, rendered_scene_bytes};
+use manifold_node_engine::water::primitives::gpu_flip_preset::testkit::{family_outputs, surface_detail_offset, assert_preset_root, rendered_scene_bytes};
 
-use crate::node_graph::primitives::gpu_flip_preset::*;
-use crate::testkit::liquid_extents::*;
+use manifold_node_engine::water::primitives::gpu_flip_preset::*;
+use manifold_node_engine::testkit::liquid_extents::*;
 #[cfg(feature = "gpu-proofs")]
-use crate::node_graph::primitives::gpu_flip_preset::testkit::surface_group;
+use manifold_node_engine::water::primitives::gpu_flip_preset::testkit::surface_group;
 use manifold_core::effect_graph_def::*;
 use manifold_core::PresetTypeId;
 use serde_json::{Value, json};
-    use crate::node_graph::liquid::extent::{ExtentError, ExtentReport};
+    use manifold_node_engine::water::liquid::extent::{ExtentError, ExtentReport};
 
-    use crate::node_graph::{ParamValue, PrimitiveRegistry};
+    use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
 
     #[test]
     fn gpu_flip_defaults_disable_optional_corrections_and_preserve_opt_ins() {
-        use crate::node_graph::primitives::gpu_flip_step::GpuFlipStep;
-        use crate::node_graph::ParamValue;
-        use crate::node_graph::primitive::PrimitiveSpec;
+        use manifold_node_engine::water::primitives::gpu_flip_step::GpuFlipStep;
+        use manifold_node_engine::parameters::ParamValue;
+        use manifold_node_engine::primitive::PrimitiveSpec;
 
         assert!(!WaterScene::dam_break(64).volume_projection);
         for name in ["volume_projection", "narrow_band", "solve_level"] {
@@ -220,7 +220,7 @@ use serde_json::{Value, json};
             assert_eq!(plan.substep_regions().len(), 1, "one tick region");
             let report = walked(&def, false, &format!("rendered {n}³"));
             assert!(report.checked > 7, "checked only {} nodes at {n}³", report.checked);
-            let runtime = crate::preset_runtime::PresetRuntime::from_def(def, &registry, None).expect("the rendered scene builds");
+            let runtime = manifold_node_engine::runtime::PresetRuntime::from_def(def, &registry, None).expect("the rendered scene builds");
             let shadowed: Vec<_> = runtime.shadowed_def_params().collect();
             assert!(shadowed.is_empty(), "{n}³ at surface scale {}: cards overwrite def params: {shadowed:?}", scene.surface_scale);
         }
@@ -244,7 +244,7 @@ use serde_json::{Value, json};
 
     /// Each fused region of `def` as its members' node ids, `a + b`.
     fn fused_regions(def: &EffectGraphDef) -> Vec<String> {
-        let report = crate::node_graph::fusion_report(def, &registry());
+        let report = manifold_node_engine::freeze::fusion_report(def, &registry());
         let name = |id: u32| def.nodes.iter().find(|n| n.id == id).map_or("?".to_string(), |n| n.node_id.as_str().to_string());
         report.regions.iter().map(|r| r.member_node_ids.iter().map(|&id| name(id)).collect::<Vec<_>>().join(" + ")).collect()
     }
@@ -302,8 +302,8 @@ use serde_json::{Value, json};
     /// face grid's published valid layers.
     #[test]
     fn gpu_flip_band_uses_engine_cfl() {
-        use crate::node_graph::primitives::gpu_flip_step::{ENGINE_CFL, band_layers};
-        use crate::node_graph::liquid::conformance::FACE_GRID_GPU_FLIP_LAYERS;
+        use manifold_node_engine::water::primitives::gpu_flip_step::{ENGINE_CFL, band_layers};
+        use manifold_node_engine::water::liquid::conformance::FACE_GRID_GPU_FLIP_LAYERS;
         assert_eq!(FACE_GRID_GPU_FLIP_LAYERS, FACE_VALID_LAYERS);
         assert_eq!(band_layers(ENGINE_CFL), 12);
         assert!(band_layers(ENGINE_CFL) >= FACE_VALID_LAYERS);
@@ -340,7 +340,7 @@ use serde_json::{Value, json};
                 serde_json::from_str(&json).unwrap()
             };
             let surface_id = if name == SHIPPED_PRESET { "surface" } else { "liquid_surface" };
-            let surface = crate::node_graph::liquid::conformance::json_node_mut(&mut preset, surface_id)
+            let surface = manifold_node_engine::water::liquid::conformance::json_node_mut(&mut preset, surface_id)
                 .cloned().expect("nested surface");
             assert_eq!(surface["handle"], "Liquid Surface", "{name}: authored surface handle");
             assert_eq!(structure(&surface["group"]), structure(group), "{name}: authored surface drift");
@@ -389,7 +389,7 @@ use serde_json::{Value, json};
                     "{name}: duplicate input wire {wire}");
             }
             let preset_json = serde_json::to_string(&preset).expect("preset serializes");
-            crate::preset_runtime::PresetRuntime::from_json_str(&preset_json, &registry)
+            manifold_node_engine::runtime::PresetRuntime::from_json_str(&preset_json, &registry)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let detail = preset["presetMetadata"]["bindings"].as_array().unwrap().iter()
                 .filter(|b| b["id"] == "surface_detail").collect::<Vec<_>>();
@@ -403,11 +403,11 @@ use serde_json::{Value, json};
     fn gpu_flip_surface_defaults_match_the_engine_on_both_dam_breaks() {
         let registry = PrimitiveRegistry::with_cpu_flip_reference();
         let native = crate::reference_fixtures::cpu_flip_preset_json("WaterDamBreak.json");
-        let native = crate::preset_runtime::PresetRuntime::from_json_str(native, &registry).unwrap();
-        let gpu = crate::preset_runtime::PresetRuntime::from_def(
+        let native = manifold_node_engine::runtime::PresetRuntime::from_json_str(native, &registry).unwrap();
+        let gpu = manifold_node_engine::runtime::PresetRuntime::from_def(
             render_def(WaterScene::dam_break(64)), &registry, None,
         ).unwrap();
-        let param = |runtime: &crate::preset_runtime::PresetRuntime, node: &str, name: &str| {
+        let param = |runtime: &manifold_node_engine::runtime::PresetRuntime, node: &str, name: &str| {
             let id = runtime.graph.instance_by_node_id(&manifold_core::NodeId::new(node)).unwrap();
             runtime.graph.get_node(id).unwrap().params.get(name).cloned().unwrap()
         };
@@ -435,7 +435,7 @@ use serde_json::{Value, json};
         for def in [render_def(WaterScene::dam_break(64)), particle_view_def()] {
             let material = find_node(&def.nodes, "water_material").unwrap();
             assert_eq!(material.params.len(), 18, "the material retains its authored parameter surface");
-            let runtime = crate::preset_runtime::PresetRuntime::from_def(def, &registry, None).unwrap();
+            let runtime = manifold_node_engine::runtime::PresetRuntime::from_def(def, &registry, None).unwrap();
             let id = runtime.graph.instance_by_node_id(&manifold_core::NodeId::new("water_material")).unwrap();
             let material = runtime.graph.get_node(id).unwrap();
             for (name, expected) in [
@@ -472,7 +472,7 @@ use serde_json::{Value, json};
     fn gpu_flip_sheet_fill_rate_card_binding_and_wire_round_trip() {
         use manifold_core::NodeId;
         use manifold_core::params::{Param, ParamManifest};
-        use crate::preset_runtime::PresetRuntime;
+        use manifold_node_engine::runtime::PresetRuntime;
 
         for name in [SHIPPED_PRESET, PARTICLE_VIEW_PRESET] {
             let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
@@ -508,7 +508,7 @@ use serde_json::{Value, json};
                 let node = runtime.graph.get_node(id).unwrap();
                 assert_eq!(node.params.get("sheet_fill_rate"), Some(&ParamValue::Float(rate)));
                 let geometry = gpu_flip_geometry(|key, default| node.params.get(key)
-                    .map(crate::node_graph::param_default_to_f32).unwrap_or(default), None, None).unwrap();
+                    .map(manifold_node_engine::snapshot::param_default_to_f32).unwrap_or(default), None, None).unwrap();
                 assert_eq!(geometry.sheet_fill_rate, rate);
             }
         }
@@ -634,7 +634,7 @@ use serde_json::{Value, json};
         }
         let shipped: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("the Particle View reads")).expect("parses");
         assert!(canonical(&shipped) == canonical(&built), "{PARTICLE_VIEW_PRESET}.json differs from the builder's Particle View; rerun with UPDATE_GPU_FLIP_PRESET=1");
-        let runtime = crate::preset_runtime::PresetRuntime::from_def(def, &PrimitiveRegistry::with_builtin(), None).expect("the Particle View builds");
+        let runtime = manifold_node_engine::runtime::PresetRuntime::from_def(def, &PrimitiveRegistry::with_builtin(), None).expect("the Particle View builds");
         let shadowed: Vec<_> = runtime.shadowed_def_params().collect();
         assert!(shadowed.is_empty(), "the Particle View's cards overwrite def params: {shadowed:?}");
     }
@@ -767,7 +767,7 @@ use serde_json::{Value, json};
             w.from_node == from && w.from_port == from_port && w.to_node == to && w.to_port == to_port);
         let boundary_name = &graph.get_node(region.boundary).unwrap().node_id;
         let boundary = def.nodes.iter().find(|n| &n.node_id == boundary_name).unwrap().id;
-        let whitewater = crate::node_graph::NodeInstanceId(def.nodes.iter()
+        let whitewater = manifold_node_engine::exec::effect_node::NodeInstanceId(def.nodes.iter()
             .find(|n| n.node_id.as_str() == "whitewater").unwrap().id);
         let distance = def.wires.iter().find(|w| w.to_node == whitewater.0 && w.to_port == "distance").unwrap();
         assert_eq!(distance.from_port, "distance");
@@ -820,9 +820,9 @@ use serde_json::{Value, json};
         }
     }
 
-use crate::node_graph::primitives::{gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS};
+use manifold_node_engine::water::primitives::{gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS};
 use crate::node_graph::bundled_presets::bundled_preset_json;
-use crate::node_graph::liquid::clock::INTERVAL_DURATION_INPUTS;
+use manifold_node_engine::water::liquid::clock::INTERVAL_DURATION_INPUTS;
 
 fn shipped_preset() -> Value {
     let json = crate::node_graph::bundled_presets::bundled_preset_json(&PresetTypeId::new("WaterDamBreakGpuFlip")).expect("the GPU FLIP preset is bundled");

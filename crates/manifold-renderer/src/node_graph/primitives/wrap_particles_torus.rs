@@ -10,11 +10,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{standalone_pipeline, active_elements};
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order
 /// (`active_count`, Int → i32) then the codegen-injected `dispatch_count`
@@ -30,7 +30,7 @@ struct WrapUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: WrapParticlesTorus,
     type_id: "node.wrap_around",
     purpose: "Per-particle toroidal wrap: position.xy = fract(position.xy + 1). The cyclic-boundary policy atom for fluid sims and any flow-driven particle pipeline whose domain is `[0, 1]²`. Dead particles (life <= 0) pass through unchanged. Decomposed out of the legacy fused `integrate_particles` kernel — kept separate so different boundary policies (boundary_death, wall_bounce) can ship as sibling atoms without forking the integrator.",
@@ -67,7 +67,7 @@ impl Primitive for WrapParticlesTorus {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

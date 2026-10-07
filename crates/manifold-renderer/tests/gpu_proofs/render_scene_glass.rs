@@ -17,15 +17,12 @@
 use half::f16;
 use manifold_gpu::GpuBuffer;
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::mesh::MeshVertex;
-use manifold_renderer::node_graph::depth_rule::DepthRule;
-use manifold_renderer::node_graph::{
-    ArrayType, EffectNode, EffectNodeContext, EffectNodeType, NodeInput, NodeOutput, NodePort,
-    ParamDef, ParamValues, PortKind, PortType, PrimitiveRegistry,
-};
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::scene::depth_rule::DepthRule;
+use manifold_node_engine::{ports::ArrayType, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, ports::NodeInput, ports::NodeOutput, ports::NodePort, parameters::ParamDef, exec::effect_node::ParamValues, ports::PortKind, ports::PortType, persistence::PrimitiveRegistry};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 

@@ -1,7 +1,7 @@
-use crate::node_graph::freeze::codegen::{FusionRegion, InputSource, RegionNode};
-    use crate::node_graph::freeze::codegen::generate_fused;
-    use crate::node_graph::NodeInstanceId;
-    use crate::node_graph::primitive::PrimitiveSpec;
+use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode};
+    use manifold_node_engine::freeze::codegen::generate_fused;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::{LerpInstanceFields as L, NeighborSmooth as N};
 
     fn member<P: PrimitiveSpec>(

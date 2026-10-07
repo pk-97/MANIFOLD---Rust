@@ -15,14 +15,14 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::material::{AlphaMode, Material, MaterialKind};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::scene::material::{AlphaMode, Material, MaterialKind};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const ALPHA_MODES: &[&str] = &["Opaque", "Mask", "Blend"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CelMaterial,
     type_id: "node.cel_material",
     purpose: "Cel-shaded material — Lambert N·L quantized into `cel_bands` discrete bands. Stylised look; the DigitalPlants aesthetic. The bundled 3D mesh renderers compute per-fragment N·L with the wired light, snap into one of N bands between `band_low` (shadow side) and `band_high` (lit side), and multiply by base_color. Outputs one Material on `out`. Requires a `light` input wired to the renderer.",
@@ -208,16 +208,16 @@ impl Primitive for CelMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::material::MaterialKind;
+    use manifold_node_engine::scene::material::MaterialKind;
 
     #[test]
     fn run_emits_cel_material_with_clamped_band_count() {
-        use crate::node_graph::MockBackend;
-        use crate::node_graph::backend::Backend;
-        use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::execution_plan::ResourceId;
-        use crate::node_graph::ports::PortType;
+        use manifold_node_engine::exec::backend::MockBackend;
+        use manifold_node_engine::exec::backend::Backend;
+        use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+        use manifold_node_engine::exec::effect_node::ParamValues;
+        use manifold_node_engine::exec::execution_plan::ResourceId;
+        use manifold_node_engine::ports::PortType;
         use manifold_core::{Beats, Seconds};
 
         let mut backend = MockBackend::new();
@@ -260,7 +260,7 @@ mod tests {
             &mut render_mode_scratch,
             &mut object_scratch,
         );
-        let time = crate::node_graph::effect_node::FrameTime {
+        let time = manifold_node_engine::exec::effect_node::FrameTime {
             beats: Beats(0.0),
             seconds: Seconds(0.0),
             delta: Seconds(1.0 / 60.0),

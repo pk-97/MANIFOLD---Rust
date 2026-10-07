@@ -37,10 +37,10 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use manifold_gpu::{GpuFrameProfile, GpuWorkKind, ProfileGranularity};
-use manifold_renderer::node_graph::StepProfile;
-use manifold_renderer::node_graph::physics_metrics::ClockMetrics;
+use manifold_node_engine::exec::execution::StepProfile;
+use manifold_node_engine::water::physics_metrics::ClockMetrics;
 #[cfg(test)]
-use manifold_renderer::node_graph::physics_metrics::{ClockRecord, MAX_CLOCK_RECORDS};
+use manifold_node_engine::water::physics_metrics::{ClockRecord, MAX_CLOCK_RECORDS};
 
 use crate::content_command::ContentCommand;
 use crate::perf_soak::{prepare_project_edited, PreparedProject};
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn duplicate_profile_tags_sum_cpu_preparation_and_only_dispatch_mode_counts_compute() {
         use manifold_gpu::GpuProfiledSpan;
-        use manifold_renderer::node_graph::NodeInstanceId;
+        use manifold_node_engine::exec::effect_node::NodeInstanceId;
 
         let steps: Vec<_> = [1_000_000, 2_000_000].into_iter().map(|cpu_nanos| StepProfile {
             step_idx: 0,

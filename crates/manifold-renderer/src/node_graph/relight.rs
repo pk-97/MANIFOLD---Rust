@@ -23,10 +23,10 @@ use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGra
 use manifold_core::effects::{RelightField, RelightHeightFrom, RelightParams};
 use manifold_core::NodeId;
 
-use crate::node_graph::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
-use crate::node_graph::depth_rule::DepthRule;
-use crate::node_graph::persistence::PrimitiveRegistry;
-use crate::node_graph::ports::PortType;
+use manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
+use manifold_node_engine::scene::depth_rule::DepthRule;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::ports::PortType;
 
 /// Handle/id-space prefix for every node the relight template mints. Also
 /// doubles as the idempotence guard: [`relight_augment`] refuses to run on a
@@ -34,7 +34,7 @@ use crate::node_graph::ports::PortType;
 const RL_PREFIX: &str = "rl_";
 
 inventory::submit! {
-    crate::node_graph::augmentation::RelightAugmentation {
+    manifold_node_engine::load::augmentation::RelightAugmentation {
         augment: relight_augment,
         targets: relight_field_targets,
     }
@@ -53,7 +53,7 @@ fn enum_val(v: u32) -> SerializedParamValue {
     SerializedParamValue::Enum { value: v }
 }
 
-use crate::node_graph::augmentation::RelightTarget;
+use manifold_node_engine::load::augmentation::RelightTarget;
 
 pub fn relight_field_targets(field: RelightField) -> &'static [RelightTarget] {
     match field {
@@ -435,7 +435,7 @@ pub fn relight_augment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
+    use manifold_node_engine::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
     use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION, EffectGraphDef};
 
     fn registry() -> PrimitiveRegistry {
@@ -589,11 +589,11 @@ mod tests {
     #[test]
     fn every_bundled_preset_validates_after_relight_augmentation() {
         use crate::node_graph::bundled_presets::bundled_preset_def;
-        use crate::node_graph::validate::{ValidateKind, validate_def};
+        use manifold_node_engine::validate::{ValidateKind, validate_def};
         use manifold_core::preset_def::PresetKind;
 
         let reg = registry();
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let device_arc = device.arc();
         let mut checked = 0usize;
         for (kind, validate_kind) in [
@@ -634,11 +634,11 @@ mod tests {
     /// the graph directly asserts the actual invariant this test exists for.
     #[test]
     fn relight_off_matches_pre_relight_effect_graph_for_every_bundled_preset() {
-        use crate::node_graph::boundary_nodes::{FinalOutput, Source};
+        use manifold_node_engine::scene::boundary_nodes::{FinalOutput, Source};
         use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
-        use crate::node_graph::chain_spec::splice_def_into_chain;
-        use crate::node_graph::graph::Graph;
-        use crate::node_graph::graph_loader::{BoundaryHandling, HandleScope, instantiate_def};
+        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
+        use manifold_node_engine::graph::Graph;
+        use manifold_node_engine::load::graph_loader::{BoundaryHandling, HandleScope, instantiate_def};
         use manifold_core::preset_def::PresetKind;
 
         type NodeSig = (u32, String, String, String);
@@ -679,7 +679,7 @@ mod tests {
             // Path A: the production wrapper, relight OFF.
             let mut graph_a = Graph::new();
             let src_a = graph_a.add_node(Box::new(Source::new()));
-            let Some(result_a) = splice_def_into_chain(&mut graph_a, (src_a, "out"), def, &reg, None, &crate::node_graph::mesh_change::PreparedMeshRules::default()) else {
+            let Some(result_a) = splice_def_into_chain(&mut graph_a, (src_a, "out"), def, &reg, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) else {
                 continue; // a preset that fails to splice fails identically on both paths; skip rather than false-fail
             };
             let final_a = graph_a.add_node(Box::new(FinalOutput::new()));
@@ -697,7 +697,7 @@ mod tests {
                 BoundaryHandling::Splice {
                     source_endpoint: (src_b, "out"),
                 },
-            &crate::node_graph::mesh_change::PreparedMeshRules::default())
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
             .expect("instantiate_def B");
             let final_b = graph_b.add_node(Box::new(FinalOutput::new()));
             graph_b
@@ -729,11 +729,11 @@ mod augmentation_source_tests {
         let params = RelightParams::default();
         assert!(relight_augment(&def, &registry, &params).nodes.len() > def.nodes.len());
         assert_eq!(serde_json::to_value(relight_augment(&def, &registry, &params)).unwrap(),
-            serde_json::to_value(crate::node_graph::augmentation::relight_augment(&def, &registry, &params)).unwrap());
+            serde_json::to_value(manifold_node_engine::load::augmentation::relight_augment(&def, &registry, &params)).unwrap());
         for field in [RelightField::LightX, RelightField::LightY, RelightField::Relief,
             RelightField::AoIntensity, RelightField::ShadowSoftness, RelightField::Gain] {
             let direct = relight_field_targets(field);
-            let registered = crate::node_graph::augmentation::relight_field_targets(field);
+            let registered = manifold_node_engine::load::augmentation::relight_field_targets(field);
             assert!(std::ptr::eq(direct, registered));
         }
     }

@@ -9,10 +9,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuTextureFormat};
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 pub const REGION_MASK_SELECTIONS: &[&str] = &["All", "Largest"];
 
@@ -53,7 +53,7 @@ struct RegionMaskUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RegionMask,
     type_id: "node.region_mask",
     purpose: "Rasterize a categorical region-label texture into a grayscale coverage mask using observed tracker records. Shape 0 preserves the observed label silhouette; shape 1 uses the selected observed track boxes with non-additive union coverage, and intermediate values blend them. All unions observed labels/boxes; Largest chooses the observed track with greatest measured area, ties by lowest track ID.",
@@ -103,7 +103,7 @@ impl Primitive for RegionMask {
         port: &str,
         _canvas_dims: (u32, u32),
         input_dims: &[(&str, (u32, u32))],
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         if port != "out" {
             return None;
@@ -177,7 +177,7 @@ impl Primitive for RegionMask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::effect_node::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
     #[test]
     fn blob_v2_region_mask_has_analysis_resolution_and_float_output() {
@@ -189,7 +189,7 @@ mod tests {
         );
         assert_eq!(
             node.fusion_kind(),
-            crate::node_graph::freeze::classify::FusionKind::Pointwise
+            manifold_node_engine::freeze::classify::FusionKind::Pointwise
         );
         assert_eq!(REGION_MASK_SELECTIONS, &["All", "Largest"]);
     }
@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(read_selection_from_params(&params), 0);
     }
 
-    fn read_selection_from_params(params: &crate::node_graph::effect_node::ParamValues) -> u32 {
+    fn read_selection_from_params(params: &manifold_node_engine::exec::effect_node::ParamValues) -> u32 {
         let value = match params.get("selection") {
             Some(ParamValue::Enum(value)) => *value as f32,
             Some(ParamValue::Float(value)) => *value,
@@ -231,13 +231,11 @@ mod tests {
 mod gpu_tests {
     use super::super::region_types::TrackRecord as Track;
     use super::*;
-    use crate::node_graph::effect_node::NodeInstanceId;
-    use crate::node_graph::freeze::classify::FusionKind;
-    use crate::node_graph::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec,
-    };
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::classify::FusionKind;
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec};
+    use manifold_node_engine::primitive::PrimitiveSpec;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use half::f16;
     use manifold_gpu::{GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
 
@@ -436,7 +434,7 @@ mod gpu_tests {
 
     #[test]
     fn blob_v2_mask_pixels() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let labels = upload_labels(&device, &[1, 1, 0, 32, 32, 0, 1, 0], 4, 2);
         let mut tracks = [Track::default(); 32];
         tracks[0] = Track {
@@ -488,7 +486,7 @@ mod gpu_tests {
 
     #[test]
     fn blob_v2_mask_shape_blends_label_silhouette_with_box_union() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let labels = upload_labels(&device, &[1, 0, 1, 0, 0, 32, 0, 32], 4, 2);
         let mut tracks = [Track::default(); 32];
         tracks[0] = Track {
@@ -583,7 +581,7 @@ mod gpu_tests {
 
     #[test]
     fn blob_v2_mask_boxes_exclude_unobserved_tracks() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let labels = upload_labels(&device, &[1, 0, 0, 0], 4, 1);
         let mut tracks = [Track::default(); 32];
         tracks[0] = Track {
@@ -608,7 +606,7 @@ mod gpu_tests {
 
     #[test]
     fn blob_v2_mask_standalone_and_fused_match_fixture() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let labels = upload_labels(&device, &[1, 1, 0, 32, 32, 0, 1, 0], 4, 2);
         let mut tracks = [Track::default(); 32];
         tracks[0] = Track {

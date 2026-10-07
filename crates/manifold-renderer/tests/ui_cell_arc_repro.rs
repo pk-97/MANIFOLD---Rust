@@ -23,7 +23,7 @@ use manifold_gpu::{
     GpuDevice, GpuLoadAction, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::{texture_handle_for_key, UIFlags};
 use manifold_ui::{Rect, UITree, ZTier};

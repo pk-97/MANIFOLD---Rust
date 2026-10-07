@@ -446,7 +446,7 @@ pub(crate) fn rgb_editable(
     let Some(inst) = project.preset_instance(target) else {
         return false;
     };
-    let default = manifold_renderer::node_graph::loaded_preset_view_by_id(inst.effect_type());
+    let default = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(inst.effect_type());
     let Some(def) = project.graph_for_target(target, None).or_else(|| {
         project.graph_for_target(target, default.as_ref().map(|v| v.canonical_def.as_ref()))
     }) else {
@@ -507,7 +507,7 @@ pub(crate) fn graph_def(
         return Some(def.clone());
     }
     let inst = project.preset_instance(target)?;
-    let view = manifold_renderer::node_graph::loaded_preset_view_by_id(inst.effect_type())?;
+    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(inst.effect_type())?;
     project
         .graph_for_target(target, Some(view.canonical_def.as_ref()))
         .cloned()

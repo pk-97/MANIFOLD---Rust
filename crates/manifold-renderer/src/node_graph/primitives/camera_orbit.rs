@@ -21,10 +21,10 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Single source of truth for `near`'s default (also the `ParamDef` default
 /// below) — `gltf_import.rs` reads this to scale the clip plane for
@@ -44,7 +44,7 @@ pub const DEFAULT_NEAR: f32 = 0.05;
 /// number.
 pub const DEFAULT_FAR: f32 = 200.0;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CameraOrbit,
     type_id: "node.orbit_camera",
     purpose: "Orbit-style perspective camera source. Emits one Camera on `out` from five port-shadowed scalar inputs (orbit/tilt/distance/fov_y/look_y): pos = (distance*cos(orbit)*cos(tilt), distance*sin(tilt) + look_y, distance*sin(orbit)*cos(tilt)); target = (0, look_y, 0); world up = (0, 1, 0) — the bit-exact formula every legacy 3D renderer used pre-Camera-port. orbit/tilt/fov_y/roll are radians (Angle params; editor displays degrees), distance ∈ (0.01, 100], fov_y ∈ [0.05, 2.5] rad, look_y ∈ [-10, 10]. Also exposes pos_x/pos_y/pos_z scalar outputs for PBR shading atoms that need the camera world position per pixel. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, digital_plants_render, scatter_particles_camera) that takes a `camera: Camera` input — replaces N separate camera scalar params per primitive with one wire.",

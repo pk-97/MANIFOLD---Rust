@@ -27,7 +27,7 @@
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 
-use crate::preset_loader::GENERATOR_CATALOG;
+use manifold_node_engine::load::preset_loader::GENERATOR_CATALOG;
 
 /// Loader function for the core's
 /// [`manifold_core::preset_definition_registry::generator::PresetSource`]
@@ -171,10 +171,10 @@ mod tests {
     /// warning in the log. This test catches it at compile time.
     #[test]
     fn every_bundled_preset_chain_builds() {
-        use crate::preset_runtime::PresetRuntime;
-        use crate::node_graph::PrimitiveRegistry;
+        use manifold_node_engine::runtime::PresetRuntime;
+        use manifold_node_engine::persistence::PrimitiveRegistry;
         use manifold_gpu::GpuTextureFormat;
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let registry = PrimitiveRegistry::with_builtin();
         let mut failures: Vec<String> = Vec::new();
         for (preset_id, json) in GENERATOR_CATALOG.load().entries() {
@@ -221,13 +221,13 @@ mod tests {
     /// down the run; all failures are collected and reported at once.
     #[test]
     fn every_bundled_preset_executes_one_frame() {
-        use crate::preset_runtime::PresetRuntime;
-        use crate::preset_context::PresetContext;
-        use crate::node_graph::PrimitiveRegistry;
-        use crate::render_target::RenderTarget;
+        use manifold_node_engine::runtime::PresetRuntime;
+        use manifold_node_engine::runtime::preset_context::PresetContext;
+        use manifold_node_engine::persistence::PrimitiveRegistry;
+        use manifold_node_engine::gpu::render_target::RenderTarget;
         use manifold_gpu::GpuTextureFormat;
 
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let registry = PrimitiveRegistry::with_builtin();
         // 256x256 is enough to exercise every dispatch + copy path
         // without paying for 1080p memory traffic. The bug classes this
@@ -273,7 +273,7 @@ mod tests {
                 let mut native_enc = device.create_encoder("first-frame-test");
                 {
                     let mut gpu =
-                        crate::gpu_encoder::GpuEncoder::new(&mut native_enc, &device);
+                        manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native_enc, &device);
                     g.render(
                         &mut gpu,
                         &target.texture,

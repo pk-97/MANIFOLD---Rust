@@ -6,11 +6,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{active_elements, standalone_pipeline};
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -37,7 +37,7 @@ impl CutUniforms {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CutOutBox,
     type_id: "node.cut_out_box",
     purpose: "Hide the part of a mesh inside a world-space box: vertex alpha is multiplied by 0 inside the box and ramps back to 1 over Feather metres outside it. Pair with a material in alpha Mask mode. The cut edge is as fine as the mesh.",
@@ -79,7 +79,7 @@ impl Primitive for CutOutBox {
     fn array_output_capacity(
         &self,
         port: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
         (port == "out").then(|| inputs.iter().find(|(p, _)| *p == "mesh").map(|&(_, n)| n)).flatten()
@@ -134,10 +134,10 @@ pub(crate) fn reference(v: &MeshVertex, u: &CutUniforms) -> MeshVertex {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::effect_node::NodeInstanceId;
-    use crate::node_graph::freeze::classify::CapacityExpr;
-    use crate::node_graph::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::classify::CapacityExpr;
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::ocean_displace::{self, OceanDisplace};
 
     fn cut() -> CutUniforms {
@@ -158,8 +158,8 @@ mod gpu_tests {
     /// The generated kernel matches the CPU reference vertex for vertex.
     #[test]
     fn cut_out_box_matches_cpu() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<CutOutBox>().expect("cut_out_box codegen");
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CutOutBox>().expect("cut_out_box codegen");
         let pipeline = device.create_compute_pipeline(&wgsl, ENTRY, "cut-out-box-test");
         let (vertices, _, _) = ocean_displace::gpu_tests::fixture();
         let u = CutUniforms { dispatch_count: vertices.len() as u32, ..cut() };
@@ -205,7 +205,7 @@ mod gpu_tests {
     /// after the other (docs/OCEAN_SURFACE_DESIGN.md section 4, invariant 5).
     #[test]
     fn ocean_displace_then_cut_fused_matches_unfused() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (vertices, du, fields) = ocean_displace::gpu_tests::fixture();
         let cu = CutUniforms { dispatch_count: vertices.len() as u32, ..cut() };
         let id = NodeInstanceId;
@@ -314,8 +314,8 @@ mod gpu_tests {
         let fused_out = device.create_buffer_shared(bytes);
         let fused_pipeline = device.create_compute_pipeline(&wgsl, ENTRY, "ocean-fused-test");
         // Unfused: the two standalone kernels, one after the other.
-        let displace_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<OceanDisplace>().expect("displace codegen");
-        let cut_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<CutOutBox>().expect("cut codegen");
+        let displace_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<OceanDisplace>().expect("displace codegen");
+        let cut_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CutOutBox>().expect("cut codegen");
         let displace_pipeline = device.create_compute_pipeline(&displace_wgsl, ENTRY, "ocean-unfused-displace");
         let cut_pipeline = device.create_compute_pipeline(&cut_wgsl, ENTRY, "ocean-unfused-cut");
         let mid = device.create_buffer_shared(bytes);

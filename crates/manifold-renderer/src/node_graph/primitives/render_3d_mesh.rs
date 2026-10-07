@@ -17,11 +17,11 @@
 
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::{ConditionalRequirement, EffectNodeContext};
-use crate::node_graph::material::MaterialKind;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::{ConditionalRequirement, EffectNodeContext};
+use manifold_node_engine::scene::material::MaterialKind;
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -58,7 +58,7 @@ const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
     },
 ];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Render3DMesh,
     type_id: "node.render_mesh",
     purpose: "Single-mesh adapter over the shared scene material evaluator. Legacy normal_map remains a signed world-space normal and roughness_map/metallic_map retain absolute red-channel semantics; complete material map families use the shared scene evaluator.",
@@ -198,7 +198,7 @@ impl Primitive for Render3DMesh {
     fn output_canvas_scale(
         &self,
         _port: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         Some((1, 1))
     }
@@ -425,7 +425,7 @@ impl Primitive for Render3DMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
     #[test]
     fn render_3d_mesh_declares_conditional_requirements() {

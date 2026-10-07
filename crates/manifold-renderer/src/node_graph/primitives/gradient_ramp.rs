@@ -23,10 +23,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Maximum number of gradient stops packed into the uniform. Covers every
 /// legacy Infrared palette (max 6 explicit stops) with headroom for
@@ -63,7 +63,7 @@ struct GradientRampUniforms {
     stops: [[f32; 4]; MAX_STOPS],
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GradientRamp,
     type_id: "node.gradient",
     purpose: "General N-stop gradient / LUT generator. Emits a 1D piecewise-linear gradient as a texture — texel x → t = x/(width-1) * domain (endpoint-inclusive: texel 0 is exactly the first stop, the last texel is exactly t=domain), evaluated over a Table of `[position, r, g, b]` stops (up to 16). Constant in y, so it's a luminance LUT for node.color_lut, and reusable as a gradient texture anywhere (false-colour, duotone, thermal palettes, gradient-map, UI ramps). Evaluation matches the classic gradient(): clamp below the first stop, lerp between stops, and EXTRAPOLATE the last segment past the last stop — the overshoot that paints HDR blowout highlights when domain > 1.",
@@ -126,7 +126,7 @@ impl Primitive for GradientRamp {
         _port: &str,
         _canvas_dims: (u32, u32),
         _input_dims: &[(&str, (u32, u32))],
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         Some((LUT_WIDTH, 1))
     }

@@ -1,7 +1,7 @@
-use crate::testkit::liquid_surface::{Harness, Lattice, read};
+use manifold_node_engine::testkit::liquid_surface::{Harness, Lattice, read};
 use crate::node_graph::catalog_tests::liquid_surface::blob_bounds;
-    use crate::node_graph::primitives::particle_volume::*;
-    use crate::node_graph::fluid_particles::{CellRange, FluidBlob, bin_counts};
+    use manifold_node_engine::water::primitives::particle_volume::*;
+    use manifold_node_engine::water::fluid_particles::{CellRange, FluidBlob, bin_counts};
 
     fn expected(
         lattice: &Lattice,
@@ -47,7 +47,7 @@ use crate::node_graph::catalog_tests::liquid_surface::blob_bounds;
                     let distance = v.iter().map(|value| value * value).sum::<f32>().sqrt();
                     band.min(reach * (distance - 1.0))
                 });
-                crate::testkit::particle_volume::union(particle_phi, interior, p, min, lattice.size, levels)
+                manifold_node_engine::testkit::particle_volume::union(particle_phi, interior, p, min, lattice.size, levels)
             })
             .collect()
     }
@@ -183,7 +183,7 @@ use crate::node_graph::catalog_tests::liquid_surface::blob_bounds;
 
     #[test]
     fn gpu_flip_volume_tight_bounds_matches_original_search_exactly() {
-        use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
+        use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
 
         let mut old = standalone_for_spec::<ParticleVolume>().expect("volume standalone codegen");
         for (name, expression) in [
@@ -292,8 +292,8 @@ use crate::node_graph::catalog_tests::liquid_surface::blob_bounds;
     #[test]
     fn fluid_mesh_grid_native_interior_matches_cell_centred_plane() {
         for resolution in [8, 16] {
-            let layout = crate::node_graph::fluid::domain_layout(None, 2.0, resolution).unwrap();
-            let mesh = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+            let layout = manifold_node_engine::water::fluid::domain_layout(None, 2.0, resolution).unwrap();
+            let mesh = manifold_node_engine::water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
             let lattice = Lattice { center: mesh.bounds().pos, size: mesh.bounds().scale, cell: mesh.cell_size() };
             let field: Vec<f32> = (0..resolution.pow(3)).map(|i| {
                 layout.min[0] + (i % resolution) as f32 * mesh.cell_size() + 0.5 * mesh.cell_size() - 0.3

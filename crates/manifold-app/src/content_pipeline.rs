@@ -11,9 +11,9 @@ use manifold_core::{ClipId, EffectId, LayerId, NodeId};
 use manifold_media::video_renderer::VideoRenderer;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
 use manifold_renderer::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
-use manifold_renderer::preset_context::ProjectTempo;
+use manifold_node_engine::runtime::preset_context::ProjectTempo;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
-use manifold_renderer::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_renderer::layer_compositor::CompositeClipDescriptor;
 use manifold_renderer::tonemap::{TonemapSettings, TonemapMode};
 use manifold_renderer::presentation::{
@@ -732,7 +732,7 @@ pub struct ContentPipeline {
     sdr_curve: Option<manifold_core::TonemapCurve>,
     /// Workspace-only viewing preference; never serialized into the project.
     sdr_preview: bool,
-    sdr_output: Option<manifold_renderer::render_target::RenderTarget>,
+    sdr_output: Option<manifold_node_engine::gpu::render_target::RenderTarget>,
     /// PQ encoder for HDR export. Lazily created on first HDR export frame.
     pq_encoder: Option<manifold_renderer::pq_encoder::PqEncoder>,
     /// Reusable GPU→CPU readback for single-frame (still image) export.
@@ -786,7 +786,7 @@ pub struct ContentPipeline {
     /// per-node capture on the layer's generator `PresetRuntime`. `None` = no
     /// generator preview.
     node_preview_generator: Option<(LayerId, Option<NodeId>)>,
-    node_preview_modifier: Option<Arc<manifold_renderer::preset_runtime::ModifierPreviewContext>>,
+    node_preview_modifier: Option<Arc<manifold_node_engine::runtime::ModifierPreviewContext>>,
     modifier_editor_watched: bool,
     /// One-shot "dump every output of this effect to disk" request `(effect,
     /// target dir)`. Consumed on the next render: the compositor captures the
@@ -907,7 +907,7 @@ pub struct ContentPipeline {
     /// the last rendered frame — reset at the top of `render_content`, then
     /// merged from the generator wrapper before it drops and the compositor
     /// wrapper after rendering. Export rejects anything except Complete.
-    last_frame_status: manifold_renderer::frame_status::FrameRenderStatus,
+    last_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus,
     last_rt_updates: manifold_gpu::raytrace::RtAccelUpdate,
     last_rt_dispatches: u32,
     last_rt_history_resets: u32,
@@ -985,7 +985,7 @@ pub struct ContentPipeline {
     /// [`ContentState`](crate::content_state::ContentState) so the editor canvas
     /// shows values that move under a card slider / driver / Ableton / envelope
     /// instead of the frozen authoring def. Empty whenever no editor is watching.
-    last_live_node_params: manifold_renderer::node_graph::LiveNodeParams,
+    last_live_node_params: manifold_node_engine::preview_encoding::LiveNodeParams,
     /// Per-frame visibility bitmap: layer.index -> hidden. Computed once per
     /// frame by the content pipeline and consumed by occlusion, render-skip,
     /// layer descriptor build, and the paused-idle gate via TickResult.
@@ -1195,7 +1195,7 @@ impl ContentPipeline {
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             last_fence_wait_ms: 0.0,
             last_render_work_ms: 0.0,
-            last_frame_status: manifold_renderer::frame_status::FrameRenderStatus::Complete,
+            last_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
             last_rt_updates: Default::default(),
             last_rt_dispatches: 0,
             last_rt_history_resets: 0,
@@ -1339,7 +1339,7 @@ impl ContentPipeline {
     /// `engine.renderers_mut()` + `as_any_mut().downcast_mut::<GeneratorRenderer>()`
     /// and combines both lists.
     #[cfg(feature = "perf-soak")]
-    pub fn take_step_profiles(&mut self) -> Vec<manifold_renderer::node_graph::StepProfile> {
+    pub fn take_step_profiles(&mut self) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
         self.compositor.take_step_profiles()
     }
 
@@ -1369,7 +1369,7 @@ impl ContentPipeline {
         // BUG-j8gy: the chain-fusion worker prewarms fused-kernel pipelines
         // against this device so an edit-time fused swap-in never pays the
         // naga+spirv-opt+MSL compile on the content thread.
-        manifold_renderer::node_graph::freeze::install::set_prewarm_device(device.clone());
+        manifold_node_engine::freeze::install::set_prewarm_device(device.clone());
         self.residency = device.create_residency_manager();
         let event = device.create_event();
         // 3 frames in flight (triple buffering).
@@ -1685,7 +1685,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the merged validity of
     /// the last `render_content` frame. Export rejects anything except
     /// `Complete`; warmup treats `PendingGeometry` as incomplete preparation.
-    pub fn frame_render_status(&self) -> manifold_renderer::frame_status::FrameRenderStatus {
+    pub fn frame_render_status(&self) -> manifold_node_engine::runtime::frame_status::FrameRenderStatus {
         self.last_frame_status
     }
 
@@ -1989,7 +1989,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn set_modifier_preview_context(
         &mut self,
         watched: bool,
-        context: Option<Arc<manifold_renderer::preset_runtime::ModifierPreviewContext>>,
+        context: Option<Arc<manifold_node_engine::runtime::ModifierPreviewContext>>,
     ) {
         self.modifier_editor_watched = watched;
         self.node_preview_modifier = context;
@@ -2042,13 +2042,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 if let (Some(layer), Some(gr)) = (layer, gen_renderer.as_deref_mut()) {
                     let tempo = project_tempo.get_or_insert_with(|| {
                         project.map(|project| {
-                            manifold_renderer::preset_context::ProjectTempo::new(
+                            manifold_node_engine::runtime::preset_context::ProjectTempo::new(
                                 &project.tempo_map,
                                 project.settings.bpm,
                             )
                         })
                     });
-                    let source = manifold_renderer::node_graph::FrameTime {
+                    let source = manifold_node_engine::exec::effect_node::FrameTime {
                         seconds: captured.accepted_time,
                         beats: captured.accepted_beat,
                         delta: manifold_core::Seconds::ZERO,
@@ -2092,7 +2092,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 project.settings.rt_quality.realtime
             };
             self.compositor
-                .set_rt_quality(manifold_renderer::node_graph::RtQuality::from_column(&column));
+                .set_rt_quality(manifold_node_engine::exec::effect_node::RtQuality::from_column(&column));
             // Same column to every clip renderer — generators render
             // `render_scene` through their own PresetRuntimes, which the
             // compositor fan-out never reaches (the split-brain behind the
@@ -2114,7 +2114,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// the cross-device surface bridge.
     pub fn render_content(
         &mut self,
-        gpu: &manifold_renderer::gpu::GpuContext,
+        gpu: &manifold_node_engine::gpu::context::GpuContext,
         engine: &mut PlaybackEngine,
         tick_result: &TickResult,
         dt: f64,
@@ -2130,18 +2130,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         );
         // Whether the previous frame was late decides if live physics may run
         // a second interval this frame.
-        let load = manifold_renderer::node_graph::physics::LiveLoad {
+        let load = manifold_node_engine::water::physics::LiveLoad {
             previous: manifold_core::Seconds((self.last_render_work_ms + self.last_fence_wait_ms) / 1000.0),
             budget: manifold_core::Seconds(1.0 / f64::from(fps.max(1.0))),
         };
-        let _physics_scope = manifold_renderer::node_graph::physics::PhysicsStepScope::for_frame(
+        let _physics_scope = manifold_node_engine::water::physics::PhysicsStepScope::for_frame(
             export_mode, physics, Some(load),
         );
         let _t_frame = std::time::Instant::now();
 
         // §5.4: one reset per frame; the generator and compositor wrappers
         // merge into this before their respective drops below.
-        self.last_frame_status = manifold_renderer::frame_status::FrameRenderStatus::Complete;
+        self.last_frame_status = manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete;
         self.last_rt_updates = Default::default();
         self.last_rt_dispatches = 0;
         self.last_rt_history_resets = 0;
@@ -2222,7 +2222,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     #[allow(clippy::too_many_arguments)]
     fn render_content_native(
         &mut self,
-        _gpu: &manifold_renderer::gpu::GpuContext,
+        _gpu: &manifold_node_engine::gpu::context::GpuContext,
         engine: &mut PlaybackEngine,
         tick_result: &TickResult,
         dt: f64,
@@ -2502,7 +2502,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                         gr.write_scene_viewport_fluid_domains(layer_id, &mut self.scene_viewport_observations.scratch);
                     }
                     let status = gen_ref.map(|gr| gr.scene_viewport_status(layer_id))
-                        .unwrap_or(Err(manifold_renderer::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime));
+                        .unwrap_or(Err(manifold_node_engine::scene::scene_viewport::SceneViewportHostError::MissingRuntime));
                     self.scene_viewport_observations.record(self.write_surface_index, frame_count,
                         self.node_preview_bridge.as_ref().map_or(0, |bridge| bridge.generation()),
                         request.clone(), status);
@@ -2952,7 +2952,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             // keep their physics evaluations out of the live HUD
                             // metrics accumulated around render_content().
                             let _physics_metrics_guard =
-                                manifold_renderer::node_graph::physics_metrics::suspend_recording();
+                                manifold_node_engine::water::physics_metrics::suspend_recording();
                             let _ = gen_r.render_clip_thumbnail(
                                 &mut gpu_cold,
                                 cid_str,
@@ -3444,7 +3444,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     // Recording is an SDR destination, independent of either
                     // monitor. Keep the shared HDR frame intact for displays.
                     if self.sdr_output.as_ref().is_none_or(|t| t.width != src.width || t.height != src.height) {
-                        self.sdr_output = Some(manifold_renderer::render_target::RenderTarget::new(
+                        self.sdr_output = Some(manifold_node_engine::gpu::render_target::RenderTarget::new(
                             native_device, src.width, src.height,
                             manifold_renderer::presentation::UI_FORMAT, "SDR recording output",
                         ));
@@ -3694,7 +3694,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         }
         // The snapshot includes every prepared candidate and all retained old
         // resources, including driver-owned scaler storage and pending GPU work.
-        manifold_renderer::node_graph::scene_modifier_expand::admit_candidate_bytes(
+        manifold_node_engine::load::expand::admit_candidate_bytes(
             device.modifier_memory_snapshot(), 0,
         ).map_err(|error| error.to_string())?;
 
@@ -3835,11 +3835,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         source: &manifold_gpu::GpuTexture,
         target: Option<&manifold_gpu::GpuTexture>,
         smart: bool,
-        encoding: manifold_renderer::node_graph::PreviewEncoding,
+        encoding: manifold_node_engine::preview_encoding::PreviewEncoding,
         pipelines: &PreviewPipelines<'_>,
         sampler: Option<&manifold_gpu::GpuSampler>,
     ) {
-        use manifold_renderer::node_graph::PreviewEncoding;
+        use manifold_node_engine::preview_encoding::PreviewEncoding;
         let Some(target) = target else {
             return;
         };
@@ -3909,7 +3909,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// from the most recent render, keyed by stable `NodeId`. Empty when no editor
     /// is watching. The editor canvas overlays these onto its node faces so a
     /// driver / Ableton / envelope / card slider is seen moving the knob.
-    pub fn live_node_params(&self) -> manifold_renderer::node_graph::LiveNodeParams {
+    pub fn live_node_params(&self) -> manifold_node_engine::preview_encoding::LiveNodeParams {
         self.last_live_node_params.clone()
     }
 
@@ -4113,7 +4113,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let device = self.native_device.as_ref().expect("native export device");
         let source = self.compositor.output_texture();
         if self.sdr_output.as_ref().is_none_or(|t| t.width != source.width || t.height != source.height) {
-            self.sdr_output = Some(manifold_renderer::render_target::RenderTarget::new(
+            self.sdr_output = Some(manifold_node_engine::gpu::render_target::RenderTarget::new(
                 device, source.width, source.height, manifold_renderer::presentation::UI_FORMAT, "SDR export output",
             ));
         }
@@ -4164,7 +4164,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn chain_debug_info(
         &self,
         layer_id: &str,
-    ) -> Option<manifold_renderer::preset_runtime::ChainDebugInfo<'_>> {
+    ) -> Option<manifold_node_engine::runtime::ChainDebugInfo<'_>> {
         self.compositor.chain_debug_info(layer_id)
     }
 
@@ -4285,7 +4285,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn graph_snapshot_for(
         &self,
         type_id: &manifold_core::PresetTypeId,
-    ) -> Option<manifold_renderer::node_graph::GraphSnapshot> {
+    ) -> Option<manifold_node_engine::snapshot::GraphSnapshot> {
         self.compositor.graph_snapshot_for(type_id)
     }
 
@@ -4296,7 +4296,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn outer_routings_for(
         &self,
         type_id: &manifold_core::PresetTypeId,
-    ) -> Vec<manifold_renderer::node_graph::OuterParamRouting> {
+    ) -> Vec<manifold_node_engine::snapshot::OuterParamRouting> {
         self.compositor.outer_routings_for(type_id)
     }
 }

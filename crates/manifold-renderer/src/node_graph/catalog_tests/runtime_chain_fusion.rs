@@ -4,14 +4,14 @@
     //! and the cards' `param_values` must keep driving the fused chain
     //! through the retargeted bindings.
 
-    use crate::preset_runtime::testkit::build_segment_cards;
+    use manifold_node_engine::runtime::testkit::build_segment_cards;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use crate::preset_runtime::*;
+use manifold_node_engine::runtime::*;
 use crate::node_graph::*;
-    use crate::gpu_encoder::GpuEncoder;
-    use crate::node_graph::freeze::TextureDiff;
-    use crate::node_graph::freeze::install as freeze_install;
-    use crate::preset_context::PresetContext;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+    use manifold_node_engine::freeze::TextureDiff;
+    use manifold_node_engine::freeze::install as freeze_install;
+    use manifold_node_engine::runtime::preset_context::PresetContext;
     use half::f16;
     use manifold_core::PresetTypeId;
     use manifold_core::effects::PresetInstance;
@@ -106,9 +106,9 @@ use crate::node_graph::*;
         device: &manifold_gpu::GpuDevice,
         w: u32,
         h: u32,
-    ) -> crate::render_target::RenderTarget {
+    ) -> manifold_node_engine::gpu::render_target::RenderTarget {
         let out = cg.output_texture().expect("chain produced output");
-        let rt = crate::render_target::RenderTarget::new(
+        let rt = manifold_node_engine::gpu::render_target::RenderTarget::new(
             device,
             w,
             h,
@@ -123,7 +123,7 @@ use crate::node_graph::*;
 
     #[test]
     fn fused_segment_build_matches_per_card_build_and_stays_param_driven() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
         let input = gradient_input(&device, w, h);
@@ -145,9 +145,9 @@ use crate::node_graph::*;
         // per-card — today's production path, our oracle. ──
         let mut per_card = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("per-card chain builds");
-        assert_eq!(crate::preset_runtime::testkit::slot_count(&per_card), 2);
+        assert_eq!(manifold_node_engine::runtime::testkit::slot_count(&per_card), 2);
         assert!(
-            crate::preset_runtime::testkit::pending_segments(&per_card),
+            manifold_node_engine::runtime::testkit::pending_segments(&per_card),
             "cold cache must leave the chain waiting on the segment compile"
         );
         assert!(
@@ -168,8 +168,8 @@ use crate::node_graph::*;
 
         let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("fused-segment chain builds");
-        assert_eq!(crate::preset_runtime::testkit::slot_count(&fused), 2, "one EffectSlot per card survives");
-        assert!(!crate::preset_runtime::testkit::pending_segments(&fused));
+        assert_eq!(manifold_node_engine::runtime::testkit::slot_count(&fused), 2, "one EffectSlot per card survives");
+        assert!(!manifold_node_engine::runtime::testkit::pending_segments(&fused));
         let fused_kernels = fused
             .graph
             .nodes()
@@ -247,7 +247,7 @@ use crate::node_graph::*;
     /// `bound_graph::inner_override_routes_fused_away_node_through_retarget`.
     #[test]
     fn fused_segment_inner_override_reaches_live_kernel() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
         let input = gradient_input(&device, w, h);
@@ -269,7 +269,7 @@ use crate::node_graph::*;
 
         let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("fused-segment chain builds");
-        assert!(!crate::preset_runtime::testkit::pending_segments(&fused));
+        assert!(!manifold_node_engine::runtime::testkit::pending_segments(&fused));
         let fused_kernels = fused
             .graph
             .nodes()
@@ -346,7 +346,7 @@ use crate::node_graph::*;
         if !manifold_foundation::RELIGHT_FEATURE_ENABLED {
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
         let input = gradient_input(&device, w, h);
@@ -360,7 +360,7 @@ use crate::node_graph::*;
 
             let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
             .expect("fused relight-on chain builds");
-            assert!(!crate::preset_runtime::testkit::pending_segments(&fused));
+            assert!(!manifold_node_engine::runtime::testkit::pending_segments(&fused));
             let fused_kernel_count = fused
                 .graph
                 .nodes()
@@ -418,7 +418,7 @@ use crate::node_graph::*;
         if !manifold_foundation::RELIGHT_FEATURE_ENABLED {
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
         let input = gradient_input(&device, w, h);
@@ -468,7 +468,7 @@ use crate::node_graph::*;
         if !manifold_foundation::RELIGHT_FEATURE_ENABLED {
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
 
         let mut fx = make_default(PresetTypeId::COLOR_GRADE);
@@ -478,7 +478,7 @@ use crate::node_graph::*;
         let _ = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
         .expect("prime build");
         let cache_len_after_default =
-            crate::node_graph::freeze::install::fused_effect_cache_len_for_test();
+            manifold_node_engine::freeze::install::fused_effect_cache_len_for_test();
 
         // Move every float knob; the cache should NOT grow.
         fx.relight_params.light_x += 0.5;
@@ -490,7 +490,7 @@ use crate::node_graph::*;
         let _ = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
         .expect("knob-drag build");
         let cache_len_after_knobs =
-            crate::node_graph::freeze::install::fused_effect_cache_len_for_test();
+            manifold_node_engine::freeze::install::fused_effect_cache_len_for_test();
         assert_eq!(
             cache_len_after_default, cache_len_after_knobs,
             "float-knob drag must be a fused-view cache HIT, not a new compile"
@@ -502,7 +502,7 @@ use crate::node_graph::*;
         let _ = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
         .expect("height-from build");
         let cache_len_after_height_from =
-            crate::node_graph::freeze::install::fused_effect_cache_len_for_test();
+            manifold_node_engine::freeze::install::fused_effect_cache_len_for_test();
         assert!(
             cache_len_after_height_from >= cache_len_after_knobs,
             "height_from is allowed to add a fused-view variant"
@@ -520,7 +520,7 @@ use crate::node_graph::*;
         if !manifold_foundation::RELIGHT_FEATURE_ENABLED {
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
 
@@ -544,9 +544,9 @@ use crate::node_graph::*;
 
         let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("mixed relight segment chain builds");
-        assert!(!crate::preset_runtime::testkit::pending_segments(&cg), "mixed segment must be ready after seeding");
+        assert!(!manifold_node_engine::runtime::testkit::pending_segments(&cg), "mixed segment must be ready after seeding");
         assert_eq!(
-            crate::preset_runtime::testkit::slot_count(&cg),
+            manifold_node_engine::runtime::testkit::slot_count(&cg),
             2,
             "one EffectSlot per member survives"
         );
@@ -579,7 +579,7 @@ use crate::node_graph::*;
     /// check: the trail actually accumulated something worth preserving).
     #[test]
     fn rebuild_with_prior_carries_feedback_trail_across() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
         let input = gradient_input(&device, w, h);
@@ -674,7 +674,7 @@ use crate::node_graph::*;
     /// end. Fused segment vs per-card build of the same chain, real GPU.
     #[test]
     fn infrared_quadmirror_segment_matches_per_card() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
         let input = gradient_input(&device, w, h);
@@ -729,7 +729,7 @@ use crate::node_graph::*;
     /// this drives the build-time value and a live palette switch.
     #[test]
     fn infrared_quadmirror_segment_nondefault_palette() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
         let input = gradient_input(&device, w, h);
@@ -860,7 +860,7 @@ use crate::node_graph::*;
     /// input, both chain orders.
     #[test]
     fn infrared_quadmirror_segment_alpha_zero_background() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         // Deliberately NOT 256x256: the gradient_ramp LUT strip is 256 wide,
         // and a 256 canvas can mask cross-resolution sampling bugs by making
@@ -930,7 +930,7 @@ use crate::node_graph::*;
     /// mid-show swap-in (the path the app actually takes) was never proven.
     #[test]
     fn infrared_quadmirror_mid_show_swap_matches_per_card() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
         let input = wireframe_input(&device, w, h);
@@ -999,7 +999,7 @@ use crate::node_graph::*;
     /// disabled card's uniforms.
     #[test]
     fn fused_segment_spans_disabled_card_matches_per_card() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (640u32, 360u32);
         let input = wireframe_input(&device, w, h);
@@ -1059,7 +1059,7 @@ use crate::node_graph::*;
     /// would mask exactly this class, matching the order dependence reported.
     #[test]
     fn fused_segment_with_half_res_chain_input_matches_per_card() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (640u32, 360u32);
         let input = wireframe_input(&device, w / 2, h / 2);
@@ -1118,7 +1118,7 @@ use crate::node_graph::*;
     /// frames, require the late frame to still match.
     #[test]
     fn infrared_alone_static_input_stays_stable_across_frames() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (640u32, 360u32);
         let input = wireframe_input(&device, w, h);
@@ -1167,7 +1167,7 @@ use crate::node_graph::*;
     /// the one that goes black.
     #[test]
     fn infrared_before_quadmirror_stays_stable_across_frames() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (640u32, 360u32);
         let input = wireframe_input(&device, w, h);
@@ -1212,7 +1212,7 @@ use crate::node_graph::*;
     /// carrying.
     #[test]
     fn toggle_rebuild_resets_state_same_set_rebuild_carries() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
         let input = gradient_input(&device, w, h);
@@ -1270,7 +1270,7 @@ use crate::node_graph::*;
     /// harvested chain match a fresh [CG, FB] build.
     #[test]
     fn upstream_reorder_resets_stateful_card() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
         let (w, h) = (256u32, 256u32);
         let input = gradient_input(&device, w, h);

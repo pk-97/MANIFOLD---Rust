@@ -1,5 +1,5 @@
-use crate::node_graph::validate::*;
-use crate::node_graph::PrimitiveRegistry;
+use manifold_node_engine::validate::*;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use std::path::Path;
 const ASSET_SUBDIRS: &[(&str, ValidateKind)] = &[("assets/effect-presets", ValidateKind::Effect), ("assets/generator-presets", ValidateKind::Generator)];
@@ -13,7 +13,7 @@ const ASSET_SUBDIRS: &[(&str, ValidateKind)] = &[("assets/effect-presets", Valid
     fn every_bundled_preset_validates_clean() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let registry = PrimitiveRegistry::with_builtin();
-        let device = crate::gpu::test_gpu_device("validate tests");
+        let device = manifold_node_engine::gpu::context::test_gpu_device("validate tests");
 
         let mut total = 0usize;
         let mut failures: Vec<(std::path::PathBuf, ValidationReport)> = Vec::new();
@@ -70,7 +70,7 @@ const ASSET_SUBDIRS: &[(&str, ValidateKind)] = &[("assets/effect-presets", Valid
     fn bundled_preset_card_warning_counts() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let registry = PrimitiveRegistry::with_builtin();
-        let device = crate::gpu::test_gpu_device("validate tests");
+        let device = manifold_node_engine::gpu::context::test_gpu_device("validate tests");
 
         for (subdir, kind) in ASSET_SUBDIRS {
             let dir = manifest_dir.join(subdir);

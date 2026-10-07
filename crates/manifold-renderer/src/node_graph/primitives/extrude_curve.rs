@@ -13,11 +13,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::{CurvePoint, MeshVertex};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`depth`
 /// f32, `steps` Int→i32, `close` Bool→u32), then the derived `outline_len`
@@ -37,7 +37,7 @@ struct ExtrudeCurveUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ExtrudeCurve,
     type_id: "node.extrude_curve",
     purpose: "Extrude a 2D outline curve (Array<CurvePoint>) along +Z into a (steps+1) x cols positions+uv grid, cols = the outline's point count (or +1 when `close` duplicates the first point as the last column for a closed loop). pos(i,j) = (x_j, y_j, depth * i/steps). Normals are left zero — wire node.make_triangles downstream (src_cols=cols, src_rows=steps+1). No end caps in v1 (the extruded solid is open at both ends).",
@@ -94,7 +94,7 @@ impl Primitive for ExtrudeCurve {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn extrude_curve_capacity_is_rows_times_cols() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = ExtrudeCurve::new();
         let mut params = ParamValues::default();
         params.insert(std::borrow::Cow::Borrowed("steps"), ParamValue::Float(3.0));
@@ -212,7 +212,7 @@ mod gpu_tests {
     }
 
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<ExtrudeCurve>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<ExtrudeCurve>()
             .expect("extrude_curve buffer codegen")
     }
 
@@ -228,7 +228,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "extrude-curve-test",
         );
         let outline_buf = device.create_buffer_shared(std::mem::size_of_val(outline) as u64);
@@ -266,7 +266,7 @@ mod gpu_tests {
 
     #[test]
     fn no_end_caps_open_solid_row_zero_and_last_match_outline_exactly() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let outline = vec![mk_curve(0.0, 0.0), mk_curve(2.0, 0.0), mk_curve(1.0, 3.0)];
         const STEPS: i32 = 2;

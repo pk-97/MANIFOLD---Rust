@@ -7,12 +7,12 @@
 //! the proof cannot pass on RT dispatch alone with stale or degenerate data.
 
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::frame_status::FrameRenderStatus;
-use manifold_renderer::mesh::MeshVertex;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::PrimitiveRegistry;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
@@ -317,7 +317,7 @@ fn rt_dynamic_current_frame_first_frame_dispatches() {
 #[test]
 fn rt_dynamic_current_frame_stock_modifier_combo_accepts_rt_and_dispatches() {
     use manifold_core::NodeId;
-    use manifold_renderer::node_graph::ParamValue;
+    use manifold_node_engine::parameters::ParamValue;
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let owner = modifier_combo_scene();
@@ -450,7 +450,7 @@ fn rt_dynamic_current_frame_stock_modifier_combo_accepts_rt_and_dispatches() {
 #[test]
 fn rt_dynamic_current_frame_warmup_toggle_deform_and_idle() {
     use manifold_core::NodeId;
-    use manifold_renderer::node_graph::ParamValue;
+    use manifold_node_engine::parameters::ParamValue;
     let h = harness::shared();
     let mut graph: serde_json::Value = serde_json::from_str(scene_json()).unwrap();
     graph["nodes"]
@@ -583,7 +583,7 @@ fn rt_dynamic_current_frame_warmup_toggle_deform_and_idle() {
 #[test]
 fn rt_dynamic_history_reset_and_resume() {
     use manifold_core::NodeId;
-    use manifold_renderer::node_graph::ParamValue;
+    use manifold_node_engine::parameters::ParamValue;
 
     const SENTINEL: f32 = 123.0;
     let h = harness::shared();

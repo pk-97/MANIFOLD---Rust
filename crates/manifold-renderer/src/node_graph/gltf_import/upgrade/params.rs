@@ -66,7 +66,7 @@ pub(super) fn generated_material_defaults(
 }
 
 pub(super) fn retain_unlit_params(params: &mut BTreeMap<String, SerializedParamValue>) {
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::UnlitMaterial;
     params.retain(|name, _| {
         UnlitMaterial::PARAMS

@@ -14,14 +14,14 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 pub const CAMERA_SWITCH_SELECT_LABELS: &[&str] = &["A", "B"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CameraSwitch,
     type_id: "node.camera_switch",
     purpose: "Select between two Camera inputs with an enum select: A passes `a`, B passes `b`. An unwired input falls back to the other, so a single producer on either side still reaches `out`. Camera-path scene modifiers mint one between the previous camera producer and the lens — the modifier's enable toggle is a param write on `select` (D5 Switch), never a structural edit. CPU-only; Camera is a value type (like loop_camera's outputs).",

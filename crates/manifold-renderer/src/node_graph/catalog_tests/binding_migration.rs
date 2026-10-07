@@ -1,4 +1,4 @@
-use crate::node_graph::binding_migration::*;
+use manifold_node_engine::load::binding_migration::*;
 use crate::node_graph::bundled_presets::bundled_preset_def;
 use manifold_core::project::Project;
     use manifold_core::PresetTypeId;

@@ -46,17 +46,17 @@ pub use soft_focus::{SOFT_FOCUS_TYPE_ID, build_soft_focus};
 pub use strobe_opacity::{STROBE_OPACITY_TYPE_ID, build_strobe_opacity};
 
 #[cfg(test)]
-use crate::node_graph::param_binding::composite_handle::CompositeHandle;
+use manifold_node_engine::param_binding::composite_handle::CompositeHandle;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::{NodeInstanceId, GraphError, ParamValue};
+    use manifold_node_engine::{exec::effect_node::NodeInstanceId, validation::GraphError, parameters::ParamValue};
     use std::collections::HashSet;
 
     use manifold_core::{Beats, Seconds};
 
-    use crate::node_graph::{Executor, FinalOutput, FrameTime, Graph, Source, compile, validate};
+    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, scene::boundary_nodes::Source, exec::execution_plan::compile, validate};
 
     fn frame_time() -> FrameTime {
         FrameTime {

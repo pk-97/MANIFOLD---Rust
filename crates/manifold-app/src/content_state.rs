@@ -300,7 +300,7 @@ pub struct ContentState {
     /// graph, for the editor canvas. `None` when no graph-backed effect
     /// has run yet, or when the editor window isn't open. Wrapped in
     /// `Arc` so cloning the `ContentState` per snapshot is cheap.
-    pub active_graph_snapshot: Option<Arc<manifold_renderer::node_graph::GraphSnapshot>>,
+    pub active_graph_snapshot: Option<Arc<manifold_node_engine::snapshot::GraphSnapshot>>,
     /// Identity captured with the snapshot; UI requests may already target a
     /// different graph while this content-thread response is in flight.
     pub active_graph_target: Option<Arc<manifold_core::GraphTarget>>,
@@ -317,7 +317,7 @@ pub struct ContentState {
     /// `graph_version`-cached `active_graph_snapshot` carries. Empty whenever no
     /// editor is watching. Param names are `&'static`, so this allocates only the
     /// small per-node `Vec`s.
-    pub live_node_params: manifold_renderer::node_graph::LiveNodeParams,
+    pub live_node_params: manifold_node_engine::preview_encoding::LiveNodeParams,
     /// `(node_id, atlas_cell_index)` for the per-node thumbnail atlas captured
     /// this frame. The editor canvas maps each visible node to its atlas cell to
     /// blit the thumbnail. Empty unless the editor enabled the atlas.

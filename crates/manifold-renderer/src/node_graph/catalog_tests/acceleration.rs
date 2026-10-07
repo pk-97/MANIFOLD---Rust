@@ -1,8 +1,8 @@
 //! CPU graph proofs for physical recipients of force recipes.
 
-use crate::node_graph::persistence::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use crate::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-use crate::node_graph::scene_modifier_expand::{SceneModifierExpandError, prepare_scene_modifiers};
+use manifold_node_engine::load::expand::{SceneModifierExpandError, prepare_scene_modifiers};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::scene_modifier_edit::insert_scene_modifier;
@@ -30,7 +30,7 @@ fn recipe() -> EffectGraphDef {
 #[test]
 fn scene_modifier_grouped_water_add_and_retarget_expand() {
     use crate::node_graph::scene_modifier_authoring::scene_modifier_objects;
-    use crate::node_graph::scene_modifier_expand::resolve_modifier_mesh_frames;
+    use manifold_node_engine::load::expand::resolve_modifier_mesh_frames;
     use manifold_core::scene_modifier_edit::retarget_scene_modifier;
     use manifold_core::scene_index::FlatSceneIndex;
 
@@ -44,7 +44,7 @@ fn scene_modifier_grouped_water_add_and_retarget_expand() {
     let owner = attach(&owner, "force", SceneTargetSelection::AllObjects);
     prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin())
         .expect("performer Add Uniform Force expands");
-    crate::preset_runtime::PresetRuntime::from_def(owner.clone(), &PrimitiveRegistry::with_builtin(), None)
+    manifold_node_engine::runtime::PresetRuntime::from_def(owner.clone(), &PrimitiveRegistry::with_builtin(), None)
         .expect("performer Add Uniform Force builds a runtime");
     let mut instance = owner.scene_modifiers[0].clone();
     instance.targets = SceneTargetSelection::Explicit { objects: vec![water.clone()] };
@@ -53,7 +53,7 @@ fn scene_modifier_grouped_water_add_and_retarget_expand() {
     assert!(FlatSceneIndex::build(&owner).unwrap().scene_objects(&scene).unwrap().contains(&water));
     prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin())
         .expect("performer retarget to grouped Water expands");
-    crate::preset_runtime::PresetRuntime::from_def(owner, &PrimitiveRegistry::with_builtin(), None)
+    manifold_node_engine::runtime::PresetRuntime::from_def(owner, &PrimitiveRegistry::with_builtin(), None)
         .expect("performer retarget to grouped Water builds a runtime");
 }
 fn reference(def: &EffectGraphDef, ty: &str, id: &str) -> SceneNodeRef {

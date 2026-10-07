@@ -14,10 +14,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -28,7 +28,7 @@ struct SharpenUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Sharpen,
     type_id: "node.sharpen",
     purpose: "Single-knob 4-neighbour Laplacian unsharp mask. `amount = 0` passes the source through unchanged; positive values add increasingly aggressive edge enhancement. Curated wrapper over the same math node.custom_convolution can express, factored out so one outer-card slider drives sharpening directly without needing five affine_scalar nodes to compute kernel weights.",

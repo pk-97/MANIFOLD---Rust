@@ -1,15 +1,15 @@
 //! Device proofs against the pass-1 publication contract, and byte for byte
 //! against the transcribed 1-bit publisher (`particle_publication::reference`).
-use super::liquid_stats::LIQUID_STATS_WORDS;
-use crate::testkit::liquid_surface::read;
+use manifold_node_engine::water::primitives::liquid_stats::LIQUID_STATS_WORDS;
+use manifold_node_engine::testkit::liquid_surface::read;
 use super::particle_frame_blend_tests::publication_contract::publish as reference;
-use super::particle_identity::{BirthReservation, ParticleIdentity};
-use super::particle_publication::reference::{live as live_radius, publish as oracle};
-use super::particle_publication::{ParticlePublication, Publication, scratch_bytes};
-use crate::node_graph::fluid_particles::{CellRange, FluidParticle};
+use manifold_node_engine::water::primitives::particle_identity::{BirthReservation, ParticleIdentity};
+use manifold_node_engine::water::primitives::particle_publication::reference::{live as live_radius, publish as oracle};
+use manifold_node_engine::water::primitives::particle_publication::{ParticlePublication, Publication, scratch_bytes};
+use manifold_node_engine::water::fluid_particles::{CellRange, FluidParticle};
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
-fn shared<T: bytemuck::Pod>(device: &crate::TestDevice, values: &[T]) -> GpuBuffer {
+fn shared<T: bytemuck::Pod>(device: &manifold_gpu::testkit::TestDevice, values: &[T]) -> GpuBuffer {
     let buffer = device.create_buffer_shared(std::mem::size_of_val(values).max(16) as u64);
     buffer.zero_fill();
     // SAFETY: fresh storage, no device work in flight.
@@ -26,7 +26,7 @@ fn particle(id: u32, x: f32) -> FluidParticle {
 
 #[test]
 fn particle_publication_reorder_death_birth_empty_and_retired_tails() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let mut publisher = ParticlePublication::default();
     publisher.prepare(&device);
     // CPU extent proof: every output has 257 records, metadata/identity 4 words,
@@ -89,7 +89,7 @@ fn particle_publication_reorder_death_birth_empty_and_retired_tails() {
 
 #[test]
 fn particle_identity_birth_ranges_rollover_and_exact_epoch_exhaustion() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let mut allocator = ParticleIdentity::default();
     allocator.prepare(&device);
     let mut original = [
@@ -179,7 +179,7 @@ fn particle_identity_birth_ranges_rollover_and_exact_epoch_exhaustion() {
 
 #[test]
 fn particle_identity_multiple_substeps_keep_birth_ids() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let mut allocator = ParticleIdentity::default();
     allocator.prepare(&device);
     let particles = shared(
@@ -356,7 +356,7 @@ fn cases(rng: &mut Rng) -> Vec<Case> {
         let gate = cases.len() as u32;
         let mut stats = [0u32; LIQUID_STATS_WORDS as usize];
         stats[0] = u32::from(gate % 5 == 1);
-        stats[super::liquid_stats::NARROW_BAND_SHORTAGE_WORD as usize] = u32::from(gate % 5 == 2);
+        stats[manifold_node_engine::water::primitives::liquid_stats::NARROW_BAND_SHORTAGE_WORD as usize] = u32::from(gate % 5 == 2);
         let identity = [rng.next(), rng.next(), rng.next(), u32::from(gate % 5 == 3)];
         cases.push(Case { label: label.to_owned(), records, count, slots, identity, stats });
     };
@@ -396,7 +396,7 @@ fn words<T: bytemuck::Pod>(values: &[T]) -> &[u32] {
 
 /// Publishes `case` over a garbage-filled target and metadata: the target's
 /// words and the metadata words.
-fn publish_case(device: &crate::TestDevice, publisher: &mut ParticlePublication, case: &Case) -> Result<(Vec<u32>, Vec<u32>), String> {
+fn publish_case(device: &manifold_gpu::testkit::TestDevice, publisher: &mut ParticlePublication, case: &Case) -> Result<(Vec<u32>, Vec<u32>), String> {
     let source = shared(device, &case.records);
     let target = shared(device, &vec![0xa5a5_a5a5u32; case.slots as usize * 8]);
     let metadata = shared(device, &[0xcafe_babeu32; 4]);
@@ -454,7 +454,7 @@ fn check_case(case: &Case, got: &[u32], got_metadata: &[u32]) -> Result<(), Stri
 /// and what it holds is exactly the extent budget of its largest target.
 #[test]
 fn particle_publication_matches_the_reference_byte_for_byte() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let mut publisher = ParticlePublication::default();
     publisher.prepare(&device);
     let mut rng = Rng(0x005e_ed0f_9ab1_1c47);
@@ -481,7 +481,7 @@ fn particle_publication_matches_the_reference_byte_for_byte() {
 /// infinite, subnormal and negative-zero payloads come through bit for bit.
 #[test]
 fn particle_publication_edge_radii_match_the_reference() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let mut publisher = ParticlePublication::default();
     publisher.prepare(&device);
     let edges = [

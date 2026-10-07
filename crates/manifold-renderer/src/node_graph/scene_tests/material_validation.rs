@@ -1,9 +1,9 @@
 use std::borrow::Cow;
-use crate::node_graph::{EffectNodeType, EffectNodeContext, ParamDef, Graph, GraphError, NodeInstanceId, validate};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
-    use crate::node_graph::FINAL_OUTPUT_TYPE_ID;
-    use crate::node_graph::effect_node::ConditionalRequirement;
-    use crate::node_graph::material::MaterialKind;
+use manifold_node_engine::{exec::effect_node::EffectNodeType, exec::effect_node::EffectNodeContext, parameters::ParamDef, graph::Graph, validation::GraphError, exec::effect_node::NodeInstanceId, validate};
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+    use manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
+    use manifold_node_engine::exec::effect_node::ConditionalRequirement;
+    use manifold_node_engine::scene::material::MaterialKind;
 
     /// Stand-in for a 3D mesh renderer that requires `light` whenever
     /// the wired material's kind is `Cel`. Mirrors what
@@ -20,9 +20,9 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortTy
         }
     }
 
-    impl crate::node_graph::EffectNode for CelRequiresLightRenderer {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    impl manifold_node_engine::exec::effect_node::EffectNode for CelRequiresLightRenderer {
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
@@ -75,7 +75,7 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortTy
         g: &mut Graph,
         renderer_id: NodeInstanceId,
     ) -> NodeInstanceId {
-        let fin = g.add_node(Box::new(crate::node_graph::FinalOutput::new()));
+        let fin = g.add_node(Box::new(manifold_node_engine::scene::boundary_nodes::FinalOutput::new()));
         g.connect((renderer_id, "color"), (fin, "in")).unwrap();
         fin
     }

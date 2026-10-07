@@ -10,10 +10,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::dispatch_standalone_2d;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::dispatch_standalone_2d;
 
 pub const GRADIENT_CHANNELS: &[&str] = &["R", "G", "B", "A"];
 
@@ -54,7 +54,7 @@ struct GradientUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GradientCentralDiff,
     type_id: "node.edge_slope",
     purpose: "Per-pixel central-difference gradient of a single input channel. Output: (dx, dy, 0, 1) in RGBA. `scale_mode` selects Texel-space (`(R - L) * 0.5` — default, matches oily-fluid / heightmap-to-normal usage) or UV-space (`(R - L) * W * 0.5` per-axis — multiplies by the dimension halves so output is in per-UV-unit space, what fluid-sim gradient-rotate needs). `wrap_mode` selects Clamp (default, clamps the neighbour texel index to the texture bounds) or Repeat (modulo-wraps the neighbour index toroidally, for cyclic fluid sims) — resolved by an exact integer textureLoad, no sampler. The standard vec2 gradient atom: feeds Sobel edge detectors, fluid-sim curl-from-color extraction, heightmap→normal pipelines, reaction-diffusion flow seeding.",
@@ -160,7 +160,7 @@ impl Primitive for GradientCentralDiff {
     /// stays even though it looks orphaned from this file alone.
     fn fused_gather_sampler_mode(
         &self,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> manifold_gpu::GpuAddressMode {
         let wrap_repeat = match params.get("wrap_mode") {
             Some(ParamValue::Enum(v)) => *v == 1,
@@ -218,9 +218,9 @@ impl Primitive for GradientCentralDiff {
             // policy from `wrap_mode` itself (gcd_wrap_coord).
             // gradient_central_diff.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
+                &manifold_node_engine::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
                     .expect("node.edge_slope standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
+                manifold_node_engine::freeze::codegen::ENTRY,
                 "node.edge_slope",
             )
         });
@@ -258,10 +258,10 @@ mod gpu_tests {
     };
 
     use super::{GradientCentralDiff, GradientUniforms};
-    use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::{generate_standalone, StandaloneKernelSpec, ENTRY};
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
+    use manifold_node_engine::freeze::codegen::{generate_standalone, StandaloneKernelSpec, ENTRY};
+    use manifold_node_engine::primitive::PrimitiveSpec;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     /// Verbatim copy of the pre-conversion `gradient_central_diff_body.wgsl`
     /// — frozen here ONLY as an old-vs-new comparison fixture, never used as
@@ -386,7 +386,7 @@ fn body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
     /// and NEW (GatherTexel, `wrap_mode` uniform) kernels against the same
     /// field and asserts they agree.
     fn assert_old_matches_new(address_mode: GpuAddressMode, wrap_mode: u32, label: &str) {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (17u32, 11u32); // odd, non-square — exercises both axes' edges
         let raw = synthetic_field(w, h);
         let field_tex = upload_field(&device, w, h, &raw);
@@ -429,7 +429,7 @@ fn body(in_tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
         let old_pixels = readback_rgba(&device, &old_out.texture, w, h);
 
         let new_wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<GradientCentralDiff>()
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<GradientCentralDiff>()
                 .expect("new GatherTexel standalone codegen");
         let new_pipeline = device.create_compute_pipeline(&new_wgsl, ENTRY, "edge-slope-new");
         let new_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "new-out");

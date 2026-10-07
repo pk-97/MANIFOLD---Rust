@@ -1,5 +1,5 @@
-use crate::node_graph::freeze::install::testkit::compose_region_mesh_rules;
-use crate::node_graph::mesh_change::*;
+use manifold_node_engine::freeze::install::testkit::compose_region_mesh_rules;
+use manifold_node_engine::scene::mesh_change::*;
 
     /// P2 (BUG-e3p6.4, design §3.3) — the fused node's mesh-rule sidecar
     /// composed from member declarations, proven at the composition seam for
@@ -15,11 +15,9 @@ use crate::node_graph::mesh_change::*;
     /// vertices external.
     #[test]
     fn mesh_change_compose_region_rules_wave_morph() {
-        use crate::node_graph::freeze::classify::InputAccess;
-        use crate::node_graph::freeze::region::{
-            ExternalRef, Region, RegionInput, RegionMember,
-        };
-        use crate::node_graph::mesh_change::{MeshAspect, MeshDependency};
+        use manifold_node_engine::freeze::classify::InputAccess;
+        use manifold_node_engine::freeze::region::{ExternalRef, Region, RegionInput, RegionMember};
+        use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency};
         use crate::node_graph::primitives::{MorphMesh, NormalWaveMesh};
         use std::borrow::Cow;
 
@@ -55,7 +53,7 @@ use crate::node_graph::mesh_change::*;
             virtual_chains: vec![],
             output_capacity: None,
         };
-        let keepalive: Vec<Box<dyn crate::node_graph::EffectNode>> = vec![
+        let keepalive: Vec<Box<dyn manifold_node_engine::exec::effect_node::EffectNode>> = vec![
             Box::new(NormalWaveMesh::new()),
             Box::new(MorphMesh::new()),
         ];

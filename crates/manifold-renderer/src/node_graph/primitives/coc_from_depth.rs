@@ -50,11 +50,11 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::camera::{Camera, CameraMode};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::scene::camera::{Camera, CameraMode};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
 
@@ -79,7 +79,7 @@ struct CocFromDepthUniforms {
     _pad0: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CocFromDepth,
     type_id: "node.coc_from_depth",
     purpose: "Physically-based circle-of-confusion radius from scene depth + a Camera (thin-lens model, docs/CINEMATIC_POST_DESIGN.md D1, signed CoC in docs/BOKEH_LAYERED_DOF_DESIGN.md D1): f_mm = 24mm / (2*tan(fov_y/2)); aperture_radius_mm = f_mm/(2*f_stop); D_mm = linearize_depth(raw_depth, near, far) * world_to_mm; S_mm = focus_distance * world_to_mm; signed = D_mm - S_mm; coc_radius_mm = aperture_radius_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_radius_px = clamp(|coc_radius_mm|/24mm * viewport_h, 0, max_radius). Output R/B = coc_radius_px / max_radius (the [0,1] radius magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the radius zero everywhere. `world_to_mm` (default 1000.0 = the old 1-unit-per-meter constant) calibrates the mm-per-world-unit reading for the scene at hand (BUG-bdwd): the glTF import stamps 1000/scene_radius so any scene scale renders with musical f-stops. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
@@ -161,7 +161,7 @@ fn derive_lens_scalars(cam: &Camera) -> [f32; 5] {
 // this should not happen in practice for a member that passed the
 // install-time `has_recompute` gate).
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.coc_from_depth",
         array_ports: &[],
         recompute: |ctx| ctx.camera.map(derive_lens_scalars).map(|v| v.to_vec()),
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn derive_lens_scalars_reads_perspective_fov_and_lens() {
-        use crate::node_graph::camera::LensParams;
+        use manifold_node_engine::scene::camera::LensParams;
 
         let mut cam = Camera::default_perspective();
         cam.near = 0.1;
@@ -262,7 +262,7 @@ mod tests {
 /// CoC formula verbatim.
 #[cfg(test)]
 mod hand_computed_coc {
-    use crate::node_graph::camera::linearize_depth;
+    use manifold_node_engine::scene::camera::linearize_depth;
 
     const FOV_Y: f32 = std::f32::consts::FRAC_PI_2; // 90 degrees
     const NEAR: f32 = 0.1;
@@ -479,7 +479,7 @@ mod gpu_tests {
 
     use super::{CocFromDepth, CocFromDepthUniforms};
     use crate::node_graph::primitives::GaussianBlurVariableWidth;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     /// A custom, CPU-uploadable texture (unlike `RenderTarget`, whose usage
     /// flags don't include `CPU_UPLOAD`) — used for every INPUT texture in
@@ -628,7 +628,7 @@ mod gpu_tests {
     /// a diameter/radius mix-up doubles this result and cannot pass.
     #[test]
     fn fifty_mm_f2_focus_1m_object_2m_uses_coc_radius() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 1080u32);
         let (near, far, object_z) = (0.1f32, 100.0f32, 2.0f32);
         let raw = (near * far / object_z - near) / (far - near);
@@ -641,10 +641,10 @@ mod gpu_tests {
         });
         device.upload_texture(&depth, bytemuck::cast_slice(&vec![raw; (w * h) as usize]));
         let uniforms = coc_uniforms(24.0, 2.0 * (24.0f32 / 100.0).atan(), near, far, 1.0, 2.0);
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<CocFromDepth>()
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CocFromDepth>()
             .expect("CoC standalone codegen");
         let pipeline = device.create_compute_pipeline(
-            &wgsl, crate::node_graph::freeze::codegen::ENTRY, "coc-physical-radius",
+            &wgsl, manifold_node_engine::freeze::codegen::ENTRY, "coc-physical-radius",
         );
         let out = dispatch_coc(&device, &pipeline, &depth, w, h, bytemuck::bytes_of(&uniforms));
         for p in out {
@@ -659,17 +659,17 @@ mod gpu_tests {
     /// hand oracle).
     #[test]
     fn pinhole_f_stop_gives_all_zero_coc_buffer() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 4u32);
         let depth = depth_ramp(&device, w, h);
         let uniforms = coc_uniforms(24.0, std::f32::consts::FRAC_PI_2, 0.1, 100.0, 5.0, f32::INFINITY);
         let bytes = bytemuck::bytes_of(&uniforms);
 
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<CocFromDepth>()
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CocFromDepth>()
             .expect("node.coc_from_depth standalone codegen");
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "coc-pinhole",
         );
         let out = dispatch_coc(&device, &pipeline, &depth, w, h, bytes);
@@ -691,18 +691,18 @@ mod gpu_tests {
     /// that on every texel.
     #[test]
     fn pinhole_dof_chain_is_bit_clean_passthrough() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 16u32);
         let depth = depth_ramp(&device, w, h);
         let color = color_gradient(&device, w, h);
         let uniforms = coc_uniforms(24.0, std::f32::consts::FRAC_PI_2, 0.1, 100.0, 5.0, f32::INFINITY);
         let bytes = bytemuck::bytes_of(&uniforms);
 
-        let coc_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<CocFromDepth>()
+        let coc_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CocFromDepth>()
             .expect("node.coc_from_depth standalone codegen");
         let coc_pipeline = device.create_compute_pipeline(
             &coc_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "coc-chain",
         );
         let coc_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "coc-chain-out");
@@ -731,14 +731,14 @@ mod gpu_tests {
         }
 
         let vbw_wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<GaussianBlurVariableWidth>()
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<GaussianBlurVariableWidth>()
                 .expect("node.variable_blur standalone codegen");
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
 
         let dispatch_blur = |direction: u32, input: &GpuTexture| -> RenderTarget {
             let pipeline = device.create_specialized_compute_pipeline(
                 &vbw_wgsl,
-                crate::node_graph::freeze::codegen::ENTRY,
+                manifold_node_engine::freeze::codegen::ENTRY,
                 &[("QUALITY_LEVEL", "1u"), ("WEIGHTING_MODE", "0u")],
                 "coc-chain-blur",
             );

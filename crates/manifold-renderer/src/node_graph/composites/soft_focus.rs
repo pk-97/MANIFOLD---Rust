@@ -4,11 +4,11 @@
 //! source fan-out within a composite: the outer source feeds both the
 //! Blur input and Mix's "a" input.
 
-use crate::node_graph::param_binding::composite_handle::CompositeHandle;
-use crate::node_graph::effect_node::NodeInstanceId;
-use crate::node_graph::graph::Graph;
-use crate::node_graph::primitives::{Blur, Mix};
-use crate::node_graph::validation::GraphError;
+use manifold_node_engine::param_binding::composite_handle::CompositeHandle;
+use manifold_node_engine::exec::effect_node::NodeInstanceId;
+use manifold_node_engine::graph::Graph;
+use {crate::node_graph::primitives::Blur, manifold_node_engine::primitives::mix::Mix};
+use manifold_node_engine::validation::GraphError;
 
 pub const SOFT_FOCUS_TYPE_ID: &str = "composite.soft_focus";
 

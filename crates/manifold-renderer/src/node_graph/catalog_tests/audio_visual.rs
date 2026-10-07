@@ -1,12 +1,9 @@
-use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::node_graph::{ExecutionPlan, compile};
-use crate::node_graph::Graph;
-use crate::node_graph::ParamValue;
-use crate::node_graph::{
-    EffectGraphDefExt, Executor, MetalBackend,
-    PrimitiveRegistry,
-};
-use crate::render_target::RenderTarget;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::exec::execution_plan::{ExecutionPlan, compile};
+use manifold_node_engine::graph::Graph;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::metal_backend::MetalBackend, persistence::PrimitiveRegistry};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use half::f16;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::{
@@ -20,9 +17,9 @@ const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
 
 
-use crate::testkit::proof_support::*;
-use crate::preset_context::PresetContext;
-use crate::preset_runtime::PresetRuntime;
+use manifold_node_engine::testkit::proof_support::*;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 use manifold_core::audio_visual::AudioVisualRegistry;
 use manifold_core::params::ParamManifest;
 use manifold_core::{AudioSendId, PresetTypeId};
@@ -31,7 +28,7 @@ struct AudioGraph {
     graph: Graph,
     plan: ExecutionPlan,
     executor: Executor,
-    output: crate::node_graph::Slot,
+    output: manifold_node_engine::bindings::Slot,
     width: u32,
     height: u32,
 }
@@ -39,7 +36,7 @@ struct AudioGraph {
 impl AudioGraph {
     fn new(device: &std::sync::Arc<GpuDevice>, def: EffectGraphDef, input: &GpuTexture) -> Self {
         let registry = PrimitiveRegistry::with_builtin();
-        let mut graph = def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("audio graph loads");
+        let mut graph = def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("audio graph loads");
         let plan = compile(&graph).expect("audio graph compiles");
         let source = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
         let final_node = find_node(&graph, "system.final_output");
@@ -56,7 +53,7 @@ impl AudioGraph {
         encoder.copy_texture_to_texture(input, &source_target.texture, width, height, 1);
         encoder.commit_and_wait_completed();
         let mut backend = MetalBackend::new(device.clone(), width, height, FMT);
-        crate::node_graph::pre_allocate_resources(&mut graph, &plan, device, &mut backend)
+        manifold_node_engine::load::graph_loader::pre_allocate_resources(&mut graph, &plan, device, &mut backend)
             .expect("audio graph resources allocate as in production");
         backend.pre_bind_texture_2d(source, source_target);
         let output = backend.pre_bind_texture_2d(
@@ -89,7 +86,7 @@ impl AudioGraph {
             .backend()
             .texture_2d(self.output)
             .expect("output retained");
-        crate::testkit::gpu::readback_raw_halves(device, texture, self.width, self.height)
+        manifold_node_engine::testkit::gpu::readback_raw_halves(device, texture, self.width, self.height)
             .chunks_exact(2)
             .map(|v| f16::from_bits(u16::from_le_bytes([v[0], v[1]])).to_f32())
             .collect()
@@ -129,7 +126,7 @@ fn compare_pixels(actual: &[f32], expected: &[f32], tolerance: f32) {
 
 #[test]
 fn audio_visual_magnitude_db_matches_math_and_fusion() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
         "version":2, "name":"Magnitude proof",
         "nodes":[
@@ -157,7 +154,7 @@ fn audio_visual_magnitude_db_matches_math_and_fusion() {
     );
     let registry = PrimitiveRegistry::with_builtin();
     let fused_view =
-        crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).expect("numeric chain fuses");
+        manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry).expect("numeric chain fuses");
     assert!(
         fused_view
             .def
@@ -215,7 +212,7 @@ fn render_generator(
         );
     }
     encoder.commit_and_wait_completed();
-    crate::testkit::gpu::readback_raw_halves(device, target, target.width, target.height)
+    manifold_node_engine::testkit::gpu::readback_raw_halves(device, target, target.width, target.height)
         .chunks_exact(2)
         .map(|v| f16::from_bits(u16::from_le_bytes([v[0], v[1]])).to_f32())
         .collect()
@@ -241,7 +238,7 @@ fn audio_fixture() -> (AudioSendId, AudioVisualRegistry) {
 
 #[test]
 fn audio_visual_generators_render_live_sources_and_fuse_on_portrait_canvas() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let primitives = PrimitiveRegistry::with_builtin();
     let (width, height) = (1080, 1920);
     let target = RenderTarget::new(&device, width, height, FMT, "audio-generator-target");
@@ -256,7 +253,7 @@ fn audio_visual_generators_render_live_sources_and_fuse_on_portrait_canvas() {
                 .any(|node| node.type_id == "system.generator_input")
         );
         assert!(!def.nodes.iter().any(|node| node.type_id == "system.source"));
-        let fused_view = crate::node_graph::freeze::install::fuse_generator_view(&def, &primitives);
+        let fused_view = manifold_node_engine::freeze::install::fuse_generator_view(&def, &primitives);
         let build = |def| {
             PresetRuntime::from_def_with_device(
                 def,
@@ -351,8 +348,8 @@ fn audio_visual_generators_render_live_sources_and_fuse_on_portrait_canvas() {
 
 #[test]
 fn audio_visual_spectrum_chain_keeps_fixed_source_size_on_portrait_canvas() {
-    use crate::preset_runtime::ChainBuildInputs;
-    let device = crate::test_device();
+    use manifold_node_engine::runtime::ChainBuildInputs;
+    let device = manifold_gpu::testkit::test_device();
     let primitives = PrimitiveRegistry::with_builtin();
     let (width, height) = (1080, 1920);
     let mut effect =
@@ -416,7 +413,7 @@ fn audio_visual_spectrum_chain_keeps_fixed_source_size_on_portrait_canvas() {
     encoder.commit_and_wait_completed();
     let output = runtime.output_texture().unwrap();
     assert_eq!((output.width, output.height), (width, height));
-    let pixels = crate::testkit::gpu::readback_raw_halves(&device, output, width, height);
+    let pixels = manifold_node_engine::testkit::gpu::readback_raw_halves(&device, output, width, height);
     assert!(
         pixels
             .chunks_exact(8)

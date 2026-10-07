@@ -33,11 +33,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
 
@@ -60,7 +60,7 @@ struct BilateralBlurUniforms {
     far: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BilateralBlur,
     type_id: "node.bilateral_blur",
     purpose: "Depth-guided (bilateral) single-axis blur: fixed 9 taps at 1-texel spacing along `axis`, weight_j = K9_j * exp(-(dz_j/depth_sigma)^2) where K9_j are the same sigma~=2 gaussian constants used by every other 9-tap kernel in this codebase and dz_j is the linearized-depth difference from the center texel, renormalized by the weight sum actually used. Pair a Horizontal pass with a Vertical pass for a full 2D edge-aware blur that smooths noise (e.g. raw SSAO/GTAO occlusion) without bleeding across depth discontinuities (silhouette edges stay sharp). Alpha is a pure center pass-through. `camera` is read entirely via near/far derived uniforms for `linearize_depth` — never a GPU binding.",
@@ -127,7 +127,7 @@ fn derive_depth_scalars(cam: &Camera) -> [f32; 2] {
 // Camera external, matching `run()`'s own `derive_depth_scalars` call below
 // exactly.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.bilateral_blur",
         array_ports: &[],
         recompute: |ctx| ctx.camera.map(derive_depth_scalars).map(|v| v.to_vec()),
@@ -209,7 +209,7 @@ mod tests {
 /// (not sharing source). Used by the GPU-vs-CPU parity gpu_test below.
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod cpu_reference {
-    use crate::node_graph::camera::linearize_depth;
+    use manifold_node_engine::scene::camera::linearize_depth;
 
     const K9: [f32; 5] = [0.16501, 0.15019, 0.11325, 0.07076, 0.03664];
 
@@ -302,7 +302,7 @@ mod gpu_tests {
 
     use super::cpu_reference::{bilateral_texel, Fixture};
     use super::{BilateralBlur, BilateralBlurUniforms};
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn upload_rgba16f(device: &GpuDevice, w: u32, h: u32, label: &str, px: &[f16]) -> GpuTexture {
         assert_eq!(px.len(), (w * h * 4) as usize);
@@ -399,9 +399,9 @@ mod gpu_tests {
     }
 
     fn generated_pipeline(device: &GpuDevice, label: &str) -> GpuComputePipeline {
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<BilateralBlur>()
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<BilateralBlur>()
             .expect("node.bilateral_blur standalone codegen");
-        device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, label)
+        device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, label)
     }
 
     /// Non-uniform color gradient — noise stand-in — so a per-texel bug
@@ -427,7 +427,7 @@ mod gpu_tests {
     /// dz=0 is the byte-compare the invariant calls for.
     #[test]
     fn bilateral_uniform_depth_matches_gaussian() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 16u32);
         let raw_depth = vec![0.5f32; (w * h) as usize];
         let color = color_gradient(w, h);
@@ -488,7 +488,7 @@ mod gpu_tests {
         // stays on the near-plane side. Reconstruct z_center + each tap's
         // weight directly (mirrors `bilateral_texel`'s inner loop) so this
         // test asserts the WEIGHT CONTRIBUTION, not just the blended color.
-        use crate::node_graph::camera::linearize_depth;
+        use manifold_node_engine::scene::camera::linearize_depth;
         let depth_at = |x: i32, y: i32| -> f32 {
             let cx = x.clamp(0, w - 1);
             let cy = y.clamp(0, h - 1);
@@ -531,7 +531,7 @@ mod gpu_tests {
         // far-plane's, which in this fixture is IDENTICAL color so we vary
         // the color per side instead — a real cross-check needs a color
         // difference to detect bleed through the OUTPUT, not just weights).
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (wu, hu) = (w as u32, h as u32);
         let mut color = vec![[0.0f32, 0.0, 0.0, 1.0]; (w * h) as usize];
         for y in 0..h {
@@ -562,7 +562,7 @@ mod gpu_tests {
     /// general (non-degenerate) case, distinct from I7a's dz=0 special case.
     #[test]
     fn generated_bilateral_matches_cpu_reference() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (20u32, 12u32);
         let mut raw_depth = vec![0.0f32; (w * h) as usize];
         for y in 0..h {

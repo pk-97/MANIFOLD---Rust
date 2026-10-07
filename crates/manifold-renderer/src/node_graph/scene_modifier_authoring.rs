@@ -11,10 +11,8 @@ use manifold_core::scene_modifier_preset::{
     initialize_scene_modifier_snapshot, validate_scene_modifier_schema,
 };
 
-use super::PrimitiveRegistry;
-use super::scene_modifier_expand::{
-    SceneModifierExpandError, resolve_modifier_mesh_frames, validate_modifier_attachment,
-};
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::load::expand::{SceneModifierExpandError, resolve_modifier_mesh_frames, validate_modifier_attachment};
 
 static SCENE_MODIFIER_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> =
     std::sync::LazyLock::new(PrimitiveRegistry::with_builtin);
@@ -147,5 +145,5 @@ pub fn scene_modifier_objects(
     owner: &EffectGraphDef,
     scene: &SceneNodeRef,
 ) -> Result<Vec<SceneNodeRef>, SceneModifierExpandError> {
-    super::scene_modifier_expand::scene_objects_for_authoring(owner, scene)
+    manifold_node_engine::load::expand::scene_objects_for_authoring(owner, scene)
 }

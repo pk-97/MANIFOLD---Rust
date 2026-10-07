@@ -8,10 +8,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// The six fields, in spectrum order: Dy, Dx, Dz, Dxx, Dzz, Dxz.
 pub const OCEAN_FIELDS: u32 = 6;
@@ -35,7 +35,7 @@ struct SpectrumUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: OceanSpectrum,
     type_id: "node.ocean_spectrum",
     purpose: "One ocean wave cascade's spectrum at time t: JONSWAP from wind speed and fetch, Donelan-Banner spreading around the wind direction, deep-water dispersion, random phases from a seed. Writes six half spectra (height Dy, sideways Dx and Dz, and their slopes Dxx, Dzz, Dxz) of N rows by N/2+1 columns for node.inverse_fft_2d, holding only wavenumbers in [band_low, band_high) so cascades never double-count.",
@@ -78,7 +78,7 @@ crate::primitive! {
 // A fused region's per-frame `time` field: the playback clock, as `run()`
 // uses when `time` is unwired.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.ocean_spectrum",
         array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32]),
@@ -96,7 +96,7 @@ pub fn spectrum_len(n: u32) -> u32 {
     OCEAN_FIELDS * n * (n / 2 + 1)
 }
 
-fn param_f32(params: &crate::node_graph::effect_node::ParamValues, name: &str, default: f32) -> f32 {
+fn param_f32(params: &manifold_node_engine::exec::effect_node::ParamValues, name: &str, default: f32) -> f32 {
     match params.get(name) {
         Some(ParamValue::Float(v)) => *v,
         _ => default,
@@ -107,7 +107,7 @@ impl Primitive for OceanSpectrum {
     fn array_output_capacity(
         &self,
         port: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _inputs: &[(&str, u32)],
     ) -> Option<u32> {
         (port == "spectrum").then(|| valid_size(param_f32(params, "size", 256.0))).flatten().map(spectrum_len)
@@ -413,8 +413,8 @@ mod gpu_tests {
     }
 
     fn dispatch(device: &manifold_gpu::GpuDevice, s: &Spectrum, t: f32) -> manifold_gpu::GpuBuffer {
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<OceanSpectrum>().expect("ocean_spectrum codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "ocean-spectrum-test");
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<OceanSpectrum>().expect("ocean_spectrum codegen");
+        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "ocean-spectrum-test");
         let len = spectrum_len(N);
         let out = device.create_buffer_shared(u64::from(len) * 8);
         let uniforms = SpectrumUniforms {
@@ -468,7 +468,7 @@ mod gpu_tests {
     /// The generated kernel matches the CPU reference value for value.
     #[test]
     fn ocean_spectrum_matches_cpu() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let s = sea();
         let t = 2.5;
         let got = read(&dispatch(&device, &s, t as f32), spectrum_len(N) as usize * 2);
@@ -495,7 +495,7 @@ mod gpu_tests {
     /// kept column 0's ±kz pairs are conjugate.
     #[test]
     fn ocean_field_matches_direct_sum() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let s = sea();
         let t = 1.25;
         let spectrum = dispatch(&device, &s, t as f32);

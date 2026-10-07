@@ -13,10 +13,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -27,7 +27,7 @@ struct SaturationUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Saturation,
     type_id: "node.saturation",
     purpose: "Luma-based saturation: out = mix(vec3(rec709_luma), c, saturation). 0 = grayscale, 1 = unchanged, >1 = oversaturated. Alpha passes through. The `saturation` input port shadows the param — wire any scalar source (LFO, audio bridge) to pump saturation live. Distinct from node.hue_saturation (HSV-space saturation); this pulls toward perceptual grey, the look Color Grade uses.",

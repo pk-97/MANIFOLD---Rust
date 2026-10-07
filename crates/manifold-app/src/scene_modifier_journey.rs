@@ -255,9 +255,9 @@ fn live_param(
         ct.engine.project().unwrap(),
         &LayerId::new("journey-mushroom"),
     );
-    let prepared = manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers(
+    let prepared = manifold_node_engine::load::expand::prepare_scene_modifiers(
         owner,
-        &manifold_renderer::node_graph::PrimitiveRegistry::with_builtin(),
+        &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin(),
     )
     .unwrap();
     let routes: Vec<_> = prepared
@@ -1566,9 +1566,9 @@ fn legacy_math_view_connected_multi_carrier_migration_journey() {
 
     // Preparation: each view's mask borrows its own carrier's patch params
     // and the masks compose into the scene objects' weights.
-    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let prepared =
-        manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers(
+        manifold_node_engine::load::expand::prepare_scene_modifiers(
             graph, &registry,
         )
         .expect("connected migrated views prepare");
@@ -1826,8 +1826,8 @@ fn legacy_math_view_nine_carrier_capacity_journey() {
     }
     // The 18-modifier graph prepares: 9 stage carriers + 9 views, each under
     // its own cap.
-    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
-    manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers(
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
+    manifold_node_engine::load::expand::prepare_scene_modifiers(
         graph,
         &registry,
     )
@@ -1932,8 +1932,8 @@ fn legacy_math_view_view_cap_preservation_journey() {
     );
     // The mixed graph prepares: 3 stage carriers under the stage cap, 16
     // views at the view cap.
-    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
-    manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers(
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
+    manifold_node_engine::load::expand::prepare_scene_modifiers(
         graph,
         &registry,
     )
@@ -2015,10 +2015,10 @@ fn legacy_math_view_failed_migration_stays_executable_journey() {
             .any(|binding| binding.id == "orbit"),
         "authored deformation survives"
     );
-    let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let prepare_error = |project: &Project| {
         let graph = generator_graph(project, &layer_id);
-        manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers(
+        manifold_node_engine::load::expand::prepare_scene_modifiers(
             graph,
             &registry,
         )

@@ -32,12 +32,10 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
 
 use crate::node_graph::scene_exposure::migrate_scene_exposures;
-use crate::preset_loader::{
-    EFFECT_CATALOG, GENERATOR_CATALOG, SCENE_MODIFIER_CATALOG, catalog_generation,
-};
+use manifold_node_engine::load::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG, SCENE_MODIFIER_CATALOG, catalog_generation};
 
 inventory::submit! {
-    crate::node_graph::catalog_source::PresetCatalogSource {
+    manifold_node_engine::load::catalog_source::PresetCatalogSource {
         name: "bundled",
         json: bundled_preset_json,
         def: bundled_preset_def,
@@ -220,9 +218,9 @@ inventory::submit! {
 mod tests {
     use super::*;
 
-    use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
-    use crate::node_graph::validation::validate;
-    use crate::node_graph::execution_plan::compile;
+    use manifold_node_engine::persistence::{EffectGraphDefExt, PrimitiveRegistry};
+    use manifold_node_engine::validation::validate;
+    use manifold_node_engine::exec::execution_plan::compile;
 
     /// Regression guard: every bundled preset must surface in the
     /// picker via `effect_type_registry`. The picker's data source
@@ -326,7 +324,7 @@ mod tests {
             let def = bundled_preset_def(&type_id)
                 .expect("registered preset must have a parsed def")
                 .clone();
-            let graph = def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap_or_else(|e| {
+            let graph = def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap_or_else(|e| {
                 panic!("bundled preset {}: into_graph failed: {e}", type_id.as_str())
             });
             validate(&graph).unwrap_or_else(|e| {
@@ -354,7 +352,7 @@ mod tests {
             def.preset_metadata.is_some(),
             "LED Fill must carry presetMetadata so the picker/inspector can show its params",
         );
-        let graph = def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("LED Fill must build a graph");
+        let graph = def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("LED Fill must build a graph");
         validate(&graph).expect("LED Fill graph must validate");
         compile(&graph).expect("LED Fill graph must compile");
     }
@@ -484,16 +482,16 @@ mod tests {
     /// chain-grafting code that the runtime actually calls.
     #[test]
     fn every_bundled_preset_splices_into_a_chain() {
-        use crate::node_graph::boundary_nodes::Source;
-        use crate::node_graph::chain_spec::splice_def_into_chain;
-        use crate::node_graph::graph::Graph;
+        use manifold_node_engine::scene::boundary_nodes::Source;
+        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
+        use manifold_node_engine::graph::Graph;
 
         let registry = PrimitiveRegistry::with_builtin();
         for type_id in bundled_preset_type_ids(PresetKind::Effect) {
             let def = bundled_preset_def(&type_id).expect("registered");
             let mut chain = Graph::new();
             let src = chain.add_node(Box::new(Source::new()));
-            let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &crate::node_graph::mesh_change::PreparedMeshRules::default());
+            let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default());
             assert!(
                 result.is_some(),
                 "bundled preset {} failed to splice into a chain — preset and chain runtime have \
@@ -525,19 +523,19 @@ mod tests {
     /// once.
     #[test]
     fn every_bundled_preset_executes_one_frame() {
-        use crate::node_graph::boundary_nodes::{FinalOutput, Source};
-        use crate::node_graph::chain_spec::splice_def_into_chain;
-        use crate::node_graph::effect_node::FrameTime;
-        use crate::node_graph::execution::Executor;
-        use crate::node_graph::execution_plan::compile;
-        use crate::node_graph::graph::Graph;
-        use crate::node_graph::metal_backend::MetalBackend;
-        use crate::node_graph::state_store::StateStore;
-        use crate::render_target::RenderTarget;
+        use manifold_node_engine::scene::boundary_nodes::{FinalOutput, Source};
+        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
+        use manifold_node_engine::exec::effect_node::FrameTime;
+        use manifold_node_engine::exec::execution::Executor;
+        use manifold_node_engine::exec::execution_plan::compile;
+        use manifold_node_engine::graph::Graph;
+        use manifold_node_engine::exec::metal_backend::MetalBackend;
+        use manifold_node_engine::state_store::StateStore;
+        use manifold_node_engine::gpu::render_target::RenderTarget;
         use manifold_core::{Beats, Seconds};
         use manifold_gpu::GpuTextureFormat;
 
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let registry = PrimitiveRegistry::with_builtin();
         // 256x256 — see generator-side test for size rationale.
         let (w, h) = (256u32, 256u32);
@@ -563,7 +561,7 @@ mod tests {
             let mut chain = Graph::new();
             let src = chain.add_node(Box::new(Source::new()));
             let Some(result) =
-                splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &crate::node_graph::mesh_change::PreparedMeshRules::default())
+                splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
             else {
                 failures.push(format!("{preset_id}: splice failed"));
                 continue;
@@ -607,7 +605,7 @@ mod tests {
                 let mut native_enc =
                     device.create_encoder("effect-first-frame-test");
                 {
-                    let mut gpu = crate::gpu_encoder::GpuEncoder::new(
+                    let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(
                         &mut native_enc,
                         &device,
                     );
@@ -650,9 +648,9 @@ mod tests {
     /// doesn't resolve, etc.).
     #[test]
     fn color_compass_splice_preserves_translate_and_time_constant_wires() {
-        use crate::node_graph::boundary_nodes::Source;
-        use crate::node_graph::chain_spec::splice_def_into_chain;
-        use crate::node_graph::graph::Graph;
+        use manifold_node_engine::scene::boundary_nodes::Source;
+        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
+        use manifold_node_engine::graph::Graph;
 
         let registry = PrimitiveRegistry::with_builtin();
         let id = PresetTypeId::new("ColorCompass");
@@ -660,12 +658,12 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &crate::node_graph::mesh_change::PreparedMeshRules::default())
+        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
             .expect("Color Compass splices");
 
         // Resolve handle → chain-node-id map for the inner nodes the
         // assertions need.
-        let mut handle_map = ahash::AHashMap::<&str, crate::node_graph::effect_node::NodeInstanceId>::default();
+        let mut handle_map = ahash::AHashMap::<&str, manifold_node_engine::exec::effect_node::NodeInstanceId>::default();
         for (name, id) in &result.handles {
             handle_map.insert(name.as_ref(), *id);
         }
@@ -722,20 +720,16 @@ mod tests {
     // high-frequency content produce near-zero asymmetry).
     #[cfg(any())]
     fn color_compass_responds_to_half_bright_source() {
-        use crate::node_graph::boundary_nodes::{FinalOutput, Source};
-        use crate::node_graph::chain_spec::splice_def_into_chain;
-        use crate::node_graph::effect_node::{
-            EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,
-        };
-        use crate::node_graph::execution_plan::{ResourceId, compile};
-        use crate::node_graph::graph::Graph;
-        use crate::node_graph::parameters::{ParamDef, ParamValue};
-        use crate::node_graph::ports::{
-            NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
-        };
-        use crate::node_graph::state_store::StateStore;
-        use crate::node_graph::{Executor, MetalBackend};
-        use crate::render_target::RenderTarget;
+        use manifold_node_engine::scene::boundary_nodes::{FinalOutput, Source};
+        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
+        use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId};
+        use manifold_node_engine::exec::execution_plan::{ResourceId, compile};
+        use manifold_node_engine::graph::Graph;
+        use manifold_node_engine::parameters::{ParamDef, ParamValue};
+        use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+        use manifold_node_engine::state_store::StateStore;
+        use manifold_node_engine::exec::{execution::Executor, metal_backend::MetalBackend};
+        use manifold_node_engine::gpu::render_target::RenderTarget;
         use manifold_core::{Beats, Seconds};
         use manifold_gpu::GpuTextureFormat;
 
@@ -749,7 +743,7 @@ mod tests {
         }
 
         fn output_resource(
-            plan: &crate::node_graph::execution_plan::ExecutionPlan,
+            plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan,
             node: NodeInstanceId,
             port: &str,
         ) -> ResourceId {
@@ -795,7 +789,7 @@ mod tests {
             }
         }
 
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 64u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -840,7 +834,7 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &crate::node_graph::mesh_change::PreparedMeshRules::default())
+        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
             .expect("splice ok");
 
         // Look up smoothing_y (vertical axis = N-S compass).
@@ -888,7 +882,7 @@ mod tests {
             let mut native_enc = device.create_encoder("compass-diag");
             {
                 let mut gpu =
-                    crate::gpu_encoder::GpuEncoder::new(&mut native_enc, &device);
+                    manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native_enc, &device);
                 exec.execute_frame_with_state(
                     &mut chain,
                     &plan,
@@ -922,7 +916,7 @@ mod catalog_source_tests {
     fn preset_catalog_providers_have_disjoint_type_ids() {
         let mut ids = std::collections::HashSet::new();
         for kind in [PresetKind::Effect, PresetKind::Generator, PresetKind::SceneModifier] {
-            crate::node_graph::catalog_source::visit_presets(kind, &mut |id| assert!(ids.insert(id.clone()), "duplicate preset type id: {id}"));
+            manifold_node_engine::load::catalog_source::visit_presets(kind, &mut |id| assert!(ids.insert(id.clone()), "duplicate preset type id: {id}"));
         }
         assert!(!ids.is_empty(), "catalog census requires linked family presets");
     }
@@ -931,11 +925,11 @@ mod catalog_source_tests {
     fn preset_catalog_registration_preserves_json_and_cached_def() {
         for kind in [PresetKind::Effect, PresetKind::Generator, PresetKind::SceneModifier] {
             let direct: Vec<_> = bundled_preset_type_ids(kind).collect();
-            let registered: Vec<_> = crate::node_graph::catalog_source::preset_type_ids(kind).collect();
+            let registered: Vec<_> = manifold_node_engine::load::catalog_source::preset_type_ids(kind).collect();
             assert_eq!(direct, registered);
             for id in direct {
-                assert_eq!(bundled_preset_json(&id), crate::node_graph::catalog_source::preset_json(&id));
-                match (bundled_preset_def(&id), crate::node_graph::catalog_source::preset_def(&id)) {
+                assert_eq!(bundled_preset_json(&id), manifold_node_engine::load::catalog_source::preset_json(&id));
+                match (bundled_preset_def(&id), manifold_node_engine::load::catalog_source::preset_def(&id)) {
                     (Some(a), Some(b)) => assert!(std::ptr::eq(a, b)),
                     (None, None) => {},
                     _ => panic!("catalog definition mismatch: {id}"),
@@ -974,7 +968,7 @@ mod metadata_source_tests {
             .map(|entry| (entry.id, entry.kind, entry.display_name)).collect::<Vec<_>>();
         let before = published_order();
         let generation = catalog_generation();
-        assert_eq!(crate::preset_loader::clear_project_presets(), generation + 1);
+        assert_eq!(manifold_node_engine::load::preset_loader::clear_project_presets(), generation + 1);
         assert_eq!(published_order(), before);
         for metadata in direct.iter().flatten() {
             assert_eq!(definitions::get(&metadata.id).display_name, metadata.display_name);

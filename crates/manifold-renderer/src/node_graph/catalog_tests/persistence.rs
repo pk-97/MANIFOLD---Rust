@@ -1,5 +1,5 @@
-use crate::node_graph::persistence::*;
-use crate::node_graph::{Graph, ParamValue, Source, FinalOutput, SOURCE_TYPE_ID, FINAL_OUTPUT_TYPE_ID, compile, validate};
+use manifold_node_engine::persistence::*;
+use manifold_node_engine::{graph::Graph, parameters::ParamValue, scene::boundary_nodes::Source, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::SOURCE_TYPE_ID, scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID, exec::execution_plan::compile, validate};
 use crate::node_graph::primitives::{self, Blur, Threshold};
 use std::collections::BTreeMap;
 fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
@@ -62,7 +62,7 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
         let json = serde_json::to_string(&doc).unwrap();
         let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
 
-        let g2 = parsed.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
+        let g2 = parsed.into_graph(&registry(), &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
         assert_eq!(g2.node_count(), 3);
         assert_eq!(g2.wires().len(), 2);
         // Named handle survives.
@@ -119,7 +119,7 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
         assert!(thresh_doc.exposed_params.contains("softness"));
 
         // Confirm the live graph mirror picks them back up.
-        let g2 = parsed.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
+        let g2 = parsed.into_graph(&registry(), &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
         let thresh2 = g2.node_id_by_handle("thresh").unwrap();
         assert!(g2.is_param_exposed(thresh2, "level"));
         assert!(g2.is_param_exposed(thresh2, "softness"));
@@ -157,7 +157,7 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
             }],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()));
+        let err = expect_err(doc.into_graph(&registry(), &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()));
         match err {
             LoadError::UnknownParam { param, .. } => assert_eq!(param, "totally_made_up"),
             other => panic!("expected UnknownParam, got {other:?}"),
@@ -191,7 +191,7 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
             }],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()));
+        let err = expect_err(doc.into_graph(&registry(), &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()));
         match err {
             LoadError::ParamTypeMismatch { expected, got, .. } => {
                 assert_eq!(expected, "Float");
@@ -221,7 +221,7 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
         let doc = GraphDocument::from_graph(&g);
         let json = serde_json::to_string(&doc).unwrap();
         let parsed: GraphDocument = serde_json::from_str(&json).unwrap();
-        let g2 = parsed.into_graph(&registry(), &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
+        let g2 = parsed.into_graph(&registry(), &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
 
         assert_eq!(g2.node_count(), 4);
         assert_eq!(g2.wires().len(), 4);

@@ -6,7 +6,7 @@
 //! too.
 
 use manifold_core::file_loader::{ALL_FILE_LOADER_TYPE_IDS, file_loader_kind};
-use manifold_renderer::node_graph::{ParamType, PrimitiveRegistry};
+use manifold_node_engine::{parameters::ParamType, persistence::PrimitiveRegistry};
 
 /// Load-bearing externs behind the "is this a file reader?" check.
 ///

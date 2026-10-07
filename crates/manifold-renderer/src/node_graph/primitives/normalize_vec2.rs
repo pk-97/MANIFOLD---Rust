@@ -11,11 +11,11 @@
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: NormalizeVec2,
     type_id: "node.normalize",
     purpose: "Per-pixel safe-normalize of the input's RG channels treated as a vec2. Writes (v/length(v), 0, 1) when length ≥ 1e-6, else (0, 0, 0, 1). Direction-only — restores magnitude downstream with `node.exposure`. The building block for curl-force extraction (normalize gradients before summing in fluid-sim velocity steps) and any flow-field that wants directional uniformity regardless of source magnitude.",

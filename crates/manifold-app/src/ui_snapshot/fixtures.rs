@@ -1391,9 +1391,9 @@ mod tests {
         scenes.sort_unstable();
         scenes.dedup();
         for scene in scenes {
-            let before = manifold_renderer::preset_loader::catalog_generation();
+            let before = manifold_node_engine::load::preset_loader::catalog_generation();
             assert!(super::build(scene).is_some(), "unknown flow scene {scene}");
-            let installed = manifold_renderer::preset_loader::catalog_generation() != before;
+            let installed = manifold_node_engine::load::preset_loader::catalog_generation() != before;
             assert_eq!(
                 installed,
                 super::installs_preset_overlay(scene),

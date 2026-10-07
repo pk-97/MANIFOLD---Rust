@@ -38,7 +38,7 @@ use manifold_core::PresetTypeId;
 use manifold_core::preset_def::PresetKind;
 use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
 use manifold_core::types::LayerType;
-use manifold_renderer::preset_loader::{clear_project_presets, set_project_presets};
+use manifold_node_engine::load::preset_loader::{clear_project_presets, set_project_presets};
 
 /// Test-side mirror of the app's `install_embedded_presets` glue (manifold-app
 /// is bin-only, so the 5-line loop isn't linkable from an integration test):

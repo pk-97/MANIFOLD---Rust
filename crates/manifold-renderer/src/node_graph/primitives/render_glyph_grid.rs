@@ -5,10 +5,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -19,7 +19,7 @@ struct GlyphGridUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RenderGlyphGrid,
     type_id: "node.render_glyph_grid",
     purpose: "Render row-major Channels[VALUE: U32] terminal cells as antialiased grayscale glyph coverage using a Gather atlas. Cell values 32..126 select printable ASCII, 127 selects the inset cursor, and invalid or out-of-range cells render blank.",
@@ -67,7 +67,7 @@ impl Primitive for RenderGlyphGrid {
     fn output_canvas_scale(
         &self,
         port: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         (port == "out").then_some((1, 1))
     }
@@ -143,7 +143,7 @@ mod tests {
         assert_eq!(
             node.output_canvas_scale(
                 "out",
-                &crate::node_graph::effect_node::ParamValues::default(),
+                &manifold_node_engine::exec::effect_node::ParamValues::default(),
             ),
             Some((1, 1))
         );
@@ -153,8 +153,8 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use half::f16;
     use manifold_gpu::{
         GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -289,7 +289,7 @@ mod gpu_tests {
 
     #[test]
     fn gpu_formula_maps_rows_columns_and_bounds_cells() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let atlas = synthetic_atlas(&device);
 
         // A/B prove the row-major cell orientation.  127 selects the cursor

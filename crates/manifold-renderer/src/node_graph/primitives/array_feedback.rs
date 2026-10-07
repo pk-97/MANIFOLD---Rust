@@ -20,13 +20,13 @@
 
 use manifold_gpu::GpuBuffer;
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::state_store::NodeState;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::state_store::NodeState;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ArrayFeedback,
     type_id: "node.array_feedback",
     purpose: "One-frame delay for Array<Particle>: this frame's input becomes next frame's output. Closes per-frame particle loops without introducing graph cycles. The internal state-backed buffer is sized to match the producer's pre-allocated wire capacity (item_size × max_capacity). Optional `seed` input initialises the persistent buffer on first allocation (mirrors `node.feedback`'s seed-bootstrap) — wire `node.fluid_seed` (or any particle source) here for non-zero first-frame state. Optional `reset_trigger` input fires a re-seed on integer-edge changes: when it advances, the next emission copies `seed` into the state buffer (treats the trigger event as a clear+reseed). When `seed` is unwired, `reset_trigger` is a no-op.",
@@ -93,7 +93,7 @@ impl Primitive for ArrayFeedback {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

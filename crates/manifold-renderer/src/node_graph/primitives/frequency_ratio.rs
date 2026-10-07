@@ -15,9 +15,9 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Curated 10-row harmonic ratio table. Each row is `(a, b)` —
 /// the integer-frequency pair for the Lissajous curve `(sin(a*t),
@@ -38,7 +38,7 @@ pub const FREQUENCY_RATIO_TABLE: [(f32, f32); 10] = [
     (3.0, 7.0), // 9 — dissonant 3:7
 ];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: FrequencyRatio,
     type_id: "node.frequency_ratio",
     purpose: "Emit two scalars from a curated table of small-integer harmonic ratios. `a:b` maps to a musical interval (1:2 octave, 2:3 fifth, 3:4 fourth, …). Indexing the 10-row table is the clip-trigger primitive for shape generators (Lissajous-style curves) that want clean musically-meaningful closed shapes instead of non-closing scribbles. `index` is port-shadows-param so a counter / trigger source can drive the variety per retrigger.",
@@ -69,7 +69,7 @@ crate::primitive! {
     aliases: ["frequency ratio", "harmonic", "interval"],
     boundary_reason: NonGpu,
     extra_fields: {
-        clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle = crate::generators::clip_trigger::ClipTriggerCycle::new(),
+        clip_trigger_cycle: manifold_node_engine::clip_trigger::ClipTriggerCycle = manifold_node_engine::clip_trigger::ClipTriggerCycle::new(),
     },
 }
 
@@ -112,7 +112,7 @@ impl Primitive for FrequencyRatio {
     /// next trigger after release starts idempotence tracking over, the
     /// same as a freshly-built graph.
     fn clear_state(&mut self) {
-        self.clip_trigger_cycle = crate::generators::clip_trigger::ClipTriggerCycle::new();
+        self.clip_trigger_cycle = manifold_node_engine::clip_trigger::ClipTriggerCycle::new();
     }
 
     fn is_trigger_latch(&self) -> bool {
@@ -123,9 +123,9 @@ impl Primitive for FrequencyRatio {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitives::Value;
-    use crate::node_graph::{Executor, FrameTime, Graph, compile};
+    use manifold_node_engine::exec::effect_node::EffectNode;
+    use manifold_node_engine::primitives::value::Value;
+    use manifold_node_engine::{exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::execution_plan::compile};
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -137,8 +137,8 @@ mod tests {
         }
     }
 
-    use crate::node_graph::effect_node::EffectNodeType;
-    use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+    use manifold_node_engine::exec::effect_node::EffectNodeType;
+    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 
     /// Scalar sink that captures the last value seen on its `in` port.
     struct Capture {
@@ -146,8 +146,8 @@ mod tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
     }
     impl EffectNode for Capture {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id

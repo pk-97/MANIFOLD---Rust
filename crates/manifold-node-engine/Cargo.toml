@@ -1,0 +1,61 @@
+[package]
+name = "manifold-node-engine"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+manifold-physics = { path = "../manifold-physics" }
+manifold-fluids = { path = "../manifold-fluids" }
+zstd = "0.13.3"
+arrayvec = "0.7"
+manifold-core = { path = "../manifold-core" }
+manifold-foundation = { path = "../manifold-foundation" }
+manifold-gpu = { path = "../manifold-gpu" }
+manifold-playback = { path = "../manifold-playback" }
+log = { workspace = true }
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+half = "2"
+serde = { workspace = true }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+ahash = { workspace = true }
+arc-swap = { workspace = true }
+inventory = "0.3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "exr"] }
+# Disk-cache hashing for expensive decodes (WARMUP_DESIGN.md P3).
+sha2 = "0.10"
+naga = { version = "28", features = ["wgsl-in", "msl-out"] }
+
+
+[build-dependencies]
+sha2 = "0.10"
+
+[dev-dependencies]
+glam = "0.29.3"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "0.6"
+
+[features]
+testkit = []
+# GPU-proof tests: slow, flaky, and need a real Metal device with synchronous
+# readback. Off by default so the workspace test sweep stays fast and
+# deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,
+# every `mod gpu_tests`, the `gpu_proofs` integration binary above, and the
+# counters and error tap the liquid conformance suite reads.
+gpu-proofs = ["manifold-gpu/gpu-proofs"]
+# Bounded dynamic-RT timing is opt-in, separate from correctness gates.
+rt-perf-proofs = ["gpu-proofs"]
+# GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.
+fluid-perf-proofs = ["gpu-proofs"]
+# GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.
+matter-perf-proofs = ["gpu-proofs"]
+# Water race probes (GPU_FLIP_PRESSURE_SOLVE.md): minutes-long Dam Break
+# runs of GPU FLIP and the FLIP Fluids engine, opt-in. The frame probe reads
+# render_scene::water_perf.
+water-race-probes = ["gpu-proofs", "fluid-perf-proofs", "manifold-fluids/face-oracle"]
+# The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),
+# opt-in: builds FLIP's oracle entries into manifold-fluids.
+whitewater-oracle = ["gpu-proofs", "manifold-fluids/whitewater-oracle"]
+[lints]
+workspace = true

@@ -3,11 +3,11 @@
 use manifold_gpu::GpuBinding;
 use std::borrow::Cow;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::mesh::InstanceTransform;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,7 +22,7 @@ pub(super) struct Uniforms {
     pub(super) _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: DisplaceCopies,
     type_id: "node.displace_copies",
     purpose: "Displace each InstanceTransform's current xyz by amount * weight * direction. Scale, rotation, marker, inactive holes, and every other record field are preserved; zero amount and zero per-copy scale return the exact source record.",
@@ -59,7 +59,7 @@ impl Primitive for DisplaceCopies {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "instances" {
@@ -148,12 +148,12 @@ mod gpu_tests {
         amount: f32,
         direction: [f32; 3],
     ) -> Vec<InstanceTransform> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<DisplaceCopies>().unwrap();
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<DisplaceCopies>().unwrap();
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "wave-pilot-displace",
         );
         let input = device.create_buffer_shared(std::mem::size_of_val(src) as u64);

@@ -18,8 +18,8 @@
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use crate::gpu_encoder::GpuEncoder;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     /// RCAS uniform layout. 16-byte aligned.
     #[repr(C)]

@@ -1,14 +1,12 @@
-use crate::chain_dispatch::{
-    clear_chain_state, dispatch_chain, dispatch_chain_with_scene_viewport,
-};
+use manifold_node_engine::runtime::chain_dispatch::{clear_chain_state, dispatch_chain, dispatch_chain_with_scene_viewport};
 use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
-use crate::effect::PostProcessEffect;
-use crate::preset_runtime::PresetRuntime;
-use crate::gpu_encoder::GpuEncoder;
-use crate::preset_context::PresetContext;
-use crate::render_target::RenderTarget;
+use manifold_node_engine::runtime::effect::PostProcessEffect;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
-use crate::uniform_arena::UniformArena;
+use manifold_node_engine::gpu::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::effects::{EffectContainer, EffectGroup, PresetInstance};
 use manifold_core::{BlendMode, EffectId, LayerId, NodeId, PresetTypeId, WarmupBudget, WarmupCap, WarmupOutcome};
@@ -324,7 +322,7 @@ pub(crate) fn unique_clip_chain_topologies(
             if !has_enabled_effects(layer_effects) {
                 continue;
             }
-            let hash = crate::preset_runtime::chain_topology_hash(
+            let hash = manifold_node_engine::runtime::chain_topology_hash(
                 layer_effects,
                 groups,
                 width,
@@ -347,7 +345,7 @@ pub(crate) fn unique_clip_chain_topologies(
             if !has_enabled_effects(&effects) {
                 continue;
             }
-            let hash = crate::preset_runtime::chain_topology_hash(
+            let hash = manifold_node_engine::runtime::chain_topology_hash(
                 &effects,
                 groups,
                 width,
@@ -447,9 +445,9 @@ pub struct PreparedCompositorResize {
     layers: AHashMap<LayerId, PingPong>,
     groups: AHashMap<LayerId, PingPong>,
     tonemap: RenderTarget,
-    layer_chains: Vec<(LayerId, crate::preset_runtime::PreparedRuntimeResize)>,
-    group_chains: Vec<(LayerId, crate::preset_runtime::PreparedRuntimeResize)>,
-    master_chain: Option<crate::preset_runtime::PreparedRuntimeResize>,
+    layer_chains: Vec<(LayerId, manifold_node_engine::runtime::PreparedRuntimeResize)>,
+    group_chains: Vec<(LayerId, manifold_node_engine::runtime::PreparedRuntimeResize)>,
+    master_chain: Option<manifold_node_engine::runtime::PreparedRuntimeResize>,
 }
 
 pub struct LayerCompositor {
@@ -614,17 +612,17 @@ pub struct LayerCompositor {
     scene_viewport_request: Option<(
         EffectId,
         NodeId,
-        crate::node_graph::scene_viewport::SceneViewportConfig,
+        manifold_node_engine::scene::scene_viewport::SceneViewportConfig,
     )>,
-    scene_viewport_error: Option<crate::node_graph::scene_viewport::SceneViewportHostError>,
+    scene_viewport_error: Option<manifold_node_engine::scene::scene_viewport::SceneViewportHostError>,
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — per-frame RT quality values from the
     /// active column (realtime vs export). Set per frame via [`set_rt_quality`];
     /// forwarded to every chain's executor through dispatch_chain. Default = live
     /// constants so tests and non-RT graphs run unchanged.
-    rt_quality: crate::node_graph::RtQuality,
+    rt_quality: manifold_node_engine::exec::effect_node::RtQuality,
     /// SCENE_FX P4a — registry of previous-frame layer composited outputs,
     /// published after all layer renders and read by graph execution next frame.
-    layer_skin_registry: crate::layer_skin::LayerSkinRegistry,
+    layer_skin_registry: manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
 }
 
 /// This chain's profiled-tag scope for a screen/LED per-layer effect chain:
@@ -711,7 +709,7 @@ impl LayerCompositor {
             active_layer_ids_scratch: Vec::new(),
             active_layer_buf_ids_scratch: Vec::new(),
             master_effect_chain: None,
-            plugin_warmups: crate::plugin_prewarm::prewarm_all(device),
+            plugin_warmups: manifold_node_engine::runtime::plugin_prewarm::prewarm_all(device),
             tonemap: TonemapPipeline::new(device, width, height),
             layer_outputs_scratch: Vec::new(),
             source_outputs_scratch: Vec::new(),
@@ -734,8 +732,8 @@ impl LayerCompositor {
             profiling_enabled: false,
             scene_viewport_request: None,
             scene_viewport_error: None,
-            rt_quality: crate::node_graph::RtQuality::default(),
-            layer_skin_registry: crate::layer_skin::LayerSkinRegistry::new(
+            rt_quality: manifold_node_engine::exec::effect_node::RtQuality::default(),
+            layer_skin_registry: manifold_node_engine::runtime::layer_skin::LayerSkinRegistry::new(
                 device,
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
             ),
@@ -759,9 +757,9 @@ impl LayerCompositor {
                     match cg.set_scene_viewport(effect_id, node_id, *config) {
                         Ok(()) => viewport_applied = true,
                         Err(error) => match error {
-                            crate::node_graph::scene_viewport::SceneViewportError::TargetNotFound => {}
+                            manifold_node_engine::scene::scene_viewport::SceneViewportError::TargetNotFound => {}
                             other => viewport_error = Some(
-                                crate::node_graph::scene_viewport::SceneViewportHostError::InvalidTarget(other),
+                                manifold_node_engine::scene::scene_viewport::SceneViewportHostError::InvalidTarget(other),
                             ),
                         },
                     }
@@ -804,7 +802,7 @@ impl LayerCompositor {
         self.scene_viewport_error = viewport_error.or_else(|| {
             viewport_request.as_ref().and_then(|_| {
                 (!viewport_applied).then_some(
-                    crate::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime,
+                    manifold_node_engine::scene::scene_viewport::SceneViewportHostError::MissingRuntime,
                 )
             })
         });
@@ -974,7 +972,7 @@ impl LayerCompositor {
             elapsed: std::time::Duration::ZERO,
         };
         let group_id = layer.layer_id.clone();
-        let mut warmup_frame_status: crate::frame_status::FrameRenderStatus;
+        let mut warmup_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus;
         for frame in 0..budget.per_layer_frames {
             // Wall-clock is the primary per-layer cap; the frame cap is only
             // a safety bound for runaway spin loops.
@@ -1026,7 +1024,7 @@ impl LayerCompositor {
                     None,
                     &scope,
                     false,
-                    crate::node_graph::RtQuality::default(),
+                    manifold_node_engine::exec::effect_node::RtQuality::default(),
                     &self.layer_skin_registry,
                     None,
                 );
@@ -1222,14 +1220,14 @@ impl LayerCompositor {
         ctx: &PresetContext,
         scope: &str,
         budget: WarmupBudget,
-        layer_sources: &crate::layer_skin::LayerSkinRegistry,
+        layer_sources: &manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
     ) -> WarmupOutcome {
         let start = std::time::Instant::now();
         let mut outcome = WarmupOutcome::BudgetExhausted {
             cap: WarmupCap::PerLayerFrames,
             elapsed: std::time::Duration::ZERO,
         };
-        let mut warmup_frame_status: crate::frame_status::FrameRenderStatus;
+        let mut warmup_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 
         for _frame in 0..budget.per_layer_frames {
             if start.elapsed() >= budget.per_layer {
@@ -1256,7 +1254,7 @@ impl LayerCompositor {
                     None,
                     scope,
                     false,
-                    crate::node_graph::RtQuality::default(),
+                    manifold_node_engine::exec::effect_node::RtQuality::default(),
                     layer_sources,
                     None,
                 );
@@ -1771,9 +1769,9 @@ impl LayerCompositor {
         preview_effect: Option<&EffectId>,
         scope: &str,
         profiling: bool,
-        rt_quality: crate::node_graph::RtQuality,
-        layer_sources: &crate::layer_skin::LayerSkinRegistry,
-        project_tempo: Option<&crate::preset_context::ProjectTempo>,
+        rt_quality: manifold_node_engine::exec::effect_node::RtQuality,
+        layer_sources: &manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
+        project_tempo: Option<&manifold_node_engine::runtime::preset_context::ProjectTempo>,
     ) -> Option<&'a GpuTexture> {
         dispatch_chain(
             effect_chain,
@@ -1805,17 +1803,17 @@ impl LayerCompositor {
         preview_effect: Option<&EffectId>,
         scope: &str,
         profiling: bool,
-        rt_quality: crate::node_graph::RtQuality,
-        layer_sources: &crate::layer_skin::LayerSkinRegistry,
+        rt_quality: manifold_node_engine::exec::effect_node::RtQuality,
+        layer_sources: &manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
         scene_viewport: Option<(
             &EffectId,
             &NodeId,
-            crate::node_graph::scene_viewport::SceneViewportConfig,
+            manifold_node_engine::scene::scene_viewport::SceneViewportConfig,
         )>,
         scene_viewport_error: &mut Option<
-            crate::node_graph::scene_viewport::SceneViewportHostError,
+            manifold_node_engine::scene::scene_viewport::SceneViewportHostError,
         >,
-        project_tempo: Option<&crate::preset_context::ProjectTempo>,
+        project_tempo: Option<&manifold_node_engine::runtime::preset_context::ProjectTempo>,
     ) -> Option<&'a GpuTexture> {
         dispatch_chain_with_scene_viewport(
             effect_chain,
@@ -1870,7 +1868,7 @@ impl LayerCompositor {
     pub fn chain_debug_info(
         &self,
         layer_id: &LayerId,
-    ) -> Option<crate::preset_runtime::ChainDebugInfo<'_>> {
+    ) -> Option<manifold_node_engine::runtime::ChainDebugInfo<'_>> {
         self.effect_chains
             .get(layer_id)
             .and_then(|opt| opt.as_ref())
@@ -2828,7 +2826,7 @@ impl Compositor for LayerCompositor {
         request: Option<(
             EffectId,
             NodeId,
-            crate::node_graph::scene_viewport::SceneViewportConfig,
+            manifold_node_engine::scene::scene_viewport::SceneViewportConfig,
         )>,
     ) {
         self.scene_viewport_request = request;
@@ -2856,14 +2854,14 @@ impl Compositor for LayerCompositor {
     fn scene_viewport_status(
         &self,
     ) -> Result<
-        crate::frame_status::FrameRenderStatus,
-        crate::node_graph::scene_viewport::SceneViewportHostError,
+        manifold_node_engine::runtime::frame_status::FrameRenderStatus,
+        manifold_node_engine::scene::scene_viewport::SceneViewportHostError,
     > {
         if let Some(error) = self.scene_viewport_error {
             return Err(error);
         }
         let Some((_effect_id, _, _)) = self.scene_viewport_request.as_ref() else {
-            return Err(crate::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime);
+            return Err(manifold_node_engine::scene::scene_viewport::SceneViewportHostError::MissingRuntime);
         };
         let chains = std::iter::once(&self.master_effect_chain)
             .chain(self.effect_chains.values())
@@ -2873,14 +2871,14 @@ impl Compositor for LayerCompositor {
                 return Ok(status);
             }
         }
-        Err(crate::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime)
+        Err(manifold_node_engine::scene::scene_viewport::SceneViewportHostError::MissingRuntime)
     }
 
     fn write_scene_viewport_fluid_domains(
         &self,
         output: &mut Vec<(
             NodeId,
-            crate::node_graph::fluid::FluidDomainSnapshot,
+            manifold_node_engine::water::fluid::FluidDomainSnapshot,
         )>,
     ) {
         if self.scene_viewport_error.is_some() {
@@ -2924,9 +2922,9 @@ impl Compositor for LayerCompositor {
 
     /// Encoding for this frame's previewed node. Walks the same chains as
     /// [`Self::preview_texture`] and returns the watched chain's encoding.
-    fn preview_encoding(&self) -> crate::node_graph::PreviewEncoding {
+    fn preview_encoding(&self) -> manifold_node_engine::preview_encoding::PreviewEncoding {
         if self.preview_request.is_none() {
-            return crate::node_graph::PreviewEncoding::Color;
+            return manifold_node_engine::preview_encoding::PreviewEncoding::Color;
         }
         if let Some(cg) = self
             .master_effect_chain
@@ -2944,13 +2942,13 @@ impl Compositor for LayerCompositor {
                 return cg.preview_encoding();
             }
         }
-        crate::node_graph::PreviewEncoding::Color
+        manifold_node_engine::preview_encoding::PreviewEncoding::Color
     }
 
     /// Live scalar I/O of this frame's previewed node, for the value inspector.
     /// Walks the watched chain regardless of whether it captured a texture —
     /// the inspector is exactly the no-texture case.
-    fn preview_scalar_io(&self) -> crate::node_graph::PreviewScalarIo {
+    fn preview_scalar_io(&self) -> manifold_node_engine::preview_encoding::PreviewScalarIo {
         if self.preview_request.is_none() {
             return (Vec::new(), Vec::new());
         }
@@ -2980,7 +2978,7 @@ impl Compositor for LayerCompositor {
     /// and return the first non-empty (only the chain holding the effect has a
     /// matching slot, so at most one answers). Same chain set as
     /// [`Self::preview_scalar_io`] — master, then layer, then group chains.
-    fn live_node_params(&self) -> crate::node_graph::LiveNodeParams {
+    fn live_node_params(&self) -> manifold_node_engine::preview_encoding::LiveNodeParams {
         let Some((effect_id, _)) = self.preview_request.as_ref() else {
             return Vec::new();
         };
@@ -3046,7 +3044,7 @@ impl Compositor for LayerCompositor {
         }
     }
 
-    fn take_step_profiles(&mut self) -> Vec<crate::node_graph::StepProfile> {
+    fn take_step_profiles(&mut self) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
         let mut out = Vec::new();
         for chain in self.effect_chains.values_mut().flatten() {
             out.extend(chain.take_step_profiles());
@@ -3086,7 +3084,7 @@ impl Compositor for LayerCompositor {
         Vec::new()
     }
 
-    fn dump_arrays(&self) -> Vec<crate::preset_runtime::instrumentation::ArrayDump<'_>> {
+    fn dump_arrays(&self) -> Vec<manifold_node_engine::runtime::instrumentation::ArrayDump<'_>> {
         let Some(effect_id) = self.dump_request.as_ref().map(|r| r.effect_id()) else {
             return Vec::new();
         };
@@ -3509,26 +3507,26 @@ impl Compositor for LayerCompositor {
     fn graph_snapshot_for(
         &self,
         type_id: &manifold_core::PresetTypeId,
-    ) -> Option<crate::node_graph::GraphSnapshot> {
-        let view = crate::node_graph::loaded_preset_view_by_id(type_id)?;
-        crate::node_graph::snapshot_for_view(view)
+    ) -> Option<manifold_node_engine::snapshot::GraphSnapshot> {
+        let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(type_id)?;
+        manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view)
     }
 
     fn outer_routings_for(
         &self,
         type_id: &manifold_core::PresetTypeId,
-    ) -> Vec<crate::node_graph::OuterParamRouting> {
-        let Some(view) = crate::node_graph::loaded_preset_view_by_id(type_id) else {
+    ) -> Vec<manifold_node_engine::snapshot::OuterParamRouting> {
+        let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(type_id) else {
             return Vec::new();
         };
-        crate::node_graph::outer_routings_from_view(view)
+        manifold_node_engine::load::loaded_preset_view::outer_routings_from_view(view)
     }
 
-    fn layer_skin_registry(&self) -> Option<&crate::layer_skin::LayerSkinRegistry> {
+    fn layer_skin_registry(&self) -> Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry> {
         Some(&self.layer_skin_registry)
     }
 
-    fn set_rt_quality(&mut self, q: crate::node_graph::RtQuality) {
+    fn set_rt_quality(&mut self, q: manifold_node_engine::exec::effect_node::RtQuality) {
         // RT_QUALITY_SETTINGS_DESIGN.md D5: forward to all chains, same sweep as set_profiling
         self.rt_quality = q;
         // Forward to all chains — same sweep as set_profiling
@@ -3573,7 +3571,7 @@ impl Compositor for LayerCompositor {
     fn chain_debug_info(
         &self,
         layer_id: &str,
-    ) -> Option<crate::preset_runtime::ChainDebugInfo<'_>> {
+    ) -> Option<manifold_node_engine::runtime::ChainDebugInfo<'_>> {
         self.effect_chains
             .get(&LayerId::new(layer_id))
             .and_then(|opt| opt.as_ref())
@@ -3602,8 +3600,8 @@ mod chain_pool_tests {
 
     /// Build a minimal compositor. Tiny size keeps GPU costs low; tests
     /// don't render, so resolution doesn't matter.
-    fn make_compositor() -> (crate::TestDevice, LayerCompositor) {
-        let device = crate::test_device();
+    fn make_compositor() -> (manifold_gpu::testkit::TestDevice, LayerCompositor) {
+        let device = manifold_gpu::testkit::test_device();
         let comp = LayerCompositor::new(&device, 64, 64);
         (device, comp)
     }
@@ -3678,7 +3676,7 @@ mod chain_pool_tests {
 
     fn warm_effect_layer(
         comp: &mut LayerCompositor,
-        device: &crate::TestDevice,
+        device: &manifold_gpu::testkit::TestDevice,
         layer: &manifold_core::layer::Layer,
     ) {
         assert_eq!(
@@ -3799,7 +3797,7 @@ mod chain_pool_tests {
             render_skip: &[],
         };
         let mut enc = device.create_encoder("empty-frame-obsolete-chain");
-        let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+        let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
         let _ = comp.render(&mut gpu, &frame);
         enc.commit_and_wait_completed();
 
@@ -4031,7 +4029,7 @@ mod chain_pool_tests {
     #[test]
     fn warmup_builds_layer_post_fx_chain_and_zero_cold_touches_on_play() {
         use crate::compositor::{Compositor, CompositorFrame};
-        use crate::render_target::RenderTarget;
+        use manifold_node_engine::gpu::render_target::RenderTarget;
         use manifold_core::effect_graph_def::ParamSpecDef;
         use manifold_core::effects::PresetInstance;
         use manifold_core::layer::Layer;
@@ -4154,7 +4152,7 @@ mod chain_pool_tests {
         // One render to ensure the cached chain is exercised, then reset and
         // sample the cold-touch counter over 60 frames.
         let mut enc = device.create_encoder("warmup play");
-        let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+        let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
         let _ = comp.render(&mut gpu, &frame);
         enc.commit_and_wait_completed();
 
@@ -4162,7 +4160,7 @@ mod chain_pool_tests {
         set_transport_playing(true);
         for f in 0..60 {
             let mut enc = device.create_encoder("warmup play");
-            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
             let _ = comp.render(&mut gpu, &frame);
             enc.commit_and_wait_completed();
             // Silence unused warning in release builds.
@@ -4203,7 +4201,7 @@ mod led_warmup_tests {
 
     #[test]
     fn led_composite_resident_after_prewarm() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut comp = LayerCompositor::new(&device, 64, 64);
         let project = led_project();
 
@@ -4369,7 +4367,7 @@ mod muted_clip_output_tests {
 
     fn run(
         comp: &mut LayerCompositor,
-        device: &crate::TestDevice,
+        device: &manifold_gpu::testkit::TestDevice,
         layers: &[CompositeLayerDescriptor],
         clips: &[CompositeClipDescriptor],
     ) {
@@ -4401,7 +4399,7 @@ mod muted_clip_output_tests {
         native_enc.commit_and_wait_completed();
     }
 
-    fn white_texture(device: &crate::TestDevice) -> GpuTexture {
+    fn white_texture(device: &manifold_gpu::testkit::TestDevice) -> GpuTexture {
         device.create_texture(&GpuTextureDesc {
             width: 64,
             height: 64,
@@ -4416,7 +4414,7 @@ mod muted_clip_output_tests {
 
     #[test]
     fn all_muted_clips_with_layer_effects_emit_no_output() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut comp = LayerCompositor::new(&device, 64, 64);
         let layer_id = LayerId::from("L0");
         let fx = [make_fx()];
@@ -4434,7 +4432,7 @@ mod muted_clip_output_tests {
 
     #[test]
     fn visible_clip_with_layer_effects_still_emits() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut comp = LayerCompositor::new(&device, 64, 64);
         let layer_id = LayerId::from("L0");
         let fx = [make_fx()];
@@ -4481,7 +4479,7 @@ mod led_composite_pixel_tests {
     const GREEN: (f32, f32, f32) = (0.15, 0.85, 0.3);
     const TOL: f32 = 0.02;
 
-    fn solid_clip_texture(device: &crate::TestDevice, color: (f32, f32, f32)) -> GpuTexture {
+    fn solid_clip_texture(device: &manifold_gpu::testkit::TestDevice, color: (f32, f32, f32)) -> GpuTexture {
         let tex = device.create_texture(&GpuTextureDesc {
             width: COMP_W,
             height: COMP_H,
@@ -4521,7 +4519,7 @@ mod led_composite_pixel_tests {
     /// bytes).
     fn render_layers(
         comp: &mut LayerCompositor,
-        device: &crate::TestDevice,
+        device: &manifold_gpu::testkit::TestDevice,
         specs: &[LayerSpec],
         occluded: &[i32],
     ) -> (Option<Vec<u8>>, Vec<u8>) {
@@ -4686,7 +4684,7 @@ mod led_composite_pixel_tests {
 
     #[test]
     fn group_mask_sources_include_folded_children_and_remove_stale_layers() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
         let parent = LayerId::from("parent");
         let child = LayerId::from("child");
@@ -4721,7 +4719,7 @@ mod led_composite_pixel_tests {
 
     #[test]
     fn led_composite_matches_source_color_for_flagged_layer() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
 
         let (led, screen) = render_layers(
@@ -4746,7 +4744,7 @@ mod led_composite_pixel_tests {
 
     #[test]
     fn led_composite_absent_for_unflagged_layer() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
 
         let (led, _) = render_layers(
@@ -4772,7 +4770,7 @@ mod led_composite_pixel_tests {
 
     #[test]
     fn led_type_layer_routes_direct_and_is_screen_invisible() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
 
         // Frame A: LED-type layer (red) over a plain video layer (green),
         // with the LED layer carrying the occluded marking the content
@@ -4826,7 +4824,7 @@ mod led_composite_pixel_tests {
 
     #[test]
     fn direct_route_switches_mirror_layers_off() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
 
         // Mirror layer ABOVE the LED layer: on a blended-composite reading
@@ -4861,7 +4859,7 @@ mod led_composite_pixel_tests {
 
     #[test]
     fn mixed_group_mirror_child_is_absent_under_direct_route() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let group_id = || LayerId::from("grp");
 
         // Run A: mixed group — mirror child (green, above) + LED child
@@ -4905,7 +4903,7 @@ mod led_composite_pixel_tests {
 
     #[test]
     fn direct_child_never_appears_in_group_screen_composite() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let group_id = || LayerId::from("grp");
         let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
 
@@ -4974,7 +4972,7 @@ mod scene_linear_presentation_gpu_tests {
         mapped: [f32; 4],
     }
 
-    fn solid_source(device: &crate::TestDevice, rgb: [f32; 3]) -> GpuTexture {
+    fn solid_source(device: &manifold_gpu::testkit::TestDevice, rgb: [f32; 3]) -> GpuTexture {
         let texture = device.create_texture(&GpuTextureDesc {
             width: WIDTH,
             height: HEIGHT,
@@ -5006,7 +5004,7 @@ mod scene_linear_presentation_gpu_tests {
         curve: TonemapCurve,
         master_effect_kind: MasterEffect,
     ) -> RenderSample {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut compositor = LayerCompositor::new(&device, WIDTH, HEIGHT);
         let source = solid_source(&device, source_rgb);
         let layer_id = LayerId::from("scene-linear-presentation-layer");

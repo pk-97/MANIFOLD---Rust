@@ -12,7 +12,7 @@ fn scene_force_add_without_physics_keeps_controls_and_roundtrips_undo() {
     let instance = added.scene_modifiers.iter().find(|m| m.id == id).unwrap();
     assert!(is_force_recipe(&instance.graph));
     assert!(
-        manifold_renderer::node_graph::scene_modifier_expand::force_objects_for_authoring(
+        manifold_node_engine::load::expand::force_objects_for_authoring(
             &added,
             &instance.scene,
         )

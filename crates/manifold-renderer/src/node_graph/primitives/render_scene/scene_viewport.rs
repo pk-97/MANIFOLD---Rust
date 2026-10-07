@@ -1,18 +1,18 @@
 //! Render-only viewport pass owned by the scene renderer.
 
 use manifold_gpu::{GpuTexture, GpuTextureFormat};
-use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
-use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::backend::Backend;
-use crate::node_graph::bindings::{NodeOutputs, Slot};
-use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, ParamValues};
-use crate::node_graph::execution_plan::ResourceId;
-use crate::node_graph::metal_backend::MetalBackend;
-use crate::node_graph::scene_viewport::{SceneViewportConfig, SceneViewportError, ViewportPass};
-use crate::render_target::RenderTarget;
+use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::exec::backend::Backend;
+use manifold_node_engine::bindings::{NodeOutputs, Slot};
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, ParamValues};
+use manifold_node_engine::exec::execution_plan::ResourceId;
+use manifold_node_engine::exec::metal_backend::MetalBackend;
+use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportError, ViewportPass};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use super::RenderScene;
 #[cfg(test)]
-use crate::node_graph::viewport_camera::ViewportCamera;
+use manifold_node_engine::scene::viewport_camera::ViewportCamera;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct OutputLayout {
@@ -33,14 +33,14 @@ pub(crate) struct SceneViewportPass {
     errors: Vec<String>,
     status: FrameRenderStatus,
     last_attempt_valid: bool,
-    pending_scalar_writes: Vec<(Slot, crate::node_graph::ParamValue)>,
-    pending_camera_writes: Vec<(Slot, crate::node_graph::camera::Camera)>,
-    pending_light_writes: Vec<(Slot, crate::node_graph::light::Light)>,
-    pending_material_writes: Vec<(Slot, crate::node_graph::material::Material)>,
-    pending_transform_writes: Vec<(Slot, crate::node_graph::transform::Transform)>,
-    pending_atmosphere_writes: Vec<(Slot, crate::node_graph::atmosphere::Atmosphere)>,
-    pending_render_mode_writes: Vec<(Slot, crate::node_graph::render_mode::RenderMode)>,
-    pending_object_writes: Vec<(Slot, crate::node_graph::scene_object::SceneObject)>,
+    pending_scalar_writes: Vec<(Slot, manifold_node_engine::parameters::ParamValue)>,
+    pending_camera_writes: Vec<(Slot, manifold_node_engine::scene::camera::Camera)>,
+    pending_light_writes: Vec<(Slot, manifold_node_engine::scene::light::Light)>,
+    pending_material_writes: Vec<(Slot, manifold_node_engine::scene::material::Material)>,
+    pending_transform_writes: Vec<(Slot, manifold_node_engine::scene::transform::Transform)>,
+    pending_atmosphere_writes: Vec<(Slot, manifold_node_engine::scene::atmosphere::Atmosphere)>,
+    pending_render_mode_writes: Vec<(Slot, manifold_node_engine::scene::render_mode::RenderMode)>,
+    pending_object_writes: Vec<(Slot, manifold_node_engine::scene::scene_object::SceneObject)>,
 }
 
 impl SceneViewportPass {
@@ -373,9 +373,9 @@ mod tests {
         );
         params.insert(
             "temporal_upscale".into(),
-            crate::node_graph::ParamValue::Bool(true),
+            manifold_node_engine::parameters::ParamValue::Bool(true),
         );
-        params.insert("rt_denoise_feed".into(), crate::node_graph::ParamValue::Bool(true));
+        params.insert("rt_denoise_feed".into(), manifold_node_engine::parameters::ParamValue::Bool(true));
         let scale = pass.renderer.output_canvas_scale("depth", &params).unwrap();
         let dimensions = (321 * scale.0 / scale.1, 201 * scale.0 / scale.1);
         for (port, format) in [

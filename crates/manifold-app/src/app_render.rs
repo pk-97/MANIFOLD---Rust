@@ -1940,7 +1940,7 @@ impl Application {
                     screen_pos,
                     graph_pos,
                 } => {
-                    use manifold_renderer::node_graph::{Category, descriptor_for};
+                    use manifold_node_engine::descriptor::{Category, descriptor_for};
                     use manifold_ui::panels::browser_popup::*;
                     use manifold_ui::panels::picker_core::PickerItem;
 

@@ -16,11 +16,11 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::InstanceTransform;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `t` param (f32) then the codegen-
 /// injected `dispatch_count` (= element count, the guard), padded to 16 bytes.
@@ -33,7 +33,7 @@ struct Uniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: LerpInstanceFields,
     type_id: "node.blend_copies",
     purpose: "Elementwise linear interpolation between two Array<InstanceTransform>s. out[idx] = (1 - t) * a[idx] + t * b[idx] applied to both pos_scale and rot_pad. The continuous counterpart to node.switch_array — pick this when the morph parameter is a real 0..1 slider and intermediate values must visually morph (the DigitalPlants cyl ↔ tor case). At t=0 the output equals a; at t=1 it equals b; at t=0.5 the elementwise midpoint. `t` is port-shadow-param so the morph factor can be modulated.",
@@ -71,7 +71,7 @@ impl Primitive for LerpInstanceFields {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {

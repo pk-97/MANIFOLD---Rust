@@ -1,9 +1,9 @@
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire, GroupDef};
-use crate::preset_runtime::testkit::prepare_surface as prepare;
+use manifold_node_engine::runtime::testkit::prepare_surface as prepare;
     use manifold_core::effect_graph_def::{GroupInterface, GroupParamDef, SerializedParamValue};
     use manifold_core::params::{Param, ParamManifest};
-    use crate::node_graph::{ParamValue, PrimitiveRegistry};
-    use crate::preset_runtime::PresetRuntime;
+    use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
+    use manifold_node_engine::runtime::PresetRuntime;
 
     fn shipped() -> EffectGraphDef {
         serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterDamBreakGpuFlip.json"))).unwrap()

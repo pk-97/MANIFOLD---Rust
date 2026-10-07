@@ -1,5 +1,5 @@
 //! Buffer extent rule owned by this node.
-use crate::node_graph::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_node_engine::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn ocean_spectrum(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let size = x.param("size", 256.0);

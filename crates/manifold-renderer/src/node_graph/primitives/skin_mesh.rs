@@ -29,11 +29,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::{JointMatrix, MeshVertex, Vec4Vertex};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::{JointMatrix, MeshVertex, Vec4Vertex};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `joint_count` param (Int -> i32),
 /// then the derived `joints_len`/`weights_len`/`matrices_len` (u32 each),
@@ -53,7 +53,7 @@ struct SkinMeshUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SkinMesh,
     type_id: "node.skin_mesh",
     purpose: "Per-vertex linear-blend GPU skinning: deforms Array(MeshVertex) `in` by up to 4 joint matrices per vertex, looked up from `matrices` (a joint-index palette, node.gltf_skeleton_pose's output) via the coincident per-vertex `joints`/`weights` (Array(Vec4Vertex), 4 joint indices + 4 weights per vertex). pos' = sum(weight[k] * (matrices[joints[k]] * vec4(pos,1))).xyz; normal' likewise with w=0. Weights are normalized defensively (sum may not be exactly 1.0 on every real asset). Barrier-free per-element kernel — the codegen path (fusable), never a fusion-boundary WGSL include.",
@@ -96,7 +96,7 @@ impl Primitive for SkinMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -206,7 +206,7 @@ mod gpu_tests {
 
     /// Generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<SkinMesh>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<SkinMesh>()
             .expect("skin_mesh buffer codegen")
     }
 
@@ -254,7 +254,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let wgsl = generated_wgsl();
         let pipeline =
-            device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "skin-mesh-test");
+            device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "skin-mesh-test");
         let in_buf = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
         unsafe {
             in_buf.write(0, bytemuck::cast_slice(verts));
@@ -302,7 +302,7 @@ mod gpu_tests {
 
     #[test]
     fn generated_matches_hand_formula_single_joint_full_weight() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
         assert!(gen_wgsl.contains("var<storage, read_write>"), "output bound read_write");
@@ -332,7 +332,7 @@ mod gpu_tests {
 
     #[test]
     fn generated_matches_hand_formula_two_joint_blend() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let verts = vec![mk_vertex([2.0, 0.0, 0.0], [0.0, 0.0, 1.0])];
         let joints = vec![[0.0, 1.0, 0.0, 0.0]];
         let weights = vec![[0.25, 0.75, 0.0, 0.0]];
@@ -353,7 +353,7 @@ mod gpu_tests {
 
     #[test]
     fn out_of_range_joint_index_clamps_to_last_valid_joint() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let verts = vec![mk_vertex([1.0, 0.0, 0.0], [0.0, 1.0, 0.0])];
         // Joint index 99 is out of range for a 1-joint palette — must
         // clamp to joint 0, not read out of bounds.

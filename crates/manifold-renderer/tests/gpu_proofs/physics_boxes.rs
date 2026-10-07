@@ -2,12 +2,12 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_renderer::headless_readback::{readback_raw_halves, readback_to_srgb_png};
-use manifold_renderer::node_graph::{PrimitiveRegistry, physics_metrics};
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::{persistence::PrimitiveRegistry, water::physics_metrics};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const JSON: &str = include_str!("../../assets/generator-presets/PhysicsBoxes.json");
 
@@ -149,7 +149,7 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
     )
     .unwrap();
     {
-        let _live = manifold_renderer::node_graph::physics::PhysicsStepScope::with_preview_budget(
+        let _live = manifold_node_engine::water::physics::PhysicsStepScope::with_preview_budget(
             false,
             std::time::Duration::ZERO,
         );

@@ -12,10 +12,8 @@ use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
 use manifold_core::preset_def::PresetKind;
-use manifold_renderer::node_graph::{
-    EffectGraphDefExt, PrimitiveRegistry, bundled_preset_def, bundled_preset_type_ids, compile,
-};
-use manifold_renderer::preset_runtime::PresetRuntime;
+use {manifold_node_engine::persistence::EffectGraphDefExt, manifold_node_engine::persistence::PrimitiveRegistry, manifold_renderer::node_graph::bundled_preset_def, manifold_renderer::node_graph::bundled_preset_type_ids, manifold_node_engine::exec::execution_plan::compile};
+use manifold_node_engine::runtime::PresetRuntime;
 
 const SOURCE_VARIANTS: &[(&str, &[&str])] = &[
     (
@@ -219,7 +217,7 @@ fn assert_graph_loads_validates_and_compiles(id: &str, def: &EffectGraphDef) {
         .clone()
         .into_graph(
             &registry,
-            &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default(),
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
         )
         .unwrap_or_else(|error| panic!("{id}: graph load failed: {error}"));
     // `compile` performs the graph validation pass before building the plan.

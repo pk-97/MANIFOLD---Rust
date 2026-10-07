@@ -13,10 +13,10 @@
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::camera::{Camera, CameraMode};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::scene::camera::{Camera, CameraMode};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Generated layout: no params, then the ten derived fields in declaration
 /// order, padded to 16 bytes.
@@ -37,7 +37,7 @@ struct CameraSkyUniforms {
     _pad1: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CameraSky,
     type_id: "node.camera_sky",
     purpose: "Draws an equirect environment (an HDRI) as the wired Camera sees it: each pixel's ray d = normalize(fwd + ndc.x·tan(fov_y/2)·aspect·right + ndc.y·tan(fov_y/2)·up) is looked up at uv = (atan2(d.z, d.x)/2π + 0.5, asin(d.y)/π + 0.5), render_scene's own env convention, so the backdrop lines up with the scene's reflections. Alpha is 1. Composite render_scene's colour over it with node.over to put the sky behind a scene. An orthographic camera falls back to a 60° field of view.",
@@ -77,7 +77,7 @@ fn derive(cam: &Camera) -> [f32; 10] {
 }
 
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.camera_sky",
         array_ports: &[],
         recompute: |ctx| ctx.camera.map(derive).map(|v| v.to_vec()),
@@ -97,7 +97,7 @@ impl Primitive for CameraSky {
     fn output_canvas_scale(
         &self,
         _port: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         Some((1, 1))
     }
@@ -134,11 +134,11 @@ impl Primitive for CameraSky {
 #[cfg(test)]
 mod tests {
     use super::CameraSky;
-    use crate::node_graph::execution_plan::compile;
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::parameters::ParamValue;
+    use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::parameters::ParamValue;
     use crate::node_graph::primitives::{FreeCamera, HdriSource};
-    use crate::node_graph::FinalOutput;
+    use manifold_node_engine::scene::boundary_nodes::FinalOutput;
 
     /// A 2:1 HDRI feeding the sky must not size it: the output is the frame.
     #[test]
@@ -176,9 +176,9 @@ mod gpu_tests {
     };
 
     use super::{CameraSky, uniforms};
-    use crate::node_graph::camera::{Camera, CameraMode};
-    use crate::node_graph::primitives::standalone_pipeline::standalone_pipeline;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::scene::camera::{Camera, CameraMode};
+    use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn uv_sky(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
         let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
@@ -250,7 +250,7 @@ mod gpu_tests {
 
     #[test]
     fn camera_sky_matches_cpu() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (sw, sh) = (256u32, 128u32);
         let (w, h) = (48u32, 27u32);
         let sky = uv_sky(&device, sw, sh);

@@ -1,6 +1,6 @@
-use crate::node_graph::freeze::fusion_report::*;
-use crate::node_graph::PrimitiveRegistry;
-use crate::node_graph::freeze::region;
+use manifold_node_engine::freeze::fusion_report::*;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::freeze::region;
 use manifold_core::flatten::flatten_groups;
 use manifold_core::effect_graph_def::EffectGraphDef;
 

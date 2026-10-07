@@ -20,14 +20,14 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 #[cfg(feature = "gpu-proofs")]
 use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 #[cfg(feature = "gpu-proofs")]
-use crate::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 #[cfg(feature = "gpu-proofs")]
 use crate::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
 #[cfg(feature = "gpu-proofs")]
-use crate::preset_context::PresetContext;
-use crate::preset_runtime::PresetRuntime;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 #[cfg(feature = "gpu-proofs")]
-use crate::render_target::RenderTarget;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 #[cfg(feature = "gpu-proofs")]
 use crate::tonemap::TonemapSettings;
 
@@ -182,7 +182,7 @@ fn layer_param_survives_serde_round_trip() {
     }
 
     // The reloaded def must still build (the "reload" half of the invariant).
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     PresetRuntime::from_json_str(&reserialized, &registry)
         .expect("round-tripped def must build a runtime");
 }
@@ -205,7 +205,7 @@ fn render_two_layer_frame(
     layer_a_id: &manifold_core::LayerId,
     layer_b_id: &manifold_core::LayerId,
     frame: u64,
-) -> crate::frame_status::FrameRenderStatus {
+) -> manifold_node_engine::runtime::frame_status::FrameRenderStatus {
     let time = frame as f64 / 60.0;
     let dt = 1.0 / 60.0;
     let ctx = |width: u32, height: u32| PresetContext {
@@ -377,7 +377,7 @@ fn settle_two_layer(
         frame += 1;
         let pending = runtime_b.warmup_pending()
             || runtime_a.as_deref().is_some_and(PresetRuntime::warmup_pending);
-        if !pending && status == crate::frame_status::FrameRenderStatus::Complete {
+        if !pending && status == manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete {
             return frame;
         }
         assert!(
@@ -441,8 +441,8 @@ fn mean_abs_delta(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn mutual_skin_two_layers_render_300_frames() {
-    let device = crate::test_device();
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let device = manifold_gpu::testkit::test_device();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
 
     let mut runtime_a = PresetRuntime::from_json_str_with_device(
@@ -476,7 +476,7 @@ fn mutual_skin_two_layers_render_300_frames() {
     // for the whole test, mirroring the content-pipeline wiring.
     {
         // Safety: the compositor (and its registry) outlives both runtimes.
-        let ptr = crate::layer_skin::LayerSkinPtr::new(
+        let ptr = manifold_node_engine::runtime::layer_skin::LayerSkinPtr::new(
             compositor.layer_skin_registry().expect("compositor registry"),
         );
         runtime_a.set_layer_skin_registry(Some(unsafe { ptr.get() }));
@@ -513,7 +513,7 @@ fn mutual_skin_two_layers_render_300_frames() {
         );
         assert_eq!(
             status,
-            crate::frame_status::FrameRenderStatus::Complete,
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
             "mutual-skin frame {frame} did not render completely"
         );
         assert!(
@@ -544,8 +544,8 @@ fn mutual_skin_two_layers_render_300_frames() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn skin_tracks_source_content_and_missing_id_falls_back() {
-    let device = crate::test_device();
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let device = manifold_gpu::testkit::test_device();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
 
     let mut runtime_b = PresetRuntime::from_json_str_with_device(
@@ -566,7 +566,7 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
     let layer_b_id = manifold_core::LayerId::new(LAYER_B);
 
     {
-        let ptr = crate::layer_skin::LayerSkinPtr::new(
+        let ptr = manifold_node_engine::runtime::layer_skin::LayerSkinPtr::new(
             compositor.layer_skin_registry().expect("compositor registry"),
         );
         runtime_b.set_layer_skin_registry(Some(unsafe { ptr.get() }));

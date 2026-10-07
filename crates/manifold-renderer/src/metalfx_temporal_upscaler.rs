@@ -30,8 +30,8 @@
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use crate::gpu_encoder::GpuEncoder;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     /// GPU temporal upscaler: MetalFX Temporal. Created once per
     /// (src_dims, dst_dims); call `resize()` on dimension change — same

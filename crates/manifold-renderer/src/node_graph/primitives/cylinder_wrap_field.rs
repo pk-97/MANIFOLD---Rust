@@ -22,10 +22,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::InstanceTransform;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -40,7 +40,7 @@ struct Uniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CylinderWrapField,
     type_id: "node.cylinder_wrap_field",
     purpose: "Lift an Array<vec2<f32>> of UVs onto a cylindrical surface and emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, r = base_radius * pow(max(1 - uv.y, 0), taper) + radius_disp, y = (uv.y - 0.5) * height_scale, pos = (r·cos θ, y, r·sin θ). The taper curve narrows the radius toward uv.y=1 — produces stem / vase / cone / conifer shapes. Optional radius_disp Array<f32> adds per-instance radial noise (typically driven by node.simplex_noise_per_copy + shaping). All scalar params are port-shadow so the cylinder can be animated by control wires.",
@@ -104,7 +104,7 @@ impl Primitive for CylinderWrapField {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "instances" {

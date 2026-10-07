@@ -19,12 +19,12 @@
 
 use std::borrow::Cow;
 
-use crate::generators::clip_trigger::ClipTriggerCycle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::clip_trigger::ClipTriggerCycle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ClipTriggerCycleNode,
     type_id: "node.clip_trigger_cycle",
     purpose: "Defense-in-depth `trigger_count % modulus` cycle: emits a value in [0, modulus) on each new trigger_count, advancing past would-be repeats so consecutive emissions never duplicate. Pair with `node.fluid_seed.pattern` for the legacy 7-pattern re-seed cycle, or any other discrete selector that must never fire the same row twice in a row. Pass RAW `trigger_count` (never pre-wrapped) — the cycle handles the modulus internally and pre-wrapping breaks idempotence.",
@@ -91,7 +91,7 @@ impl Primitive for ClipTriggerCycleNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
     /// Forwards directly to ClipTriggerCycle::step — these tests
     /// mirror the legacy ones to lock in the wrapper.

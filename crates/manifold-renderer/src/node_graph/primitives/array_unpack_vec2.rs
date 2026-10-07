@@ -10,9 +10,9 @@
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: no params, just the codegen-injected
 /// `dispatch_count` (u32, the element-count guard) + 16-byte pad. 1 word + 3
@@ -26,7 +26,7 @@ struct UnpackUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ArrayUnpackVec2,
     type_id: "node.split_xy",
     purpose: "Split an Array<vec2<f32>> into two Array<f32>s, one per component (`x`, `y`). Composition glue so Array<f32> math primitives can operate on individual axes of a vec2 wire — UV coordinates, 2D positions, 2D velocities — without each scalar-math primitive needing a vec2-input variant.",
@@ -54,7 +54,7 @@ impl Primitive for ArrayUnpackVec2 {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "x" && port_name != "y" {
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn array_unpack_vec2_outputs_match_input_capacity() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = ArrayUnpackVec2::new();
         let params = ParamValues::default();
         let inputs = [("in", 160_000_u32)];
@@ -163,7 +163,7 @@ mod gpu_tests {
 
     #[test]
     fn generated_unpack_splits_vec2_into_two_arrays() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let input: Vec<[f32; 2]> = vec![
             [0.0, 1.0],
             [2.5, -3.5],
@@ -180,12 +180,12 @@ mod gpu_tests {
             in_buf.write(0, bytemuck::cast_slice(&input));
         }
 
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ArrayUnpackVec2>()
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ArrayUnpackVec2>()
             .expect("array_unpack_vec2 codegen");
         assert!(gen_wgsl.contains("struct BufferOutputs"), "multi-output struct emitted");
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "unpack-oracle",
         );
 

@@ -4,10 +4,10 @@
 
 use manifold_gpu::GpuBinding;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::freeze::classify::FusedOutputCapacity;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::freeze::classify::FusedOutputCapacity;
+use manifold_node_engine::primitive::Primitive;
 
 /// Codegen uniform layout: no params, then `dispatch_count`.
 #[repr(C)]
@@ -19,7 +19,7 @@ struct DivideByValueUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: DivideByValue,
     type_id: "node.divide_by_value",
     purpose: "Divide every element of an Array<f32> by divisor[0], a value computed on the GPU (a length from node.dot_products). A divisor under 1e-30 in size gives zeros instead of infinities, so a solve that has already converged carries zeros forward.",

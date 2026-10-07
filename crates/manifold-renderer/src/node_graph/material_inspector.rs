@@ -268,7 +268,7 @@ fn sampler_component(name: &str) -> Option<(MaterialMapFamily, SamplerComponent)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::PbrMaterial;
 
     #[test]

@@ -19,12 +19,12 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::transform::Transform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::transform::Transform;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Transform3D,
     type_id: "node.transform_3d",
     purpose: "TRS (position/rotation/scale) producer for scene objects. Nine scalar params — position X/Y/Z, rotation X/Y/Z (radians), scale X/Y/Z — each port-shadowed by a same-named optional scalar input port so the transform can be driven by an LFO, MIDI, a beat_ramp, or any other control-rate source. Plus a `billboard` bool param: when on, the consumer (e.g. node.render_scene) ignores the rotation and instead keeps the object's local +Z axis pointing at the camera each frame, so a plane mesh always faces the viewer; position and scale stay user-controlled and roll stays zero. Outputs a single Transform struct (pos/rot_euler/scale/billboard) consumed by render_scene's transform_n ports (replacing nine per-object params) or any future TRS consumer. Matrices are composed by consumers — the wire carries plain TRS, never a matrix.",
@@ -162,12 +162,12 @@ impl Primitive for Transform3D {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::MockBackend;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::{FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::ports::{PortType, ScalarType};
+    use manifold_node_engine::exec::backend::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::{PortType, ScalarType};
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {

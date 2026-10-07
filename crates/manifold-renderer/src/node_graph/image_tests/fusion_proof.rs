@@ -1,13 +1,10 @@
-use crate::node_graph::freeze::TextureDiff;
-use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::node_graph::compile;
-use crate::node_graph::Graph;
-use crate::node_graph::ParamValue;
-use crate::node_graph::{
-    EffectGraphDefExt,
-    PrimitiveRegistry,
-};
-use crate::render_target::RenderTarget;
+use manifold_node_engine::freeze::TextureDiff;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::exec::execution_plan::compile;
+use manifold_node_engine::graph::Graph;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::persistence::{EffectGraphDefExt, PrimitiveRegistry};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::GpuTextureFormat;
 
@@ -28,7 +25,7 @@ const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 const OUT_OF_LOOP_ULP_ABS_TOL: f32 = 1.0e-2;
 const OUT_OF_LOOP_ULP_REL_TOL: f32 = 3.0e-2;
 
-use crate::testkit::proof_support::*;
+use manifold_node_engine::testkit::proof_support::*;
 
 /// BUG-135/BUG-141: the real glb-import-shaped region — a camera-derived
 /// `wgsl_includes` TEXTURE atom (`node.coc_from_depth`, whose body calls
@@ -45,9 +42,9 @@ use crate::testkit::proof_support::*;
 /// the direct regression guard: it panics on that fallback.
 #[test]
 fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
-    use crate::node_graph::freeze::install::{FusedDef, fuse_canonical_def};
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (64u32, 64u32);
     // Stand-in "depth" — CocFromDepth reads it as raw [0,1] clip depth
@@ -80,7 +77,7 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
     let f_stop = 2.8f32;
 
     // ── Unfused: the canonical graph, params set by node id. ──
-    let mut unfused_graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused_graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let set_by_node_id = |g: &mut Graph, node_id: &str, param: &str, v: f32| {
         let id = g
             .node_id_by_handle(node_id)
@@ -138,7 +135,7 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
         fused_wgsl
     );
 
-    let mut fused_graph = fused_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused_graph = fused_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     set_by_node_id(&mut fused_graph, "lens", "focus_distance", focus_distance);
     set_by_node_id(&mut fused_graph, "lens", "f_stop", f_stop);
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
@@ -174,9 +171,9 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
 /// varying-alpha top, fuses into one kernel and matches the unfused pair.
 #[test]
 fn camera_sky_over_fuses_and_matches_unfused() {
-    use crate::node_graph::freeze::install::{FusedDef, fuse_canonical_def};
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (64u32, 64u32);
     let input = gradient_input_varying_alpha(&device, w, h);
@@ -210,7 +207,7 @@ fn camera_sky_over_fuses_and_matches_unfused() {
         set_by_node_id(g, "cam", "pitch", 0.3);
     };
 
-    let mut unfused_graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused_graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     aim(&mut unfused_graph);
     let unfused_plan = compile(&unfused_graph).expect("compile unfused");
     let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
@@ -234,7 +231,7 @@ fn camera_sky_over_fuses_and_matches_unfused() {
                 && s.contains("@derived_uniform_member:")),
         "the fused kernel must read the camera through the derived-uniform recompute"
     );
-    let mut fused_graph = fused_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused_graph = fused_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     aim(&mut fused_graph);
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
     let fused_plan = compile(&fused_graph).expect("compile fused");
@@ -260,9 +257,9 @@ fn camera_sky_over_fuses_and_matches_unfused() {
 /// neighbour matches the unfused pair.
 #[test]
 fn sea_horizon_env_fuses_and_matches_unfused() {
-    use crate::node_graph::freeze::install::{FusedDef, fuse_canonical_def};
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (64u32, 64u32);
     let input = gradient_input(&device, w, h);
@@ -280,7 +277,7 @@ fn sea_horizon_env_fuses_and_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).expect("parse fixture graph");
 
-    let mut unfused_graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused_graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let unfused_plan = compile(&unfused_graph).expect("compile unfused");
     let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
     let u_out = resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.invert"), "out");
@@ -293,7 +290,7 @@ fn sea_horizon_env_fuses_and_matches_unfused() {
         1,
         "sea_horizon_env and invert must collapse to exactly one fused node"
     );
-    let mut fused_graph = fused_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused_graph = fused_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
     let fused_plan = compile(&fused_graph).expect("compile fused");
     let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
@@ -322,10 +319,10 @@ fn stencil_checkpoint_diff(
     radius: f32,
     kernel_size: u32,
     step: f32,
-) -> crate::node_graph::freeze::DiffResult {
-    use crate::node_graph::freeze::install::{FusedDef, fuse_canonical_def};
+) -> manifold_node_engine::freeze::DiffResult {
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
     let input = noise_input(&device, w, h);
@@ -354,7 +351,7 @@ fn stencil_checkpoint_diff(
     );
     let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.gaussian_blur"), "out");
@@ -370,7 +367,7 @@ fn stencil_checkpoint_diff(
         !fdef.nodes.iter().any(|n| n.type_id == "node.gaussian_blur"),
         "the blur folds into the fused kernel"
     );
-    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -431,9 +428,9 @@ fn stencil_virtual_chain_fractional_tap_blur_matches_unfused() {
 /// wrong substitution can't hide behind the default kernel.
 #[test]
 fn fused_variable_width_blur_matches_unfused() {
-    use crate::node_graph::freeze::install::{FusedDef, fuse_canonical_def};
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
     let input = gradient_input_varying_alpha(&device, w, h);
@@ -461,7 +458,7 @@ fn fused_variable_width_blur_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -483,7 +480,7 @@ fn fused_variable_width_blur_matches_unfused() {
         !wgsl.contains("QUALITY_LEVEL") && !wgsl.contains("WEIGHTING_MODE"),
         "specialization tokens must be substituted, not free"
     );
-    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -513,9 +510,9 @@ fn fused_variable_width_blur_matches_unfused() {
 /// near-exact agreement.
 #[test]
 fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
-    use crate::node_graph::freeze::install::{FusedDef, fuse_canonical_def};
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
     let input = noise_input(&device, w, h);
@@ -545,12 +542,12 @@ fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
 
     // Structural expectation first: the warp is absorbed (deleted), the flow
     // field survives standalone, the blur folds into the fused kernel.
-    let regions = crate::node_graph::freeze::region::partition_regions(&def, &registry);
+    let regions = manifold_node_engine::freeze::region::partition_regions(&def, &registry);
     assert_eq!(regions.len(), 1, "blur + absorbed warp form one region");
     assert_eq!(regions[0].virtual_chains.len(), 1, "the warp is a virtual chain");
     assert_eq!(regions[0].virtual_chains[0].members[0].doc_id, 2);
 
-    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.gaussian_blur"), "out");
@@ -566,7 +563,7 @@ fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
         fdef.nodes.iter().any(|n| n.type_id == "node.flow_field_noise"),
         "the half-res flow field survives as the chain's sampled external"
     );
-    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -599,7 +596,7 @@ fn stencil_chain_absorbs_gather_warp_with_half_res_flow() {
 /// rewriting the presets onto the fusable single-axis atom.
 #[test]
 fn linear_blur_pair_matches_legacy_blur_node() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
     let input = noise_input(&device, w, h);
@@ -636,14 +633,14 @@ fn linear_blur_pair_matches_legacy_blur_node() {
     }"#;
 
     let l_def: EffectGraphDef = serde_json::from_str(legacy).unwrap();
-    let mut l_graph = l_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("legacy graph");
+    let mut l_graph = l_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("legacy graph");
     let l_plan = compile(&l_graph).expect("compile legacy");
     let l_src = resource_for_output(&l_plan, find_node(&l_graph, "system.source"), "out");
     let l_out = resource_for_output(&l_plan, find_node(&l_graph, "node.blur"), "out");
     let l_img = render_graph(&device.arc(), &mut l_graph, &l_plan, l_src, &input, l_out);
 
     let p_def: EffectGraphDef = serde_json::from_str(pair).unwrap();
-    let mut p_graph = p_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("pair graph");
+    let mut p_graph = p_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("pair graph");
     let p_plan = compile(&p_graph).expect("compile pair");
     let p_src = resource_for_output(&p_plan, find_node(&p_graph, "system.source"), "out");
     let p_out = {
@@ -682,12 +679,12 @@ fn linear_blur_pair_matches_legacy_blur_node() {
 /// `out`) through the register.
 #[test]
 fn voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused() {
-    use crate::node_graph::freeze::install::fuse_generator_view;
-    use crate::node_graph::freeze::region::{NodeClass, classify_node, partition_regions};
-    use crate::preset_context::PresetContext;
-    use crate::preset_runtime::PresetRuntime;
+    use manifold_node_engine::freeze::install::fuse_generator_view;
+    use manifold_node_engine::freeze::region::{NodeClass, classify_node, partition_regions};
+    use manifold_node_engine::runtime::preset_context::PresetContext;
+    use manifold_node_engine::runtime::PresetRuntime;
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (128u32, 128u32);
 
@@ -784,9 +781,9 @@ fn voronoi_multi_output_fuses_with_pointwise_neighbor_and_matches_unfused() {
 /// flash pattern diverges.
 #[test]
 fn glitch_block_displace_field_multi_output_matches_unfused() {
-    use crate::node_graph::freeze::install::{FusedDef, fuse_canonical_def};
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
     let input = gradient_input(&device, w, h);
@@ -799,7 +796,7 @@ fn glitch_block_displace_field_multi_output_matches_unfused() {
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse Glitch.json");
 
     // ── Unfused: the shipped (grouped) preset graph, amount cranked on. ──
-    let mut unfused_graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused_graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let set_by_handle = |g: &mut Graph, handle: &str, param: &str, v: f32| {
         let id = g
             .node_id_by_handle(handle)
@@ -818,7 +815,7 @@ fn glitch_block_displace_field_multi_output_matches_unfused() {
     // block_displace_field member), def-rewrite, run through the executor. ──
     let FusedDef { def: fused_def, retarget, .. } =
         fuse_canonical_def(&def, &registry).expect("Glitch is fusable once flattened");
-    let mut fused_graph = fused_def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused_graph = fused_def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     // `amount_value` fans out to FOUR different consumers (both fields, the
     // invert gain, the final crossfade) that land in DIFFERENT regions once
     // fused — a node can only ever be one region's member, so it survives as
@@ -903,9 +900,9 @@ fn glitch_block_displace_field_multi_output_matches_unfused() {
 /// vocabulary the finder doesn't own, e.g. Bloom's unconverted threshold/blur.)
 #[test]
 fn fused_quarter_res_chain_matches_unfused() {
-    use crate::node_graph::freeze::install::{FusedDef, fuse_canonical_def};
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
     let input = gradient_input_varying_alpha(&device, w, h);
@@ -927,7 +924,7 @@ fn fused_quarter_res_chain_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -935,7 +932,7 @@ fn fused_quarter_res_chain_matches_unfused() {
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the quarter-res chain fuses");
-    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -965,9 +962,9 @@ fn fused_quarter_res_chain_matches_unfused() {
 /// kernel.
 #[test]
 fn fused_control_wired_param_matches_unfused() {
-    use crate::node_graph::freeze::install::{FusedDef, fuse_canonical_def};
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 128u32); // non-square → aspect = 2.0 (≠ gain default 1.0)
     let input = gradient_input_varying_alpha(&device, w, h);
@@ -989,7 +986,7 @@ fn fused_control_wired_param_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -997,7 +994,7 @@ fn fused_control_wired_param_matches_unfused() {
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the control-wired region fuses");
-    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_node = find_node(&fused, "node.wgsl_compute");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
@@ -1027,9 +1024,9 @@ fn fused_control_wired_param_matches_unfused() {
 /// Comparing the final `mix` output proves both branches are threaded correctly.
 #[test]
 fn fused_fanout_region_matches_unfused() {
-    use crate::node_graph::freeze::install::{FusedDef, fuse_canonical_def};
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
     let input = gradient_input_varying_alpha(&device, w, h);
@@ -1057,7 +1054,7 @@ fn fused_fanout_region_matches_unfused() {
     }"#;
     let def: EffectGraphDef = serde_json::from_str(json).unwrap();
 
-    let mut unfused = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.mix"), "out");
@@ -1065,7 +1062,7 @@ fn fused_fanout_region_matches_unfused() {
 
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the fan-out region fuses");
-    let mut fused = fdef.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, find_node(&fused, "node.mix"), "out");

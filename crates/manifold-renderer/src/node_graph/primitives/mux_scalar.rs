@@ -7,11 +7,11 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MuxScalar,
     type_id: "node.switch_value",
     purpose: "N-way scalar selector. Routes one of in_0..in_7 (Scalar F32) to the output based on the selector input (rounded, clamped). Every input is port-shadows-param — wire dynamic sources into the ports, or set the inline `in_N` params for static option tables (curated frequency rates, side counts, gate constants). Useful for trigger-driven parameter switching.",
@@ -65,7 +65,7 @@ const MUX_SCALAR_INPUT_PORT_NAMES: [&str; 8] = [
 impl Primitive for MuxScalar {
     fn selected_input_branch(
         &self,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         wired_inputs: &[&str],
     ) -> Option<&'static str> {
         // Same wired-selector rule as MuxTexture — see that primitive's
@@ -98,8 +98,8 @@ impl Primitive for MuxScalar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitives::Value;
-    use crate::node_graph::{Executor, FrameTime, Graph, compile};
+    use manifold_node_engine::primitives::value::Value;
+    use manifold_node_engine::{exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::execution_plan::compile};
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {

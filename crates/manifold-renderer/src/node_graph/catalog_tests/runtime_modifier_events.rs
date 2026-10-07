@@ -1,4 +1,4 @@
-use crate::preset_runtime::*;
+use manifold_node_engine::runtime::*;
 use crate::node_graph::*;
 
 use std::collections::BTreeSet;
@@ -12,7 +12,7 @@ use manifold_core::scene_modifier_preset::{
 };
 use manifold_core::{Beats, NodeId, Seconds};
 
-use crate::node_graph::scene_modifier_expand::SceneModifierEventRoute;
+use manifold_node_engine::load::expand::SceneModifierEventRoute;
 
 fn control_modifier(id: &str) -> EffectGraphDef {
     let mut graph: EffectGraphDef = serde_json::from_str(
@@ -184,21 +184,21 @@ fn control_runtime_for(
 ) -> (PresetRuntime, EffectGraphDef, Vec<SceneModifierEventRoute>) {
     let registry = PrimitiveRegistry::with_builtin();
     let prepared =
-        crate::node_graph::scene_modifier_expand::prepare_scene_modifiers(&owner, &registry)
+        manifold_node_engine::load::expand::prepare_scene_modifiers(&owner, &registry)
             .expect("canonical event host prepares");
     let routes = prepared.event_routes.clone();
     let control = extract_control_graph(&prepared.def, &routes);
     let mut runtime = PresetRuntime::from_def_for_render(control, &registry, None, false)
         .expect("CPU control graph loads");
     let events = Some(
-        crate::node_graph::scene_modifier_expand::PreparedModifierEvents::prepare(
+        manifold_node_engine::load::expand::PreparedModifierEvents::prepare(
             &owner,
             &routes,
             &runtime.graph,
         )
         .expect("event routes resolve in extracted graph"),
     );
-    crate::preset_runtime::testkit::set_modifier_events(&mut runtime, events);
+    manifold_node_engine::runtime::testkit::set_modifier_events(&mut runtime, events);
     (runtime, owner, routes)
 }
 
@@ -398,7 +398,7 @@ fn scene_modifier_event_runtime_loads_canonical_in_both_modes() {
     let owner = canonical_owner();
     let registry = PrimitiveRegistry::with_builtin();
     let prepared =
-        crate::node_graph::scene_modifier_expand::prepare_scene_modifiers(&owner, &registry)
+        manifold_node_engine::load::expand::prepare_scene_modifiers(&owner, &registry)
             .unwrap();
     for fused in [false, true] {
         let mut runtime =
@@ -425,7 +425,7 @@ fn scene_modifier_event_runtime_loads_canonical_in_both_modes() {
             };
             assert_eq!(
                 runtime.graph.get_node(id).unwrap().params.get("value"),
-                Some(&crate::node_graph::ParamValue::Float(expected))
+                Some(&manifold_node_engine::parameters::ParamValue::Float(expected))
             );
         }
     }

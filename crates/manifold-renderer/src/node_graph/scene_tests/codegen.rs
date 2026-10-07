@@ -1,8 +1,8 @@
-use crate::node_graph::NodeInstanceId;
-use crate::node_graph::freeze::markers::Marker;
+use manifold_node_engine::exec::effect_node::NodeInstanceId;
+use manifold_node_engine::freeze::markers::Marker;
 
-use crate::node_graph::freeze::codegen::generate_fused;
-use crate::node_graph::freeze::codegen::{FusionRegion, InputSource, RegionNode};
+use manifold_node_engine::freeze::codegen::generate_fused;
+use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode};
 
 
 /// Buffer-domain multi-atom fusion: a chain of two per-element instance atoms
@@ -18,7 +18,7 @@ use crate::node_graph::freeze::codegen::{FusionRegion, InputSource, RegionNode};
 /// on the live path.
 #[test]
 fn fused_buffer_region_threads_element_registers() {
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::InstanceRotationJitter as J;
     let id = NodeInstanceId;
     let mk = |i: u32, src: InputSource| RegionNode {
@@ -83,7 +83,7 @@ fn fused_buffer_region_threads_element_registers() {
 /// (two required `Array<InstanceTransform>` inputs) is the shipped shape.
 #[test]
 fn fused_buffer_region_two_array_externals_bounds_count_by_min() {
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::LerpInstanceFields as L;
     let id = NodeInstanceId;
     let region = FusionRegion {

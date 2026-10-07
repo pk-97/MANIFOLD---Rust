@@ -1,7 +1,7 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
-use crate::mesh::InstanceTransform;
-use crate::node_graph::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn particles_to_copies(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("copies", x.items("particles").unwrap_or(0) * size_of::<InstanceTransform>() as u64)

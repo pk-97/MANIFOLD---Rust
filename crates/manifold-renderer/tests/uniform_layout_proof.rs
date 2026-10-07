@@ -12,8 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
-use manifold_renderer::node_graph::freeze::codegen::standalone_for_node;
-use manifold_renderer::node_graph::{EffectNode, ParamType, PortType, PrimitiveRegistry};
+use manifold_node_engine::freeze::codegen::standalone_for_node;
+use manifold_node_engine::{exec::effect_node::EffectNode, parameters::ParamType, ports::PortType, persistence::PrimitiveRegistry};
 
 /// One expected struct field: name as the hand struct spells it (raw param
 /// name — the WGSL-side reserved-word prefixing is a text concern, not a byte

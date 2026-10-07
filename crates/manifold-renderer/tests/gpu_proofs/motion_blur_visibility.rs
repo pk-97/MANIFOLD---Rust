@@ -26,10 +26,10 @@
 
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::PrimitiveRegistry;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
@@ -240,8 +240,8 @@ fn motion_blur_output_differs_under_motion_fused_route() {
         serde_json::from_str(&scene_json(SHUTTER)).expect("shutter=180 def parses");
     let def_off: manifold_core::effect_graph_def::EffectGraphDef =
         serde_json::from_str(&scene_json(0.0)).expect("shutter=0 def parses");
-    let fused_on = manifold_renderer::node_graph::freeze::install::fused_generator_view_for(&def_on);
-    let fused_off = manifold_renderer::node_graph::freeze::install::fused_generator_view_for(&def_off);
+    let fused_on = manifold_node_engine::freeze::install::fused_generator_view_for(&def_on);
+    let fused_off = manifold_node_engine::freeze::install::fused_generator_view_for(&def_off);
     if fused_on.is_none() || fused_off.is_none() {
         eprintln!(
             "motion_blur fused-route: freeze compiler refused the chain \

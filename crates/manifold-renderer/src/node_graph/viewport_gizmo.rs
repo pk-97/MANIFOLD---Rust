@@ -34,7 +34,7 @@
 //! in [`LOCKED_COLOR`] instead of its normal per-axis color — the viewport
 //! never fights the graph.
 
-use crate::node_graph::camera::Camera;
+use manifold_node_engine::scene::camera::Camera;
 use crate::node_graph::scene_vm::{ParamAddr, SceneObjectVm, SceneVm, TransformVm};
 use crate::node_graph::viewport_overlay::WorldLine;
 
@@ -557,7 +557,7 @@ mod tests {
         }))
     }
 
-    fn known_fluid(id: u32, domain: Option<crate::node_graph::fluid::FluidDomainLayout>) -> SceneObjectVm {
+    fn known_fluid(id: u32, domain: Option<manifold_node_engine::water::fluid::FluidDomainLayout>) -> SceneObjectVm {
         let mut object = known_object(id, (0.0, 0.0, -5.0), (false, false, false));
         let SceneObjectVm::Known(row) = &mut object else { unreachable!() };
         row.transform = None;
@@ -585,7 +585,7 @@ mod tests {
 
     fn known_fluid_with_transform(
         id: u32,
-        domain: crate::node_graph::fluid::FluidDomainLayout,
+        domain: manifold_node_engine::water::fluid::FluidDomainLayout,
         transform: TransformVm,
     ) -> SceneObjectVm {
         let mut object = known_fluid(id, Some(domain));
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn static_fluid_domain_center_is_pickable_and_targets_domain_transform() {
-        let domain = crate::node_graph::fluid::FluidDomainLayout {
+        let domain = manifold_node_engine::water::fluid::FluidDomainLayout {
             min: [1.0, -1.0, -8.0],
             size: [4.0, 2.0, 4.0],
             cells: [8, 8, 8],
@@ -659,7 +659,7 @@ mod tests {
 
     #[test]
     fn static_fluid_domain_without_explicit_transform_is_unavailable() {
-        let domain = crate::node_graph::fluid::FluidDomainLayout {
+        let domain = manifold_node_engine::water::fluid::FluidDomainLayout {
             min: [-2.0, 0.0, -2.0],
             size: [4.0, 4.0, 4.0],
             cells: [16, 16, 16],
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn fluid_domain_rotation_is_hidden_unpickable_and_unwritable() {
-        let domain = crate::node_graph::fluid::FluidDomainLayout {
+        let domain = manifold_node_engine::water::fluid::FluidDomainLayout {
             min: [-2.0, 0.0, -7.0],
             size: [4.0, 4.0, 4.0],
             cells: [16, 16, 16],
@@ -742,7 +742,7 @@ mod tests {
 
     #[test]
     fn gizmo_constraints_reject_nonfinite_and_bound_scale() {
-        let domain = crate::node_graph::fluid::FluidDomainLayout {
+        let domain = manifold_node_engine::water::fluid::FluidDomainLayout {
             min: [-2.0, 0.0, -7.0],
             size: [4.0, 4.0, 4.0],
             cells: [16, 16, 16],

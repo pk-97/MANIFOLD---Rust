@@ -12,10 +12,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -26,7 +26,7 @@ struct ContrastUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Contrast,
     type_id: "node.contrast",
     purpose: "Pivot-around-0.5 contrast: out = (c - 0.5) * contrast + 0.5. 1.0 = unchanged, >1 = punchier, <1 = flatter. Alpha passes through. The `contrast` input port shadows the param for live modulation. HDR-safe affine — use this rather than node.levels for contrast (levels' gamma pow NaNs on the negatives a contrast push produces).",

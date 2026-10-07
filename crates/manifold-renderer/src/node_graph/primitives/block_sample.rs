@@ -8,10 +8,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,7 +22,7 @@ struct BlockSampleUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BlockSample,
     type_id: "node.block_sample",
     purpose: "Sample the input at the centre of each integer pixel block while keeping the output full resolution. With columns and rows at zero, `block_size = 1` is an identity. Positive columns or rows select a normalized grid; block_size groups its cells.",
@@ -121,8 +121,8 @@ mod gpu_tests {
         GpuTextureUsage,
     };
 
-    use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn rgba16_gradient(
         device: &manifold_gpu::GpuDevice,
@@ -261,7 +261,7 @@ mod gpu_tests {
 
     #[test]
     fn normalized_grid_repeats_non_integer_cell_centres() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let input = rgba16_gradient(&device, 10, 6);
         let output = dispatch_grid(&device, &input, 1.0, 3.0, 2.0);
         for y in 0..6 {
@@ -278,7 +278,7 @@ mod gpu_tests {
 
     #[test]
     fn gpu_formula_preserves_coordinates_and_alpha_at_size_one() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let input = rgba16_gradient(&device, 4, 4);
         let output = dispatch(&device, &input, 1.0);
         for (i, pixel) in output.iter().enumerate() {
@@ -298,7 +298,7 @@ mod gpu_tests {
 
     #[test]
     fn gpu_formula_samples_block_centres_and_clamps_edges() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let input = rgba16_gradient(&device, 5, 2);
         let output = dispatch(&device, &input, 4.0);
         // The first block spans x=0..3; linear sampling at its geometric

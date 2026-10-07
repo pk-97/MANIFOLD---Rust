@@ -7,11 +7,11 @@
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: LengthVec2,
     type_id: "node.vector_length",
     purpose: "Per-pixel `length(in.rg)` as a scalar field in the R channel (GBA = 0, 0, 1). The vec2 magnitude atom — converts signed flow / displacement / gradient textures into positive scalar fields. Standard upstream step for heightmap-style ops that need a derived height from a vec2 source.",

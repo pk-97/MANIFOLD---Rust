@@ -7,8 +7,8 @@ use std::path::Path;
 
 use manifold_gpu::GpuTextureFormat;
 
-use crate::node_graph::PrimitiveRegistry;
-use crate::preset_runtime::PresetRuntime;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
 
 const LIQUID_PRESETS: [&str; 4] = [
     "WaterDamBreakGpuFlip.json",
@@ -25,7 +25,7 @@ fn cache_len(device: &manifold_gpu::GpuDevice) -> (usize, usize) {
 fn liquid_prepare_pipelines_is_idempotent() {
     let registry = PrimitiveRegistry::with_builtin();
     for file in LIQUID_PRESETS {
-        let device = crate::gpu::test_gpu_device("liquid_prepare_pipelines_is_idempotent");
+        let device = manifold_node_engine::gpu::context::test_gpu_device("liquid_prepare_pipelines_is_idempotent");
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/generator-presets").join(file);
         let json = std::fs::read_to_string(path).expect("preset reads");
         let install = || {

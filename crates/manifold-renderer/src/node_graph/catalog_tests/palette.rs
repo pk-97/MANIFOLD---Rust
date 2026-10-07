@@ -1,4 +1,4 @@
-use crate::node_graph::palette::catalog_graph_def_for;
+use manifold_node_engine::palette::catalog_graph_def_for;
 
     #[test]
     fn catalog_default_is_available_for_every_shipping_effect() {

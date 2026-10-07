@@ -15,7 +15,7 @@ use manifold_core::scene_modifier_preset::{
 };
 use manifold_core::{NodeId, SceneNodeRef};
 
-use crate::node_graph::{PrimitiveRegistry, scene_modifier_expand::prepare_scene_modifiers};
+use manifold_node_engine::{persistence::PrimitiveRegistry, load::expand::prepare_scene_modifiers};
 
 const LOOP: &[(&str, &str)] = &[
     ("loop_phase", "node.beat_ramp"),

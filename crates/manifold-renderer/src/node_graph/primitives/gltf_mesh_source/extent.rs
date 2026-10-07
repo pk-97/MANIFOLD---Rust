@@ -1,5 +1,5 @@
 //! Buffer extent rule owned by this node.
-use crate::node_graph::liquid::extent::{AtomExtent, ExtentRule, Verdict, size_bounded};
+use manifold_node_engine::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, size_bounded};
 
 fn gltf_mesh_source(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The asset's decoded vertex count is unknown here. Uploads truncate to

@@ -25,12 +25,12 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::state_store::NodeState;
-use super::standalone_pipeline::active_elements;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::state_store::NodeState;
+use manifold_node_engine::primitives::standalone_pipeline::active_elements;
 
 /// `seed_mode` enum labels.
 /// `EveryFrame` (0): rewrite the buffer each frame — the legacy
@@ -53,7 +53,7 @@ struct SeedUniforms {
     _pad: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SeedParticles,
     type_id: "node.spawn_particles",
     purpose: "Emit a fresh Array<Particle> sized by `max_capacity` (chain-build-time ceiling). `active_count` particles initialise alive at Wang-hash uniform positions in [0,1]²; the remaining capacity sits dead at center. `seed_mode` picks when the seed kernel fires: EveryFrame (legacy — overwrite each tick; suited to advection 'rain' effects where the integrator never accumulates state) or OnceOnReset (seed once after a state-store reset; the buffer persists whatever the downstream sim writes into it — required for any sim where particle state must evolve across frames, e.g. StrangeAttractor + FluidSim2D).",

@@ -1,11 +1,11 @@
-use crate::testkit::whitewater_fingerprints::run;
-use crate::testkit::whitewater_scene::with_tick_probe;
-use crate::node_graph::primitives::gpu_flip_preset::WaterScene;
+use manifold_node_engine::testkit::whitewater_fingerprints::run;
+use manifold_node_engine::testkit::whitewater_scene::with_tick_probe;
+use manifold_node_engine::water::primitives::gpu_flip_preset::WaterScene;
 #[test]
 fn whitewater_packed_preset_save_load_matches_fingerprints() {
     use manifold_core::{project::Project, types::LayerType, preset_type_id::PresetTypeId};
-    use crate::testkit::whitewater_scene::with_whitewater_reports;
-    let def = crate::node_graph::primitives::gpu_flip_preset::render_def(WaterScene::dam_break(64));
+    use manifold_node_engine::testkit::whitewater_scene::with_whitewater_reports;
+    let def = manifold_node_engine::water::primitives::gpu_flip_preset::render_def(WaterScene::dam_break(64));
     let mut project = Project::default();
     let index = project.timeline.add_layer("Dam Break", LayerType::Generator, PresetTypeId::new("WaterDamBreakGpuFlip"));
     project.timeline.layers[index].gen_params_or_init().graph = Some(def.clone());

@@ -1,5 +1,5 @@
 //! Buffer extent rule owned by this node.
-use crate::node_graph::liquid::extent::{ExtentRule, texture_only};
+use manifold_node_engine::water::liquid::extent::{ExtentRule, texture_only};
 
 inventory::submit! {
     ExtentRule { type_id: "node.over", check: texture_only }

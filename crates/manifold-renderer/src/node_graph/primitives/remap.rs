@@ -13,10 +13,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 pub const REMAP_WRAP_MODES: &[&str] = &["Clamp", "Repeat", "Mirror"];
 pub const REMAP_FIELD_MODES: &[&str] = &["Absolute", "Relative"];
@@ -30,7 +30,7 @@ struct RemapUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Remap,
     type_id: "node.remap",
     purpose: "Resample `source` at the per-pixel UV coordinates in `uv_field`'s R/G channels (TouchDesigner's Remap TOP). `mode` = Absolute: out(p) = source(uv_field(p).rg); Relative: out(p) = source(p + uv_field(p).rg) — treat the field as a UV *offset* so it sums cleanly with other offset fields. `wrap` picks the out-of-[0,1] policy (Clamp / Repeat / Mirror). The generic UV-warp atom — pair with a coordinate-field producer (polar_field, centered_uv, scale_offset_texture, block_displace_field, optical flow) to build kaleidoscope / mirror / edge-stretch / chromatic split / glitch displace / lens distortion as a visible `coordinate-math → remap → blend` graph rather than a bespoke single-effect shader.",

@@ -12,7 +12,7 @@
 
 use std::path::PathBuf;
 
-use manifold_renderer::node_graph::freeze::region::census::{FixtureCorpus, build_census_report};
+use manifold_node_engine::freeze::region::census::{FixtureCorpus, build_census_report};
 
 const FIXTURE: &str = "Liveschool Live Show V6 LEDS.manifold";
 

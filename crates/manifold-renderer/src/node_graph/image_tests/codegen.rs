@@ -1,10 +1,10 @@
-use crate::node_graph::NodeInstanceId;
+use manifold_node_engine::exec::effect_node::NodeInstanceId;
 
-use crate::node_graph::freeze::codegen::generate_fused;
-use crate::node_graph::freeze::codegen::{generate_standalone, StandaloneKernelSpec};
-use crate::node_graph::freeze::codegen::{FusedVirtualChain, FusionRegion, InputSource, RegionNode, ENTRY};
-use crate::node_graph::freeze::TextureDiff;
-use crate::render_target::RenderTarget;
+use manifold_node_engine::freeze::codegen::generate_fused;
+use manifold_node_engine::freeze::codegen::{generate_standalone, StandaloneKernelSpec};
+use manifold_node_engine::freeze::codegen::{FusedVirtualChain, FusionRegion, InputSource, RegionNode, ENTRY};
+use manifold_node_engine::freeze::TextureDiff;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_gpu::{
     GpuBinding, GpuSamplerDesc, GpuTexture,
     GpuTextureFormat, GpuTextureUsage,
@@ -12,7 +12,7 @@ use manifold_gpu::{
 
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
-use crate::testkit::codegen_support::*;
+use manifold_node_engine::testkit::codegen_support::*;
 /// BUG-135: the fused TEXTURE-domain path must emit a member's
 /// `node_includes` exactly like `generate_fused_buffer` already does.
 /// `node.coc_from_depth` declares `wgsl_includes: [DEPTH_COMMON]` — its
@@ -24,8 +24,8 @@ use crate::testkit::codegen_support::*;
 /// scope for identifier: linearize_depth" (BUG-141's exact symptom).
 #[test]
 fn fused_texture_region_carries_and_dedups_wgsl_includes() {
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::primitives::{CocFromDepth, Gain};
+    use manifold_node_engine::primitive::PrimitiveSpec;
+    use {crate::node_graph::primitives::CocFromDepth, manifold_node_engine::primitives::gain::Gain};
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![
@@ -105,8 +105,8 @@ fn fused_texture_region_carries_and_dedups_wgsl_includes() {
 /// absorbed gain reading external 0.
 #[test]
 fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::primitives::{Gain, GaussianBlur};
+    use manifold_node_engine::primitive::PrimitiveSpec;
+    use {manifold_node_engine::primitives::gain::Gain, crate::node_graph::primitives::GaussianBlur};
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![
@@ -181,8 +181,8 @@ fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
 /// `let ext_0`, and threads sharpen's register into invert.
 #[test]
 fn fused_gather_binds_sampler_and_passes_texture() {
-    use crate::node_graph::freeze::classify::InputAccess;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::freeze::classify::InputAccess;
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::{Invert, Sharpen};
     let id = NodeInstanceId;
     let region = FusionRegion {
@@ -247,8 +247,8 @@ fn fused_gather_binds_sampler_and_passes_texture() {
 /// unchanged (every other test asserts the byte-identical `var dst`).
 #[test]
 fn fused_fanout_emits_two_dst_bindings() {
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::primitives::{Contrast, Gain, Invert};
+    use manifold_node_engine::primitive::PrimitiveSpec;
+    use {crate::node_graph::primitives::Contrast, manifold_node_engine::primitives::gain::Gain, crate::node_graph::primitives::Invert};
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![
@@ -327,10 +327,10 @@ fn fused_fanout_emits_two_dst_bindings() {
 /// disk so this test self-documents which shaders the cutover will retire.
 #[test]
 fn generated_pointwise_atoms_match_originals() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let input = gradient(&device, w, h);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let shaders_dir =
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
 
@@ -403,12 +403,12 @@ fn generated_pointwise_atoms_match_originals() {
 /// Circle is exercised, plus the uv-only Rectangle.
 #[test]
 fn generated_vignette_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (160u32, 128u32); // aspect 1.25, deliberately non-square
     let input = gradient(&device, w, h);
     let aspect = w as f32 / h as f32;
 
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let node = registry.construct("node.vignette").unwrap();
     let generated = generate_standalone(&StandaloneKernelSpec {
         fusion_kind: node.fusion_kind(),
@@ -474,12 +474,12 @@ fn generated_vignette_matches_original() {
 /// pattern(2), dst(3)) so it's a drop-in for dither's run().
 #[test]
 fn generated_dither_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let source = gradient(&device, w, h);
     let pattern = gradient_b(&device, w, h); // R channel = the threshold map
 
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let node = registry.construct("node.dither").unwrap();
     let generated = generate_standalone(&StandaloneKernelSpec {
         fusion_kind: node.fusion_kind(),
@@ -534,11 +534,11 @@ fn generated_dither_matches_original() {
 /// the same set. Covers arities 2, 3, and 5.
 #[test]
 fn generated_coincident_atoms_match_originals() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let ga = gradient(&device, w, h);
     let gb = gradient_b(&device, w, h);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let shaders_dir =
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
     let differ = TextureDiff::new(&device);
@@ -592,10 +592,10 @@ fn generated_coincident_atoms_match_originals() {
 /// pointwise layout (uniform(0), tex(1), sampler(2), dst(3)).
 #[test]
 fn generated_enum_pointwise_atoms_match_originals() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let input = gradient(&device, w, h);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let shaders_dir =
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
     let differ = TextureDiff::new(&device);
@@ -684,10 +684,10 @@ fn generated_enum_pointwise_atoms_match_originals() {
 /// the paramless codegen path matches bit-for-bit.
 #[test]
 fn generated_paramless_atom_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let input = gradient(&device, w, h);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let node = registry.construct("node.absolute_value").unwrap();
     let generated = generate_standalone(&StandaloneKernelSpec {
         fusion_kind: node.fusion_kind(),
@@ -740,13 +740,13 @@ fn generated_paramless_atom_matches_original() {
 /// wrap_coord helper.
 #[test]
 fn generated_remap_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let source = gradient(&device, w, h);
     let field = gradient_b(&device, w, h); // .rg carry the target UVs
     let sampler = device.create_sampler(&GpuSamplerDesc::default());
 
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let node = registry.construct("node.remap").unwrap();
     let generated = generate_standalone(&StandaloneKernelSpec {
         fusion_kind: node.fusion_kind(),
@@ -840,11 +840,11 @@ fn generated_remap_matches_original() {
 /// the gathered `in`, the second the coincident field.
 #[test]
 fn generated_gather_atoms_match_originals() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let ga = gradient(&device, w, h);
     let gb = gradient_b(&device, w, h);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let shaders_dir =
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
     let differ = TextureDiff::new(&device);
@@ -907,11 +907,11 @@ fn generated_gather_atoms_match_originals() {
 /// matching step. `dispatch_pointwise` covers the shared 1-input layout.
 #[test]
 fn generated_single_input_gather_atoms_match_originals() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let input = gradient(&device, w, h);
     let texel = 1.0f32 / 128.0;
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let shaders_dir =
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
     let differ = TextureDiff::new(&device);
@@ -1002,11 +1002,11 @@ fn generated_single_input_gather_atoms_match_originals() {
 /// both axes; the default Clamp sampler matches address_mode=0.
 #[test]
 fn generated_separable_gaussian_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let input = gradient(&device, w, h);
     let texel = 1.0f32 / 128.0;
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.gaussian_blur").unwrap();
@@ -1089,9 +1089,9 @@ fn generated_separable_gaussian_matches_original() {
 /// diff across all three shapes (solid + wireframe + rotated).
 #[test]
 fn generated_basic_shape_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.basic_shape").unwrap();
@@ -1173,9 +1173,9 @@ fn generated_basic_shape_matches_original() {
 /// diff. domain=2 exercises the past-last-stop extrapolation tail.
 #[test]
 fn generated_gradient_ramp_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.gradient").unwrap();
@@ -1255,9 +1255,9 @@ fn generated_gradient_ramp_matches_original() {
 /// both.
 #[test]
 fn generated_downsample_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let input = gradient(&device, 128, 128);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.downsample").unwrap();
@@ -1327,11 +1327,11 @@ fn generated_downsample_matches_original() {
 /// (quality, weighting) and diff across three combos.
 #[test]
 fn generated_gaussian_blur_variable_width_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let src = gradient(&device, w, h);
     let width = gradient_b(&device, w, h); // R channel varies → CoC varies
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.variable_blur").unwrap();
@@ -1408,9 +1408,9 @@ fn generated_gaussian_blur_variable_width_matches_original() {
 /// vol_res, radius}.
 #[test]
 fn generated_blur_3d_separable_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let n = 32u32;
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
 
     let node = registry.construct("node.blur_3d").unwrap();
     let generated = generate_standalone(&StandaloneKernelSpec {
@@ -1541,9 +1541,9 @@ textureStore(vol, vec3<i32>(id), vec4<f32>(f.x, f.y, f.z, 0.5 + 0.5 * f.x));\n\
 /// The hand entry is `main`; the generated is `cs_main`.
 #[test]
 fn generated_gradient_central_diff_3d_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let n = 32u32;
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
 
     let node = registry.construct("node.edge_slope_3d").unwrap();
     let generated = generate_standalone(&StandaloneKernelSpec {
@@ -1625,9 +1625,9 @@ fn generated_gradient_central_diff_3d_matches_original() {
 /// the same logical values.
 #[test]
 fn generated_curl_slope_force_3d_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let n = 32u32;
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
 
     let node = registry.construct("node.swirl_force_3d").unwrap();
     let generated = generate_standalone(&StandaloneKernelSpec {
@@ -1725,10 +1725,10 @@ fn generated_curl_slope_force_3d_matches_original() {
 /// f16, so the sub-f16 GPU-vs-CPU trig difference is below the store).
 #[test]
 fn generated_vector_op_atoms_match_originals() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let input = gradient(&device, w, h); // .rg = (x/w, y/h)
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let shaders_dir =
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
     let differ = TextureDiff::new(&device);
@@ -1813,10 +1813,10 @@ fn generated_vector_op_atoms_match_originals() {
 /// sin (matching the hand), so it's bit-exact.
 #[test]
 fn generated_hash_field_by_seed_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let input = gradient(&device, w, h); // .rg = a value field
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.hash_field_by_seed").unwrap();
@@ -1887,11 +1887,11 @@ fn generated_hash_field_by_seed_matches_original() {
 /// paths. Binding layout uniform(0)/r(1)/g(2)/b(3)/a(4)/samp(5)/dst(6) for both.
 #[test]
 fn generated_pack_channels_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let ga = gradient(&device, w, h);
     let gb = gradient_b(&device, w, h);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.pack_rgba").unwrap();
@@ -1958,12 +1958,12 @@ fn generated_pack_channels_matches_original() {
 /// (scalar phase) exercises both paths; GPU sin matches bit-exact.
 #[test]
 fn generated_trig_texture_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let in_tex = gradient(&device, w, h);
     let freq_t = gradient_b(&device, w, h);
     let phase_t = gradient(&device, w, h); // unused (use_phase_tex=0)
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.sine_cosine").unwrap();
@@ -2039,9 +2039,9 @@ fn generated_trig_texture_matches_original() {
 /// each output. bdf_hash2 uses GPU sin, so it's bit-exact.
 #[test]
 fn generated_block_displace_field_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.block_displace_field").unwrap();
@@ -2097,11 +2097,11 @@ fn generated_block_displace_field_matches_original() {
 /// uniform(0)/source(1)/velocity(2)/samp(3)/dst(4) for both.
 #[test]
 fn generated_lic_integrate_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let ga = gradient(&device, w, h); // source
     let gb = gradient_b(&device, w, h); // velocity (.rg)
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.flow_lines").unwrap();
@@ -2146,10 +2146,10 @@ fn generated_lic_integrate_matches_original() {
 /// volume(1)/samp(2)/dst(3) and the same payload.
 #[test]
 fn generated_sample_volume_2d_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
     let n = 32u32;
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.slice_volume").unwrap();
@@ -2234,9 +2234,9 @@ fn generated_sample_volume_2d_matches_original() {
 /// independently (both write flags on, distinct textures, no aliasing).
 #[test]
 fn generated_voronoi_2d_matches_original() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let differ = TextureDiff::new(&device);
 
     let node = registry.construct("node.voronoi_2d").unwrap();
@@ -2299,9 +2299,9 @@ fn generated_voronoi_2d_matches_original() {
 /// both reproduce their hand shaders bit-for-bit.
 #[test]
 fn generated_source_atoms_match_originals() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128u32, 128u32);
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let shaders_dir =
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders");
     let differ = TextureDiff::new(&device);

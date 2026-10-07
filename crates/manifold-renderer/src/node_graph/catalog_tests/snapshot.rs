@@ -1,10 +1,10 @@
-use crate::node_graph::{Graph, GraphSnapshot};
+use manifold_node_engine::{graph::Graph, snapshot::GraphSnapshot};
 
     /// `GraphSnapshot::from_def` builds a snapshot directly from an
     /// `EffectGraphDef`, matching the editor's per-card path.
     #[test]
     fn from_def_builds_snapshot_with_named_handles() {
-        use crate::node_graph::EffectGraphDefExt;
+        use manifold_node_engine::persistence::EffectGraphDefExt;
         use manifold_core::effect_graph_def::EffectGraphDef;
 
         // Build a small named-handle graph via an existing composite
@@ -13,13 +13,13 @@ use crate::node_graph::{Graph, GraphSnapshot};
         let mut g = Graph::new();
         let src = g.add_node_named(
             "source",
-            Box::new(crate::node_graph::boundary_nodes::Source::new()),
+            Box::new(manifold_node_engine::scene::boundary_nodes::Source::new()),
         );
         let handle = crate::node_graph::composites::build_soft_focus(&mut g, (src, "out"))
             .expect("build_soft_focus");
         let _out = g.add_node_named(
             "final_output",
-            Box::new(crate::node_graph::boundary_nodes::FinalOutput::new()),
+            Box::new(manifold_node_engine::scene::boundary_nodes::FinalOutput::new()),
         );
         let final_out_id = g.node_id_by_handle("final_output").unwrap();
         g.connect(handle.output(), (final_out_id, "in")).unwrap();
@@ -57,20 +57,20 @@ use crate::node_graph::{Graph, GraphSnapshot};
     /// auto-lays-out on every reopen.
     #[test]
     fn from_def_preserves_editor_pos_through_overlay() {
-        use crate::node_graph::EffectGraphDefExt;
+        use manifold_node_engine::persistence::EffectGraphDefExt;
         use manifold_core::effect_graph_def::EffectGraphDef;
 
         // Build a minimal soft-focus graph with a moved Source node.
         let mut g = Graph::new();
         let src = g.add_node_named(
             "source",
-            Box::new(crate::node_graph::boundary_nodes::Source::new()),
+            Box::new(manifold_node_engine::scene::boundary_nodes::Source::new()),
         );
         let handle = crate::node_graph::composites::build_soft_focus(&mut g, (src, "out"))
             .expect("build_soft_focus");
         let final_out = g.add_node_named(
             "final_output",
-            Box::new(crate::node_graph::boundary_nodes::FinalOutput::new()),
+            Box::new(manifold_node_engine::scene::boundary_nodes::FinalOutput::new()),
         );
         g.connect(handle.output(), (final_out, "in")).unwrap();
         let mut def = EffectGraphDef::from_graph(&g);

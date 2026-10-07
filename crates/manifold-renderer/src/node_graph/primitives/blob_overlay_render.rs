@@ -12,10 +12,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: PARAMS order — `color` (Color param →
 /// 4 consecutive f32 fields, reassembled as `vec4<f32>` at the body call
@@ -36,7 +36,7 @@ struct OverlayUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BlobOverlayRender,
     type_id: "node.blob_overlay",
     purpose: "Draw hollow rectangles around each blob in an Array<Blob> on top of a source Texture2D. Companion to node.blob_tracker for sparse blob visualisation. Minimal box-drawing — for the full HUD treatment (brackets, crosshairs, ticks, labels) use the legacy node.blob_tracking wrapper.",

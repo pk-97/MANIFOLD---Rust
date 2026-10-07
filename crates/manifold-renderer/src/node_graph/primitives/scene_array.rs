@@ -26,11 +26,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::InstanceTransform;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 pub const AXIS_LABELS: &[&str] = &["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
 
@@ -115,7 +115,7 @@ pub struct SceneArrayStasisKey {
     pub rebuild_epoch: u64,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SceneArray,
     type_id: "node.scene_array",
     purpose: "Camera-windowed Array<InstanceTransform> for the endless corridor (SCENE_LOOP_ENDLESS_CORRIDOR_DESIGN.md). Slot w maps to corridor cell c = base_cell - BEHIND + w; the cell's transform is a translation c * cell_size along axis (+X/-X/+Y/-Y/+Z/-Z) plus optional deterministic jitter (rotation +/-jitter_amount rad per axis, scale 1 +/- jitter_amount/2) keyed on the Euclidean (c mod pattern_length) mixed with jitter_seed. The optional camera: Camera input drives the window each frame: base_cell = floor(axis component of camera.pos / cell_size), ahead = clamp(ceil(camera.far / cell_size) + 2, 4, 22) — every cell that can render exists in the buffer, so the far-edge hole is gone by construction. Unwired, the corridor runs from the origin (base_cell 0, ahead 22). Output capacity is the constant 32 (WINDOW_CAPACITY), never a param — surplus slots mask to zero-scale. Wrap purity is arithmetic: the loop camera travels patterns_per_loop * pattern_length cells per loop and the jitter keys on the same cell mod pattern_length, so any integer pair is pure (the jitter_period-divides-stride coupling is gone). The same node feeds ALL object groups. Pointwise atom on the freeze codegen path.",
@@ -201,7 +201,7 @@ impl Primitive for SceneArray {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -326,7 +326,7 @@ mod tests {
     /// card row; the corridor has no count-shaped param left at all).
     #[test]
     fn output_capacity_is_window_capacity_not_param_derived() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = SceneArray::new();
         assert_eq!(WINDOW_CAPACITY, 32);
 
@@ -540,10 +540,10 @@ mod gpu_tests {
     /// the base cell's position.
     #[test]
     fn scene_array_window_placement_matches_cpu_including_negative_base() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SceneArray>()
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "scene_array_test");
+        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "scene_array_test");
 
         for base_cell in [0i32, 5, -1, -7, -22] {
             let gpu_data = dispatch(&device, &pipeline, 3, 4, 10.0, 0, 0.0, base_cell, BEHIND, MAX_AHEAD);
@@ -573,10 +573,10 @@ mod gpu_tests {
     /// elements — invisible in the main pass and the shadow passes alike.
     #[test]
     fn scene_array_masks_slots_beyond_the_window() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SceneArray>()
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "scene_array_test");
+        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "scene_array_test");
 
         let ahead = 4u32;
         let gpu_data = dispatch(&device, &pipeline, 1, 4, 10.0, 0, 0.0, 0, BEHIND, ahead);
@@ -603,10 +603,10 @@ mod gpu_tests {
     /// Two seeds must disagree; amount 0 must stay identity TRS.
     #[test]
     fn scene_array_jitter_matches_cpu_rem_euclid_oracle() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SceneArray>()
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "scene_array_test");
+        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "scene_array_test");
 
         let period = 4u32;
         for (seed, amount) in [(0u32, 0.6f32), (7, 1.0), (1234, 0.25)] {
@@ -680,10 +680,10 @@ mod gpu_tests {
     /// Euclidean mod restored it is green.
     #[test]
     fn window_at_phase_0_equals_window_at_phase_1_translated_by_kp_cells() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SceneArray>()
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SceneArray>()
             .expect("scene_array codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "scene_array_test");
+        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "scene_array_test");
 
         for p in 2u32..=8u32 {
             for k in [1i32, 2, 3, 5, 8] {

@@ -2,10 +2,10 @@
 
 use manifold_gpu::GpuBinding;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::mesh::{InstanceTransform, Vec4Vertex};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::{InstanceTransform, Vec4Vertex};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -16,7 +16,7 @@ struct Uniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CopyPositions,
     type_id: "node.copy_positions",
     purpose: "Extract each InstanceTransform's world position into an Array<Vec4Vertex>. The output is (pos_scale.x, pos_scale.y, pos_scale.z, 1), so it can feed point-field atoms while ignoring scale, rotation, and marker data.",
@@ -43,7 +43,7 @@ impl Primitive for CopyPositions {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -104,19 +104,17 @@ impl Primitive for CopyPositions {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
-    };
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::{DisplaceCopies, WaveField3d};
 
     fn dispatch(src: &[InstanceTransform]) -> Vec<Vec4Vertex> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<CopyPositions>().unwrap();
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<CopyPositions>().unwrap();
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "wave-pilot-copy",
         );
         let input = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
@@ -179,7 +177,7 @@ mod gpu_tests {
 
     #[test]
     fn wave_pilot_fused_copy_wave_displace_matches_standalone_and_cpu() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let src = vec![
             InstanceTransform {
                 pos_scale: [-0.75, 0.5, 1.25, 1.0],
@@ -196,7 +194,7 @@ mod gpu_tests {
         ];
         let (frequency, phase, amount) = (0.37_f32, 0.19_f32, 1.6_f32);
         let direction = [0.8_f32, -0.35, 0.2];
-        let id = crate::node_graph::effect_node::NodeInstanceId;
+        let id = manifold_node_engine::exec::effect_node::NodeInstanceId;
         let node = |node_id,
                     type_id: &'static str,
                     body,
@@ -208,7 +206,7 @@ mod gpu_tests {
                     node_includes,
                     derived_uniforms| RegionNode {
             node_id: id(node_id),
-            fusion_kind: crate::node_graph::freeze::classify::FusionKind::Pointwise,
+            fusion_kind: manifold_node_engine::freeze::classify::FusionKind::Pointwise,
             body,
             params,
             inputs,
@@ -287,17 +285,17 @@ mod gpu_tests {
         let standalone_out =
             device.create_buffer_shared(std::mem::size_of_val(src.as_slice()) as u64);
         let cp = device.create_compute_pipeline(
-            &crate::node_graph::freeze::codegen::standalone_for_spec::<CopyPositions>().unwrap(),
+            &manifold_node_engine::freeze::codegen::standalone_for_spec::<CopyPositions>().unwrap(),
             ENTRY,
             "wave-pilot-standalone-copy",
         );
         let wp = device.create_compute_pipeline(
-            &crate::node_graph::freeze::codegen::standalone_for_spec::<WaveField3d>().unwrap(),
+            &manifold_node_engine::freeze::codegen::standalone_for_spec::<WaveField3d>().unwrap(),
             ENTRY,
             "wave-pilot-standalone-wave",
         );
         let dp = device.create_compute_pipeline(
-            &crate::node_graph::freeze::codegen::standalone_for_spec::<DisplaceCopies>().unwrap(),
+            &manifold_node_engine::freeze::codegen::standalone_for_spec::<DisplaceCopies>().unwrap(),
             ENTRY,
             "wave-pilot-standalone-displace",
         );

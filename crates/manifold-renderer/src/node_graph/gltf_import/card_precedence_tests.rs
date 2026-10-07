@@ -21,8 +21,8 @@ use crate::node_graph::gltf_load::GltfImportSummary;
 
 use super::scene::build_import_graph;
 use super::tests::full_material;
-use crate::node_graph::PrimitiveRegistry;
-use crate::preset_runtime::PresetRuntime;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::PresetRuntime;
 
 /// BUG-1l7f, the part of the imported-def footgun BUG-ji6q did NOT close.
 ///
@@ -85,7 +85,7 @@ fn an_imported_defs_authored_binding_still_overwrites_a_node_write_and_reports_i
         .expect("selector readable post-build");
     assert_ne!(
         got,
-        crate::node_graph::parameters::ParamValue::Float(baked),
+        manifold_node_engine::parameters::ParamValue::Float(baked),
         "if an AUTHORED default ever stops planting, this test is the place that \
          records the decision — that plant is where a binding's scale/offset fold \
          is applied, so dropping it renders raw def values (BUG-1l7f)",

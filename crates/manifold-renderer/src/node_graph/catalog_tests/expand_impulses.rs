@@ -1,12 +1,10 @@
 use manifold_core::NodeId;
-use crate::node_graph::scene_modifier_expand::{SceneModifierExpandError, SceneModifierNodeRoute};
-use crate::node_graph::scene_modifier_expand::testkit::prepare_impulses as prepare;
+use manifold_node_engine::load::expand::{SceneModifierExpandError, SceneModifierNodeRoute};
+use manifold_node_engine::load::expand::testkit::prepare_impulses as prepare;
 
     use crate::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-    use crate::node_graph::scene_modifier_expand::{
-        SceneModifierNodeCopy, prepare_scene_modifiers,
-    };
-    use crate::node_graph::{Graph, PrimitiveRegistry};
+    use manifold_node_engine::load::expand::{SceneModifierNodeCopy, prepare_scene_modifiers};
+    use manifold_node_engine::{graph::Graph, persistence::PrimitiveRegistry};
     use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
     use manifold_core::scene_modifier_edit::insert_scene_modifier;
     use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};

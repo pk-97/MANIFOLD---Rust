@@ -21,12 +21,9 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::{
     GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::{
-    EffectGraphDefExt, Executor, FrameTime, MetalBackend, NodeInstanceId, PrimitiveRegistry,
-    ResourceId, StateStore, compile,
-};
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 use crate::harness;
 
@@ -72,7 +69,7 @@ fn build_gradient_input(
     RenderTarget::view_of(tex, "film-grain-decorrelation-gradient-input")
 }
 
-fn output_resource(plan: &manifold_renderer::node_graph::ExecutionPlan, node: NodeInstanceId, port: &str) -> Option<ResourceId> {
+fn output_resource(plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan, node: NodeInstanceId, port: &str) -> Option<ResourceId> {
     for step in plan.steps() {
         if step.node == node {
             for &(name, id) in &step.outputs {
@@ -113,18 +110,18 @@ fn render_film_grain_frame(w: u32, h: u32, frame_count: i64) -> FilmGrainFrame {
 
     let registry = PrimitiveRegistry::with_builtin();
     let mut graph = def
-        .into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default())
+        .into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
         .unwrap_or_else(|e| panic!("FilmGrain graph load failed: {e}"));
     let plan = compile(&graph).unwrap_or_else(|e| panic!("FilmGrain compile failed: {e:?}"));
 
     let source_id = graph
         .nodes()
-        .find(|n| n.node.type_id().as_str() == manifold_renderer::node_graph::SOURCE_TYPE_ID)
+        .find(|n| n.node.type_id().as_str() == manifold_node_engine::scene::boundary_nodes::SOURCE_TYPE_ID)
         .map(|n| n.id)
         .expect("FilmGrain has a system.source node");
     let final_id = graph
         .nodes()
-        .find(|n| n.node.type_id().as_str() == manifold_renderer::node_graph::FINAL_OUTPUT_TYPE_ID)
+        .find(|n| n.node.type_id().as_str() == manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID)
         .map(|n| n.id)
         .expect("FilmGrain has a system.final_output node");
 

@@ -1,10 +1,10 @@
 //! Shared dispatch and stasis for mesh and weight cut-map resampling.
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::node_graph::content_revision::ContentVersion;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::content_revision::ContentVersion;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
 
 pub(super) fn run<P: Primitive>(
     ctx: &mut EffectNodeContext<'_, '_>,
@@ -94,21 +94,19 @@ pub(super) fn run<P: Primitive>(
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::super::taper_mesh::TaperMesh;
-    use crate::TestDevice;
-    use crate::mesh::{MeshVertex, Vec4Vertex};
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::content_revision::ContentVersion;
-    use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::freeze::classify::CapacityExpr;
-    use crate::node_graph::freeze::codegen::{
-        FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec,
-    };
-    use crate::node_graph::primitive::{Primitive, PrimitiveSpec};
+    use manifold_gpu::testkit::TestDevice;
+    use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::content_revision::ContentVersion;
+    use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::freeze::classify::CapacityExpr;
+    use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec};
+    use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
     use crate::node_graph::primitives::{RemapCutWeights, RemapMeshCut};
-    use crate::node_graph::{FrameTime, MetalBackend, NodeInstanceId};
+    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend, effect_node::NodeInstanceId};
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuBinding;
 
@@ -148,7 +146,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "cut-remap-test",
         );
         let source_buf = device.create_buffer_shared(std::mem::size_of_val(source).max(1) as u64);
@@ -200,7 +198,7 @@ mod gpu_tests {
         let wgsl = standalone_for_spec::<RemapCutWeights>().expect("weight remap codegen");
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "cut-weight-remap-test",
         );
         let source_buf = device.create_buffer_shared((source.len() * 4).max(1) as u64);
@@ -245,7 +243,7 @@ mod gpu_tests {
 
     #[test]
     fn standalone_remap_preserves_corners_interpolates_frames_and_zeros_invalid_maps() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let source = vec![
             vertex(
                 [0.0, 0.0, 0.0],
@@ -308,7 +306,7 @@ mod gpu_tests {
 
     #[test]
     fn standalone_weight_remap_interpolates_and_zeros_invalid_maps() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let maps = vec![
             map([1.0, 0.0, 0.0], 0.0),
             map([0.25, 0.5, 0.25], 0.0),
@@ -412,7 +410,7 @@ mod gpu_tests {
 
     #[test]
     fn fused_remap_with_longer_map_executes_and_matches_standalone_semantics() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let source = vec![
             vertex(
                 [0.0, 0.0, 0.0],
@@ -451,7 +449,7 @@ mod gpu_tests {
         );
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "fused-cut-remap-test",
         );
         let source_buf = device.create_buffer_shared(
@@ -594,7 +592,7 @@ mod gpu_tests {
 
     #[test]
     fn context_cache_tracks_generation_epoch_and_readiness() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut backend = MetalBackend::new(
             device.arc(),
             1,

@@ -14,7 +14,7 @@ use manifold_gpu::raytrace::{
     MAX_RT_EMISSIVE_TRIANGLES,
 };
 use manifold_gpu::{GpuBuffer, GpuDevice};
-use manifold_renderer::mesh::InstanceTransform;
+use manifold_node_engine::mesh::InstanceTransform;
 
 use crate::harness;
 

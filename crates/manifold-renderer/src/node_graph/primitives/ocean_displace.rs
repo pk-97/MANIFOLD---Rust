@@ -6,12 +6,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{active_elements, standalone_pipeline};
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
 
 pub(crate) const CASCADES: usize = 3;
 
@@ -94,7 +94,7 @@ impl DisplaceUniforms {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: OceanDisplace,
     type_id: "node.ocean_displace",
     purpose: "Move each vertex of a water mesh by three ocean cascades and paint foam where the waves fold. Each cascade's fields (from node.inverse_fft_2d: height, sideways x/z, and their slopes) are sampled, wrapping, at the vertex's rest position held in its uv (metres) over that cascade's tile, faded out with distance from the camera: Catmull-Rom for height and sideways shift, so the surface stays smooth between samples however close the camera gets, and bilinear for the slopes that drive foam. Position += Σ fade·(Choppiness·Dx, Dy, Choppiness·Dz). Foam mixes vertex colour toward white as the Jacobian of the summed sideways displacement drops below Foam Threshold.",
@@ -138,13 +138,13 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/ocean_displace_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather, BufferGather],
-    output_capacity: crate::node_graph::freeze::classify::FusedOutputCapacity::FromInput { input: "mesh" },
+    output_capacity: manifold_node_engine::freeze::classify::FusedOutputCapacity::FromInput { input: "mesh" },
     derived_uniforms: ["cam_x", "cam_z"],
 }
 
 // A fused region's camera x/z, as `run()` reads them.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.ocean_displace",
         array_ports: &[],
         recompute: |ctx| ctx.camera.map(|c| vec![c.pos[0], c.pos[2]]),
@@ -162,7 +162,7 @@ impl Primitive for OceanDisplace {
     fn array_output_capacity(
         &self,
         port: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
         (port == "out").then(|| inputs.iter().find(|(p, _)| *p == "mesh").map(|&(_, n)| n)).flatten()
@@ -438,9 +438,9 @@ pub(crate) mod gpu_tests {
     /// The generated kernel matches the CPU reference vertex for vertex.
     #[test]
     fn ocean_displace_matches_cpu() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<OceanDisplace>().expect("ocean_displace codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "ocean-displace-test");
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<OceanDisplace>().expect("ocean_displace codegen");
+        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "ocean-displace-test");
         let (vertices, uniforms, fields) = fixture();
         let upload = |bytes: &[u8]| {
             let b = device.create_buffer_shared(bytes.len() as u64);

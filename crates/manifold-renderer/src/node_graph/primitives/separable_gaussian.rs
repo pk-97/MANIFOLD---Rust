@@ -14,10 +14,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Display labels for the `kernel_size` enum, indexed by enum value.
 pub const GAUSSIAN_BLUR_KERNELS: &[&str] = &["9-tap", "17-tap", "25-tap"];
@@ -36,7 +36,7 @@ pub const GAUSSIAN_BLUR_RADIUS_MODES: &[&str] = &["Fixed", "Dynamic", "Linear"];
 /// Matches `manifold_gpu::GpuAddressMode` enum order.
 pub const GAUSSIAN_BLUR_ADDRESS_MODES: &[&str] = &["Clamp", "Repeat", "Mirror"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GaussianBlur,
     type_id: "node.gaussian_blur",
     purpose: "Single-axis Gaussian blur. Pair an H pass with a V pass for an isotropic blur. Two algorithms behind one primitive: Fixed (default) uses precomputed 9/17/25-tap kernels at σ≈2/4/6 with `step` controlling per-tap UV stride — cheap, deterministic, used by Halation / DoF / Bloom / OilyFluid. Dynamic uses the legacy fluid-sim algorithm — sigma = max(radius/3, 1), bilinear tap-pair loop, `radius` is in pixels — required for bit-exact FluidSim2D parity (the perceived stroke width depends on the dynamic curve specifically). Set `radius_mode = Dynamic` and wire `radius` to switch algorithms; `kernel_size` and `step` are ignored in Dynamic mode. Dynamic with radius=0 collapses to a single-tap nearest-neighbor sample — the legacy downsample trick. Linear is the exact port of the classic Blur node's per-axis pass (sigma = radius/2, one tap per pixel offset up to 32, normalized): pair an H and a V pass to replace a Blur node with zero look change.",
@@ -165,7 +165,7 @@ impl Primitive for GaussianBlur {
     /// fetch wraps its corner texels by this mode too.
     fn fused_gather_sampler_mode(
         &self,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> manifold_gpu::GpuAddressMode {
         let mode = match params.get("address_mode") {
             Some(ParamValue::Enum(v)) => *v,
@@ -185,7 +185,7 @@ impl Primitive for GaussianBlur {
     /// and Dynamic uses bilinear tap-pairs — both stay `false`.
     fn stencil_taps_texel_exact(
         &self,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> bool {
         match params.get("radius_mode") {
             Some(ParamValue::Enum(v)) => *v == 2,
@@ -294,15 +294,12 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::Slot;
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::{
-        ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
-        ParamValue, Source, compile,
-    };
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     use super::GaussianBlur;
 
@@ -340,7 +337,7 @@ mod gpu_tests {
         step: f32,
         fill_input: F,
     ) -> Vec<[f32; 4]> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();
@@ -505,7 +502,7 @@ mod gpu_tests {
         radius: f32,
         fill_input: F,
     ) -> Vec<[f32; 4]> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();

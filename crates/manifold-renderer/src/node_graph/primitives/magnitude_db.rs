@@ -8,10 +8,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,7 +22,7 @@ struct MagnitudeDbUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MagnitudeDb,
     type_id: "node.magnitude_db",
     purpose: "Convert a non-negative linear magnitude Texture2D to decibels with `20*log10(magnitude / reference)`, clamped at `floor_db`. Alpha passes through. Keep palette mapping in separate scale, clamp, and gradient/LUT nodes.",

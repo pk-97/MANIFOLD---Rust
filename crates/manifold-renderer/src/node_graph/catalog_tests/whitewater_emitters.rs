@@ -1,11 +1,11 @@
-use crate::node_graph::primitives::testkit as water_nodes;
-use crate::testkit::liquid_surface::{Harness, params};
-use crate::node_graph::NodeInstanceId;
-use crate::node_graph::freeze::{classify::CapacityExpr, codegen::{FusionRegion, InputSource, generate_fused}};
-use crate::testkit::water_codegen::{member, fused, run};
+use manifold_node_engine::water::primitives::testkit as water_nodes;
+use manifold_node_engine::testkit::liquid_surface::{Harness, params};
+use manifold_node_engine::exec::effect_node::NodeInstanceId;
+use manifold_node_engine::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::generate_fused};
+use manifold_node_engine::testkit::water_codegen::{member, fused, run};
 use crate::node_graph::primitives::{divide_by_value::DivideByValue, };
 
-use crate::node_graph::primitives::testkit::GridBox as Box3;
+use manifold_node_engine::water::primitives::testkit::GridBox as Box3;
 fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
     let mut v = vec![
         ("center_x", 4.0),

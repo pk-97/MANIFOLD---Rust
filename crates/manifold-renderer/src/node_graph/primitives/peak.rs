@@ -12,11 +12,11 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Peak,
     type_id: "node.peak",
     purpose: "Peak (max) Rec. 709 luminance of the input texture, emitted as a scalar on `out` (range [0, 1]). Bridge from image domain to control domain — drives knobs that should respond to the brightest spot rather than overall brightness. One frame of latency on the measurement.",
@@ -102,18 +102,14 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::Peak;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::effect_node::{
-        EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,
-    };
-    use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId, compile};
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::parameters::{ParamDef, ParamValue};
-    use crate::node_graph::ports::{
-        NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
-    };
-    use crate::node_graph::{Executor, MetalBackend, Source};
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId};
+    use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::parameters::{ParamDef, ParamValue};
+    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+    use manifold_node_engine::{exec::execution::Executor, exec::metal_backend::MetalBackend, scene::boundary_nodes::Source};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -142,7 +138,7 @@ mod gpu_tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
     }
     impl EffectNode for Capture {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -174,7 +170,7 @@ mod gpu_tests {
     /// uniform.
     #[test]
     fn solid_grey_texture_reduces_to_its_luminance() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 16u32);
         let format = GpuTextureFormat::Rgba16Float;
         let grey = 0.4_f32;
@@ -193,7 +189,7 @@ mod gpu_tests {
 
         let r_src = output_resource(&plan, src, "out");
         let src_target = RenderTarget::new(&device, w, h, format, "test-peak-grey");
-        crate::testkit::gpu::clear_texture_committed(
+        manifold_node_engine::testkit::gpu::clear_texture_committed(
             &device,
             &src_target.texture,
             [grey as f64, grey as f64, grey as f64, 1.0],
@@ -226,7 +222,7 @@ mod gpu_tests {
     #[test]
     fn black_and_white_textures_reduce_to_their_luminance() {
         for (name, rgb, expected) in [("black", [0.0; 3], 0.0_f32), ("white", [1.0; 3], 1.0_f32)] {
-            let device = crate::test_device();
+            let device = manifold_gpu::testkit::test_device();
             let (w, h) = (16u32, 16u32);
             let format = GpuTextureFormat::Rgba16Float;
 
@@ -245,7 +241,7 @@ mod gpu_tests {
             let r_src = output_resource(&plan, src, "out");
             let src_target =
                 RenderTarget::new(&device, w, h, format, "test-peak-bw");
-            crate::testkit::gpu::clear_texture_committed(
+            manifold_node_engine::testkit::gpu::clear_texture_committed(
                 &device,
                 &src_target.texture,
                 [rgb[0], rgb[1], rgb[2], 1.0],

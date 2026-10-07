@@ -13,10 +13,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -27,7 +27,7 @@ struct FieldCombineUniforms {
     _pad: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: FieldCombine,
     type_id: "node.field_combine",
     purpose: "Per-pixel scalar field: out.rgb = a * in.r + b * in.g + c, alpha = 1. Projects a 2D coordinate texture (typically uv_field output) onto any linear combination of its channels, with an optional constant offset. All three coefficients (a, b, c) accept scalar wires for per-frame-derived transforms (rotation, aspect, scale).",

@@ -4,16 +4,14 @@ use manifold_core::{NodeId, Seconds};
 use manifold_physics::input::EventStamp;
 use manifold_physics::FieldValue;
 
-use crate::preset_runtime::PresetRuntime;
-use crate::node_graph::FrameTime;
-use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
-use crate::node_graph::{
-    ParamValue, ParamValues, PortType, PrimitiveRegistry,
-};
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::exec::effect_node::FrameTime;
+use manifold_node_engine::water::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
+use manifold_node_engine::{parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry};
 
-use crate::preset_runtime::{CapturedSceneImpulse, PreparedSceneImpulse};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind};
-use crate::node_graph::{EffectNode, EffectNodeContext, EffectNodeType, ParamDef};
+use manifold_node_engine::water::runtime::physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind};
+use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef};
 use manifold_core::Beats;
 use manifold_physics::VectorField;
 use std::{borrow::Cow, cell::Cell};
@@ -36,7 +34,7 @@ impl EffectNode for CpuScene {
     fn type_id(&self) -> &EffectNodeType {
         self.0.type_id()
     }
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
         self.0.depth_rule()
     }
     fn inputs(&self) -> &[NodeInput] {
@@ -57,8 +55,8 @@ impl EffectNode for ObservePositions {
     fn type_id(&self) -> &EffectNodeType {
         &self.0
     }
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
     fn is_liveness_root(&self) -> bool {
         true
@@ -460,7 +458,7 @@ fn scene_impulse_rejects_stateful_ancestry_and_inactive_selections() {
 
 #[test]
 fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
-    use crate::node_graph::physics::RigidImpulseTargets;
+    use manifold_node_engine::water::physics::RigidImpulseTargets;
     let mut def = fixture();
     let mut control = runtime(&def);
     control.execute_frame(time(0.0));
@@ -576,7 +574,7 @@ fn scene_impulse_captures_spatial_shape_before_center_edits() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn scene_impulse_selection_combines_body_slots_copies_and_fluid_domain() {
-    use crate::node_graph::physics::RigidImpulseTargets;
+    use manifold_node_engine::water::physics::RigidImpulseTargets;
     let mut def = fixture();
     def.nodes.push(
         serde_json::from_value(serde_json::json!({

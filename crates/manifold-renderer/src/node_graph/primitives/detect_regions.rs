@@ -16,11 +16,11 @@ use manifold_native::region_detector::{
 
 use super::region_types::{MAX_REGIONS, Region};
 
-use crate::background_worker::BackgroundWorker;
+use manifold_node_engine::runtime::background_worker::BackgroundWorker;
 use crate::gpu_readback::ReadbackRequest;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 // The performance proof enables this fixed-capacity probe only around its
 // measured frames. Normal playback uses relaxed atomic loads and allocates nothing.
@@ -252,7 +252,7 @@ fn publish_response(
     true
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: DetectRegions,
     type_id: "node.detect_regions",
     purpose: "Detect 8-connected filled foreground components in a mask, preserving a categorical label image and bounded region records for independent tracking and mask rendering.",
@@ -330,7 +330,7 @@ impl DetectRegions {
 
     fn ensure_state(
         &mut self,
-        gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
+        gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
         width: u32,
         height: u32,
     ) {
@@ -428,7 +428,7 @@ impl Primitive for DetectRegions {
         port: &str,
         _canvas_dims: (u32, u32),
         input_dims: &[(&str, (u32, u32))],
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         (port == "labels")
             .then(|| {
@@ -447,7 +447,7 @@ impl Primitive for DetectRegions {
     fn array_output_capacity(
         &self,
         port: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _inputs: &[(&str, u32)],
     ) -> Option<u32> {
         (port == "regions").then_some(MAX_REGIONS as u32)

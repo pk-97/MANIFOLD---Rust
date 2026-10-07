@@ -11,13 +11,13 @@
 //! Reusable for particle proximity graphs, constellation effects,
 //! sparse-detection neighbour viz.
 
-use crate::mesh::EdgePair;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::EdgePair;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use std::borrow::Cow;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ArrayConnectNearest,
     type_id: "node.connect_nearest",
     purpose: "For each item in a Channels[X, Y, WIDTH, HEIGHT] array, find its nearest neighbour within max_distance and emit an EdgePair (A_INDEX, B_INDEX). Sparse nearest-neighbour graph generation. Wire detection regions, particle positions, or any sparse-position array; output connects to render_lines edges port for connection-line visualisation.",
@@ -85,7 +85,7 @@ impl Primitive for ArrayConnectNearest {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "edges" {

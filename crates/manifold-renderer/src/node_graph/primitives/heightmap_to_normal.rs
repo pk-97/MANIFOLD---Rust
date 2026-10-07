@@ -26,10 +26,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -40,7 +40,7 @@ struct HeightmapNormalUniforms {
     _pad0: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: HeightmapToNormal,
     type_id: "node.surface_bumps",
     purpose: "Scalar height field (read from `in.r`) → unit normal map (RGB) via central-difference gradient. Coord_space picks the output convention: TangentZ for flat-surface tangent-space shading (OilyFluid lambert/matcap/blinn), WorldYUp for 3D meshes laid out in the XZ plane with Y up (MetallicGlass full-resolution-reflection trick). Larger `z_scale` flattens the normal; smaller steepens it. `aspect` scales the Y-axis gradient for non-square world quads. Output is SIGNED (range [-1, 1] per channel).",
@@ -170,10 +170,10 @@ mod gpu_tests {
     };
 
     use super::{HeightmapNormalUniforms, HeightmapToNormal};
-    use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::{generate_standalone, StandaloneKernelSpec, ENTRY};
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
+    use manifold_node_engine::freeze::codegen::{generate_standalone, StandaloneKernelSpec, ENTRY};
+    use manifold_node_engine::primitive::PrimitiveSpec;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     /// Verbatim copy of the pre-conversion `heightmap_to_normal_body.wgsl` —
     /// frozen here ONLY as an old-vs-new comparison fixture, never used as a
@@ -296,7 +296,7 @@ fn body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
     /// against the same synthetic height field.
     #[test]
     fn gather_texel_conversion_is_value_preserving() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (17u32, 11u32); // odd, non-square — exercises both axes' edges
         let raw = synthetic_height_field(w, h);
         let height_tex = upload_height(&device, w, h, &raw);
@@ -338,7 +338,7 @@ fn body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
         );
         let old_pixels = readback_rgba(&device, &old_out.texture, w, h);
 
-        let new_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<HeightmapToNormal>()
+        let new_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<HeightmapToNormal>()
             .expect("new GatherTexel standalone codegen");
         let new_pipeline = device.create_compute_pipeline(&new_wgsl, ENTRY, "surface-bumps-new");
         let new_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "new-out");

@@ -1,9 +1,9 @@
 use crate::generators::registry::GeneratorRegistry;
-use crate::preset_runtime::PresetRuntime;
-use crate::gpu_encoder::GpuEncoder;
-use crate::preset_context::{PresetContext, ProjectTempo};
-use crate::render_target::RenderTarget;
-use crate::uniform_arena::UniformArena;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::runtime::preset_context::{PresetContext, ProjectTempo};
+use manifold_node_engine::gpu::render_target::RenderTarget;
+use manifold_node_engine::gpu::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
@@ -14,12 +14,10 @@ use manifold_playback::renderer::ClipRenderer;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::frame_status::FrameRenderStatus;
-use crate::node_graph::fluid::FluidDomainSnapshot;
-use crate::node_graph::scene_viewport::{
-    SceneViewportConfig, SceneViewportHostError,
-};
-use crate::preset_runtime::ModifierPreviewContext;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::water::fluid::FluidDomainSnapshot;
+use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportHostError};
+use manifold_node_engine::runtime::ModifierPreviewContext;
 
 mod physics_events;
 
@@ -51,7 +49,7 @@ pub struct PreparedGeneratorResize {
     height: u32,
     active: Vec<(ClipId, RenderTarget)>,
     available: Vec<RenderTarget>,
-    layers: Vec<(LayerId, crate::preset_runtime::PreparedRuntimeResize)>,
+    layers: Vec<(LayerId, manifold_node_engine::runtime::PreparedRuntimeResize)>,
 }
 
 /// Per-layer generator state. Persists across clips to maintain
@@ -158,12 +156,12 @@ struct ThumbGen {
     /// Monotonic per-runtime frame counter. Retries continue from the last
     /// attempted frame instead of restarting stateful generators at zero.
     frame_count: i64,
-    last_frame_status: crate::frame_status::FrameRenderStatus,
+    last_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus,
 }
 
 pub struct GeneratorRenderer {
     next_physics_event: u64,
-    scene_impulse_diagnostics: crate::preset_runtime::SceneImpulseDiagnostics,
+    scene_impulse_diagnostics: manifold_node_engine::water::runtime::scene_impulses::SceneImpulseDiagnostics,
     /// Shared handle to the GpuDevice owned by ContentPipeline. An `Arc`
     /// clone instead of a cached raw pointer means this survives any future
     /// move of `ContentPipeline`/`ContentThread` (BUG-054).
@@ -206,11 +204,11 @@ pub struct GeneratorRenderer {
     /// `PresetRuntime` at render time (same D6-correction discipline as
     /// `dispatch_chain`) so runtimes installed after the last push still
     /// render at the current quality.
-    rt_quality: crate::node_graph::RtQuality,
+    rt_quality: manifold_node_engine::exec::effect_node::RtQuality,
     /// SCENE_FX P4a — borrowed pointer to the compositor's layer-skin registry
     /// for this frame. Set by the host before `render_all`; a raw pointer is
     /// used because the renderer's lifetime is independent of the registry.
-    layer_skin_registry: Option<crate::layer_skin::LayerSkinPtr>,
+    layer_skin_registry: Option<manifold_node_engine::runtime::layer_skin::LayerSkinPtr>,
     /// Render-only viewport request forwarded to the matching generator
     /// runtime. The modifier context is shared with the host and does not
     /// participate in graph execution.
@@ -271,7 +269,7 @@ impl GeneratorRenderer {
             last_data_version: u64::MAX, // force scan on first frame
             preview_layer: None,
             profiling_enabled: false,
-            rt_quality: crate::node_graph::RtQuality::default(),
+            rt_quality: manifold_node_engine::exec::effect_node::RtQuality::default(),
             layer_skin_registry: None,
             scene_viewport_request: None,
             scene_viewport_modifier: None,
@@ -293,7 +291,7 @@ impl GeneratorRenderer {
 
     /// Drain every owned generator's per-step CPU profiles recorded on the
     /// last profiled frame.
-    pub fn take_step_profiles(&mut self) -> Vec<crate::node_graph::StepProfile> {
+    pub fn take_step_profiles(&mut self) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
         let mut out = Vec::new();
         for state in self.layer_generators.values_mut() {
             out.extend(state.generator.take_step_profiles());
@@ -461,22 +459,22 @@ impl GeneratorRenderer {
     pub fn set_modifier_preview_node(
         &mut self,
         layer_id: &LayerId,
-        context: Option<&crate::preset_runtime::ModifierPreviewContext>,
+        context: Option<&manifold_node_engine::runtime::ModifierPreviewContext>,
         node: Option<&NodeId>,
-    ) -> Option<crate::preset_runtime::ModifierPreviewError> {
+    ) -> Option<manifold_node_engine::runtime::ModifierPreviewError> {
         self.set_preview_node(layer_id, None);
         let runtime = &mut self.layer_generators.get_mut(layer_id)?.generator;
         match context {
             Some(context) => runtime.set_modifier_preview_node(context, node).err(),
-            None => node.map(|_| crate::preset_runtime::ModifierPreviewError::MissingNode),
+            None => node.map(|_| manifold_node_engine::runtime::ModifierPreviewError::MissingNode),
         }
     }
 
     /// SCENE_FX P4a — set the borrowed layer-skin registry for this frame.
     /// The registry must outlive `render_all` (content thread guarantee).
     /// `None` clears the pointer.
-    pub fn set_layer_skin_registry(&mut self, registry: Option<&crate::layer_skin::LayerSkinRegistry>) {
-        self.layer_skin_registry = registry.map(crate::layer_skin::LayerSkinPtr::new);
+    pub fn set_layer_skin_registry(&mut self, registry: Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry>) {
+        self.layer_skin_registry = registry.map(manifold_node_engine::runtime::layer_skin::LayerSkinPtr::new);
     }
 
     /// Set the per-node thumbnail-atlas dump to the editor's currently-visible
@@ -500,7 +498,7 @@ impl GeneratorRenderer {
 
     pub fn set_modifier_dump_visible(
         &mut self, layer_id: &LayerId,
-        context: Option<&crate::preset_runtime::ModifierPreviewContext>, visible: &[NodeId],
+        context: Option<&manifold_node_engine::runtime::ModifierPreviewContext>, visible: &[NodeId],
     ) {
         for (lid, state) in &mut self.layer_generators {
             if lid == layer_id && let Some(context) = context {
@@ -512,7 +510,7 @@ impl GeneratorRenderer {
     }
 
     pub fn modifier_preview_local_node(
-        &self, layer_id: &LayerId, context: &crate::preset_runtime::ModifierPreviewContext,
+        &self, layer_id: &LayerId, context: &manifold_node_engine::runtime::ModifierPreviewContext,
         generated: &str,
     ) -> Option<&NodeId> {
         self.layer_generators.get(layer_id)?.generator.modifier_preview_local_node(context, generated)
@@ -578,7 +576,7 @@ impl GeneratorRenderer {
 
     /// How the watched generator's previewed node should be rendered (flow
     /// wheel / lift / raw). `Color` if the layer has no generator.
-    pub fn preview_encoding(&self, layer_id: &LayerId) -> crate::node_graph::PreviewEncoding {
+    pub fn preview_encoding(&self, layer_id: &LayerId) -> manifold_node_engine::preview_encoding::PreviewEncoding {
         self.layer_generators
             .get(layer_id)
             .map(|s| s.generator.preview_encoding())
@@ -590,7 +588,7 @@ impl GeneratorRenderer {
     pub fn preview_scalar_io(
         &self,
         layer_id: &LayerId,
-    ) -> crate::node_graph::PreviewScalarIo {
+    ) -> manifold_node_engine::preview_encoding::PreviewScalarIo {
         self.layer_generators
             .get(layer_id)
             .map(|s| s.generator.preview_scalar_io())
@@ -602,7 +600,7 @@ impl GeneratorRenderer {
     /// canvas reflects what a card slider / driver / Ableton / envelope is doing
     /// to each inner knob this frame, not the frozen authoring def. Empty if the
     /// layer has no generator.
-    pub fn live_node_params(&self, layer_id: &LayerId) -> crate::node_graph::LiveNodeParams {
+    pub fn live_node_params(&self, layer_id: &LayerId) -> manifold_node_engine::preview_encoding::LiveNodeParams {
         self.layer_generators
             .get(layer_id)
             .map(|s| s.generator.live_node_params_watched())
@@ -1424,7 +1422,7 @@ impl GeneratorRenderer {
                     gen_type: gen_type.clone(),
                     ready: false,
                     frame_count: 0,
-                    last_frame_status: crate::frame_status::FrameRenderStatus::Complete,
+                    last_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
                 },
             );
         }
@@ -1504,7 +1502,7 @@ impl GeneratorRenderer {
 
 impl ClipRenderer for GeneratorRenderer {
     fn set_rt_quality(&mut self, column: &manifold_core::settings::RtQualityColumn) {
-        self.rt_quality = crate::node_graph::RtQuality::from_column(column);
+        self.rt_quality = manifold_node_engine::exec::effect_node::RtQuality::from_column(column);
     }
 
     fn can_handle(&self, clip: &TimelineClip) -> bool {
@@ -1710,7 +1708,7 @@ impl ClipRenderer for GeneratorRenderer {
             cap: manifold_core::WarmupCap::PerLayerFrames,
             elapsed: std::time::Duration::ZERO,
         };
-        let mut warmup_frame_status: crate::frame_status::FrameRenderStatus;
+        let mut warmup_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus;
         for frame in 0..budget.per_layer_frames {
             // Wall-clock is the primary per-layer cap; the frame cap is only
             // a safety bound for runaway spin loops.
@@ -1924,7 +1922,7 @@ impl ClipRenderer for GeneratorRenderer {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod tests {
     use super::*;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_gpu::GpuTextureFormat;
 
     /// Architectural regression: a generator type swap mid-clip must
@@ -1959,7 +1957,7 @@ mod tests {
     /// fundamentally broken) at a non-default host resolution.
     #[test]
     fn generator_type_swap_marks_active_clips_for_clear_at_host_canvas_dims() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let host_w: u32 = 1280;
         let host_h: u32 = 720;
 
@@ -2111,7 +2109,7 @@ mod tests {
     /// (simulated here by passing `false`) must NOT bump `clip_count`.
     #[test]
     fn effective_trigger_count_sums_clip_and_audio_and_respects_clip_edge_mode() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(), 256, 256, GpuTextureFormat::Rgba16Float, 0,
         );
@@ -2224,7 +2222,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod warmup_tests {
     use super::*;
-    use crate::gpu_encoder::GpuEncoder;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_core::clip::TimelineClip;
     use manifold_core::layer::Layer;
     use manifold_core::project::Project;
@@ -2272,7 +2270,7 @@ mod warmup_tests {
         renderer: &mut GeneratorRenderer,
         clip_id: &str,
         ready: bool,
-        status: crate::frame_status::FrameRenderStatus,
+        status: manifold_node_engine::runtime::frame_status::FrameRenderStatus,
     ) {
         let gen_type = PresetTypeId::new("Plasma");
         let runtime = renderer
@@ -2312,8 +2310,8 @@ mod warmup_tests {
     /// geometry failure hides it.
     #[test]
     fn node_error_frame_stays_presentable() {
-        use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
-        let device = crate::test_device();
+        use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
+        let device = manifold_gpu::testkit::test_device();
         let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
@@ -2329,7 +2327,7 @@ mod warmup_tests {
 
     #[test]
     fn thumbnail_pruning_handles_captured_offscreen_and_equal_size_changes() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
@@ -2341,19 +2339,19 @@ mod warmup_tests {
             &mut renderer,
             "captured",
             true,
-            crate::frame_status::FrameRenderStatus::Complete,
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
         );
         insert_test_thumb(
             &mut renderer,
             "offscreen",
             true,
-            crate::frame_status::FrameRenderStatus::Complete,
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
         );
         insert_test_thumb(
             &mut renderer,
             "replacement",
             false,
-            crate::frame_status::FrameRenderStatus::PendingGeometry,
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::PendingGeometry,
         );
 
         let visible = [ClipId::new("captured"), ClipId::new("replacement")];
@@ -2372,13 +2370,13 @@ mod warmup_tests {
             &mut renderer,
             "same-live",
             true,
-            crate::frame_status::FrameRenderStatus::Complete,
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
         );
         insert_test_thumb(
             &mut renderer,
             "same-stale-a",
             true,
-            crate::frame_status::FrameRenderStatus::Complete,
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
         );
         let equal_size_visible = [
             ClipId::new("same-live"),
@@ -2392,7 +2390,7 @@ mod warmup_tests {
 
     #[test]
     fn pending_visible_thumbnail_is_retained_and_live_generator_is_independent() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
@@ -2418,7 +2416,7 @@ mod warmup_tests {
             &mut renderer,
             "pending-visible",
             false,
-            crate::frame_status::FrameRenderStatus::PendingGeometry,
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::PendingGeometry,
         );
 
         let visible = [ClipId::new("pending-visible")];
@@ -2433,9 +2431,9 @@ mod warmup_tests {
 
     #[test]
     fn thumbnail_capture_survives_owner_drop_before_gpu_submission() {
-        let _serial = crate::test_device();
+        let _serial = manifold_gpu::testkit::test_device();
         // Independent retirement owner: do not change the shared test device.
-        let device = crate::gpu::test_gpu_device("generator_renderer tests");
+        let device = manifold_node_engine::gpu::context::test_gpu_device("generator_renderer tests");
         let event = device.create_event();
         let (sender, mut retirement) = manifold_gpu::RetireQueue::new();
         device.set_retirement(manifold_gpu::RetireMark::new(event.second_handle(), sender));
@@ -2444,7 +2442,7 @@ mod warmup_tests {
         );
         insert_test_thumb(
             &mut renderer, "captured", true,
-            crate::frame_status::FrameRenderStatus::Complete,
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
         );
         let atlas = RenderTarget::new(
             &device, THUMB_W, THUMB_H, GpuTextureFormat::Rgba8Unorm,
@@ -2479,7 +2477,7 @@ mod warmup_tests {
 
     #[test]
     fn thumbnail_output_is_withheld_until_ready_and_frame_complete() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
@@ -2491,20 +2489,20 @@ mod warmup_tests {
             &mut renderer,
             "pending",
             false,
-            crate::frame_status::FrameRenderStatus::PendingGeometry,
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::PendingGeometry,
         );
         assert!(renderer.thumb_texture("pending").is_none());
         {
             let thumb = renderer.thumb_gens.get_mut("pending").unwrap();
             thumb.ready = true;
-            thumb.last_frame_status = crate::frame_status::FrameRenderStatus::Complete;
+            thumb.last_frame_status = manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete;
         }
         assert!(renderer.thumb_texture("pending").is_some());
         renderer
             .thumb_gens
             .get_mut("pending")
             .unwrap()
-            .last_frame_status = crate::frame_status::FrameRenderStatus::PendingGeometry;
+            .last_frame_status = manifold_node_engine::runtime::frame_status::FrameRenderStatus::PendingGeometry;
         assert!(renderer.thumb_texture("pending").is_none());
     }
 
@@ -2526,7 +2524,7 @@ mod warmup_tests {
     /// model load, chain construction).
     #[test]
     fn warmup_gate_zero_cold_touches_during_playback() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut renderer = GeneratorRenderer::new(
             device.arc(),
             CANVAS_W,
@@ -2571,7 +2569,7 @@ mod warmup_tests {
     /// quiesce, even if a disk cache makes the parse fast on the second run.
     #[test]
     fn warmup_inv2_budget_terminates_never_quiescent() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut renderer = GeneratorRenderer::new(
             device.arc(),
             CANVAS_W,
@@ -2601,7 +2599,7 @@ mod warmup_tests {
     /// per-layer generator entry instead of rebuilding it.
     #[test]
     fn warmup_inv3_acquire_clip_hits_installed_generator() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut renderer = GeneratorRenderer::new(
             device.arc(),
             CANVAS_W,
@@ -2656,7 +2654,7 @@ mod warmup_tests {
     /// seam, leaving `layer_generators` populated.
     #[test]
     fn edit_time_generator_assignment_warms_when_stopped() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut renderer = GeneratorRenderer::new(
             device.arc(),
             CANVAS_W,

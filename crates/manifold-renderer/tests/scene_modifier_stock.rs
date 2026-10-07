@@ -13,12 +13,10 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::scene_modifier_edit::insert_scene_modifier;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-use manifold_renderer::node_graph::scene_modifier_expand::{
-    SceneModifierExpandError, prepare_scene_modifiers,
-};
+use manifold_node_engine::load::expand::{SceneModifierExpandError, prepare_scene_modifiers};
 
 const MUSHROOM_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

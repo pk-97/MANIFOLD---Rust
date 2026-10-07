@@ -3,9 +3,9 @@
 //! playing real photoscans are covered by the application journey.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
-use manifold_renderer::preset_context::PresetContext;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 // Frozen fixtures were captured for structure and intentionally lack lighting.
 // Supply the same required PBR environment to both comparison inputs; keep
@@ -36,7 +36,7 @@ fn illuminate(def: &mut EffectGraphDef) {
 
 fn render(def: EffectGraphDef, context: &PresetContext) -> Vec<u8> {
     let device = crate::harness::shared().device.clone();
-    let mut runtime = manifold_renderer::preset_runtime::PresetRuntime::from_def_with_device(
+    let mut runtime = manifold_node_engine::runtime::PresetRuntime::from_def_with_device(
         def,
         &PrimitiveRegistry::with_builtin(),
         device.clone(),
@@ -46,7 +46,7 @@ fn render(def: EffectGraphDef, context: &PresetContext) -> Vec<u8> {
         None,
     )
     .unwrap();
-    let target = manifold_renderer::render_target::RenderTarget::new(
+    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
         &device,
         256,
         256,
@@ -58,7 +58,7 @@ fn render(def: EffectGraphDef, context: &PresetContext) -> Vec<u8> {
         let mut ctx = *context;
         ctx.frame_count = frame;
         runtime.render(
-            &mut manifold_renderer::gpu_encoder::GpuEncoder::new(&mut encoder, &device),
+            &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut encoder, &device),
             &target.texture,
             &ctx,
             &manifold_core::params::ParamManifest::default(),

@@ -13,11 +13,11 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::dispatch_standalone_2d;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::dispatch_standalone_2d;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Public `TYPE_ID` re-exports for callers that pre-date the `primitive!`
 /// macro conversion — `persistence.rs`'s registry
@@ -32,7 +32,7 @@ pub const COLOR_RAMP_TYPE_ID: &str = "node.gradient_map";
 // Brightness — RGB → grayscale via per-channel weights.
 // =====================================================================
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Brightness,
     type_id: "node.brightness",
     purpose: "RGB -> weighted grayscale (luma) via per-channel weights. Defaults are BT.709 luma coefficients, so the default behaviour is desaturate-to-luminance.",
@@ -110,7 +110,7 @@ impl Primitive for Brightness {
 // ChannelMix — 4x4 RGBA transformation.
 // =====================================================================
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ChannelMix,
     type_id: "node.channel_mixer",
     purpose: "Per-pixel 4x4 RGBA matrix transform: out = M . in, where M's rows are the four Vec4 params (row0=R, row1=G, row2=B, row3=A). Identity matrix is the param default — output = input.",
@@ -219,7 +219,7 @@ impl Primitive for ChannelMix {
 // ColorRamp — luma → two-stop gradient lookup.
 // =====================================================================
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ColorRamp,
     type_id: "node.gradient_map",
     purpose: "Maps input luminance to a two-stop gradient (color_a at luma 0 -> color_b at luma 1). The gradient-map atom (Blender ColorRamp / TD Lookup with two stops). For richer multi-stop palettes (thermal, etc.) use node.lut1d with a supplied LUT texture.",
@@ -315,14 +315,12 @@ mod channel_mix_gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::ChannelMix;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId, compile};
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::parameters::ParamValue;
-    use crate::node_graph::{
-        Executor, FinalOutput, FrameTime, MetalBackend, NodeInstanceId, Source,
-    };
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::parameters::ParamValue;
+    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, scene::boundary_nodes::Source};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -356,7 +354,7 @@ mod channel_mix_gpu_tests {
         row2: [f32; 4],
         row3: [f32; 4],
     ) -> [f32; 4] {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -376,7 +374,7 @@ mod channel_mix_gpu_tests {
         let r_out = output_resource(&plan, node, "out");
         let src_target = RenderTarget::new(&device, w, h, format, "channel-mix-src");
         let out_target = RenderTarget::new(&device, w, h, format, "channel-mix-out");
-        crate::testkit::gpu::clear_texture_committed(
+        manifold_node_engine::testkit::gpu::clear_texture_committed(
             &device,
             &src_target.texture,
             [

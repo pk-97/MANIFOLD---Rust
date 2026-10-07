@@ -352,7 +352,7 @@ pub(crate) fn preset_source_def(
     let inst = project.preset_instance(target)?;
     let preset_id = inst.effect_type().clone();
     let mut def = inst.graph.clone().or_else(|| {
-        manifold_renderer::node_graph::loaded_preset_view_by_id(&preset_id)
+        manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&preset_id)
             .map(|v| (*v.canonical_def).clone())
     })?;
     // Snapshot the card's current slider values into the def's defaults so Make

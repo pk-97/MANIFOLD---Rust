@@ -17,11 +17,11 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Out-of-bounds policy labels for the `boundary` enum.
 /// `0 = Wrap` (toroidal); `1 = Discard` (skip the particle).
@@ -46,7 +46,7 @@ struct ScatterUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ScatterParticles,
     type_id: "node.draw_particles",
     purpose: "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). `width` and `height` are required wired inputs — the convention is to drive them from `system.generator_input.output_width / output_height` so the dispatch tracks the host's canvas (the buffer itself is also auto-sized to the canvas via `canvas_sized_array_outputs()`, so allocation and dispatch never disagree). Pair with `node.resolve_scatter` to read the result as a float texture.",
@@ -123,7 +123,7 @@ impl Primitive for ScatterParticles {
         // (1×1 dispatch — no allocation, no panic).
         let read_scalar = |name: &str| -> f32 {
             match ctx.inputs.scalar(name) {
-                Some(crate::node_graph::parameters::ParamValue::Float(f)) => f,
+                Some(manifold_node_engine::parameters::ParamValue::Float(f)) => f,
                 _ => 1.0,
             }
         };
@@ -207,23 +207,16 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::particles::Particle;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::effect_node::{
-        EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
-    };
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::parameters::ParamDef;
-    use crate::node_graph::ports::{
-        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
-    };
-    use crate::node_graph::{
-        ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue,
-        compile,
-    };
+    use manifold_node_engine::particles::Particle;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::parameters::ParamDef;
+    use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
+    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
 
     use super::ScatterParticles;
-    use crate::node_graph::primitives::value::Value;
+    use manifold_node_engine::primitives::value::Value;
 
     /// Test-only source for `Array<Particle>`. CPU-write the input
     /// buffer via `mapped_ptr`, then pre-bind it as this node's `out`
@@ -251,7 +244,7 @@ mod gpu_tests {
     }
 
     impl EffectNode for ParticleSource {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -303,7 +296,7 @@ mod gpu_tests {
     }
 
     impl EffectNode for AccumSink {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -374,7 +367,7 @@ mod gpu_tests {
         const HEIGHT: u32 = 1;
         const ENERGY: u32 = 4096;
 
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();

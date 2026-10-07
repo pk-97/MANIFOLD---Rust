@@ -1,9 +1,9 @@
 #[cfg(feature = "gpu-proofs")]
-use crate::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 #[cfg(feature = "gpu-proofs")]
-use crate::preset_context::PresetContext;
+use manifold_node_engine::runtime::preset_context::PresetContext;
 #[cfg(feature = "gpu-proofs")]
-use crate::render_target::RenderTarget;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_core::NodeId;
 #[cfg(feature = "gpu-proofs")]
 use manifold_core::PresetTypeId;
@@ -11,7 +11,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::ParamManifest;
 #[cfg(feature = "gpu-proofs")]
 use manifold_gpu::GpuTextureFormat;
-use crate::preset_runtime::*;
+use manifold_node_engine::runtime::*;
 use crate::node_graph::*;
 use manifold_core::effect_graph_def::BindingTarget;
 fn owner() -> EffectGraphDef {
@@ -98,7 +98,7 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
     let registry = PrimitiveRegistry::with_builtin();
     let mut params = manifest(&owner);
     for fused in [false, true] {
-        let baseline = crate::preset_runtime::testkit::render_view(
+        let baseline = manifold_node_engine::runtime::testkit::render_view(
             owner.clone(),
             &registry,
             Some(&params),
@@ -110,14 +110,14 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
             PresetRuntime::from_def_for_render(owner.clone(), &registry, Some(&params), fused)
         .unwrap();
         assert_eq!(runtime.plan.steps().len(), baseline.plan.steps().len());
-        assert_eq!(crate::preset_runtime::testkit::math_view_count(&runtime), 1);
-        assert_eq!(crate::preset_runtime::testkit::math_variant_count(&runtime, 0), 1);
-        assert_eq!(crate::preset_runtime::testkit::math_mode(&runtime, 0), 0);
+        assert_eq!(manifold_node_engine::runtime::testkit::math_view_count(&runtime), 1);
+        assert_eq!(manifold_node_engine::runtime::testkit::math_variant_count(&runtime, 0), 1);
+        assert_eq!(manifold_node_engine::runtime::testkit::math_mode(&runtime, 0), 0);
         set(&owner, &mut params, "math_view_mode", 1.0);
         set(&owner, &mut params, "orbit", 0.73);
         runtime.apply_param_values(&params);
-        assert_eq!(crate::preset_runtime::testkit::math_mode(&runtime, 0), 1);
-        let variant = crate::preset_runtime::testkit::math_variant(&mut runtime, 0, 0);
+        assert_eq!(manifold_node_engine::runtime::testkit::math_mode(&runtime, 0), 1);
+        let variant = manifold_node_engine::runtime::testkit::math_variant(&mut runtime, 0, 0);
         variant.apply_param_values(&params);
         let local = manifold_core::scene_modifier_preset::SceneNodeRef {
             scope: vec![NodeId::new("vortex_stage")],
@@ -127,7 +127,7 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
             .modifier_node_copies(&NodeId::new("vortex_a"), &local)
             .unwrap();
         for copy in copies {
-            let (target, param) = crate::preset_runtime::testkit::fused_retarget(variant, &copy.node_id, "orbit")
+            let (target, param) = manifold_node_engine::runtime::testkit::fused_retarget(variant, &copy.node_id, "orbit")
                 .unwrap_or_else(|| (copy.node_id.clone(), "orbit".into()));
             let node = variant.graph.instance_by_node_id(&target).unwrap();
             let value = variant.graph.get_node(node).unwrap().params[param.as_str()]
@@ -165,7 +165,7 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
 fn legacy_math_view_runtime_switches_scope_variants() {
     const W: u32 = 320;
     const H: u32 = 180;
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
     let owner = legacy_scope_owner();
     let registry = PrimitiveRegistry::with_builtin();
@@ -180,7 +180,7 @@ fn legacy_math_view_runtime_switches_scope_variants() {
     .unwrap()
     .with_generator_device(device.clone(), W, H, GpuTextureFormat::Rgba16Float)
     .unwrap();
-    assert_eq!(crate::preset_runtime::testkit::math_variant_count(&runtime, 0), 2);
+    assert_eq!(manifold_node_engine::runtime::testkit::math_variant_count(&runtime, 0), 2);
     let target = RenderTarget::new(
         &device,
         W,
@@ -212,7 +212,7 @@ fn legacy_math_view_runtime_switches_scope_variants() {
             params,
         );
         encoder.commit_and_wait_completed();
-        crate::testkit::gpu::readback_raw_halves(&device, &target.texture, W, H)
+        manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &target.texture, W, H)
     };
     set(&owner, &mut params, "math_view_scope", 0.0);
     let _warm = render(&mut runtime, &params);
@@ -220,7 +220,7 @@ fn legacy_math_view_runtime_switches_scope_variants() {
     if let Ok(path) = std::env::var("MANIFOLD_MATH_SCOPE_PREVIEW") {
         std::fs::write(
             format!("{path}-scope0.png"),
-            crate::testkit::gpu::readback_to_srgb_png_linear(
+            manifold_node_engine::testkit::gpu::readback_to_srgb_png_linear(
                 &device,
                 &target.texture,
                 W,
@@ -234,7 +234,7 @@ fn legacy_math_view_runtime_switches_scope_variants() {
     if let Ok(path) = std::env::var("MANIFOLD_MATH_SCOPE_PREVIEW") {
         std::fs::write(
             format!("{path}-scope1.png"),
-            crate::testkit::gpu::readback_to_srgb_png_linear(
+            manifold_node_engine::testkit::gpu::readback_to_srgb_png_linear(
                 &device,
                 &target.texture,
                 W,
@@ -252,7 +252,7 @@ fn legacy_math_view_runtime_switches_scope_variants() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn math_view_depth_modes_borrow_scene_depth_and_survive_resize() {
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
     let owner = owner();
     let registry = PrimitiveRegistry::with_builtin();
@@ -286,7 +286,7 @@ fn math_view_depth_modes_borrow_scene_depth_and_survive_resize() {
                 let mut encoder = device.create_encoder("math-depth-runtime-proof");
                 runtime.render(&mut GpuEncoder::new(&mut encoder, &device), &target.texture, &ctx, params);
                 encoder.commit_and_wait_completed();
-                crate::testkit::gpu::readback_raw_halves(&device, &target.texture, w, h)
+                manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &target.texture, w, h)
             };
             set(&owner, &mut params, "math_view_mode", 1.0);
             set(&owner, &mut params, "math_view_occlusion", 0.0);
@@ -302,20 +302,20 @@ fn math_view_depth_modes_borrow_scene_depth_and_survive_resize() {
             set(&owner, &mut params, "math_view_occlusion", 1.0);
             let overlay_depth = render(&mut runtime, &params);
             assert!(energy(&overlay_depth) < energy(&overlay_xray), "Depth must occlude Overlay marks");
-            for (shared, size, format) in crate::preset_runtime::testkit::math_depth_sharing(&runtime, 0, 0) {
+            for (shared, size, format) in manifold_node_engine::runtime::testkit::math_depth_sharing(&runtime, 0, 0) {
                 assert!(shared, "view must borrow the retained scene depth");
                 assert_eq!(size, (w, h));
                 assert_eq!(format, GpuTextureFormat::R32Float);
             }
             if w == 320 {
                 if fused {
-                    assert!(crate::testkit::gpu::mean_abs_half_diff(
+                    assert!(manifold_node_engine::testkit::gpu::mean_abs_half_diff(
                         standalone.as_ref().unwrap(), &overlay_depth,
                     ) < 0.002, "fused Depth diverged");
                 } else {
                     standalone = Some(overlay_depth);
                     if let Ok(path) = std::env::var("MANIFOLD_MATH_DEPTH_PREVIEW") {
-                        std::fs::write(path, crate::testkit::gpu::readback_to_srgb_png_linear(
+                        std::fs::write(path, manifold_node_engine::testkit::gpu::readback_to_srgb_png_linear(
                             &device, &target.texture, w, h,
                         )).unwrap();
                     }
@@ -330,12 +330,12 @@ fn math_view_depth_modes_borrow_scene_depth_and_survive_resize() {
 fn math_view_native_scene_parity_orbit_change_and_overlay() {
     const W: u32 = 640;
     const H: u32 = 360;
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
     let owner = owner();
     let registry = PrimitiveRegistry::with_builtin();
     let mut params = manifest(&owner);
-    let mut baseline = crate::preset_runtime::testkit::render_view(
+    let mut baseline = manifold_node_engine::runtime::testkit::render_view(
         owner.clone(),
         &registry,
         Some(&params),
@@ -350,7 +350,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
             .unwrap()
             .with_generator_device(device.clone(), W, H, GpuTextureFormat::Rgba16Float)
             .unwrap();
-    let view_shared = crate::preset_runtime::testkit::math_array_sharing(&runtime, 0, 0);
+    let view_shared = manifold_node_engine::runtime::testkit::math_array_sharing(&runtime, 0, 0);
     assert!(!view_shared.is_empty());
     for shared in view_shared {
         assert!(shared, "borrowed storage must be the parent's buffer");
@@ -385,7 +385,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
                 runtime.render(&mut gpu, &target.texture, &ctx, params);
             }
             encoder.commit_and_wait_completed();
-            crate::testkit::gpu::readback_raw_halves(&device, &target.texture, W, H)
+            manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &target.texture, W, H)
         };
     let render = |runtime: &mut PresetRuntime, params: &ParamManifest, frame: i64| {
         render_at(runtime, params, frame, 0)
@@ -485,7 +485,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     }
     set(&owner, &mut params, "math_view_scan_progress", 0.5);
     render(&mut runtime, &params, 12);
-    for weights in crate::preset_runtime::testkit::math_weight_buffers(&runtime) {
+    for weights in manifold_node_engine::runtime::testkit::math_weight_buffers(&runtime) {
         // Read only after render's commit-and-wait, never from a live frame.
         let values = unsafe {
             std::slice::from_raw_parts(
@@ -548,7 +548,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     let event_mask = runtime
         .graph
         .instance_by_node_id(
-            &crate::node_graph::scene_modifier_expand::math_resource_node_id(
+            &manifold_node_engine::load::expand::math_resource_node_id(
                 &owner.scene_modifiers[1].id,
                 &owner.scene_modifiers[1].mesh_frames[0].target,
                 "weights",
@@ -592,7 +592,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     runtime.clear_state();
     let moved_restored = render(&mut runtime, &params, 3);
 
-    let rgba = crate::testkit::gpu::readback_srgb_rgba8(&device, &target.texture, W, H);
+    let rgba = manifold_node_engine::testkit::gpu::readback_srgb_rgba8(&device, &target.texture, W, H);
     assert!(
         rgba.chunks_exact(4)
             .filter(|pixel| pixel[..3].iter().any(|channel| *channel > 30))
@@ -602,7 +602,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     if let Ok(path) = std::env::var("MANIFOLD_MATH_VIEW_PREVIEW") {
         std::fs::write(
             path,
-            crate::testkit::gpu::encode_rgba8_png(&rgba, W, H),
+            manifold_node_engine::testkit::gpu::encode_rgba8_png(&rgba, W, H),
         )
         .unwrap();
     }
@@ -618,7 +618,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
             .unwrap();
     let fused_image = render(&mut fused, &params, 4);
     assert!(
-        crate::testkit::gpu::mean_abs_half_diff(&moved_restored, &fused_image) < 0.002,
+        manifold_node_engine::testkit::gpu::mean_abs_half_diff(&moved_restored, &fused_image) < 0.002,
         "fused and standalone authored evaluations diverged"
     );
     for runtime in [&mut runtime, &mut fused] {
@@ -627,7 +627,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
         assert!(!black(&no_axes), "Axes Off must retain the other diagram marks");
         assert_ne!(no_axes, moved_restored, "Axes control must reach the renderer");
         set(&owner, &mut params, "math_view_axes", 1.0);
-        assert!(crate::testkit::gpu::mean_abs_half_diff(
+        assert!(manifold_node_engine::testkit::gpu::mean_abs_half_diff(
             &moved_restored, &render(runtime, &params, 4)) < 0.002,
             "Axes On must restore the original marks");
     }
@@ -698,7 +698,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
     let owner = owner();
     let registry = PrimitiveRegistry::with_builtin();
@@ -717,7 +717,7 @@ fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
     let mut successes = 0;
     let mut failures = 0;
     for stage in 0..64 {
-        let injection = crate::render_target::fail_allocation_after(stage);
+        let injection = manifold_node_engine::gpu::render_target::fail_allocation_after(stage);
         let result = runtime.prepare_resize(&device, 48, 64);
         drop(injection);
         assert_eq!((runtime.width, runtime.height), (64, 48));
@@ -733,7 +733,7 @@ fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
     assert!(failures > 2, "must exercise parent and child allocation failures");
     assert_eq!(successes, 1, "bounded preparation must eventually succeed");
     assert_eq!((runtime.width, runtime.height), (48, 64));
-    for shared in crate::preset_runtime::testkit::all_math_array_links_share_storage(&runtime) {
+    for shared in manifold_node_engine::runtime::testkit::all_math_array_links_share_storage(&runtime) {
         assert!(shared);
     }
 }
@@ -741,7 +741,7 @@ fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn staged_transform_resize_keeps_compatible_chain_and_renders() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let primitives = PrimitiveRegistry::with_builtin();
     let effects = vec![manifold_core::preset_definition_registry::create_default(&PresetTypeId::new("ColorGrade"))];
     let mut runtime = PresetRuntime::try_build(ChainBuildInputs {
@@ -764,7 +764,7 @@ fn staged_transform_resize_keeps_compatible_chain_and_renders() {
     let output = runtime.run(&mut GpuEncoder::new(&mut encoder, &device), &input.texture, &effects, &[], &ctx).unwrap().clone();
     encoder.try_commit_and_wait_completed().unwrap();
     assert_eq!((output.width, output.height), (24, 32));
-    let pixels = crate::testkit::gpu::readback_raw_halves(&device, &output, 24, 32);
+    let pixels = manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &output, 24, 32);
     assert!(pixels.chunks_exact(8).any(|pixel| pixel[..6].chunks_exact(2)
         .any(|channel| half::f16::from_le_bytes([channel[0], channel[1]]).to_f32() > 0.01)));
 }
@@ -775,7 +775,7 @@ fn math_view_instance_echoes_render_copies_and_vertices_only_path_is_unchanged()
     // BUG-uvts GPU proof: Vortex + SpatialEchoes -> Math View must render the
     // echo copies, and the vertices-only fixture must stay byte-identical to
     // its pre-instances behavior (unwired instances port).
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
     let echo_owner = crate::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
     let plain_owner = crate::node_graph::catalog_tests::math_view_fixtures::test_owner();
@@ -824,12 +824,12 @@ fn math_view_instance_echoes_render_copies_and_vertices_only_path_is_unchanged()
             &params,
         );
         encoder.commit_and_wait_completed();
-        let pixels = crate::testkit::gpu::readback_raw_halves(&device, &target.texture, 320, 180);
+        let pixels = manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &target.texture, 320, 180);
         if std::env::var_os("MANIFOLD_MATH_ECHOES_PREVIEW").is_some() {
             // Encode the live target before the closure drops it.
             std::fs::write(
                 std::env::var_os("MANIFOLD_MATH_ECHOES_PREVIEW").unwrap(),
-                crate::testkit::gpu::readback_to_srgb_png_linear(
+                manifold_node_engine::testkit::gpu::readback_to_srgb_png_linear(
                     &device,
                     &target.texture,
                     320,
@@ -916,7 +916,7 @@ fn retired_params_leave_before_scene_modifier_value_writes() {
     )
     .unwrap();
     let def = manifold_core::scene_modifier_edit::insert_scene_modifier(&def, 0, force).unwrap().graph;
-    assert!(crate::node_graph::has_retired_params(&def));
+    assert!(manifold_node_engine::load::graph_loader::has_retired_params(&def));
     PresetRuntime::from_def_for_render(def, &PrimitiveRegistry::with_builtin(), None, false)
         .expect("the retired card leaves at load and the layer builds");
 }

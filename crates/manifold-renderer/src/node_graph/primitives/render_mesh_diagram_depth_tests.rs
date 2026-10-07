@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::headless_readback::{encode_rgba8_png, readback_raw_halves, readback_srgb_rgba8};
-use crate::node_graph::camera::Camera;
+use manifold_node_engine::scene::camera::Camera;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction, GpuTextureDesc,
     GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -203,7 +203,7 @@ fn depth_values(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTex
 
 #[test]
 fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
     let camera = Camera::look_at(
         [0.0, 0.0, -1.0],
@@ -230,14 +230,14 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
         mag_filter: manifold_gpu::GpuFilterMode::Nearest,
         ..Default::default()
     });
-    let target = crate::render_target::RenderTarget::new(
+    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
         &device,
         W,
         H,
         GpuTextureFormat::Rgba16Float,
         "mesh-diagram-depth-colour",
     );
-    let xray_target = crate::render_target::RenderTarget::new(
+    let xray_target = manifold_node_engine::gpu::render_target::RenderTarget::new(
         &device,
         W,
         H,
@@ -390,7 +390,7 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
 
 #[test]
 fn surface_depth_is_maximum_and_zero_appearance_does_not_occlude() {
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
     let camera = Camera::look_at(
         [0.0, 0.0, -1.0],
@@ -411,7 +411,7 @@ fn surface_depth_is_maximum_and_zero_appearance_does_not_occlude() {
             vertex([0.0, 0.6, 0.0]),
         ],
     );
-    let target = crate::render_target::RenderTarget::new(
+    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
         &device,
         W,
         H,
@@ -465,10 +465,10 @@ fn surface_depth_is_maximum_and_zero_appearance_does_not_occlude() {
 
 #[test]
 fn math_view_axes_follow_representative_faces_and_toggle_without_hiding_outlines() {
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
     let camera = Camera::look_at([0.0, 0.0, 5.0], [0.0; 3], [0.0, 1.0, 0.0], 1.0, 0.05, 100.0);
-    let target = crate::render_target::RenderTarget::new(
+    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
         &device, W, H, GpuTextureFormat::Rgba16Float, "math-axes-proof",
     );
     let msaa = device.create_texture_msaa_memoryless(

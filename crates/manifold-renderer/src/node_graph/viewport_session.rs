@@ -33,16 +33,16 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
-use crate::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use crate::headless_readback::readback_tonemapped_rgba8;
-use crate::node_graph::persistence::PrimitiveRegistry;
-use crate::node_graph::viewport_camera::ViewportCamera;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::scene::viewport_camera::ViewportCamera;
 use crate::node_graph::viewport_overlay::{ViewportOverlayConfig, build_overlay_lines, composite_overlay_lines_rgba8, project_lines};
 use crate::node_graph::viewport_render::{OVERRIDE_CAMERA_NODE_ID, ViewportRenderError, override_camera_def};
-use crate::node_graph::{NodeInstanceId, ParamValue};
-use crate::preset_context::PresetContext;
-use crate::preset_runtime::PresetRuntime;
-use crate::render_target::RenderTarget;
+use manifold_node_engine::{exec::effect_node::NodeInstanceId, parameters::ParamValue};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 /// Content-hash of an [`EffectGraphDef`] — used to detect "the authored
 /// graph changed while the viewport was open" ([`ViewportSession::sync_def`]).
@@ -304,7 +304,7 @@ impl ViewportSession {
         &mut self,
         frame_ctx: &PresetContext,
         overlay_cfg: &ViewportOverlayConfig,
-        show_camera: Option<(&crate::node_graph::camera::Camera, f32)>,
+        show_camera: Option<(&manifold_node_engine::scene::camera::Camera, f32)>,
         light_positions: &[[f32; 3]],
         gizmo_lines: &[crate::node_graph::viewport_overlay::WorldLine],
     ) -> Vec<u8> {
@@ -341,7 +341,7 @@ impl ViewportSession {
     /// Append bounds from the same runtime that produced the cached image.
     pub fn write_fluid_domains(
         &self,
-        output: &mut Vec<(NodeId, crate::node_graph::fluid::FluidDomainSnapshot)>,
+        output: &mut Vec<(NodeId, manifold_node_engine::water::fluid::FluidDomainSnapshot)>,
     ) {
         self.runtime.write_fluid_domains_watched(output);
     }
@@ -351,7 +351,7 @@ impl ViewportSession {
     pub fn composite_overlays(
         &self,
         overlay_cfg: &ViewportOverlayConfig,
-        show_camera: Option<(&crate::node_graph::camera::Camera, f32)>,
+        show_camera: Option<(&manifold_node_engine::scene::camera::Camera, f32)>,
         light_positions: &[[f32; 3]],
         gizmo_lines: &[crate::node_graph::viewport_overlay::WorldLine],
     ) -> Vec<u8> {
@@ -372,7 +372,7 @@ impl ViewportSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::persistence::PrimitiveRegistry;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_core::effect_graph_def::{
         EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire,
     };

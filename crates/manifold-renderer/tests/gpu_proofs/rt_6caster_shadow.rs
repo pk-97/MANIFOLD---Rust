@@ -6,12 +6,12 @@
 
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::frame_status::FrameRenderStatus;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::camera::Camera;
-use manifold_renderer::node_graph::{ParamValue, PrimitiveRegistry};
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
@@ -110,7 +110,7 @@ fn context(frame: i64, h: &harness::ParityHarness) -> PresetContext {
 
 fn render_frame(
     runtime: &mut PresetRuntime,
-    target: &manifold_renderer::render_target::RenderTarget,
+    target: &manifold_node_engine::gpu::render_target::RenderTarget,
     frame: i64,
 ) -> (Vec<u8>, usize, FrameRenderStatus) {
     let h = harness::shared();

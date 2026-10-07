@@ -1,19 +1,14 @@
 //! Sparse field proofs against independent dense gathers. The field oracle
 //! follows native ParticleMesher support and production solid/border semantics.
-use crate::node_graph::primitives::testkit as water_nodes;
-use crate::testkit::shader_source::dense_source;
-use crate::mesh::MeshVertex;
-use crate::node_graph::Slot;
-use crate::node_graph::fluid_particles::{CellRange, FluidBlob, bin_counts};
-use crate::node_graph::freeze::codegen::ENTRY;
-use crate::node_graph::primitive::PrimitiveSpec;
-use crate::node_graph::primitives::{
-    lattice_bricks::{LatticeBricks, brick_layout, compact_brick_words, conservative_brick_mask},
-    particle_volume::ParticleVolume,
-    };
-use crate::node_graph::primitives::{
-    volume_surface_mesh::VolumeSurfaceMesh,
-};
+use manifold_node_engine::water::primitives::testkit as water_nodes;
+use manifold_node_engine::testkit::shader_source::dense_source;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::bindings::Slot;
+use manifold_node_engine::water::fluid_particles::{CellRange, FluidBlob, bin_counts};
+use manifold_node_engine::freeze::codegen::ENTRY;
+use manifold_node_engine::primitive::PrimitiveSpec;
+use manifold_node_engine::water::primitives::{lattice_bricks::LatticeBricks, lattice_bricks::brick_layout, lattice_bricks::compact_brick_words, lattice_bricks::conservative_brick_mask, particle_volume::ParticleVolume};
+use manifold_node_engine::water::primitives::volume_surface_mesh::VolumeSurfaceMesh;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 fn oracle<P: PrimitiveSpec>(h: &Harness, source: &str) -> GpuComputePipeline {
@@ -117,24 +112,24 @@ fn fixture(resolution: u32) {
     let mut volume = [ParticleVolume::new(), ParticleVolume::new()];
     volume[1].pipeline = Some(oracle::<ParticleVolume>(
         &h,
-        include_str!("../primitives/shaders/particle_volume_dense_reference.wgsl"),
+        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/particle_volume_dense_reference.wgsl"),
     ));
     let mut smoothing: [[_; 3]; 2] = std::array::from_fn(|lane| std::array::from_fn(|_| {
         water_nodes::smooth_lattice((lane == 1).then(|| water_nodes::dense_pipeline("smooth_lattice", &h.device,
-            include_str!("../primitives/shaders/smooth_lattice_dense_reference.wgsl"))))
+            include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/smooth_lattice_dense_reference.wgsl"))))
     }));
     let smooth_slots: [[(Slot, GpuBuffer); 3]; 2] =
         std::array::from_fn(|_| std::array::from_fn(|_| h.array::<f32>(&[], total)));
     let mut clamp = [water_nodes::clamp_liquid_to_solids(None), water_nodes::clamp_liquid_to_solids(Some(water_nodes::dense_pipeline("clamp_liquid_to_solids", &h.device,
-        include_str!("../primitives/shaders/clamp_liquid_to_solids_dense_reference.wgsl"))))];
+        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/clamp_liquid_to_solids_dense_reference.wgsl"))))];
     let clamp_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<f32>(&[], total));
     let mut counters = [water_nodes::count_surface_triangles(None), water_nodes::count_surface_triangles(Some(water_nodes::dense_pipeline("count_surface_triangles", &h.device,
-        include_str!("../primitives/shaders/count_surface_triangles_dense_reference.wgsl"))))];
+        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/count_surface_triangles_dense_reference.wgsl"))))];
     let count_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], total));
     let mut builder = LatticeBricks::new();
     let (bounds_slot, _) = h.array::<f32>(&[], 2);
     let mut bounder = crate::node_graph::primitives::blob_bounds::BlobBounds::new();
-    crate::node_graph::primitive::Primitive::prepare_pipelines(&mut bounder, &h.device);
+    manifold_node_engine::primitive::Primitive::prepare_pipelines(&mut bounder, &h.device);
     let mut scans: [_; 2] = std::array::from_fn(|_| water_nodes::running_total());
     let scan_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], total));
     let extent_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], 4));
@@ -147,11 +142,11 @@ fn fixture(resolution: u32) {
     let mut mesh = VolumeSurfaceMesh::new();
     let mesh_oracle = oracle::<VolumeSurfaceMesh>(
         &h,
-        include_str!("../primitives/shaders/volume_surface_mesh_dense_reference.wgsl"),
+        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/volume_surface_mesh_dense_reference.wgsl"),
     );
     let relax_oracle = water_nodes::dense_pipeline("relax_surface_mesh",
         &h.device,
-        include_str!("../primitives/shaders/relax_surface_mesh_dense_reference.wgsl"),
+        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/relax_surface_mesh_dense_reference.wgsl"),
     );
     let mut relaxers: [_; 2] = std::array::from_fn(|_| water_nodes::relax_surface_mesh());
     let relaxed: [[(Slot, GpuBuffer); 2]; 2] = std::array::from_fn(|_| {
@@ -504,11 +499,11 @@ fn fluid_bricks_lattice_and_mesh_bit_identical_dense_128() {
 fn fluid_smooth_clamp_dense_fusion_matches_unfused() {
     // This uses the same partitioner and installer as the live freeze path,
     // rather than proving a hand-built pair of atoms in isolation.
-    let def = crate::node_graph::primitives::gpu_flip_preset::render_def(
-        crate::node_graph::primitives::gpu_flip_preset::WaterScene::dam_break(64),
+    let def = manifold_node_engine::water::primitives::gpu_flip_preset::render_def(
+        manifold_node_engine::water::primitives::gpu_flip_preset::WaterScene::dam_break(64),
     );
-    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
-    let report = crate::node_graph::fusion_report(&def, &registry);
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
+    let report = manifold_node_engine::freeze::fusion_report(&def, &registry);
     let smooth_clamp = ["node.smooth_lattice", "node.clamp_liquid_to_solids"];
     assert!(
         report.regions.iter().any(|region| {
@@ -530,7 +525,7 @@ fn fluid_smooth_clamp_dense_fusion_matches_unfused() {
         "the live liquid surface chain must contain a smooth → clamp region: {:?}",
         report.regions,
     );
-    let fused = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry)
+    let fused = manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry)
         .expect("the liquid surface graph installs its fused region");
     assert!(
         fused
@@ -751,12 +746,12 @@ fn fluid_smooth_clamp_dense_fusion_matches_unfused() {
 /// in a column filling the lower corner, a thin sheet thrown off it, and
 /// loose drops. Without spray the frame is just the column.
 fn scatter_fixture(
-    lattice: &crate::testkit::liquid_surface::Lattice,
+    lattice: &manifold_node_engine::testkit::liquid_surface::Lattice,
     resolution: u32,
     spray: bool,
     seed: u64,
-) -> Vec<crate::node_graph::fluid_particles::FluidParticle> {
-    use crate::node_graph::fluid_particles::FluidParticle;
+) -> Vec<manifold_node_engine::water::fluid_particles::FluidParticle> {
+    use manifold_node_engine::water::fluid_particles::FluidParticle;
     let min = lattice.min();
     let unit = lattice.size[0] / 4.0;
     let marker = 0.310_175_25 * lattice.cell;
@@ -807,13 +802,13 @@ fn scatter_fixture(
 /// coordinates round coarsely against the node spacing.
 #[test]
 fn fluid_bricks_scatter_mask_is_the_gather_mask() {
-    use crate::testkit::liquid_surface::{Lattice, sort_and_shape};
+    use manifold_node_engine::testkit::liquid_surface::{Lattice, sort_and_shape};
 use crate::node_graph::catalog_tests::liquid_surface::blob_bounds;
 
     let mut h = Harness::new();
     let resolution = 64u32;
     let gather = h.device.create_compute_pipeline(
-        include_str!("../primitives/shaders/lattice_bricks_gather_reference.wgsl"),
+        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/lattice_bricks_gather_reference.wgsl"),
         "mark_bricks",
         "liquid.bricks.gather_reference",
     );
@@ -915,4 +910,4 @@ use crate::node_graph::catalog_tests::liquid_surface::blob_bounds;
     }
 }
 
-use crate::testkit::liquid_surface::{Harness, params, read};
+use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};

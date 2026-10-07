@@ -1,11 +1,11 @@
 //! Host audio modulation reaches a GPU liquid's force once per liquid tick,
 //! whatever the display rate (BUG-2jx6 (host-fed modulation sampled per
 //! liquid tick)). Drives real playback modulation into a Uniform Force chain.
-use crate::preset_runtime::*;
+use manifold_node_engine::runtime::*;
 use crate::node_graph::*;
 use manifold_core::{Beats, Seconds, PresetTypeId};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
-use crate::node_graph::{EffectNode, EffectNodeContext, EffectNodeType, ParamDef};
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef};
 use manifold_core::audio_features::{
     AudioFeatureHop, AudioFeatureSnapshot, AudioHopBatch, AudioHopStamp, SendFeatures,
 };
@@ -39,8 +39,8 @@ impl EffectNode for TickedLiquid {
     fn type_id(&self) -> &EffectNodeType {
         &self.0
     }
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
     fn inputs(&self) -> &[NodeInput] {
         static INPUTS: [NodeInput; 1] = [NodePort {
@@ -68,7 +68,7 @@ impl EffectNode for TickedLiquid {
         }
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if !crate::node_graph::physics::authored_sample_only() {
+        if !manifold_node_engine::water::physics::authored_sample_only() {
             return;
         }
         let now = ctx.time.seconds.0;
@@ -93,7 +93,7 @@ fn registry() -> PrimitiveRegistry {
     registry.register(LIQUID, || {
         let cell_size = NodePort {
             name: Cow::Borrowed("cell_size"),
-            ty: PortType::Scalar(crate::node_graph::ports::ScalarType::F32),
+            ty: PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
             kind: PortKind::Output,
             required: false,
         };

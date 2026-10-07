@@ -1,10 +1,10 @@
-use crate::node_graph::freeze::install::*;
+use manifold_node_engine::freeze::install::*;
 
 
 use ahash::AHashSet;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
-use crate::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 
 fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
 
@@ -78,8 +78,8 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
     /// non-existent fields and silently no-op — this catches it without a GPU.
     #[test]
     fn seeded_fields_match_wgsl_compute_params() {
-        use crate::node_graph::EffectNode;
-        use crate::node_graph::primitives::WgslCompute;
+        use manifold_node_engine::exec::effect_node::EffectNode;
+        use manifold_node_engine::primitives::wgsl_compute::WgslCompute;
         let def = colorgrade_def();
         let fused = fuse_canonical_def(&def, &registry()).expect("ColorGrade fuses");
         let node = fused

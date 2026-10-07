@@ -35,11 +35,11 @@ use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 
 use super::gltf_anim_shared::{LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_weight_slice};
-use crate::node_graph::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_anim_cache::{ChannelKind, LoadedAnimSet, spawn_load};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::source_asset::loaded_identity;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue, TableData};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::source_asset::loaded_identity;
 
 /// Maximum morph targets this primitive will sample in one frame —
 /// generous past the spec-typical few-to-a-dozen (`MorphStressTest.glb`,
@@ -47,7 +47,7 @@ use crate::node_graph::source_asset::loaded_identity;
 /// without an unbounded heap allocation.
 const MAX_TARGETS: usize = 64;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GltfMorphWeights,
     type_id: "node.gltf_morph_weights",
     purpose: "Samples a parsed glTF object's per-target morph-weight keyframe channel (read from the shared gltf_anim_cache, selected by path+target_node) at a live `progress` (0..1) and emits the current per-target weight vector as Array(f32), one weight per target in target order. Wire the output straight into node.morph_targets_blend's `weights` input. LINEAR interpolation only (A1/A2/A3 scope, unchanged). `progress` port-shadowed with the same default beat-drive as node.gltf_animation_source/node.gltf_skeleton_pose: wrap(beats*rate/clip_beats), always wrapping into [0,1), never clamping. A target absent from the selected clip falls back to its authored static_weights[i], never a fabricated 0.0.",
@@ -236,7 +236,7 @@ impl Primitive for GltfMorphWeights {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "weights" {
@@ -387,8 +387,8 @@ impl Primitive for GltfMorphWeights {
 
     fn source_asset_identity(
         &self,
-        params: &crate::node_graph::effect_node::ParamValues,
-    ) -> crate::node_graph::source_asset::SourceAssetIdentity<'_> {
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
+    ) -> manifold_node_engine::scene::source_asset::SourceAssetIdentity<'_> {
         loaded_identity(params, "path", &self.last_path, self.anim_set.as_deref(), self.load_error.as_deref())
     }
 
@@ -402,8 +402,8 @@ mod tests {
     use super::*;
     use crate::node_graph::gltf_anim_cache::GltfAnimSet;
 
-    fn identity_params(path: &str) -> crate::node_graph::effect_node::ParamValues {
-        let mut params = crate::node_graph::effect_node::ParamValues::default();
+    fn identity_params(path: &str) -> manifold_node_engine::exec::effect_node::ParamValues {
+        let mut params = manifold_node_engine::exec::effect_node::ParamValues::default();
         params.insert(Cow::Borrowed("path"), ParamValue::String(Arc::new(path.to_owned())));
         params
     }
@@ -424,17 +424,17 @@ mod tests {
 
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("morph-a.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Ready(fingerprint)
         );
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("morph-b.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Pending
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Pending
         );
 
         prim.load_error = Some("morph load failed".to_owned());
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("morph-a.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Failed("morph load failed")
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Failed("morph load failed")
         );
 
         Primitive::clear_state(&mut prim);
@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(prim.anim_set.as_ref().map(|set| set.identity()), Some(fingerprint));
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("morph-a.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Ready(fingerprint)
         );
     }
 

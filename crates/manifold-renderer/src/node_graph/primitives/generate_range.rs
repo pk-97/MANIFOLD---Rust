@@ -27,11 +27,11 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GenerateRange,
     type_id: "node.range",
     purpose: "Emit an Array<f32> of `count` samples linearly spaced over `[start, end]`. The TouchDesigner Pattern-CHOP analogue. Output is the t-parameter array that drives parametric curve graphs — pair with array_math (ScaleOffset / Sin / Cos) + pack_curve_xy for Lissajous-style curves, or with cycle_table_row + mux for stepped sequences. `start` and `end` are port-shadows-param so an LFO or driver wire can sweep the range dynamically. `active_count` (input-only) overrides the sample count for variable-N curves (regular polygons, variable-resolution sweeps) — when unwired the count is `max_capacity` for backward-compatible fixed-resolution sampling. Output capacity is `max_capacity`. CPU-only — the curve-math atom family runs on the content thread so downstream CPU readers (replicators, polyline stackers) see same-frame writes without a GPU→CPU fence.",

@@ -37,12 +37,12 @@ use manifold_gpu::{
 };
 use manifold_native::depth_estimator::DepthEstimator;
 
-use crate::background_worker::BackgroundWorker;
-use crate::gpu_encoder::GpuEncoder;
+use manifold_node_engine::runtime::background_worker::BackgroundWorker;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 struct MaskRequest {
     pixel_data: Vec<u8>,
@@ -78,7 +78,7 @@ struct MaskState {
     first_response_delivered: bool,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: PersonSegment,
     type_id: "node.person_mask",
     purpose: "Person / human segmentation via the native plugin's process_subject_mask API. Detects PEOPLE specifically (selfie / human / person model variants), not generic salient objects. Input: any Texture2D frame. Output: Rgba16Float mask where R = G = B = person probability ∈ [0, 1] (0 = background, 1 = person); A = 0 until the first inference completes, 1 afterwards (availability gate). Inference runs on a background worker with ~2-3 frame latency. Temporal blending (α = 0.55 default) reduces noise worker-side before upload — matches the legacy WireframeDepth contract. Same channel pack as depth_estimate_midas so they compose interchangeably as mask inputs.",
@@ -423,7 +423,7 @@ impl Primitive for PersonSegment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn person_segment_smoothing_defaults_to_legacy_055() {

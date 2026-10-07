@@ -9,6 +9,7 @@ name = "manifold"
 path = "src/main.rs"
 
 [dependencies]
+manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-core = { path = "../manifold-core" }
 manifold-editing = { path = "../manifold-editing" }
 manifold-ui = { path = "../manifold-ui" }

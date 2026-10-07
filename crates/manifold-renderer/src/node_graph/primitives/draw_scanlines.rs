@@ -7,10 +7,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Generated-codegen uniform layout: PARAMS order — `color` (Color param → 4
 /// consecutive f32 fields, reassembled as `vec4<f32>` at the body call
@@ -28,7 +28,7 @@ struct ScanlinesUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: DrawScanlines,
     type_id: "node.draw_scanlines",
     purpose: "Composite a subtle repeating horizontal scanline pattern over the whole image, additively. period_px sets the line spacing in output pixels; intensity sets how much brightness each line adds. The monitor-glass screen treatment that finishes a HUD look.",

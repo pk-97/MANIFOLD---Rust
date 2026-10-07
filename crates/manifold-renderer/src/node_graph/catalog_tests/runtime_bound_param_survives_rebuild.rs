@@ -17,10 +17,7 @@
     use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
     use crate::node_graph::scene_exposure::metadata_for_node_type;
-    use crate::node_graph::{
-        BindingSource, BoundaryHandling, Graph, HandleScope, NodeInstanceId, ParamValue,
-        PrimitiveRegistry, ResolvedBinding, ResolvedTarget, instantiate_def,
-    };
+    use manifold_node_engine::{param_binding::BindingSource, load::graph_loader::BoundaryHandling, graph::Graph, load::graph_loader::HandleScope, exec::effect_node::NodeInstanceId, parameters::ParamValue, persistence::PrimitiveRegistry, param_binding::ResolvedBinding, param_binding::ResolvedTarget, load::graph_loader::instantiate_def};
 
     /// A single `node.bake_environment` node, its `intensity` param stamped
     /// to `stamped_intensity` — the card-stamped def a GLB import produces.
@@ -112,7 +109,7 @@
             registry,
             HandleScope::Global,
             BoundaryHandling::Standalone,
-        &crate::node_graph::mesh_change::PreparedMeshRules::default())
+        &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
         .expect("single bake_environment node instantiates cleanly");
         let inst = graph
             .instance_by_node_id(&NodeId::new("env"))
@@ -150,7 +147,7 @@
                 node: inst,
                 param: std::borrow::Cow::Borrowed("intensity"),
             },
-            convert: crate::node_graph::ParamConvert::Float,
+            convert: manifold_node_engine::param_binding::ParamConvert::Float,
             source: BindingSource::Static,
             source_id: std::borrow::Cow::Borrowed("intensity"),
             reshape: None,
@@ -159,7 +156,7 @@
             // value, so it must land.
             default_mirrors_node_param: false,
         };
-        let bound = crate::node_graph::BoundGraph::new(vec![binding], &mut graph, Some(&def));
+        let bound = manifold_node_engine::exec::bound_graph::BoundGraph::new(vec![binding], &mut graph, Some(&def));
         assert!(
             bound.shadowed_def_params.is_empty(),
             "the def bakes no `intensity` at all here, so the plant overwrites \
@@ -236,7 +233,7 @@
                 node: rebuilt_inst,
                 param: std::borrow::Cow::Borrowed("intensity"),
             },
-            convert: crate::node_graph::ParamConvert::Float,
+            convert: manifold_node_engine::param_binding::ParamConvert::Float,
             source: BindingSource::Static,
             source_id: std::borrow::Cow::Borrowed("intensity"),
             reshape: None,
@@ -251,7 +248,7 @@
         // detector ever starts reporting here, it has stopped agreeing with
         // `apply_binding_defaults` and the log fills with every scene exposure.
         let bound =
-            crate::node_graph::BoundGraph::new(vec![binding], &mut rebuilt_graph, Some(&def));
+            manifold_node_engine::exec::bound_graph::BoundGraph::new(vec![binding], &mut rebuilt_graph, Some(&def));
         assert!(
             bound.shadowed_def_params.is_empty(),
             "a mirrored default doesn't plant, so the 5.0 write is not shadowed; \

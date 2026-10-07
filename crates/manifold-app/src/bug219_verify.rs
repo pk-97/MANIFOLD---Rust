@@ -285,7 +285,7 @@ fn bug219_interactive_import_with_existing_gpu_context_reuses_device() {
     let mut app = headless_application();
     // Seed `self.gpu` the way `resumed()` would have by the time a real
     // window can receive a drop — this is the case D2/P2 optimizes for.
-    app.gpu = Some(manifold_renderer::gpu::GpuContext::new_queued("bug219 verify"));
+    app.gpu = Some(manifold_node_engine::gpu::context::GpuContext::new_queued("bug219 verify"));
     log_rss("before any import (gpu context pre-populated)");
 
     for i in 1..=3u32 {

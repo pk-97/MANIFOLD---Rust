@@ -17,11 +17,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::{CurvePoint, MeshVertex};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`radius`
 /// f32, `sides` Int→i32), then the derived `path_len`/`lift_len`/
@@ -41,7 +41,7 @@ struct TubeFromPathUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TubeFromPath,
     type_id: "node.tube_from_path",
     purpose: "Sweep a circular ring around a centerline path (Array<CurvePoint>, XZ plane: x=world X, y=world Z) into a path_len x (sides+1) positions+uv tube grid. Optional `lift` (+Y per path point) and `radius_scale` (per path point, composable with a ramp for tapered vines) degrade to 0.0 / 1.0 past a short or unwired buffer, never to silent zero-radius. Frame per point: tangent from a central finite difference, reference-up=+Y — degenerates when the tangent is (near-)parallel to +Y (a vertical path segment); parallel-transport frames are deferred. Normals are left zero — wire node.make_triangles downstream (src_cols=sides+1, src_rows=path point count).",
@@ -92,7 +92,7 @@ impl Primitive for TubeFromPath {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn tube_from_path_capacity_is_rows_times_cols() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = TubeFromPath::new();
         let mut params = ParamValues::default();
         params.insert(std::borrow::Cow::Borrowed("sides"), ParamValue::Float(6.0));
@@ -222,7 +222,7 @@ mod gpu_tests {
     }
 
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<TubeFromPath>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<TubeFromPath>()
             .expect("tube_from_path buffer codegen")
     }
 
@@ -239,7 +239,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "tube-from-path-test",
         );
         let path_buf = device.create_buffer_shared(std::mem::size_of_val(path) as u64);
@@ -301,7 +301,7 @@ mod gpu_tests {
 
     #[test]
     fn short_lift_and_radius_scale_degrade_to_identity_for_the_tail() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let path: Vec<CurvePoint> = (0..8).map(|i| mk_curve(i as f32, 0.0)).collect();
         let lift = [5.0f32, 5.0]; // only first two points lifted

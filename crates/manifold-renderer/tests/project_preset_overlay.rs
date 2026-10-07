@@ -8,9 +8,7 @@ use std::sync::Mutex;
 
 use manifold_core::PresetTypeId;
 use manifold_core::project::EmbeddedOrigin;
-use manifold_renderer::preset_loader::{
-    EFFECT_CATALOG, GENERATOR_CATALOG, clear_project_presets, set_project_presets,
-};
+use manifold_node_engine::load::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG, clear_project_presets, set_project_presets};
 
 /// The test harness runs `#[test]` fns in this binary on separate threads by
 /// default; every test here mutates the same process-global overlay statics
@@ -237,9 +235,9 @@ fn overlay_only_generator_produces_nonempty_editor_snapshot() {
 
     // Editor path (content_thread::graph_snapshot's pristine-generator branch):
     // loaded_preset_view_by_id → snapshot_for_view.
-    let view = manifold_renderer::node_graph::loaded_preset_view_by_id(&preset_id)
+    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&preset_id)
         .expect("EDITOR path: overlay generator must resolve a LoadedPresetView");
-    let snap = manifold_renderer::node_graph::snapshot_for_view(view)
+    let snap = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view)
         .expect("EDITOR path: snapshot_for_view must build a snapshot");
     assert!(
         !snap.nodes.is_empty(),

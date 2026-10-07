@@ -2,8 +2,8 @@
 
 #[test]
 fn fluid_bricks_still_pool_installs_dense_clamp() {
-    use crate::node_graph::PrimitiveRegistry;
-    use crate::node_graph::freeze::install::fuse_generator_view;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
+    use manifold_node_engine::freeze::install::fuse_generator_view;
     use manifold_core::effect_graph_def::EffectGraphDef;
 
     let json = crate::node_graph::bundled_presets::bundled_preset_json(

@@ -54,7 +54,7 @@
 //! contents, the same convention `gltf_mesh_source`/`gltf_skeleton_pose`
 //! use.
 
-use crate::node_graph::transform::quat_to_render_scene_euler;
+use manifold_node_engine::scene::transform::quat_to_render_scene_euler;
 
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
@@ -62,13 +62,13 @@ use std::sync::{Arc, mpsc};
 use super::gltf_anim_shared::{
     LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_quat_slice, sample_vec3_slice,
 };
-use crate::node_graph::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_anim_cache::{GltfAnimSet, LoadedAnimSet, spawn_load};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::source_asset::loaded_identity;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue, TableData};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::source_asset::loaded_identity;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GltfAnimationSource,
     type_id: "node.gltf_animation_source",
     purpose: "Samples a parsed glTF TRS keyframe clip (read from the shared gltf_anim_cache, selected by path + per-channel translation_node/rotation_node/scale_node) at a live `progress` (0..1) and emits the nine pos_x/y/z, rot_x/y/z, scale_x/y/z scalars node.transform_3d's port-shadowed inputs accept — wire straight into an object's transform_3d to animate it. LINEAR/STEP/CUBICSPLINE interpolation (whatever the channel carries): lerp/hold/Hermite for translation/scale, slerp/hold/Hermite+renormalize then quat-to-Euler for rotation. `progress` port-shadowed: wire an LFO/fader for direct control, or leave unwired for the default beat-drive (wrap(beats*rate/clip_beats), clip_beats = duration_s scaled by the live transport) — always wraps into [0,1) before sampling, never clamps, so a clip loops continuously at the wrap point rather than freezing. A channel absent from the selected clip falls back to its own node selector's static bind pose, never a fabricated identity. Three independent node selectors (not one) because glTF assets legitimately split TRS channels across different ancestor nodes for one object (BoxAnimated.glb: translation on an ancestor, rotation on the mesh node).",
@@ -459,8 +459,8 @@ impl Primitive for GltfAnimationSource {
 
     fn source_asset_identity(
         &self,
-        params: &crate::node_graph::effect_node::ParamValues,
-    ) -> crate::node_graph::source_asset::SourceAssetIdentity<'_> {
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
+    ) -> manifold_node_engine::scene::source_asset::SourceAssetIdentity<'_> {
         loaded_identity(params, "path", &self.last_path, self.anim_set.as_deref(), self.load_error.as_deref())
     }
 
@@ -472,13 +472,13 @@ impl Primitive for GltfAnimationSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::MockBackend;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::{FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::ports::{PortType, ScalarType};
+    use manifold_node_engine::exec::effect_node::EffectNode;
+    use manifold_node_engine::exec::backend::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::{PortType, ScalarType};
     use manifold_core::{Beats, Seconds};
     use std::sync::Arc;
 
@@ -752,13 +752,13 @@ mod tests {
     /// hold regardless of asset content.
     #[test]
     fn lfo_driven_progress_loops_a_seamless_track_continuously_at_the_wrap_point() {
-        use crate::node_graph::EffectNode;
-        use crate::node_graph::effect_node::EffectNodeType;
-        use crate::node_graph::execution_plan::compile;
-        use crate::node_graph::graph::Graph;
-        use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+        use manifold_node_engine::exec::effect_node::EffectNode;
+        use manifold_node_engine::exec::effect_node::EffectNodeType;
+        use manifold_node_engine::exec::execution_plan::compile;
+        use manifold_node_engine::graph::Graph;
+        use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
         use crate::node_graph::primitives::lfo::Lfo;
-        use crate::node_graph::Executor;
+        use manifold_node_engine::exec::execution::Executor;
         use manifold_core::{Beats, Seconds};
         use std::sync::Mutex;
 
@@ -767,8 +767,8 @@ mod tests {
             seen: std::sync::Arc<Mutex<Option<ParamValue>>>,
         }
         impl EffectNode for Capture {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
             fn type_id(&self) -> &EffectNodeType {
                 &self.type_id
@@ -1028,17 +1028,17 @@ mod tests {
 
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("asset-a.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Ready(fingerprint)
         );
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("asset-b.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Pending
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Pending
         );
 
         prim.load_error = Some("missing animation asset".to_owned());
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("asset-a.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Failed("missing animation asset")
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Failed("missing animation asset")
         );
 
         Primitive::clear_state(&mut prim);
@@ -1046,7 +1046,7 @@ mod tests {
         assert_eq!(prim.anim_set.as_ref().map(|set| set.identity()), Some(fingerprint));
         assert_eq!(
             Primitive::source_asset_identity(&prim, &identity_params("asset-a.glb")),
-            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+            manifold_node_engine::scene::source_asset::SourceAssetIdentity::Ready(fingerprint)
         );
     }
 

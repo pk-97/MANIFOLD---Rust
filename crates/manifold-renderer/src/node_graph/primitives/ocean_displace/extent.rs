@@ -1,5 +1,5 @@
 //! Buffer extent rule owned by this node.
-use crate::node_graph::liquid::extent::{AtomExtent, ExtentRule, Verdict, size_bounded};
+use manifold_node_engine::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, size_bounded};
 
 fn ocean_displace(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (param, port) in [("size_0", "field_0"), ("size_1", "field_1"), ("size_2", "field_2")] {

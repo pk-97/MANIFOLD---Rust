@@ -15,7 +15,7 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::{Beats, Bpm, PresetTypeId};
 use manifold_media::export_config::ExportConfig;
-use manifold_renderer::frame_status::FrameRenderStatus;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_renderer::headless_readback::{encode_rgba8_png, linear_to_srgb8, readback_raw_halves};
 
 use crate::content_command::ContentCommand;

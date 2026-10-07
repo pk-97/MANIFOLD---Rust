@@ -15,13 +15,11 @@ use manifold_gpu::{
     GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
-use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::mesh::MeshVertex;
-use crate::node_graph::execution_plan::ResourceId;
-use crate::node_graph::{
-    Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue, compile,
-};
-use crate::render_target::RenderTarget;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::execution_plan::ResourceId;
+use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 use super::{
     BakeEquirectEnvmap, CameraOrbit, GenerateCubeMesh, LightNode, PbrMaterial, Render3DMesh,
@@ -38,7 +36,7 @@ fn frame_time() -> FrameTime {
 
 /// Resolve the `ResourceId` allocated for a node's named output port.
 fn output_resource(
-    plan: &crate::node_graph::ExecutionPlan,
+    plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan,
     node: NodeInstanceId,
     port: &str,
 ) -> ResourceId {
@@ -81,12 +79,10 @@ fn half_to_f32(h: u16) -> f32 {
 // can assert on values, not just non-blackness.
 // ============================================================================
 
-use crate::node_graph::effect_node::{
-    EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
-};
-use crate::node_graph::parameters::ParamDef;
-use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
-use crate::node_graph::Source;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+use manifold_node_engine::parameters::ParamDef;
+use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use manifold_node_engine::scene::boundary_nodes::Source;
 use crate::node_graph::primitives::scene_object::SceneObjectNode;
 use super::{CelMaterial, RenderScene, Transform3D, UnlitMaterial};
 
@@ -153,7 +149,7 @@ impl MeshSource {
 }
 
 impl EffectNode for MeshSource {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
@@ -297,7 +293,7 @@ fn render_mesh_scene(
     distance: f32,
     build: impl FnOnce(&mut Graph, NodeInstanceId) -> (NodeInstanceId, Option<(NodeInstanceId, RenderTarget)>),
 ) -> Vec<[f32; 4]> {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let format = GpuTextureFormat::Rgba16Float;
 
     let mut g = Graph::new();
@@ -377,7 +373,7 @@ fn alpha_mask_cutout_discards_transparent_texels() {
         .collect();
 
     let render_mode = |mask: bool| {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let map = upload_f16_rgba(&device, cw, ch, &checker);
         drop(device);
         render_mesh_scene(w, h, &quad_verts(), std::f32::consts::FRAC_PI_2, 4.0, move |g, render| {
@@ -449,7 +445,7 @@ fn base_color_map_modulates_albedo() {
     let texel = [0.5_f32, 0.4, 0.6, 1.0];
     let expected = [base[0] * texel[0], base[1] * texel[1], base[2] * texel[2]];
 
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let map = upload_f16_rgba(&device, 2, 2, &[texel; 4]);
     drop(device);
 
@@ -560,7 +556,7 @@ fn pre_bind_cube_output(
     backend: &mut MetalBackend,
     resource: ResourceId,
 ) {
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
     let capacity = GenerateCubeMesh::PARAMS
         .iter()
         .find(|p| p.name == "max_capacity")
@@ -580,7 +576,7 @@ fn pre_bind_cube_output(
 /// (farther from the camera), same y/z, so both cubes are centred on the
 /// optical axis and overlap on screen. `lights = 0` (Unlit needs none).
 fn render_scene_occlusion_frame(w: u32, h: u32, offset: f32) -> Vec<[f32; 4]> {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let format = GpuTextureFormat::Rgba16Float;
 
     let mut g = Graph::new();
@@ -672,7 +668,7 @@ fn render_scene_shared_depth_resolves_occlusion_between_objects() {
 /// lights wired to `light_0` (/ `light_1`). Ambient = 0 so the readback
 /// is pure per-light diffuse accumulation.
 fn render_scene_cel_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4]> {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let format = GpuTextureFormat::Rgba16Float;
 
     let mut g = Graph::new();
@@ -800,7 +796,7 @@ fn render_scene_multi_light_accumulates_diffuse_linearly() {
 /// `bcmap` wiring works for `node.render_mesh`. Mirrors
 /// `render_scene_cel_quad_frame`'s camera/mesh setup, minus lights.
 fn render_scene_bcmap_quad_frame(w: u32, h: u32, mask: bool, checker: &[[f32; 4]], cw: u32, ch: u32) -> Vec<[f32; 4]> {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let format = GpuTextureFormat::Rgba16Float;
     let map = upload_f16_rgba(&device, cw, ch, checker);
 

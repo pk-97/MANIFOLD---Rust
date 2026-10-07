@@ -20,10 +20,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Workgroups in the partial pass = entries in the partials scratch.
 /// 256 workgroups × 256 threads grid-stride any active_count; the scratch
@@ -39,7 +39,7 @@ struct RemoveDriftUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RemoveDrift3D,
     type_id: "node.remove_drift_3d",
     purpose: "Subtract the mean of an Array<[f32;3]> per-particle force field (over live particles) from every entry, so internal forces sum to zero and a particle fluid stops accumulating net momentum. Fixes the discrete-grid conservation residue that otherwise drifts a confined sim into a corner (BUG-066). amount 1 = full balance, 0 = passthrough; port-shadowed so it can be performed.",
@@ -93,7 +93,7 @@ impl Primitive for RemoveDrift3D {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {
@@ -226,7 +226,7 @@ mod gpu_tests {
     //! (b) the mean is computed over LIVE particles only, and
     //! (c) amount scales the correction.
     use super::*;
-    use crate::particles::Particle;
+    use manifold_node_engine::particles::Particle;
 
     fn mk_particle(life: f32) -> Particle {
         Particle {
@@ -290,7 +290,7 @@ mod gpu_tests {
 
     #[test]
     fn subtracts_live_mean_and_respects_amount() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
 
         // 1000 particles; every 5th is dead. Live forces have a known mean.
         let n = 1000usize;

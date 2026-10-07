@@ -14,16 +14,14 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::material::{
-    AlphaMode, MapSamplerDesc, Material, MaterialKind, MaterialMapInfo,
-};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::scene::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind, MaterialMapInfo};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const ALPHA_MODES: &[&str] = &["Opaque", "Mask", "Blend"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: UnlitMaterial,
     type_id: "node.unlit_material",
     purpose: "Flat-colour material — no lighting math, no shadow term. The renderer writes (base_color + emission) directly. Use for UI overlays, debug visualisation, neon, anything that shouldn't react to lights. The bundled 3D mesh renderers do NOT require a `light` input when this material is wired (the conditional-requirement table lets the light input stay truly optional). Outputs one Material on `out` consumed by render_3d_mesh / render_instanced_3d_mesh. Emission is premultiplied with `emission_intensity` at emission — downstream reads the final emissive directly.",
@@ -280,17 +278,17 @@ impl Primitive for UnlitMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::material::MaterialKind;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::scene::material::MaterialKind;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn run_emits_unlit_material_with_premultiplied_emission() {
-        use crate::node_graph::backend::Backend;
-        use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::execution_plan::ResourceId;
-        use crate::node_graph::ports::PortType;
-        use crate::node_graph::MockBackend;
+        use manifold_node_engine::exec::backend::Backend;
+        use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+        use manifold_node_engine::exec::effect_node::ParamValues;
+        use manifold_node_engine::exec::execution_plan::ResourceId;
+        use manifold_node_engine::ports::PortType;
+        use manifold_node_engine::exec::backend::MockBackend;
         use manifold_core::{Beats, Seconds};
 
         let mut backend = MockBackend::new();
@@ -354,7 +352,7 @@ mod tests {
             &mut render_mode_scratch,
             &mut object_scratch,
         );
-        let time = crate::node_graph::effect_node::FrameTime {
+        let time = manifold_node_engine::exec::effect_node::FrameTime {
             beats: Beats(0.0),
             seconds: Seconds(0.0),
             delta: Seconds(1.0 / 60.0),

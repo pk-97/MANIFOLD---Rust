@@ -15,9 +15,9 @@
 //! `build_instances_from_edges`) to consume it same-frame without a
 //! GPU→CPU fence — same pattern as `polytope_edges`.
 
-use crate::mesh::EdgePair;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::EdgePair;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
 
 pub const HYPERCUBE_EDGE_COUNT: u32 = 32;
 
@@ -46,7 +46,7 @@ const fn hypercube_edges() -> [EdgePair; HYPERCUBE_EDGE_COUNT as usize] {
 
 pub const HYPERCUBE_EDGES: [EdgePair; HYPERCUBE_EDGE_COUNT as usize] = hypercube_edges();
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: EdgesFromHypercube,
     type_id: "node.hypercube_edges",
     purpose: "Emit the wireframe edge topology of a 4D hypercube as Array<EdgePair> — the constant 32-edge bit-flip table. The 4D counterpart of node.platonic_solid_edges. Pair with node.hypercube_points and feed both into node.draw_lines (vertices → points, edges → edges) for a 4D wireframe. No params: a hypercube has one topology; the dimension-morph lives in the vertex positions.",
@@ -70,7 +70,7 @@ impl Primitive for EdgesFromHypercube {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "edges" {

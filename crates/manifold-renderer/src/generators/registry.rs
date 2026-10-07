@@ -2,10 +2,10 @@ use crate::node_graph::{bundled_preset_def, bundled_preset_json, bundled_preset_
 use crate::node_graph::primitives::{
     GltfTextureSource, RenderScene, ScatterOnMesh, SeedParticlesFromTexture,
 };
-use crate::preset_runtime::PresetRuntime;
+use manifold_node_engine::runtime::PresetRuntime;
 use manifold_core::effects::RelightParams;
 use manifold_core::preset_def::PresetKind;
-use crate::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
 /// Factory that maps PresetTypeId to concrete [`PresetRuntime`]
@@ -92,9 +92,9 @@ impl GeneratorRegistry {
         // runtime blit is a hand-written `create_compute_pipeline` kernel (no
         // `wgsl_body`), so the atom sweep skips it.
         GltfTextureSource::prewarm_pipeline(device);
-        crate::node_graph::primitives::physics_world::PhysicsWorldNode::prewarm_pipeline(device);
+        manifold_node_engine::water::primitives::physics_world::PhysicsWorldNode::prewarm_pipeline(device);
         #[cfg(feature = "gpu-proofs")]
-        crate::node_graph::fluid_mesh_upload::FluidMeshUpload::prewarm(device);
+        manifold_node_engine::water::fluid_mesh_upload::FluidMeshUpload::prewarm(device);
         crate::node_graph::primitives::terminal_analysis::prewarm_pipeline(device);
         // `node.scatter_on_mesh` is a barriered three-pass scan/reduce; exempt
         // from the codegen path.
@@ -284,7 +284,7 @@ impl GeneratorRegistry {
                 def_for_fusion,
                 &registry,
                 manifest,
-                crate::node_graph::freeze::install::should_render_fused(is_watched),
+                manifold_node_engine::freeze::install::should_render_fused(is_watched),
             ).and_then(|runtime| runtime.with_generator_device(
                 std::sync::Arc::clone(&device), width, height, self.target_format,
             )) {
@@ -392,7 +392,7 @@ impl GeneratorRegistry {
 /// it lands in this same skip bucket automatically — no per-atom list to
 /// maintain, just a residual class this sweep can't reach generically.
 fn prewarm_all_atom_codegen_pipelines(device: &std::sync::Arc<GpuDevice>) {
-    use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_node};
+    use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_node};
 
     let registry = PrimitiveRegistry::with_builtin();
     let mut warmed = 0usize;
@@ -413,7 +413,7 @@ fn prewarm_all_atom_codegen_pipelines(device: &std::sync::Arc<GpuDevice>) {
                 device.create_compute_pipeline(&wgsl, ENTRY, type_id);
                 warmed += 1;
             }
-            Err(crate::node_graph::freeze::codegen::CodegenError::NoBody) => {
+            Err(manifold_node_engine::freeze::codegen::CodegenError::NoBody) => {
                 skipped_no_body += 1;
             }
             Err(e) => {
@@ -480,11 +480,11 @@ pub fn graft_preset_metadata_from_bundle(
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_node};
+    use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_node};
 
     #[test]
     fn prewarm_populates_the_shared_cache_for_representative_converted_atoms() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let registry = PrimitiveRegistry::with_builtin();
         let sample = ["node.grid_mesh", "node.shininess", "node.rotate_coordinates"];
 

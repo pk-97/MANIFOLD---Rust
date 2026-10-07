@@ -14,12 +14,12 @@
 //! brightening). Both follow naturally from this pattern; deferred
 //! until the V0 proof-point lands.
 
-use crate::node_graph::param_binding::composite_handle::CompositeHandle;
-use crate::node_graph::effect_node::NodeInstanceId;
-use crate::node_graph::graph::Graph;
-use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::primitives::{BeatGate, Gain, Math, Value};
-use crate::node_graph::validation::GraphError;
+use manifold_node_engine::param_binding::composite_handle::CompositeHandle;
+use manifold_node_engine::exec::effect_node::NodeInstanceId;
+use manifold_node_engine::graph::Graph;
+use manifold_node_engine::parameters::ParamValue;
+use {crate::node_graph::primitives::BeatGate, manifold_node_engine::primitives::gain::Gain, crate::node_graph::primitives::Math, manifold_node_engine::primitives::value::Value};
+use manifold_node_engine::validation::GraphError;
 
 pub const STROBE_OPACITY_TYPE_ID: &str = "composite.strobe_opacity";
 

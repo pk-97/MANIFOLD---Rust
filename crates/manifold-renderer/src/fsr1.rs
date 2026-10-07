@@ -14,8 +14,8 @@
 //! // read from fsr.output.texture (at output_w × output_h)
 //! ```
 
-use crate::gpu_encoder::GpuEncoder;
-use crate::render_target::RenderTarget;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 /// Uniform layout for the EASU pass. 32 bytes (two vec4 rows). 16-byte aligned.
 #[repr(C)]

@@ -17,11 +17,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Container SDF modes — shared label set with `node.keep_in_box_3d`
 /// and the legacy fluid_simulate_3d / fluid_seed_3d.
@@ -39,7 +39,7 @@ struct RepelUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ContainerRepelForce3D,
     type_id: "node.push_from_walls_3d",
     purpose: "Soft container-boundary repulsion added in-place to an Array<[f32; 3]> force buffer. When a particle is within a 0.1 margin of the container SDF (Cube/Sphere/Torus), a gentle inward force `n * (t*t*0.15)` cushions it back along the outward normal, preventing wall pile-up. container = None disables it. The pre-integration cushion half of the FluidSim3D container behaviour (the post-integration hard wall is node.keep_in_box_3d). Decomposed from the fused node.fluid_simulate_3d.",
@@ -94,7 +94,7 @@ impl Primitive for ContainerRepelForce3D {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

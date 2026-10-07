@@ -12,11 +12,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuTexture, GpuTextureFormat};
 
-use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::state_store::NodeState;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::state_store::NodeState;
 
 // =====================================================================
 // Feedback — 1-frame texture delay. Last frame's `in` becomes this
@@ -32,7 +32,7 @@ use crate::node_graph::state_store::NodeState;
 
 pub const FEEDBACK_TYPE_ID: &str = "node.feedback";
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Feedback,
     type_id: "node.feedback",
     purpose: "1-frame texture delay. Last frame's `in` becomes this frame's `out`. Closes per-frame feedback loops without introducing graph cycles — the loop runs through the StateStore, not through wires. Compose with affine_transform + gain + mix + vignette for stylized-feedback chains, or with custom compute steps for fluid / reaction-diffusion sims. Optional `reset_trigger` clears the persistent state texture on integer-edge changes, or re-seeds it from `seed` when `seed_on_reset` is enabled.",
@@ -177,7 +177,7 @@ impl Primitive for Feedback {
     fn output_canvas_scale(
         &self,
         port: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         if port == "out" {
             self.output_canvas_scale_out
@@ -505,11 +505,11 @@ impl Primitive for Feedback {
         );
     }
 
-    fn requires(&self) -> crate::node_graph::effect_node::NodeRequires {
+    fn requires(&self) -> manifold_node_engine::exec::effect_node::NodeRequires {
         // Feedback emits texture copies (needs a GpuEncoder) and keys
         // its prev-frame buffer in the StateStore. A graph containing
         // this primitive must be run via `execute_frame_with_state`.
-        crate::node_graph::effect_node::NodeRequires {
+        manifold_node_engine::exec::effect_node::NodeRequires {
             state_store: true,
             gpu_encoder: true,
         }
@@ -631,7 +631,7 @@ impl Feedback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn seed_on_reset_is_opt_in_and_defaults_false() {
@@ -671,15 +671,12 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::{
-        ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
-        ParamValue, ResourceId, Source, StateStore, compile,
-    };
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::ResourceId, scene::boundary_nodes::Source, state_store::StateStore, exec::execution_plan::compile};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     use super::Feedback;
-    use crate::node_graph::primitives::Value;
+    use manifold_node_engine::primitives::value::Value;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -732,7 +729,7 @@ mod gpu_tests {
 
     #[test]
     fn feedback_dispatches_through_state_store_without_panic() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -789,7 +786,7 @@ mod gpu_tests {
     /// diffusion / SPH primitives) rely on for cross-frame precision.
     #[test]
     fn feedback_output_format_override_propagates_to_plan_and_state() {
-        use crate::node_graph::EffectNode;
+        use manifold_node_engine::exec::effect_node::EffectNode;
 
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));
@@ -858,7 +855,7 @@ mod gpu_tests {
     /// wired up.
     #[test]
     fn feedback_run_allocates_state_prev_in_overridden_format() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
 
         let mut g = Graph::new();
@@ -938,11 +935,11 @@ mod gpu_tests {
     /// bootstrap. The chain's seed-bootstrap test belongs at frame 1.)
     #[test]
     fn feedback_seed_drives_first_frame_output() {
-        use crate::node_graph::Backend;
-        use crate::node_graph::bindings::Slot;
+        use manifold_node_engine::exec::backend::Backend;
+        use manifold_node_engine::bindings::Slot;
         use half::f16;
 
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -1029,7 +1026,7 @@ mod gpu_tests {
 
     #[test]
     fn feedback_seed_on_reset_reseeds_on_edge_and_after_clear_state() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -1038,7 +1035,7 @@ mod gpu_tests {
         let seed_src = g.add_node(Box::new(Source::new()));
         let trigger = g.add_node(Box::new(Value::new()));
         let fb = g.add_node(Box::new(Feedback::new()));
-        let observe = g.add_node(Box::new(crate::node_graph::primitives::Gain::new()));
+        let observe = g.add_node(Box::new(manifold_node_engine::primitives::gain::Gain::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
         g.set_param(fb, "seed_on_reset", ParamValue::Bool(true))
             .unwrap();

@@ -60,9 +60,9 @@ fn live_param_for_layer(
     param_id: &str,
 ) -> Vec<f32> {
     let owner = generator_graph(ct.engine.project().expect("periodic project"), layer_id);
-    let prepared = manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers(
+    let prepared = manifold_node_engine::load::expand::prepare_scene_modifiers(
         owner,
-        &manifold_renderer::node_graph::PrimitiveRegistry::with_builtin(),
+        &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin(),
     )
     .expect("periodic modifier prepares");
     let routes: Vec<_> = prepared

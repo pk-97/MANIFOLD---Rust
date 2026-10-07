@@ -10,10 +10,10 @@ use manifold_gpu::{
 };
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
-use crate::render_target::RenderTarget;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const SOURCE_INPUT: NodeInput = NodePort {
     name: Cow::Borrowed("source"),
@@ -89,8 +89,8 @@ impl Default for Threshold {
 }
 
 impl EffectNode for Threshold {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Inherit
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Inherit
     }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
@@ -108,8 +108,8 @@ impl EffectNode for Threshold {
     // declared directly. The body is a verbatim port of threshold.wgsl's
     // response curve; the hand kernel stays authoritative for the standalone
     // dispatch.
-    fn fusion_kind(&self) -> crate::node_graph::freeze::classify::FusionKind {
-        crate::node_graph::freeze::classify::FusionKind::Pointwise
+    fn fusion_kind(&self) -> manifold_node_engine::freeze::classify::FusionKind {
+        manifold_node_engine::freeze::classify::FusionKind::Pointwise
     }
     fn wgsl_body(&self) -> Option<&'static str> {
         Some(include_str!("shaders/threshold_body.wgsl"))
@@ -173,10 +173,10 @@ impl EffectNode for Threshold {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: THRESHOLD_TYPE_ID,
         create: || Box::new(Threshold::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo { label: "Threshold", category: crate::node_graph::palette::PaletteCategory::Atom }),
+        picker: Some(manifold_node_engine::palette::PickerInfo { label: "Threshold", category: manifold_node_engine::palette::PaletteCategory::Atom }),
     }
 }
 
@@ -396,14 +396,14 @@ impl Blur {
 }
 
 impl EffectNode for Blur {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Inherit
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Inherit
     }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
-    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
-        Some(crate::node_graph::freeze::classify::BoundaryReason::BarrieredReduction)
+    fn boundary_reason(&self) -> Option<manifold_node_engine::freeze::classify::BoundaryReason> {
+        Some(manifold_node_engine::freeze::classify::BoundaryReason::BarrieredReduction)
     }
     fn inputs(&self) -> &[NodeInput] {
         &BLUR_INPUTS
@@ -451,7 +451,7 @@ impl EffectNode for Blur {
                 .sampler
                 .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
 
-            let dispatch = |gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
+            let dispatch = |gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
                             pipeline: &GpuComputePipeline,
                             sampler: &GpuSampler,
                             source: &GpuTexture,
@@ -691,10 +691,10 @@ impl EffectNode for Blur {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: BLUR_TYPE_ID,
         create: || Box::new(Blur::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo { label: "Blur", category: crate::node_graph::palette::PaletteCategory::Atom }),
+        picker: Some(manifold_node_engine::palette::PickerInfo { label: "Blur", category: manifold_node_engine::palette::PaletteCategory::Atom }),
     }
 }
 
@@ -780,14 +780,11 @@ mod gpu_tests {
         GpuTextureUsage,
     };
 
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::Slot;
-    use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId};
-    use crate::node_graph::{
-        Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue, Source,
-        compile,
-    };
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId};
+    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     use super::Blur;
 
@@ -861,7 +858,7 @@ mod gpu_tests {
     }
 
     fn run_smooth(
-        device: &crate::TestDevice,
+        device: &manifold_gpu::testkit::TestDevice,
         width: u32,
         height: u32,
         radius: f32,
@@ -891,7 +888,7 @@ mod gpu_tests {
         let output_slot = Slot(backend.slot_count());
         let mut executor = Executor::new(Box::new(backend));
         {
-            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut native, device);
+            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, device);
             executor.execute_frame_with_gpu(
                 &mut graph,
                 &plan,
@@ -956,7 +953,7 @@ mod gpu_tests {
 
     #[test]
     fn smooth_production_path_preserves_flat_hdr_and_alpha() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (width, height) = (29, 17);
         let output = run_smooth(
             &device,
@@ -976,7 +973,7 @@ mod gpu_tests {
 
     #[test]
     fn smooth_radius_zero_is_production_path_identity() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (width, height) = (37, 19);
         let input = (0..width * height)
             .map(|index| {
@@ -1002,7 +999,7 @@ mod gpu_tests {
 
     #[test]
     fn smooth_impulse_has_stable_mass_and_monotonic_second_moment() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         // Even dimensions keep every pyramid stage at an exact 2:1 ratio,
         // making the measured moment comparable to the calibrated ladder.
         let (width, height) = (512, 512);
@@ -1033,7 +1030,7 @@ mod gpu_tests {
 
     #[test]
     fn smooth_odd_large_impulse_stays_finite_and_mass_bounded() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (width, height) = (513, 513);
         let input = impulse_pair(width, height);
         for radius in [32.0, 64.0, 96.0] {
@@ -1053,7 +1050,7 @@ mod gpu_tests {
 
     #[test]
     fn smooth_production_path_handles_odd_and_tiny_dimensions() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         for (width, height) in [(1, 1), (2, 3), (3, 5), (7, 11), (31, 17)] {
             let input = solid(width, height, [4.0, 1.5, 0.25, 0.63]);
             let output = run_smooth(&device, width, height, 64.0, &input);

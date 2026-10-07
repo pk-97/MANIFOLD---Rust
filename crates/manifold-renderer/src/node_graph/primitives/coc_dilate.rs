@@ -44,11 +44,11 @@
 //! (`freeze/codegen.rs`'s paramless-atom rule, precedent `abs_texture.rs`):
 //! bindings are `tex(0)`, `samp(1)`, `dst(2)`.
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CocDilate,
     type_id: "node.coc_dilate",
     purpose: "Fixed 3x3 neighborhood-max dilation of a CoC texture (docs/BOKEH_LAYERED_DOF_DESIGN.md D1): R and B hold the magnitude (coc_px / max_radius), G holds the sign flag from node.coc_from_depth (1.0 = nearer than focus, 0.0 = far-or-in-focus). For each output texel, out.r = max over the 3x3 neighborhood of in.r, out.g = max over the same neighborhood of in.g, out.b = out.r, alpha = 1.0. G max == 1.0 means at least one neighbor is nearer than focus. Fixes BUG-137 (docs/BUG_BACKLOG.md): node.variable_blur reads its per-pixel gather radius from only the center pixel's own CoC, so a heavily-blurred pixel never borrows a wider radius from a neighboring high-CoC pixel — this atom spreads the max CoC outward before the gather consumes it, softening the hard seam at depth discontinuities. Wire coc_from_depth.out -> coc_dilate.in -> variable_blur(H/V).width. Bokeh Gather consumes the original CoC and computes its own search bounds internally. No params: the 3x3 radius is fixed, not a performer knob. A flat (uniform) input passes through unchanged (max of identical values is that value).",
@@ -134,7 +134,7 @@ mod gpu_tests {
     };
 
     use super::CocDilate;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn upload_rgba16f(device: &GpuDevice, w: u32, h: u32, label: &str, px: &[f16]) -> GpuTexture {
         assert_eq!(px.len(), (w * h * 4) as usize);
@@ -282,17 +282,17 @@ mod gpu_tests {
     /// `docs/CINEMATIC_POST_DESIGN.md` I1).
     #[test]
     fn generated_dilate_matches_cpu_reference() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 8u32);
         let (mag, sign) = coc_step_with_spike(w, h);
         let input = plane_to_rgba16f_tex(&device, w, h, &mag, &sign, "coc-dilate-in");
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
 
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<CocDilate>()
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CocDilate>()
             .expect("node.coc_dilate standalone codegen");
         let gen_pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "coc-dilate-generated",
         );
         let gen_out = dispatch_dilate(&device, &gen_pipeline, &sampler, &input, w, h);
@@ -325,7 +325,7 @@ mod gpu_tests {
     /// coincidence.
     #[test]
     fn flat_field_dilate_is_a_no_op() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (12u32, 12u32);
         let flat_value = 0.37f32;
         let mag = vec![flat_value; (w * h) as usize];
@@ -333,11 +333,11 @@ mod gpu_tests {
         let input = plane_to_rgba16f_tex(&device, w, h, &mag, &sign, "coc-dilate-flat-in");
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
 
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<CocDilate>()
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CocDilate>()
             .expect("node.coc_dilate standalone codegen");
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "coc-dilate-flat",
         );
         let out = dispatch_dilate(&device, &pipeline, &sampler, &input, w, h);

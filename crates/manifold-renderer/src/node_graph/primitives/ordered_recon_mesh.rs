@@ -15,11 +15,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Generated-codegen uniform layout: params in declaration order followed by
 /// the injected dispatch count. The 16 scalar words are already aligned.
@@ -44,7 +44,7 @@ struct OrderedReconUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: OrderedReconMesh,
     type_id: "node.ordered_recon_mesh",
     purpose: "Animate an incoming Array<MeshVertex> through ordered pose-blended bands using a reference mesh only for stable centroid ordering. Each reference triangle is assigned by its centroid projection onto a normalized direction; staggered smoothstep progress makes bands settle in sequence. Waiting bands evaluate a full rotation around a shared directional pivot, blend the rotated pose by `away`, and translate by restrained separation/spread. UVs and orthonormalized frame attributes remain attached, and progress >= 1 returns the incoming record exactly.",
@@ -98,7 +98,7 @@ impl Primitive for OrderedReconMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -210,12 +210,10 @@ mod gpu_tests {
     //! band pivot contract from a future capacity change silently sizing the
     //! fused output differently than the unfused buffers.
     use super::*;
-    use crate::node_graph::effect_node::NodeInstanceId;
-    use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
-    };
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     fn vertex(position: [f32; 3], normal: [f32; 3], uv: [f32; 2], tangent: [f32; 4]) -> MeshVertex {
         MeshVertex {
@@ -237,7 +235,7 @@ mod gpu_tests {
         u: OrderedReconUniforms,
         label: &str,
     ) -> Vec<MeshVertex> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
         let src = device.create_buffer_shared(std::mem::size_of_val(current) as u64);
         let rbuf = device.create_buffer_shared(std::mem::size_of_val(reference) as u64);
@@ -351,7 +349,7 @@ mod gpu_tests {
                 )
             })
             .collect();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<OrderedReconMesh>()
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<OrderedReconMesh>()
             .expect("ordered recon standalone codegen");
 
         let disabled = dispatch(
@@ -522,7 +520,7 @@ mod gpu_tests {
             _pad0: 0,
             _pad1: 0,
         };
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<OrderedReconMesh>()
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<OrderedReconMesh>()
             .expect("ordered recon standalone codegen");
         let zero = dispatch(
             &wgsl,
@@ -645,7 +643,7 @@ mod gpu_tests {
             g.wgsl
         );
         let prim = OrderedReconMesh::new();
-        let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+        let node: &dyn manifold_node_engine::exec::effect_node::EffectNode = &prim;
         assert_eq!(
             node.array_output_capacity("out", &Default::default(), &[("in", 1009), ("reference", 2009)]),
             None,

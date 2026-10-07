@@ -20,10 +20,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -34,7 +34,7 @@ struct MirrorAxisUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MirrorAxis,
     type_id: "node.flip",
     purpose: "Sample input at UVs mirrored across a line through center at `angle` radians. Single-axis 2-fold symmetry (one half visible, other half is mirror). Distinct from `node.transform` fold modes (axis-aligned, both halves visible mirrored) and `node.kaleidoscope` (N-segment radial). Use for tilted symmetry overlays, asymmetric kaleidoscope variants, height-map symmetry in shading chains.",
@@ -121,14 +121,12 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::MirrorAxis;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId, compile};
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::parameters::ParamValue;
-    use crate::node_graph::{
-        Executor, FinalOutput, FrameTime, MetalBackend, NodeInstanceId, Source,
-    };
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::parameters::ParamValue;
+    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, scene::boundary_nodes::Source};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -169,7 +167,7 @@ mod gpu_tests {
     /// of mirror angle (every UV samples the same colour).
     #[test]
     fn uniform_input_unchanged() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (8u32, 8u32);
         let format = GpuTextureFormat::Rgba16Float;
         let src_rgba = [0.4_f32, 0.6, 0.2, 1.0];
@@ -187,7 +185,7 @@ mod gpu_tests {
         let r_out = output_resource(&plan, node, "out");
         let src_target = RenderTarget::new(&device, w, h, format, "mirror-src");
         let out_target = RenderTarget::new(&device, w, h, format, "mirror-out");
-        crate::testkit::gpu::clear_texture_committed(
+        manifold_node_engine::testkit::gpu::clear_texture_committed(
             &device,
             &src_target.texture,
             [

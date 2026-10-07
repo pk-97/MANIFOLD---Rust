@@ -12,9 +12,9 @@ use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 use manifold_core::NodeId;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-use manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers;
+use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 
 #[path = "common/scene_modifier.rs"]
 mod common;
@@ -80,7 +80,7 @@ fn photoscan_stock_recipes_capture_real_mesh_frames_and_prepare() {
             .nodes
             .iter()
             .any(|node| node.type_id == "node.render_scene"));
-        manifold_renderer::preset_runtime::PresetRuntime::from_def(attached, &registry, None)
+        manifold_node_engine::runtime::PresetRuntime::from_def(attached, &registry, None)
             .unwrap_or_else(|error| panic!("{preset} runtime preparation failed: {error}"));
     }
 }
@@ -103,7 +103,7 @@ fn photoscan_structured_stack_roundtrips_and_prepares_in_both_orders() {
         let prepared = prepare_scene_modifiers(&reopened, &registry)
             .unwrap_or_else(|error| panic!("{names:?} expansion failed: {error}"));
         assert!(prepared.def.scene_modifiers.is_empty());
-        manifold_renderer::preset_runtime::PresetRuntime::from_def(reopened, &registry, None)
+        manifold_node_engine::runtime::PresetRuntime::from_def(reopened, &registry, None)
             .unwrap_or_else(|error| panic!("{names:?} runtime preparation failed: {error}"));
     }
 }

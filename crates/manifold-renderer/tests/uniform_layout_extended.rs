@@ -32,8 +32,8 @@ mod blob_v2 {
         path::Path,
     };
 
-    use manifold_renderer::node_graph::PrimitiveRegistry;
-    use manifold_renderer::node_graph::freeze::codegen::standalone_for_node;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
+    use manifold_node_engine::freeze::codegen::standalone_for_node;
     use support::uniform_abi::{assert_wgsl_layout, shader_declaration};
 
     #[test]
@@ -126,8 +126,8 @@ mod texture {
     use super::support;
     use std::path::Path;
 
-    use manifold_renderer::node_graph::PrimitiveRegistry;
-    use manifold_renderer::node_graph::freeze::codegen::standalone_for_node;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
+    use manifold_node_engine::freeze::codegen::standalone_for_node;
     use support::texture_abi_cases::CASES;
     use support::uniform_abi::assert_wgsl_layout;
 
@@ -244,7 +244,7 @@ mod custom {
 
     #[test]
     fn cut_map_primitives_use_the_reflected_shared_custom_abi() {
-        let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
+        let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
         for type_id in custom_abi_cases::CUT_MAP_TYPE_IDS {
             assert!(
                 registry.construct(type_id).is_some(),
@@ -364,14 +364,12 @@ mod custom {
 
 #[cfg(test)]
 mod dispatch_regression {
-    use manifold_renderer::node_graph::freeze::codegen::{
-        standalone_for_node, standalone_for_spec,
-    };
+    use manifold_node_engine::freeze::codegen::{standalone_for_node, standalone_for_spec};
     use manifold_renderer::node_graph::primitives::{
         BlobOverlayRender, DrawConnections, DrawDots, DrawGauge, DrawMarkers, DrawTicks,
     };
 
-    fn same<P: manifold_renderer::node_graph::primitive::Primitive + Default + 'static>() {
+    fn same<P: manifold_node_engine::primitive::Primitive + Default + 'static>() {
         let typed = standalone_for_spec::<P>().expect("typed standalone codegen");
         let dynamic = standalone_for_node(&P::default()).expect("dynamic standalone codegen");
         assert_eq!(dynamic, typed);

@@ -1,0 +1,865 @@
+//! Per-step resource bindings exposed to an [`EffectNode`] during `evaluate`.
+//!
+//! The runtime hands each node two views — [`NodeInputs`] for ports it reads
+//! and [`NodeOutputs`] for ports it writes. Each view exposes:
+//!
+//! - **slot lookup** ([`NodeInputs::slot`] / [`NodeOutputs::slot`]) — the
+//!   abstract `Slot` the runtime allocated for this port. Stable across
+//!   backends; useful for introspection and tests.
+//! - **typed lookup** ([`NodeInputs::texture_2d`], [`NodeInputs::scalar`],
+//!   etc.) — resolves the slot to a real GPU resource via the [`Backend`].
+//!   Real EffectNode implementations use these to get a `&GpuTexture` they
+//!   can bind in shader dispatches. With a mock backend the typed lookups
+//!   return `None`, which is fine for tests that don't dispatch GPU work.
+
+use ahash::AHashMap;
+use manifold_physics::FieldValue;
+use manifold_gpu::{GpuBuffer, GpuTexture};
+
+use crate::exec::backend::Backend;
+use crate::scene::camera::Camera;
+use crate::content_revision::{ContentVersion, StorageRevision};
+use crate::scene::light::Light;
+use crate::scene::material::Material;
+use crate::parameters::ParamValue;
+use crate::ports::ArrayType;
+use crate::scene::atmosphere::Atmosphere;
+use crate::scene::render_mode::RenderMode;
+use crate::water::physics::RigidBody;
+use crate::scene::scene_object::SceneObject;
+use crate::scene::transform::Transform;
+use crate::water::fluid_role::FluidRole;
+use crate::scene::mesh_source::MeshSource;
+
+/// Opaque physical-buffer index handed out by the runtime's resource pool.
+///
+/// Two [`crate::node_graph::ResourceId`]s with compatible
+/// [`crate::node_graph::PortType`]s may share the same slot if their
+/// lifetimes don't overlap (resource recycling).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Slot(pub u32);
+
+/// Read-only view of an [`EffectNode`](crate::node_graph::EffectNode)'s
+/// input port bindings for one frame.
+#[derive(Clone, Copy)]
+pub struct NodeInputs<'a> {
+    bindings: &'a [(&'static str, Slot)],
+    backend: &'a dyn Backend,
+    /// A transient camera supplied by a render-only consumer. The override
+    /// is intentionally scoped to one named port; all other input ports keep
+    /// resolving through the graph backend.
+    camera_override: Option<(&'static str, Camera)>,
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-physical-slot write
+    /// generation counters, indexed by `Slot.0`, owned by the [`Executor`]
+    /// (see `Executor::slot_generations`). Threaded through so
+    /// [`Self::storage_revision`] can resolve a port name to its current
+    /// generation without the executor itself being reachable from a node's
+    /// `evaluate`.
+    ///
+    /// [`Executor`]: crate::node_graph::execution::Executor
+    generations: &'a [u64],
+    /// Per-physical-slot content-availability flags, indexed by `Slot.0`,
+    /// owned by the [`Executor`](crate::node_graph::execution::Executor).
+    /// `true` = the producing node declared its output pending this frame
+    /// (async upload in flight — the bytes are allocation, not content).
+    /// Empty on test-constructed inputs: absent entries read as ready.
+    pending: &'a [bool],
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: per-physical-slot mesh revision
+    /// snapshots, indexed by `Slot.0`, owned by the
+    /// [`Executor`](crate::node_graph::execution::Executor) and published
+    /// from the logical per-resource revisions at the output-commit choke
+    /// point. Empty on test-constructed inputs: absent entries read as
+    /// `None` from the accessors, which callers treat as conservative
+    /// "changed every evaluated frame" (the design's compatibility rule
+    /// for externally prebound buffers, never a fallback from malformed
+    /// prepared metadata).
+    mesh_revisions: &'a [crate::scene::mesh_change::MeshRevision],
+    /// Per-physical-slot logical content snapshots, indexed by `Slot.0`.
+    /// Missing and pending content remain `None` so consumers cannot invent
+    /// a stable zero revision for unavailable bytes.
+    content_versions: &'a [Option<ContentVersion>],
+    /// The producer's layout of each wired Array input, per port. A
+    /// `Channels[permissive]` port accepts any signature, so its node reads
+    /// named channels from this. Empty on test-constructed inputs.
+    array_layouts: &'a [(&'static str, ArrayType)],
+}
+
+impl<'a> NodeInputs<'a> {
+    pub(crate) fn new(
+        bindings: &'a [(&'static str, Slot)],
+        backend: &'a dyn Backend,
+        generations: &'a [u64],
+    ) -> Self {
+        Self {
+            bindings,
+            backend,
+            camera_override: None,
+            generations,
+            pending: &[],
+            mesh_revisions: &[],
+            content_versions: &[],
+            array_layouts: &[],
+        }
+    }
+
+    /// Thread each wired Array input's producer layout through.
+    pub(crate) fn with_array_layouts(mut self, array_layouts: &'a [(&'static str, ArrayType)]) -> Self {
+        self.array_layouts = array_layouts;
+        self
+    }
+
+    /// The producer's layout of the named Array input, or `None` if the port
+    /// is unwired or the caller supplied no layouts.
+    pub fn array_layout(&self, port: &str) -> Option<ArrayType> {
+        self.array_layouts.iter().find(|(name, _)| *name == port).map(|&(_, layout)| layout)
+    }
+
+    /// Executor-only: thread the content-availability flags through.
+    /// Separate from [`Self::new`] so the many test constructions keep
+    /// their three-argument shape (same pattern as
+    /// [`EffectNodeContext::with_errors`](crate::node_graph::EffectNodeContext::with_errors)).
+    pub(crate) fn with_pending(mut self, pending: &'a [bool]) -> Self {
+        self.pending = pending;
+        self
+    }
+
+    /// Executor-only: thread the mesh revision snapshots through
+    /// (SCENE_MODIFIER_RT_DESIGN.md §3.2). Same builder pattern as
+    /// [`Self::with_pending`].
+    pub(crate) fn with_mesh_revisions(
+        mut self,
+        mesh_revisions: &'a [crate::scene::mesh_change::MeshRevision],
+    ) -> Self {
+        self.mesh_revisions = mesh_revisions;
+        self
+    }
+
+    /// Executor-only: thread the per-slot logical content snapshots through.
+    pub(crate) fn with_content_versions(
+        mut self,
+        content_versions: &'a [Option<ContentVersion>],
+    ) -> Self {
+        self.content_versions = content_versions;
+        self
+    }
+
+    /// View the same bindings with one camera port replaced for a render-only
+    /// pass. No backend value or slot binding is changed.
+    pub(crate) fn with_camera_override(
+        mut self,
+        port: &'static str,
+        camera: Camera,
+    ) -> Self {
+        self.camera_override = Some((port, camera));
+        self
+    }
+
+    /// Logical content version of the resource currently bound to `port`.
+    /// Missing, pending, and externally prebound content return `None`.
+    pub fn content_version(&self, port: &str) -> Option<ContentVersion> {
+        let slot = self.slot(port)?;
+        self.content_version_of(slot)
+    }
+
+    /// Logical content version published for a physical slot.
+    pub fn content_version_of(&self, slot: Slot) -> Option<ContentVersion> {
+        if !self.slot_content_ready(slot) { return None; }
+        self.content_versions.get(slot.0 as usize).copied().flatten()
+    }
+
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: mesh revision of the physical
+    /// slot currently bound to `port`, or `None` if the port is unwired
+    /// or the slot carries no mesh metadata. `None` reads as
+    /// conservative "changed" to RT consumers — never as "unchanged".
+    pub fn mesh_revision(&self, port: &str) -> Option<crate::scene::mesh_change::MeshRevision> {
+        let slot = self.slot(port)?;
+        self.mesh_revision_of(slot)
+    }
+
+    /// SCENE_MODIFIER_RT_DESIGN.md §3.2: mesh revision published for a
+    /// physical slot, or `None` when no mesh metadata covers it.
+    pub fn mesh_revision_of(
+        &self,
+        slot: Slot,
+    ) -> Option<crate::scene::mesh_change::MeshRevision> {
+        self.mesh_revisions.get(slot.0 as usize).copied()
+    }
+
+    /// Freshness of the physical storage currently bound to a port.
+    /// Use for physical copy/binding guards, paired with storage identity and
+    /// executor lifetime. Identical recopies advance this counter; semantic
+    /// caches must use `content_version` instead.
+    pub fn storage_revision(&self, port: &str) -> Option<StorageRevision> {
+        let slot = self.slot(port)?;
+        self.storage_revision_of(slot)
+    }
+
+    /// Slot bound to the named input port, or `None` if the port is optional
+    /// and unwired.
+    pub fn slot(&self, port: &str) -> Option<Slot> {
+        self.bindings
+            .iter()
+            .find(|(name, _)| *name == port)
+            .map(|(_, slot)| *slot)
+    }
+
+    /// `&GpuTexture` bound to the named input port. `None` if unwired,
+    /// or if the backend doesn't track textures (mock).
+    ///
+    /// The returned reference is tied to the backend's lifetime (`'a`),
+    /// not to a temporary borrow of `self`. This lets a node keep input
+    /// texture refs in locals while it later borrows the encoder
+    /// mutably from the same context.
+    pub fn texture_2d(&self, port: &str) -> Option<&'a GpuTexture> {
+        self.backend.texture_2d(self.slot(port)?)
+    }
+
+    /// 3D `&GpuTexture` bound to the named [`PortType::Texture3D`]
+    /// input port. `None` if unwired or the backend doesn't track 3D
+    /// textures (mock). The volume was pre-bound by the chain build at
+    /// dimensions sized for the producing primitive's volume-resolution
+    /// param.
+    pub fn texture_3d(&self, port: &str) -> Option<&'a GpuTexture> {
+        self.backend.texture_3d(self.slot(port)?)
+    }
+
+    /// Scalar value bound to the named input port (when wired through a
+    /// scalar output upstream).
+    pub fn scalar(&self, port: &str) -> Option<ParamValue> {
+        self.backend.scalar(self.slot(port)?)
+    }
+
+    /// `&GpuBuffer` bound to the named [`PortType::Array`] input port.
+    /// `None` if unwired or if the backend doesn't track Array
+    /// resources (mock backends). The buffer was sized by the chain
+    /// build at `(item_size × max_capacity)` bytes; primitives read
+    /// items 0..active_count from it. Active-count plumbing lands in
+    /// Phase A.7 alongside the particle primitives that need it.
+    pub fn array(&self, port: &str) -> Option<&'a GpuBuffer> {
+        self.backend.array_buffer(self.slot(port)?)
+    }
+
+    /// [`Camera`] bound to the named [`PortType::Camera`] input port.
+    /// `None` if unwired. Camera wires are CPU-only structs, set by
+    /// the producing camera primitive's `set_camera` write and drained
+    /// by the executor into the backend's per-slot map before the
+    /// consumer runs.
+    pub fn camera(&self, port: &str) -> Option<Camera> {
+        if let Some((override_port, camera)) = self.camera_override
+            && override_port == port
+        {
+            return Some(camera);
+        }
+        self.backend.camera(self.slot(port)?)
+    }
+
+    /// [`Light`] bound to the named [`PortType::Light`] input port.
+    /// `None` if unwired. Light wires are CPU-only structs with the same
+    /// drain shape as `Camera` — produced by `node.light`, consumed by
+    /// shading atoms and shadow-aware mesh renderers.
+    pub fn light(&self, port: &str) -> Option<Light> {
+        self.backend.light(self.slot(port)?)
+    }
+
+    /// [`Material`] bound to the named [`PortType::Material`] input port.
+    /// `None` if unwired — but the bundled 3D mesh renderers TREAT an
+    /// unwired material as a structured error (per the Material design
+    /// doc's "no silent fallbacks" rule), so consumers should check for
+    /// `None` and emit `ctx.error(...)` rather than substitute a default.
+    pub fn material(&self, port: &str) -> Option<Material> {
+        self.backend.material(self.slot(port)?)
+    }
+
+    /// [`Transform`] bound to the named [`PortType::Transform`] input port.
+    /// `None` if unwired. Same CPU-struct drain shape as `Camera` / `Light` /
+    /// `Material` — produced by `node.transform_3d`, consumed by
+    /// `render_scene`'s `transform_n` ports.
+    pub fn transform(&self, port: &str) -> Option<Transform> {
+        self.backend.transform(self.slot(port)?)
+    }
+
+    /// [`Atmosphere`] bound to the named [`PortType::Atmosphere`] input port.
+    /// `None` if unwired — `render_scene` treats `None` as
+    /// [`Atmosphere::default`] (fog off), so an unwired atmosphere is
+    /// byte-identical to no atmosphere. Same CPU-struct drain shape as
+    /// `Transform`.
+    pub fn atmosphere(&self, port: &str) -> Option<Atmosphere> {
+        self.backend.atmosphere(self.slot(port)?)
+    }
+
+    /// [`RenderMode`] bound to the named [`PortType::RenderMode`] input port.
+    /// `None` if unwired — `render_scene` treats `None` as
+    /// [`RenderMode::default`] (Rendered), so an unwired render_mode is
+    /// byte-identical to no render_mode. Same CPU-struct drain shape as
+    /// [`Self::atmosphere`].
+    pub fn render_mode(&self, port: &str) -> Option<RenderMode> {
+        self.backend.render_mode(self.slot(port)?)
+    }
+
+    pub fn rigid_body(&self, port: &str) -> Option<RigidBody> {
+        self.backend.rigid_body(self.slot(port)?)
+    }
+
+    /// [`FluidRole`] bound to the named [`PortType::FluidRole`] input port.
+    /// `None` if unwired. The prepared geometry remains shared through its
+    /// `Arc`; field access does not clone mesh data.
+    pub fn fluid_role(&self, port: &str) -> Option<FluidRole> {
+        self.backend.fluid_role(self.slot(port)?)
+    }
+
+    /// [`MeshSource`] bound to the named [`PortType::MeshSource`] input port.
+    /// `None` if unwired. Source descriptions contain no prepared or GPU data.
+    pub fn mesh_source(&self, port: &str) -> Option<MeshSource> {
+        self.backend.mesh_source(self.slot(port)?)
+    }
+
+    /// [`FieldValue`] bound to the named [`PortType::VectorField`] input.
+    /// The payload is an owned CPU evaluator used by native physics solvers.
+    pub fn vector_field(&self, port: &str) -> Option<FieldValue> {
+        self.backend.vector_field(self.slot(port)?)
+    }
+
+    /// [`SceneObject`] bound to the named [`PortType::Object`] input port.
+    /// `None` if unwired. Same CPU-struct drain shape as `Atmosphere` —
+    /// produced by `node.scene_object`, consumed by `render_scene`'s
+    /// `object_k` ports.
+    pub fn object(&self, port: &str) -> Option<SceneObject> {
+        self.backend.object(self.slot(port)?)
+    }
+
+    /// The port→[`Slot`] map already exists internally as [`Self::slot`];
+    /// this is the same accessor named for `node.scene_object`'s own
+    /// evaluate, which reads each of its wired resource inputs' slots (not
+    /// their resolved values — it forwards the `Slot` itself onto the
+    /// [`SceneObject`] it emits) — an accessor, not new state.
+    pub fn slot_of(&self, port: &str) -> Option<Slot> {
+        self.slot(port)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
+        self.bindings.iter().copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.bindings.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bindings.is_empty()
+    }
+
+    /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4 — build a name→[`Slot`]
+    /// index ONCE, for a node whose `evaluate` looks up MANY ports by name
+    /// per frame (e.g. `render_scene`'s `objects × ~20` mesh/material/map/
+    /// transform ports). `slot`/`texture_2d`/etc. above stay the normal path
+    /// for nodes with a handful of ports — a few `iter().find` calls per
+    /// frame is noise; this exists specifically so a hot caller can turn
+    /// O(lookups × wired_ports) linear scans into one O(wired_ports) build
+    /// plus O(1) hash lookups. Pair with the `*_slot` accessors below, which
+    /// resolve an already-known [`Slot`] with no scan at all.
+    pub fn build_index(&self) -> AHashMap<&'static str, Slot> {
+        self.bindings.iter().copied().collect()
+    }
+
+    /// `&GpuTexture` bound to an already-resolved [`Slot`] (e.g. from
+    /// [`Self::build_index`]) — no name scan, unlike [`Self::texture_2d`].
+    pub fn texture_2d_slot(&self, slot: Slot) -> Option<&'a GpuTexture> {
+        self.backend.texture_2d(slot)
+    }
+
+    /// `&GpuBuffer` bound to an already-resolved [`Slot`] — no name scan,
+    /// unlike [`Self::array`].
+    pub fn array_slot(&self, slot: Slot) -> Option<&'a GpuBuffer> {
+        self.backend.array_buffer(slot)
+    }
+
+    /// [`Material`] bound to an already-resolved [`Slot`] — no name scan,
+    /// unlike [`Self::material`].
+    pub fn material_slot(&self, slot: Slot) -> Option<Material> {
+        self.backend.material(slot)
+    }
+
+    /// [`Transform`] bound to an already-resolved [`Slot`] — no name scan,
+    /// unlike [`Self::transform`].
+    pub fn transform_slot(&self, slot: Slot) -> Option<Transform> {
+        self.backend.transform(slot)
+    }
+
+    /// [`Light`] bound to an already-resolved [`Slot`] — no name scan,
+    /// unlike [`Self::light`].
+    pub fn light_slot(&self, slot: Slot) -> Option<Light> {
+        self.backend.light(slot)
+    }
+
+    /// Write generation of an already-resolved [`Slot`] — no name scan,
+    /// unlike [`Self::storage_revision`].
+    pub fn storage_revision_of(&self, slot: Slot) -> Option<StorageRevision> {
+        self.generations.get(slot.0 as usize).copied().map(StorageRevision)
+    }
+
+    /// Content availability of an already-resolved [`Slot`]: `false`
+    /// when the producing node declared its output pending
+    /// ([`EffectNodeContext::mark_outputs_pending`](crate::node_graph::EffectNodeContext::mark_outputs_pending))
+    /// — the slot's bytes are allocation, not content, and must be
+    /// treated as absent. Slots never declared pending read as ready.
+    pub fn slot_content_ready(&self, slot: Slot) -> bool {
+        !self.pending.get(slot.0 as usize).copied().unwrap_or(false)
+    }
+
+    /// True when the named port is wired and its producer declared it
+    /// pending. Unwired ports are never pending.
+    pub fn port_pending(&self, port: &str) -> bool {
+        self.slot(port).is_some_and(|slot| !self.slot_content_ready(slot))
+    }
+
+    /// True when any wired input is pending. Only a node that runs with
+    /// pending inputs ever sees one; the executor holds every other node.
+    pub fn any_pending(&self) -> bool {
+        self.any_pending_except(|_| false)
+    }
+
+    /// True when any wired input the node does not handle itself is
+    /// pending; `handled` names the ports it reads while they are pending.
+    pub fn any_pending_except(&self, handled: impl Fn(&str) -> bool) -> bool {
+        self.bindings
+            .iter()
+            .any(|&(port, slot)| !self.slot_content_ready(slot) && !handled(port))
+    }
+
+    /// [`SceneObject`] bound to an already-resolved [`Slot`] — no name
+    /// scan, unlike [`Self::object`]. `render_scene`'s draw-assembly loop
+    /// resolves `object_k` through its per-frame `build_index()` map
+    /// (RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P4), same shape as
+    /// `material_slot`/`transform_slot` above.
+    pub fn object_slot(&self, slot: Slot) -> Option<SceneObject> {
+        self.backend.object(slot)
+    }
+
+    /// [`FluidRole`] bound to an already-resolved [`Slot`] — no name scan.
+    pub fn fluid_role_slot(&self, slot: Slot) -> Option<FluidRole> {
+        self.backend.fluid_role(slot)
+    }
+
+    /// [`MeshSource`] bound to an already-resolved [`Slot`] — no name scan.
+    pub fn mesh_source_slot(&self, slot: Slot) -> Option<MeshSource> {
+        self.backend.mesh_source(slot)
+    }
+
+    /// Live extent published for the array bound to `port`: its GPU-known
+    /// length. `None` means the whole array is live.
+    pub fn live_extent(&self, port: &str) -> Option<crate::scene::live_extent::LiveExtent> {
+        self.backend.live_extent(self.slot(port)?)
+    }
+
+    /// [`Self::live_extent`] for an already-resolved [`Slot`].
+    pub fn live_extent_slot(&self, slot: Slot) -> Option<crate::scene::live_extent::LiveExtent> {
+        self.backend.live_extent(slot)
+    }
+
+    /// [`FieldValue`] bound to an already-resolved [`Slot`] — no name scan.
+    pub fn vector_field_slot(&self, slot: Slot) -> Option<FieldValue> {
+        self.backend.vector_field(slot)
+    }
+}
+
+/// View of an [`EffectNode`](crate::node_graph::EffectNode)'s output port
+/// bindings for one frame.
+///
+/// Texture writes happen through the backend's shared mutable state
+/// (Metal's `MTLTexture` is interior-mutable via the GPU command
+/// buffer), so the backend reference here can stay shared. Scalar
+/// writes, however, need to land in the backend's CPU-side scalar
+/// map — and the backend can't be borrowed mutably here without
+/// fighting the `NodeInputs` borrow active in the same evaluate call.
+/// The scratch buffer pattern threads writes out through
+/// [`Self::set_scalar`]: nodes push, the executor drains and applies
+/// them via [`Backend::set_scalar`] after `evaluate` returns. Synchronous
+/// — downstream readers in the same frame see the value.
+pub struct NodeOutputs<'a> {
+    bindings: &'a [(&'static str, Slot)],
+    backend: &'a dyn Backend,
+    /// Per-step scratch the executor hands to every node so scalar
+    /// writes can be drained back into the backend after `evaluate`.
+    pending_scalar_writes: &'a mut Vec<(Slot, ParamValue)>,
+    /// Sibling scratch for `Camera` writes — same shape as scalars.
+    pending_camera_writes: &'a mut Vec<(Slot, Camera)>,
+    /// Sibling scratch for `Light` writes — same shape as cameras.
+    pending_light_writes: &'a mut Vec<(Slot, Light)>,
+    /// Sibling scratch for `Material` writes — same shape as lights.
+    pending_material_writes: &'a mut Vec<(Slot, Material)>,
+    /// Sibling scratch for `Transform` writes — same shape as materials.
+    pending_transform_writes: &'a mut Vec<(Slot, Transform)>,
+    /// Sibling scratch for `Atmosphere` writes — same shape as transforms.
+    pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
+    /// Sibling scratch for `RenderMode` writes — same shape as atmospheres.
+    pending_rigid_body_writes: Option<&'a mut Vec<(Slot, RigidBody)>>,
+    pending_fluid_role_writes: Option<&'a mut Vec<(Slot, FluidRole)>>,
+    pending_mesh_source_writes: Option<&'a mut Vec<(Slot, MeshSource)>>,
+    pending_live_extent_writes: Option<&'a mut Vec<(Slot, crate::scene::live_extent::LiveExtent)>>,
+    pending_vector_field_writes: Option<&'a mut Vec<(Slot, FieldValue)>>,
+    pending_render_mode_writes: &'a mut Vec<(Slot, RenderMode)>,
+    /// Sibling scratch for `SceneObject` writes — same shape as atmospheres.
+    pending_object_writes: &'a mut Vec<(Slot, SceneObject)>,
+}
+
+impl<'a> NodeOutputs<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        bindings: &'a [(&'static str, Slot)],
+        backend: &'a dyn Backend,
+        pending_scalar_writes: &'a mut Vec<(Slot, ParamValue)>,
+        pending_camera_writes: &'a mut Vec<(Slot, Camera)>,
+        pending_light_writes: &'a mut Vec<(Slot, Light)>,
+        pending_material_writes: &'a mut Vec<(Slot, Material)>,
+        pending_transform_writes: &'a mut Vec<(Slot, Transform)>,
+        pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
+        pending_render_mode_writes: &'a mut Vec<(Slot, RenderMode)>,
+        pending_object_writes: &'a mut Vec<(Slot, SceneObject)>,
+    ) -> Self {
+        Self {
+            bindings,
+            backend,
+            pending_scalar_writes,
+            pending_camera_writes,
+            pending_light_writes,
+            pending_material_writes,
+            pending_transform_writes,
+            pending_atmosphere_writes,
+            pending_render_mode_writes,
+            pending_rigid_body_writes: None,
+            pending_fluid_role_writes: None,
+            pending_mesh_source_writes: None,
+            pending_live_extent_writes: None,
+            pending_vector_field_writes: None,
+            pending_object_writes,
+        }
+    }
+
+    pub(crate) fn with_rigid_body_writes(mut self, writes: &'a mut Vec<(Slot, RigidBody)>) -> Self {
+        self.pending_rigid_body_writes = Some(writes);
+        self
+    }
+
+    pub fn set_rigid_body(&mut self, port: &str, value: RigidBody) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_rigid_body_writes.as_mut()
+                .expect("executor must provide rigid-body output scratch").push((slot, value));
+        }
+    }
+
+    pub(crate) fn with_fluid_role_writes(
+        mut self,
+        writes: &'a mut Vec<(Slot, FluidRole)>,
+    ) -> Self {
+        self.pending_fluid_role_writes = Some(writes);
+        self
+    }
+
+    /// Queue a [`FluidRole`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns.
+    pub fn set_fluid_role(&mut self, port: &str, value: FluidRole) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_fluid_role_writes
+                .as_mut()
+                .expect("executor must provide fluid-role output scratch")
+                .push((slot, value));
+        }
+    }
+
+    pub(crate) fn with_mesh_source_writes(
+        mut self,
+        writes: &'a mut Vec<(Slot, MeshSource)>,
+    ) -> Self {
+        self.pending_mesh_source_writes = Some(writes);
+        self
+    }
+
+    /// Queue a [`MeshSource`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns.
+    pub fn set_mesh_source(&mut self, port: &str, value: MeshSource) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_mesh_source_writes
+                .as_mut()
+                .expect("executor must provide mesh-source output scratch")
+                .push((slot, value));
+        }
+    }
+
+    pub(crate) fn with_live_extent_writes(
+        mut self,
+        writes: &'a mut Vec<(Slot, crate::scene::live_extent::LiveExtent)>,
+    ) -> Self {
+        self.pending_live_extent_writes = Some(writes);
+        self
+    }
+
+    /// Publish the live extent of the array written to `port` this frame.
+    /// Drained by the executor into the backend after `evaluate` returns.
+    pub fn set_live_extent(&mut self, port: &str, value: crate::scene::live_extent::LiveExtent) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_live_extent_writes
+                .as_mut()
+                .expect("executor must provide live-extent output scratch")
+                .push((slot, value));
+        }
+    }
+
+    pub(crate) fn with_vector_field_writes(
+        mut self,
+        writes: &'a mut Vec<(Slot, FieldValue)>,
+    ) -> Self {
+        self.pending_vector_field_writes = Some(writes);
+        self
+    }
+
+    /// Queue a [`FieldValue`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns.
+    pub fn set_vector_field(&mut self, port: &str, value: FieldValue) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_vector_field_writes
+                .as_mut()
+                .expect("executor must provide vector-field output scratch")
+                .push((slot, value));
+        }
+    }
+
+    pub fn slot(&self, port: &str) -> Option<Slot> {
+        self.bindings
+            .iter()
+            .find(|(name, _)| *name == port)
+            .map(|(_, slot)| *slot)
+    }
+
+    /// `&GpuTexture` an EffectNode should *write to* for the named output
+    /// port. The encoder uses this as the render-target / storage-texture
+    /// binding when dispatching the node's shader.
+    ///
+    /// The returned reference is tied to the backend's lifetime (`'a`),
+    /// matching `NodeInputs::texture_2d` so a node can hold both input
+    /// and output texture refs in locals across the encoder's mutable
+    /// borrow.
+    pub fn texture_2d(&self, port: &str) -> Option<&'a GpuTexture> {
+        let slot = self.slot(port)?;
+        if self.backend.provided_texture_descriptor(slot).is_some() { return None; }
+        self.backend.texture_2d(slot)
+    }
+
+    /// Descriptor for an immutable texture supplied by the node. None means
+    /// the caller must use the ordinary writable/prebound output path.
+    pub fn provided_texture_descriptor(&self, port: &str) -> Option<manifold_gpu::GpuTextureDesc<'static>> {
+        self.backend.provided_texture_descriptor(self.slot(port)?)
+    }
+
+    /// 3D `&GpuTexture` an EffectNode should *write to* for the named
+    /// [`PortType::Texture3D`] output port. Pre-bound by chain build at
+    /// dimensions sized for the producing primitive's volume-resolution
+    /// param. Same lifetime semantics as `texture_2d`.
+    pub fn texture_3d(&self, port: &str) -> Option<&'a GpuTexture> {
+        self.backend.texture_3d(self.slot(port)?)
+    }
+
+    /// `&GpuBuffer` an EffectNode should *write to* for the named
+    /// [`PortType::Array`] output port. Pre-bound by chain build at
+    /// `(item_size × max_capacity)` bytes — the primitive fills items
+    /// 0..active_count via compute shader stores. Same lifetime
+    /// semantics as `texture_2d`.
+    pub fn array(&self, port: &str) -> Option<&'a GpuBuffer> {
+        self.backend.array_buffer(self.slot(port)?)
+    }
+
+    /// Queue a scalar write to the named output port. The executor
+    /// applies the write through [`Backend::set_scalar`] after the
+    /// node's `evaluate` returns; downstream readers in the same
+    /// frame see the value via [`NodeInputs::scalar`]. A no-op when
+    /// `port` isn't a declared output on this node (debug-builds
+    /// could assert; production silently drops).
+    pub fn set_scalar(&mut self, port: &str, value: ParamValue) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_scalar_writes.push((slot, value));
+        }
+    }
+
+    /// Queue a [`Camera`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns; same semantics
+    /// as `set_scalar`.
+    pub fn set_camera(&mut self, port: &str, value: Camera) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_camera_writes.push((slot, value));
+        }
+    }
+
+    /// Queue a [`Light`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns; same semantics
+    /// as `set_camera`.
+    pub fn set_light(&mut self, port: &str, value: Light) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_light_writes.push((slot, value));
+        }
+    }
+
+    /// Queue a [`Material`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns; same semantics
+    /// as `set_light`.
+    pub fn set_material(&mut self, port: &str, value: Material) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_material_writes.push((slot, value));
+        }
+    }
+
+    /// Queue a [`Transform`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns; same semantics
+    /// as `set_material`.
+    pub fn set_transform(&mut self, port: &str, value: Transform) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_transform_writes.push((slot, value));
+        }
+    }
+
+    /// Queue an [`Atmosphere`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns; same semantics as
+    /// `set_transform`.
+    pub fn set_atmosphere(&mut self, port: &str, value: Atmosphere) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_atmosphere_writes.push((slot, value));
+        }
+    }
+
+    /// Queue a [`RenderMode`] write to the named output port. Drained by
+    /// the executor into the backend after `evaluate` returns; same
+    /// semantics as `set_atmosphere`.
+    pub fn set_render_mode(&mut self, port: &str, value: RenderMode) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_render_mode_writes.push((slot, value));
+        }
+    }
+
+    /// Queue a [`SceneObject`] write to the named output port. Drained by
+    /// the executor into the backend after `evaluate` returns; same
+    /// semantics as `set_atmosphere`.
+    pub fn set_object(&mut self, port: &str, value: SceneObject) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_object_writes.push((slot, value));
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, Slot)> + '_ {
+        self.bindings.iter().copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.bindings.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bindings.is_empty()
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod array_accessor_tests {
+    //! Phase A.5 of `BUFFER_PORT_PLAN`. Verifies the
+    //! [`NodeInputs::array`] / [`NodeOutputs::array`] accessors
+    //! resolve port names through the backend's [`PortType::Array`]
+    //! storage end-to-end.
+
+    use manifold_gpu::GpuTextureFormat;
+
+    use super::*;
+    use crate::exec::metal_backend::MetalBackend;
+    use crate::exec::execution_plan::ResourceId;
+
+    #[test]
+    fn inputs_array_resolves_pre_bound_buffer_by_port_name() {
+        let device = manifold_gpu::testkit::test_device();
+        let mut backend = MetalBackend::new(device.arc(), 16, 16, GpuTextureFormat::Rgba16Float);
+        let buffer = device.create_buffer(2048);
+        let expected_size = buffer.size;
+
+        let slot = backend.pre_bind_array(ResourceId(0), buffer);
+        let bindings: &[(&'static str, Slot)] = &[("particles", slot)];
+        let inputs = NodeInputs::new(bindings, &backend, &[]);
+
+        let got = inputs.array("particles").expect("should resolve");
+        assert_eq!(got.size, expected_size);
+        assert!(inputs.array("missing_port").is_none());
+    }
+
+    #[test]
+    fn outputs_array_resolves_pre_bound_buffer_by_port_name() {
+        let device = manifold_gpu::testkit::test_device();
+        let mut backend = MetalBackend::new(device.arc(), 16, 16, GpuTextureFormat::Rgba16Float);
+        let buffer = device.create_buffer(4096);
+        let expected_size = buffer.size;
+
+        let slot = backend.pre_bind_array(ResourceId(0), buffer);
+        let bindings: &[(&'static str, Slot)] = &[("particles_out", slot)];
+        let mut scratch = Vec::new();
+        let mut cam_scratch = Vec::new();
+        let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
+        let mut transform_scratch = Vec::new();
+        let mut atmosphere_scratch = Vec::new();
+        let mut render_mode_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
+        let outputs = NodeOutputs::new(
+            bindings,
+            &backend,
+            &mut scratch,
+            &mut cam_scratch,
+            &mut light_scratch,
+            &mut material_scratch,
+            &mut transform_scratch,
+            &mut atmosphere_scratch,
+            &mut render_mode_scratch,
+            &mut object_scratch,
+        );
+
+        let got = outputs.array("particles_out").expect("should resolve");
+        assert_eq!(got.size, expected_size);
+    }
+}
+
+#[cfg(test)]
+mod camera_override_tests {
+    use super::*;
+    use crate::exec::backend::Backend;
+    use crate::exec::execution_plan::ResourceId;
+    use crate::ports::PortType;
+
+    #[test]
+    fn camera_override_is_scoped_to_the_named_port() {
+        let mut backend = crate::exec::backend::MockBackend::new();
+        let camera_slot = backend.acquire(
+            ResourceId(0),
+            PortType::Camera,
+            None,
+            (0, 0),
+        );
+        let other_slot = backend.acquire(
+            ResourceId(1),
+            PortType::Camera,
+            None,
+            (0, 0),
+        );
+        let underlying = Camera::default_perspective();
+        let override_camera = Camera::from_pos_euler(
+            [1.0, 2.0, -4.0],
+            0.2,
+            -0.1,
+            0.0,
+            0.8,
+            0.05,
+            200.0,
+        );
+        Backend::set_camera(&mut backend, camera_slot, underlying);
+        Backend::set_camera(&mut backend, other_slot, underlying);
+        let bindings = [("camera", camera_slot), ("other", other_slot)];
+        let inputs = NodeInputs::new(&bindings, &backend, &[])
+            .with_camera_override("camera", override_camera);
+
+        assert_eq!(inputs.camera("camera"), Some(override_camera));
+        assert_eq!(inputs.camera("other"), Some(underlying));
+        assert_eq!(backend.camera(camera_slot), Some(underlying));
+        assert_eq!(inputs.scalar("camera"), None);
+    }
+}

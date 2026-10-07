@@ -10,10 +10,10 @@
 
 use std::sync::OnceLock;
 
-use manifold_renderer::node_graph::Transform;
-use manifold_renderer::node_graph::fluid::domain_layout;
-use manifold_renderer::node_graph::fluid_particles::FluidParticle;
-use manifold_renderer::node_graph::matter::look::{ALIGNMENT_TICKS, Cells, LookRecorder};
+use manifold_node_engine::scene::transform::Transform;
+use manifold_node_engine::water::fluid::domain_layout;
+use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::water::matter::look::{ALIGNMENT_TICKS, Cells, LookRecorder};
 
 use crate::matter_scene::{MatterScene, SceneSettings};
 

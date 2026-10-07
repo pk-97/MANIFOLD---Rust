@@ -13,11 +13,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 const TAPER_AXES: &[&str] = &["X", "Y", "Z"];
 
@@ -39,7 +39,7 @@ struct TaperUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TaperMesh,
     type_id: "node.taper_mesh",
     purpose: "Per-vertex taper of an Array<MeshVertex> along `axis`. s(v) = mix(1, taper, clamp((coord(v) - center) / length, 0, 1) * w), where coord(v) is the vertex's coordinate along `axis` and w is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). The two off-axis position components scale by s (taper=1 no change, taper=0 collapses to a point on the axis); normal off-axis components divide by s and the normal renormalizes — exact for this transform (D4). `t*w` is not re-clamped after the mix, so weights above 1.0 produce honest extrapolation (over-taper / flare) rather than a silent clamp.",
@@ -111,7 +111,7 @@ crate::primitive! {
 // `run()` does). The marker carries the member→fused-port mapping for the
 // `weights` port (fused kernels rename inputs to `src_<k>`).
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.taper_mesh",
         array_ports: &["weights"],
         recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
@@ -124,7 +124,7 @@ impl Primitive for TaperMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -225,7 +225,7 @@ mod gpu_tests {
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<TaperMesh>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<TaperMesh>()
             .expect("taper_mesh buffer codegen")
     }
 
@@ -284,7 +284,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "taper-mesh-test",
         );
         let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
@@ -339,7 +339,7 @@ mod gpu_tests {
 
     #[test]
     fn matches_hand_formula_analytically() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src = vec![
             mk_vertex([0.5, -0.3, 1.2], [0.267, 0.535, 0.802], [0.1, 0.2]),
@@ -372,7 +372,7 @@ mod gpu_tests {
 
     #[test]
     fn count_order_and_uv_are_preserved() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src = vec![
             mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.1, 0.2]),
@@ -388,7 +388,7 @@ mod gpu_tests {
 
     #[test]
     fn short_weights_degrade_to_one_for_the_tail() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         // 12 identical vertices at y=1.0 (axis=Y) so the off-axis scale
         // directly reads off the effective weight.

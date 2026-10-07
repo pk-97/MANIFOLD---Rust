@@ -9,11 +9,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::freeze::classify::FusedOutputCapacity;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::freeze::classify::FusedOutputCapacity;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Generated-codegen uniform layout: `amount`, then the injected element
 /// count and padding required by the buffer standalone wrapper.
@@ -26,7 +26,7 @@ struct Uniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MixArrays,
     type_id: "node.mix_arrays",
     purpose: "Interpolate two equal-capacity GPU Array<f32> buffers element by element: out = a + (b - a) * amount. The amount port shadows the 0..1 display control and is clamped so interpolated solids stay between the two frames.",
@@ -152,9 +152,9 @@ impl Primitive for MixArrays {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::standalone_for_spec;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
+    use manifold_node_engine::freeze::codegen::standalone_for_spec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn mix_arrays_generated_wgsl_validates() {
@@ -206,8 +206,8 @@ mod tests {
 
     #[test]
     fn mix_arrays_two_node_graph_reports_one_fusion_region() {
-        use crate::testkit::substep_nodes::register_substep_test_nodes;
-        use crate::node_graph::{PrimitiveRegistry, fusion_report};
+        use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
+        use manifold_node_engine::{persistence::PrimitiveRegistry, freeze::fusion_report};
         use manifold_core::effect_graph_def::EffectGraphDef;
 
         let mut registry = PrimitiveRegistry::with_builtin();
@@ -264,12 +264,10 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::effect_node::NodeInstanceId;
-    use crate::node_graph::freeze::classify::FusionKind;
-    use crate::node_graph::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec,
-    };
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::classify::FusionKind;
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec};
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use manifold_gpu::{GpuBuffer, GpuDevice};
 
     fn shared(device: &GpuDevice, data: &[f32]) -> GpuBuffer {
@@ -339,7 +337,7 @@ mod gpu_tests {
 
     #[test]
     fn mix_arrays_matches_cpu_formula_and_clamps_amount() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let a = [0.0, 1.0, -2.0, 10.0, 0.25, -0.75, 4.0, 8.0];
         let b = [2.0, -1.0, 6.0, -2.0, 1.25, 0.75, -4.0, 0.0];
         for amount in [-0.5, 0.0, 0.25, 0.5, 1.0, 1.5] {
@@ -376,7 +374,7 @@ mod gpu_tests {
 
     #[test]
     fn mix_arrays_mix_arrays_fused_matches_unfused() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let a = [0.0, 1.0, -2.0, 10.0, 0.25, -0.75, 4.0, 8.0];
         let b = [2.0, -1.0, 6.0, -2.0, 1.25, 0.75, -4.0, 0.0];
         let c = [-1.0, 3.0, 2.0, 4.0, -0.25, 1.75, 9.0, -8.0];

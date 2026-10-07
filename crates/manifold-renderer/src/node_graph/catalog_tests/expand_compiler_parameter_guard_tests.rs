@@ -1,7 +1,7 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
-use crate::node_graph::persistence::PrimitiveRegistry;
-use crate::node_graph::scene_modifier_expand::SceneModifierExpandError;
-use crate::node_graph::scene_modifier_expand::resolve_modifier_mesh_frames;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::load::expand::SceneModifierExpandError;
+use manifold_node_engine::load::expand::resolve_modifier_mesh_frames;
 
 use std::collections::BTreeMap;
 
@@ -123,21 +123,21 @@ fn calibrated_fixture() -> EffectGraphDef {
     owner
 }
 
-fn runtime(owner: EffectGraphDef, fused: bool) -> crate::preset_runtime::PresetRuntime {
+fn runtime(owner: EffectGraphDef, fused: bool) -> manifold_node_engine::runtime::PresetRuntime {
     let registry = PrimitiveRegistry::with_builtin();
-    crate::preset_runtime::PresetRuntime::from_def_for_render(owner, &registry, None, fused)
+    manifold_node_engine::runtime::PresetRuntime::from_def_for_render(owner, &registry, None, fused)
         .expect("prepared scene modifier runtime")
 }
 
-fn source_id(runtime: &crate::preset_runtime::PresetRuntime) -> crate::node_graph::NodeInstanceId {
+fn source_id(runtime: &manifold_node_engine::runtime::PresetRuntime) -> manifold_node_engine::exec::effect_node::NodeInstanceId {
     runtime
         .graph
         .instance_by_node_id(&NodeId::new("left_mesh"))
         .expect("flattened left source")
 }
 
-fn frame_time() -> crate::node_graph::FrameTime {
-    crate::node_graph::FrameTime {
+fn frame_time() -> manifold_node_engine::exec::effect_node::FrameTime {
+    manifold_node_engine::exec::effect_node::FrameTime {
         beats: Beats(0.0),
         seconds: Seconds(0.0),
         delta: Seconds(1.0 / 60.0),
@@ -174,7 +174,7 @@ fn scene_modifier_parameter_guard_maps_string_binding_and_suspends_invalid_frame
         runtime.execute_frame(frame_time());
         assert!(runtime.errors().iter().any(|error| matches!(
             error,
-            crate::preset_runtime::ChainError::PreparedParameterChanged { node_id, param }
+            manifold_node_engine::runtime::ChainError::PreparedParameterChanged { node_id, param }
                 if node_id == "left_mesh" && param == "path"
         )));
 
@@ -198,7 +198,7 @@ fn scene_modifier_parameter_guard_blocks_source_selector_allows_rt_and_keeps_geo
             .set_param(
                 source,
                 "mesh_index",
-                crate::node_graph::ParamValue::Float(0.0)
+                manifold_node_engine::parameters::ParamValue::Float(0.0)
             )
             .is_err()
     );
@@ -206,7 +206,7 @@ fn scene_modifier_parameter_guard_blocks_source_selector_allows_rt_and_keeps_geo
     runtime.graph.set_param_unchecked(
         source,
         "mesh_index",
-        crate::node_graph::ParamValue::Float(0.0),
+        manifold_node_engine::parameters::ParamValue::Float(0.0),
     );
     assert_eq!(runtime.graph.get_node(source).unwrap().param_epoch, before);
     assert_eq!(
@@ -223,7 +223,7 @@ fn scene_modifier_parameter_guard_blocks_source_selector_allows_rt_and_keeps_geo
         .set_param(
             scene,
             "rt_enabled",
-            crate::node_graph::ParamValue::Bool(true)
+            manifold_node_engine::parameters::ParamValue::Bool(true)
         )
         .is_ok());
     assert!(runtime
@@ -231,7 +231,7 @@ fn scene_modifier_parameter_guard_blocks_source_selector_allows_rt_and_keeps_geo
         .set_param(
             scene,
             "rt_enabled",
-            crate::node_graph::ParamValue::Bool(false)
+            manifold_node_engine::parameters::ParamValue::Bool(false)
         )
         .is_ok());
 
@@ -253,7 +253,7 @@ fn scene_modifier_parameter_guard_blocks_source_selector_allows_rt_and_keeps_geo
             .set_param(
                 copy_id,
                 "amplitude",
-                crate::node_graph::ParamValue::Float(0.31)
+                manifold_node_engine::parameters::ParamValue::Float(0.31)
             )
             .is_ok()
     );
@@ -290,12 +290,12 @@ fn scene_modifier_parameter_guard_rejects_initial_selector_change_before_gpu() {
     metadata.bindings.push(binding);
     let registry = PrimitiveRegistry::with_builtin();
     let result =
-        crate::preset_runtime::PresetRuntime::from_def_for_render(owner, &registry, None, false);
+        manifold_node_engine::runtime::PresetRuntime::from_def_for_render(owner, &registry, None, false);
     assert!(
         matches!(
             &result,
             Err(
-                crate::preset_runtime::JsonGeneratorLoadError::SceneModifier(
+                manifold_node_engine::runtime::JsonGeneratorLoadError::SceneModifier(
                     SceneModifierExpandError::UnsupportedCoordinateFrame { .. }
                 )
             )

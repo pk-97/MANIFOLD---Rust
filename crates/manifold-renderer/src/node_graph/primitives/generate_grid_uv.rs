@@ -26,15 +26,15 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 pub const GRID_UV_DEFAULT_SIZE: u32 = 24;
 pub const GRID_UV_MAX_SIZE: u32 = 64;
 pub const TAU: f32 = std::f32::consts::TAU;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GenerateGridUv,
     type_id: "node.grid_points",
     purpose: "Emit two Array<f32> outputs (u_values, v_values) sampling a 2D parameter domain [0, u_max) × [0, v_max) at grid_size steps along each axis, flattened to grid_size² entries in row-major order (idx = iu * grid_size + iv). The parametric-surface authoring atom: pair with array_math (Cos / Sin / ScaleOffset) + pack_vec4 + edges_from_grid_uv to author any (u, v)-parametric surface in the graph — Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh — without a per-surface Rust atom. End-exclusive sampling matches periodic-surface conventions where the wrap edge is supplied by edges_from_grid_uv. CPU-only — runs on the content thread so downstream CPU readers see same-frame writes.",
@@ -86,7 +86,7 @@ crate::primitive! {
 /// Read `grid_size` from the params bag, clamped to the valid range.
 /// Shared by `array_output_capacity` (plan time) and `run` (frame time)
 /// so buffer sizing always matches the sample loop.
-fn read_grid_size(params: &crate::node_graph::effect_node::ParamValues) -> u32 {
+fn read_grid_size(params: &manifold_node_engine::exec::effect_node::ParamValues) -> u32 {
     match params.get("grid_size") {
         Some(ParamValue::Float(n)) => n.round().max(2.0) as u32,
         _ => GRID_UV_DEFAULT_SIZE,
@@ -98,7 +98,7 @@ impl Primitive for GenerateGridUv {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         let n = read_grid_size(params);
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn output_capacity_scales_with_grid_size() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = GenerateGridUv::new();
 
         let default = ParamValues::default();

@@ -12,12 +12,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: WetDry,
     type_id: "node.wet_dry",
     purpose: "Crossfade a processed `wet` texture back over the original `dry` texture by a `wet_dry` factor [0,1]. At 0 returns dry unchanged; at 1 returns wet. RGBA-wide lerp.",
@@ -125,15 +125,12 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::Slot;
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::{
-        ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
-        ParamValue, Source, compile,
-    };
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     use super::WetDry;
 
@@ -160,7 +157,7 @@ mod gpu_tests {
     }
 
     fn run_wet_dry_at(dry_rgba: [f32; 4], wet_rgba: [f32; 4], wet_dry: f32) -> [f32; 4] {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -274,9 +271,9 @@ mod gpu_tests {
     /// be the pure `dry` colour.
     #[test]
     fn wet_dry_wired_scalar_overrides_param() {
-        use super::super::Value as ValuePrimitive;
+        use manifold_node_engine::primitives::value::Value as ValuePrimitive;
 
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
         let dry = [0.2_f32, 0.4, 0.6, 0.8];

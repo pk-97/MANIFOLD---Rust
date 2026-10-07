@@ -297,7 +297,7 @@ impl ContentThread {
         // shared state.
         let drain_start = std::time::Instant::now();
         let mut drain_logged = false;
-        while manifold_renderer::preset_runtime::prewarm_worker_pending_count() > 0 {
+        while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
             if start.elapsed() >= budget.total {
                 log::warn!(
                     "[ContentThread] Warmup fusion worker drain timed out after {:.1?}; \
@@ -307,7 +307,7 @@ impl ContentThread {
                 any_budget_exhausted = true;
                 break;
             }
-            manifold_renderer::node_graph::freeze::install::pump_segment_results();
+            manifold_node_engine::freeze::install::pump_segment_results();
             std::thread::sleep(std::time::Duration::from_millis(2));
             if !drain_logged && drain_start.elapsed() >= std::time::Duration::from_secs(1) {
                 log::info!("[ContentThread] Waiting for fusion worker drain...");
@@ -452,13 +452,13 @@ impl ContentThread {
                 // rebuild happens during warmup rather than on stage. The loop
                 // stops once a chain pass produces no new worker jobs (or the
                 // budget / loop cap is hit).
-                let pending_after = manifold_renderer::preset_runtime::prewarm_worker_pending_count();
+                let pending_after = manifold_node_engine::runtime::prewarm_worker_pending_count();
                 if pending_after == 0 {
                     break;
                 }
                 let drain_start = std::time::Instant::now();
                 let mut drain_logged = false;
-                while manifold_renderer::preset_runtime::prewarm_worker_pending_count() > 0 {
+                while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
                     if start.elapsed() >= budget.total {
                         log::warn!(
                             "[ContentThread] Warmup chain-fusion drain timed out after {:.1?}; \
@@ -469,7 +469,7 @@ impl ContentThread {
                             layer_completed = false;
                         break;
                     }
-                    manifold_renderer::node_graph::freeze::install::pump_segment_results();
+                    manifold_node_engine::freeze::install::pump_segment_results();
                     std::thread::sleep(std::time::Duration::from_millis(2));
                     if !drain_logged
                         && drain_start.elapsed() >= std::time::Duration::from_secs(1)
@@ -498,7 +498,7 @@ impl ContentThread {
                 name: layer_name.clone(),
                 elapsed_ms: layer_start.elapsed().as_secs_f64() * 1000.0,
                 completed: layer_completed && start.elapsed() < budget.total
-                    && manifold_renderer::preset_runtime::prewarm_worker_pending_count() == 0,
+                    && manifold_node_engine::runtime::prewarm_worker_pending_count() == 0,
                 allocated_gpu_bytes: self.content_pipeline.native_device()
                     .and_then(|device| device.modifier_memory_snapshot())
                     .map(|memory| memory.current_allocated_bytes),
@@ -564,13 +564,13 @@ impl ContentThread {
                     manifold_core::WarmupOutcome::Quiescent => {}
                 }
 
-                let pending_after = manifold_renderer::preset_runtime::prewarm_worker_pending_count();
+                let pending_after = manifold_node_engine::runtime::prewarm_worker_pending_count();
                 if pending_after == 0 {
                     break;
                 }
                 let drain_start = std::time::Instant::now();
                 let mut drain_logged = false;
-                while manifold_renderer::preset_runtime::prewarm_worker_pending_count() > 0 {
+                while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
                     if start.elapsed() >= budget.total {
                         log::warn!(
                             "[ContentThread] Warmup clip-topology fusion drain timed out \
@@ -581,7 +581,7 @@ impl ContentThread {
                         any_budget_exhausted = true;
                         break;
                     }
-                    manifold_renderer::node_graph::freeze::install::pump_segment_results();
+                    manifold_node_engine::freeze::install::pump_segment_results();
                     std::thread::sleep(std::time::Duration::from_millis(2));
                     if !drain_logged
                         && drain_start.elapsed() >= std::time::Duration::from_secs(1)
@@ -620,13 +620,13 @@ impl ContentThread {
                     manifold_core::WarmupOutcome::Quiescent => {}
                 }
 
-                let pending_after = manifold_renderer::preset_runtime::prewarm_worker_pending_count();
+                let pending_after = manifold_node_engine::runtime::prewarm_worker_pending_count();
                 if pending_after == 0 {
                     break;
                 }
                 let drain_start = std::time::Instant::now();
                 let mut drain_logged = false;
-                while manifold_renderer::preset_runtime::prewarm_worker_pending_count() > 0 {
+                while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
                     if start.elapsed() >= budget.total {
                         log::warn!(
                             "[ContentThread] Warmup master-chain fusion drain timed out after {:.1?}; \
@@ -636,7 +636,7 @@ impl ContentThread {
                         any_budget_exhausted = true;
                         break;
                     }
-                    manifold_renderer::node_graph::freeze::install::pump_segment_results();
+                    manifold_node_engine::freeze::install::pump_segment_results();
                     std::thread::sleep(std::time::Duration::from_millis(2));
                     if !drain_logged
                         && drain_start.elapsed() >= std::time::Duration::from_secs(1)
@@ -673,13 +673,13 @@ impl ContentThread {
                     manifold_core::WarmupOutcome::Quiescent => {}
                 }
 
-                let pending_after = manifold_renderer::preset_runtime::prewarm_worker_pending_count();
+                let pending_after = manifold_node_engine::runtime::prewarm_worker_pending_count();
                 if pending_after == 0 {
                     break;
                 }
                 let drain_start = std::time::Instant::now();
                 let mut drain_logged = false;
-                while manifold_renderer::preset_runtime::prewarm_worker_pending_count() > 0 {
+                while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
                     if start.elapsed() >= budget.total {
                         log::warn!(
                             "[ContentThread] Warmup group-chain fusion drain timed out after {:.1?}; \
@@ -689,7 +689,7 @@ impl ContentThread {
                         any_budget_exhausted = true;
                         break;
                     }
-                    manifold_renderer::node_graph::freeze::install::pump_segment_results();
+                    manifold_node_engine::freeze::install::pump_segment_results();
                     std::thread::sleep(std::time::Duration::from_millis(2));
                     if !drain_logged
                         && drain_start.elapsed() >= std::time::Duration::from_secs(1)
@@ -718,7 +718,7 @@ impl ContentThread {
         // Later chain phases are guarded by the total budget too. Reaching
         // that bound can skip them without entering a phase-specific timeout.
         any_budget_exhausted |= start.elapsed() >= budget.total;
-        let pending_workers = manifold_renderer::preset_runtime::prewarm_worker_pending_count();
+        let pending_workers = manifold_node_engine::runtime::prewarm_worker_pending_count();
         let gpu_faults = manifold_gpu::gpu_fault::fault_count().saturating_sub(initial_gpu_faults);
         let status = if gpu_faults > 0 {
             log::error!(
@@ -835,7 +835,7 @@ impl ContentThread {
                 self.content_pipeline.set_scene_viewport_request(None);
                 self.modifier_preview_context = match &self.watched_graph_target {
                     Some(manifold_core::GraphTarget::SceneModifier { modifier_id, .. }) =>
-                        Some(std::sync::Arc::new(manifold_renderer::preset_runtime::ModifierPreviewContext {
+                        Some(std::sync::Arc::new(manifold_node_engine::runtime::ModifierPreviewContext {
                             modifier_id: modifier_id.clone(), scope, object,
                         })),
                     _ => None,
@@ -1153,7 +1153,7 @@ impl ContentThread {
                 self.commit_automation_recording(true);
             }
             ContentCommand::FireParameter { target, param_id } => {
-                let source = manifold_renderer::node_graph::FrameTime {
+                let source = manifold_node_engine::exec::effect_node::FrameTime {
                     seconds: self.engine.current_time(),
                     beats: self.engine.current_beat(),
                     delta: Seconds::ZERO,
@@ -1179,7 +1179,7 @@ impl ContentThread {
                         if GeneratorRenderer::has_scene_impulse(layer, param_id.as_ref()) {
                             let project_tempo = project
                                 .as_deref()
-                                .map(|project| manifold_renderer::preset_context::ProjectTempo::new(
+                                .map(|project| manifold_node_engine::runtime::preset_context::ProjectTempo::new(
                                     &project.tempo_map,
                                     project.settings.bpm,
                                 ));
@@ -1503,7 +1503,7 @@ impl ContentThread {
                 // (background worker; enqueue-only) so the show's first scenes
                 // dispatch fused instead of per-card while compiles trickle in.
                 if let Some(p) = self.engine.project() {
-                    manifold_renderer::preset_runtime::prewarm_project_chain_segments(p);
+                    manifold_node_engine::runtime::prewarm_project_chain_segments(p);
                 }
                 // Update MIDI mapping config from the newly loaded project.
                 // Port of C# PlaybackController.OnProjectLoaded → midiInputController.SetMidiConfig().

@@ -23,11 +23,11 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler};
 use manifold_native::blob_detector::BlobDetector;
 
-use crate::background_worker::BackgroundWorker;
+use manifold_node_engine::runtime::background_worker::BackgroundWorker;
 use crate::gpu_readback::ReadbackRequest;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// In-memory representation of one detected blob. Pod-equivalent to a
 /// `Channels[x: F32, y: F32, width: F32, height: F32]` wire (4×f32,
@@ -96,7 +96,7 @@ struct BlobState {
     cut_score: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BlobDetectFfi,
     type_id: "node.blob_tracker",
     purpose: "Sparse blob detection (bright-region tracking) via the manifold_native BlobDetector FFI plugin. Input: any Texture2D. Output: Array<Blob> (16-byte items: x, y, width, height in normalized 0..1 image space). First N entries are valid blobs (N = detected count, capped at 32); remaining entries are zeroed. Pair with downstream blob-overlay render primitives to draw the boxes, or wire to any consumer that iterates Array<Blob>.",
