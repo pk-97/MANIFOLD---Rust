@@ -13,6 +13,8 @@
 use std::borrow::Cow;
 
 pub const SURFACE_MESH_ADJACENCY_WGSL: &str = include_str!("shaders/surface_mesh_adjacency.wgsl");
+pub const SURFACE_EDGE_OWNERSHIP_WGSL: &str = include_str!("shaders/surface_edge_ownership.wgsl");
+pub const SURFACE_EDGE_INDEX_WGSL: &str = include_str!("shaders/surface_edge_index.wgsl");
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 

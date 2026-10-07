@@ -46,7 +46,7 @@ struct Uniforms {
     _pad1: u32,
 }
 
-const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
+const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
 
 manifold_node_engine::primitive! {
     name: InstancePositionJitter,

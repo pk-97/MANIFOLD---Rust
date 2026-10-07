@@ -70,7 +70,7 @@ const PARTIAL_SHADERS: &[&str] = &[
     "surface_mesh_adjacency.wgsl",
 ];
 
-const NOISE_COMMON: &str = include_str!("../src/generators/shaders/noise_common.wgsl");
+const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
 const PBR_BRDF: &str = include_str!("../src/node_graph/primitives/shaders/pbr_brdf.wgsl");
 const TONEMAP_COMMON: &str = include_str!("../src/effects/shaders/tonemap_common.wgsl");
 const SAMPLE_FACE_COMMON: &str =
@@ -122,7 +122,11 @@ fn is_partial(path: &std::path::Path) -> bool {
 
 #[test]
 fn all_wgsl_shaders_validate() {
-    let files = find_wgsl_files(&shader_dir());
+    let mut files = find_wgsl_files(&shader_dir());
+    let shared_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../manifold-node-engine/src/gpu/shaders");
+    assert!(shared_shaders.is_dir(), "engine shared shader directory must exist");
+    files.extend(find_wgsl_files(&shared_shaders));
     assert!(
         !files.is_empty(),
         "No .wgsl files found — test infrastructure broken"

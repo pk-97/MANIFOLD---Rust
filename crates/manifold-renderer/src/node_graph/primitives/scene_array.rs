@@ -34,7 +34,7 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 pub const AXIS_LABELS: &[&str] = &["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
 
-const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
+const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
 
 /// Fixed output capacity — the whole corridor concept (D5: vertex/descriptor
 /// cost flat regardless of speed). Value-level constant, never a param

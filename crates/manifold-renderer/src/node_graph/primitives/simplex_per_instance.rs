@@ -40,7 +40,7 @@ struct Uniforms {
 /// creation — same pattern as the legacy `DigitalPlantsGenerator`.
 /// Sharing the exact source file guarantees bit-exact parity with
 /// any other shader that samples `simplex3d` from this library.
-const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
+const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
 
 manifold_node_engine::primitive! {
     name: SimplexPerInstance,

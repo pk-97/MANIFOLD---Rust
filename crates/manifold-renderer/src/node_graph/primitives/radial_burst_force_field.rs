@@ -42,7 +42,7 @@ struct BurstUniforms {
 /// perturbation matches the rest of the renderer's noise math
 /// bit-exactly (same Ashima 3D simplex `simplex3d` source). Lets the
 /// burst integrate cleanly with simplex-based velocity fields.
-const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
+const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
 
 manifold_node_engine::primitive! {
     name: RadialBurstForceField,
