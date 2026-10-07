@@ -26,8 +26,8 @@ use manifold_gpu::{
     GpuAddressMode, GpuBinding, GpuFilterMode, GpuLoadAction, GpuSamplerDesc, GpuTextureFormat,
 };
 
-use crate::generators::mesh_common::InstanceTransform;
-use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, ortho_rh};
+use crate::mesh::InstanceTransform;
+use crate::mesh::pipeline::{look_at_rh, mat4_mul, ortho_rh};
 use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};

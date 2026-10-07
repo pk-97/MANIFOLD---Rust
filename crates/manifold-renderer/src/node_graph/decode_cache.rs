@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 use sha2::{Digest, Sha256};
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::node_graph::gltf_load::{
     GltfMeshSelector, load_gltf_mesh_from_buffers, parse_buffer_snapshot,
 };

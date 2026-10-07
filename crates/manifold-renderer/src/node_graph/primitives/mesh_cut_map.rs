@@ -9,7 +9,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuEvent};
 
-use crate::generators::mesh_common::{MeshVertex, Vec4Vertex};
+use crate::mesh::{MeshVertex, Vec4Vertex};
 use crate::node_graph::content_revision::ContentVersion;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};

@@ -19,7 +19,7 @@ use super::count_surface_triangles::MARCHING_CUBES_COMMON;
 use super::liquid_bricks;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::live_extent::LiveExtent;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -876,7 +876,7 @@ mod tests {
 mod gpu_tests {
     use super::tests::flip_vertex_interp;
     use super::VolumeSurfaceMesh;
-    use crate::generators::mesh_common::MeshVertex;
+    use crate::mesh::MeshVertex;
     use crate::node_graph::primitives::liquid_surface_tests::{params, read, Harness};
     use crate::node_graph::parameters::ParamValue;
 

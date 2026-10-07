@@ -24,7 +24,7 @@
 use std::borrow::Cow;
 use std::sync::mpsc;
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, DEFAULT_MATERIAL_SENTINEL, load_gltf_morph_deltas};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};

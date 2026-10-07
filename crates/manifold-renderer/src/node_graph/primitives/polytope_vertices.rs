@@ -30,7 +30,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::generators::mesh_common::{MeshVertex, PLATONIC_MAX_VERTS, PLATONIC_SHAPES};
+use crate::mesh::{MeshVertex, PLATONIC_MAX_VERTS, PLATONIC_SHAPES};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -180,7 +180,7 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::generators::mesh_common::{MeshVertex, PLATONIC_MAX_VERTS};
+    use crate::mesh::{MeshVertex, PLATONIC_MAX_VERTS};
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::effect_node::{
         EffectNode, EffectNodeContext, EffectNodeType,

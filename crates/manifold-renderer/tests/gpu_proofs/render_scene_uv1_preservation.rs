@@ -6,7 +6,7 @@
 //! Metal, and read back from the output buffer.
 
 use manifold_gpu::GpuBinding;
-use manifold_renderer::generators::mesh_common::MeshVertex;
+use manifold_renderer::mesh::MeshVertex;
 use manifold_renderer::node_graph::freeze::codegen::{standalone_for_spec, ENTRY};
 use manifold_renderer::node_graph::primitives::MorphMesh;
 

@@ -17,7 +17,7 @@
 
 use manifold_gpu::GpuBinding;
 
-use crate::generators::compute_common::Particle;
+use crate::particles::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;

@@ -1,7 +1,7 @@
 //! Numerical GPU proofs for `node.analytic_echo_instances`.
 
 use super::{AnalyticEchoInstances, ECHO_CAPACITY, EchoUniforms as Uniforms};
-use crate::generators::mesh_common::InstanceTransform;
+use crate::mesh::InstanceTransform;
 use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
 use manifold_gpu::GpuBinding;
 

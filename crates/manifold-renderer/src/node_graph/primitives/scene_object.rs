@@ -27,7 +27,7 @@
 
 use std::borrow::Cow;
 
-use crate::generators::mesh_common::{InstanceTransform, MeshVertex, Vec4Vertex};
+use crate::mesh::{InstanceTransform, MeshVertex, Vec4Vertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -313,7 +313,7 @@ mod tests {
         );
         let topology_slot = backend.acquire(
             ResourceId(4),
-            PortType::Array(ArrayType::of_known::<crate::generators::mesh_common::Vec4Vertex>()),
+            PortType::Array(ArrayType::of_known::<crate::mesh::Vec4Vertex>()),
             None,
             (0, 0),
         );

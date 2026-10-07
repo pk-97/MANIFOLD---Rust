@@ -47,7 +47,7 @@ pub struct FluidTakeIdentity {
 /// they describe the most recently completed batch.
 pub struct FluidTakeFrame<'a> {
     pub tick: u64,
-    pub surface: &'a [crate::generators::mesh_common::MeshVertex],
+    pub surface: &'a [crate::mesh::MeshVertex],
     pub whitewater: &'a super::WhitewaterFrame,
     pub obstacle: super::Transform,
     pub stats: manifold_fluids::FrameStats,

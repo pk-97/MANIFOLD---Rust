@@ -665,7 +665,7 @@ mod tests {
         ArrayFeedback, ContainerBounds3D, GenerateCubeMesh, ResolveAccumulator, ScatterParticles,
         SceneObjectNode, SeedParticles, Value, WaveShearMesh,
     };
-    use crate::generators::mesh_common::MeshVertex;
+    use crate::mesh::MeshVertex;
 
     struct FixedArrayNode {
         type_id: EffectNodeType,
