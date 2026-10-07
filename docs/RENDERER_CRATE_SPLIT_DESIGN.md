@@ -115,6 +115,8 @@ Outcomes, decided at P0 (2026-10-07; site detail in `.claude/orchestration/crate
 
 **D12 — Layering is a test over `cargo metadata`, not prose.** `crates/manifold-app/tests/crate_layering.rs` reads `cargo metadata --format-version 1 --no-deps`, builds the workspace edge set (normal + build deps; dev-deps separately), and asserts the table in section 3. Precedent: `godfile_regrowth.rs` (a workspace-reading test with a committed table). It lands in P1a with the first new crate and grows a row per phase. `PHYSICS_ENGINE_BOUNDARY` P1's deny.toml rows coexist; this test is the one that names every workspace crate.
 
+**D13 — The engine crate is grouped by job, not flat.** `manifold-node-engine` has a small root (graph, primitive and its macro, ports, parameters, bindings, descriptor, persistence, validation, snapshot, state store, built-ins) and named groups: `exec` (execution, plan, effect node, backends, resource allocation, substeps), `freeze`, `load` (graph loader, `load::migration` per D5, `load::expand` per D2, chain spec, preset loader), `runtime` (`PresetRuntime` and the runtime-root modules), `gpu` (encoder, render targets, uniform arena, GPU context), `scene` (the D2 vocabulary plus `viewport_camera`, `scene_viewport`, `gltf_anim_identity`), the D3 helpers at the root, `primitives` (exactly the D11 list) and, in v1 only, `water` (the D9 adapters, their runtime files and the water primitives). The P1 brief carries the file-by-file list. Consequences: P5 moves `water` as one directory; INV-7 excludes water primitives by path. Rejected: *a flat root* — about 110 top-level modules, the v1 water residue indistinguishable from the engine, and D5's and D2's own paths contradicted. Rejected: *re-nesting later* — every importer would be rewritten twice.
+
 ---
 
 ## 3. Layering table (enforced by `crate_layering.rs`, D12)
@@ -143,7 +145,7 @@ Forbidden edges, normal and build dependencies (dev-deps may cross downward only
 | INV-4 Emitted WGSL is byte-identical | `fused_wgsl_snapshot_unchanged` + `freeze/reference.rs` goldens, unmodified, green at every landing that touches `freeze/` or a primitive file (CPU test, seconds) |
 | INV-5 No test is lost in a move | `scripts/test_census.py` (P0 deliverable; `cargo nextest list --workspace --message-format json` → multiset of test names with the crate prefix stripped) equal before and after each landing, drift printed by name |
 | INV-6 Decomposed files do not regrow across the move | `godfile_regrowth.rs` CEILINGS rows re-pathed in the same landing; the test is green before push |
-| INV-7 Built-ins are exactly the D11 list | `builtins_match_registry` test in `manifold-node-engine` |
+| INV-7 Built-ins are exactly the D11 list | `builtins_match_registry` in `manifold-node-engine`: the engine crate's registered factories outside `water::primitives` equal the D11 list. |
 | INV-8 Load migrations run in the committed order | `migration_order_matches_table` + LiveSchool round-trip |
 | INV-9 No per-frame change | Move phases: none needed (bodies unchanged, proven by INV-2). P5: `MANIFOLD_RENDER_TRACE=1` run on the water demo project, no frame > 20 ms |
 
@@ -193,7 +195,7 @@ Common to every phase: one Astra lane per phase or sub-phase in its own slot wor
 ### P3 — The catalog, and `manifold-renderer` is gone
 
 - **Entry:** P2a–c landed. `manifold-renderer` now holds: bins, `assets/`, `bundled_presets`, `generators/registry.rs` + `bundled_generator_presets.rs`, cross-family tests. (The water primitives and adapters are in `manifold-node-engine` after P1 per D9, not here.) ⚠ VERIFY-AT-IMPL: `fd -e rs . crates/manifold-renderer/src | wc -l` and list; anything not in this sentence is an escalation.
-- **Deliverables:** `crates/manifold-nodes` per D1 and D6; `assets/` moved; `preset_loader` dev-path resolution takes the assets root from the catalog (`manifold_nodes::ASSETS_DIR: &str = env!("CARGO_MANIFEST_DIR")/assets` passed in, no path baked in the hub); bins moved; cross-family tests folded; `crates/manifold-renderer` deleted; workspace members updated; every remaining `manifold-renderer`/`manifold_renderer` string in `scripts/`, `.config/`, `.claude/`, `docs/` resolved (re-derive: `rg -l 'manifold[-_]renderer' scripts .config .claude docs crates`) — zero hits is the deletion gate; BUG-yd6b (fold per-file test binaries into one per crate) closed.
+- **Deliverables:** `crates/manifold-nodes` per D1 and D6; `assets/` moved; the `PresetAssetsRoot` registration moves from `manifold-renderer` to `manifold-nodes` with the assets; bins moved; cross-family tests folded; `crates/manifold-renderer` deleted; workspace members updated; every remaining `manifold-renderer`/`manifold_renderer` string in `scripts/`, `.config/`, `.claude/`, `docs/` resolved (re-derive: `rg -l 'manifold[-_]renderer' scripts .config .claude docs crates`) — zero hits is the deletion gate; BUG-yd6b (fold per-file test binaries into one per crate) closed.
 - **Gate:** INV-1 through INV-7; full `scripts/landing_gate.py`; `scripts/feature_matrix.py` (every moved feature builds); `rg -l 'manifold[-_]renderer' …` → 0 outside `docs/archive/` and git history.
 - **Demo:** L3 — full flow suite, count match; plus the two P1 preset renders at threshold 0.
 
@@ -229,6 +231,7 @@ Phasing-completeness check: every D1 crate appears in exactly one phase's delive
 10. Built-ins are the D11 list, enforced.
 11. Layering is a `cargo metadata` test (D12).
 12. Astra lanes for P0–P4; Opus lead; P5 is lead work.
+13. The engine crate is grouped by job (D13).
 
 ## 7. Deferred
 
