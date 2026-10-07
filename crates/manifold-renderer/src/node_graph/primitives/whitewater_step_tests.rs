@@ -518,7 +518,7 @@ mod gpu {
 
     use manifold_gpu::GpuBuffer;
 
-    use super::super::liquid_surface_tests::{Harness, read};
+    use crate::testkit::liquid_surface::{Harness, read};
     use super::super::whitewater_step::{Step, StepFrame, StepInputs};
     use super::*;
     use crate::gpu_encoder::GpuEncoder;

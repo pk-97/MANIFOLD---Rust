@@ -106,7 +106,7 @@
     }
 
     fn assert_solid_red(device: &manifold_gpu::GpuDevice, tex: &manifold_gpu::GpuTexture, w: u32, h: u32, what: &str) {
-        let raw = crate::headless_readback::readback_raw_halves(device, tex, w, h);
+        let raw = crate::testkit::gpu::readback_raw_halves(device, tex, w, h);
         let (m, s) = channel_stats(&raw);
         assert!(
             (m[0] - 1.0).abs() < 0.02

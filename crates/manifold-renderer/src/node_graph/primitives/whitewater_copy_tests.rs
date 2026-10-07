@@ -1,6 +1,6 @@
 //! Live field placement and influence ownership, without golden recording.
 use super::*;
-use super::super::liquid_surface_tests::{Harness, read};
+use crate::testkit::liquid_surface::{Harness, read};
 use super::super::whitewater_obstacle_source::WhitewaterSource;
 use crate::node_graph::fluid_particles::FluidParticle;
 use super::super::whitewater_pool_cpu::empty_slot;

@@ -44,12 +44,6 @@ pub use compiler::{
     expand_scene_modifiers, prepare_scene_modifier_math_view, prepare_scene_modifiers,
     validate_modifier_attachment, validate_modifier_runtime,
 };
-#[cfg(test)]
-pub(crate) use math_view::test_owner as math_view_test_owner;
-// Only the gpu-proofs scene proof uses this re-export; compiler tests call
-// math_view::test_owner_with_instance_echoes directly.
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) use math_view::test_owner_with_instance_echoes as math_view_test_owner_with_instance_echoes;
 pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};
 
 pub use frames::{resolve_modifier_mesh_frames, validate_modifier_mesh_frames};
@@ -153,3 +147,8 @@ pub fn force_objects_for_authoring(
         &crate::node_graph::persistence::PrimitiveRegistry::with_builtin(),
     )
 }
+
+#[cfg(test)]
+#[doc(hidden)]
+#[path = "../testkit/expansion.rs"]
+pub(crate) mod testkit;

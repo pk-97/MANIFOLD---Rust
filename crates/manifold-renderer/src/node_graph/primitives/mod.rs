@@ -315,22 +315,6 @@ mod tone_map;
 mod torus_wrap_field;
 mod triangulate_grid;
 mod tube_from_path;
-// D7/P0 I6 test fixture only (docs/CINEMATIC_POST_DESIGN.md), never registered
-// outside test builds. Its only user is `freeze::proof`'s GPU I6 test, hence
-// the gpu-proofs gate. `pub(crate)` so that test can construct it directly (it
-// is deliberately NOT in the global inventory-backed registry — see the
-// module doc comment).
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) mod test_camera_pointwise_fixture;
-// BUG-agfh (Codegen: buffer atom with several outputs, one atomic) test fixture,
-// kept out of the global registry the same way. Not gpu-proofs-gated: its
-// codegen tests run without a device.
-#[cfg(test)]
-pub(crate) mod test_multi_output_atomic_fixture;
-// BUG-u8io (fft-water-fusion-param-capacity) region-compiler fixture, kept out
-// of the global registry the same way.
-#[cfg(test)]
-pub(crate) mod test_face_lattice_fixture;
 mod twist_mesh;
 mod trigger_ease_to;
 mod trigger_gate;
@@ -340,13 +324,13 @@ pub(crate) mod prefix_scan;
 pub(crate) mod sort_particles_into_cells;
 mod running_total;
 mod shape_particle_blobs;
-mod blob_bounds;
+pub(crate) mod blob_bounds;
 pub(crate) mod particle_volume;
 pub(crate) mod lattice_bricks;
 pub(crate) mod liquid_bricks;
 mod smooth_lattice;
 pub(crate) mod dot_products;
-mod divide_by_value;
+pub(crate) mod divide_by_value;
 pub(crate) mod gpu_flip_bodies;
 // Standalone staged encoder; the step keeps its existing pressure path.
 pub mod gpu_flip_lentine;
@@ -440,8 +424,6 @@ mod face_grid_scene_tests;
 pub mod gpu_flip_preset;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_atom_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_body_tests;
 #[cfg(test)]
 mod gpu_flip_extension_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -453,19 +435,13 @@ mod gpu_flip_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_tile_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
-mod whitewater_scene_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_golden_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod liquid_prepare_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod gpu_flip_volume;
 #[cfg(all(test, feature = "water-race-probes"))]
 pub(crate) mod gpu_flip_race_tests;
 #[cfg(all(test, feature = "water-race-probes"))]
 pub(crate) mod gpu_flip_still;
-#[cfg(all(test, feature = "water-race-probes"))]
-mod gpu_flip_render_smoke_tests;
 mod clamp_liquid_to_solids;
 mod count_surface_triangles;
 mod count_surface_edges;
@@ -1136,3 +1112,8 @@ pub(crate) mod whitewater_distance;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_engine_gpu_tests;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[doc(hidden)]
+#[path = "../../testkit/water_nodes.rs"]
+pub(crate) mod testkit;

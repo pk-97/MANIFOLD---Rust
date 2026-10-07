@@ -5,7 +5,7 @@
 //! face positions (`liquid::grid::face_position`).
 
 use super::face_sample_component::FaceSampleComponent;
-use super::liquid_surface_tests::{Harness, params, read};
+use crate::testkit::liquid_surface::{Harness, params, read};
 use super::matter_face_component::MatterFaceComponent;
 use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::fluid_particles::FaceSample;

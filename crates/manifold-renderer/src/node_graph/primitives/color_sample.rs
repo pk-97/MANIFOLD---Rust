@@ -299,7 +299,7 @@ mod gpu_tests {
 
         let r_src = output_resource(&plan, src, "out");
         let src_target = RenderTarget::new(&device, w, h, format, "test-cs-src");
-        crate::clear_texture_committed(
+        crate::testkit::gpu::clear_texture_committed(
             &device,
             &src_target.texture,
             [color[0] as f64, color[1] as f64, color[2] as f64, 1.0],
@@ -366,7 +366,7 @@ mod gpu_tests {
 
         let r_src = output_resource(&plan, src, "out");
         let src_target = RenderTarget::new(&device, w, h, format, "test-cs-luma-src");
-        crate::clear_texture_committed(
+        crate::testkit::gpu::clear_texture_committed(
             &device,
             &src_target.texture,
             [color[0] as f64, color[1] as f64, color[2] as f64, 1.0],

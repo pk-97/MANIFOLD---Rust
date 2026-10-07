@@ -129,8 +129,8 @@ pub struct PresetRuntime {
     /// has no input — it renders *into* a host-provided target texture
     /// installed at the `final_output` source slot each frame.
     pub(super) io: PresetIo,
-    pub(super) width: u32,
-    pub(super) height: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     /// Dimension-independent topology hash. Dimensions are compared separately
     /// so a committed resource resize does not trigger a redundant rebuild.
     pub(super) topology_hash: u64,

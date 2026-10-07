@@ -1004,13 +1004,14 @@ mod tests {
         assert!((conv.apply(400.0) - 400.0 * std::f32::consts::PI / 180.0).abs() < 1e-4);
     }
     use crate::node_graph::boundary_nodes::Source;
-    // AffineTransform stands in for the legacy stateful-feedback
+    // binding fixture stands in for the legacy stateful-feedback
     // fixture: it has multiple `Float` params (`scale`, `translate_x`,
     // `translate_y`, `rotation`) plus port-shadow inputs, which exercise
     // the static / user / fan-out / cache code paths. `Mix` carries an
     // `Enum` `mode` param and is the fixture for the `EnumRound`
     // routing test.
-    use crate::node_graph::primitives::{AffineTransform, Mix};
+    use crate::node_graph::primitives::Mix;
+    use crate::testkit::graph::GraphFixture;
 
     // ---- Conversion tests ----
 
@@ -1100,11 +1101,11 @@ mod tests {
         vec![(NodeId::new("feedback"), feedback)]
     }
 
-    /// Add an `AffineTransform` under handle `"feedback"` AND stamp its
+    /// Add an `binding fixture` under handle `"feedback"` AND stamp its
     /// stable node id to match — mirrors what `instantiate_def` does, so
     /// the node-id resolvers can find it.
     fn add_feedback_node(g: &mut Graph) -> NodeInstanceId {
-        let id = g.add_node_named("feedback", Box::new(AffineTransform::new()));
+        let id = g.add_node_named("feedback", Box::new(GraphFixture::binding()));
         g.set_node_id(id, NodeId::new("feedback"));
         id
     }
@@ -1182,7 +1183,7 @@ mod tests {
         match rb.target {
             ResolvedTarget::Node { node, param } => {
                 assert_eq!(node, feedback);
-                assert_eq!(param.as_ref(), "translate_x"); // pulled off AffineTransform's ParamDef list as a &'static str
+                assert_eq!(param.as_ref(), "translate_x"); // pulled off binding fixture's ParamDef list as a &'static str
             }
             _ => panic!("user bindings always resolve to Node target"),
         }
@@ -1245,7 +1246,7 @@ mod tests {
     #[test]
     fn apply_node_target_writes_param_to_graph() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let binding = resolved_feedback_amount(feedback);
         binding.apply(&mut g, None, 0.75).unwrap();
         let inst = g.get_node(feedback).unwrap();
@@ -1255,13 +1256,13 @@ mod tests {
     /// PARAM_RANGE_CONTRACT_DESIGN.md D3/invariant table: a hint (declared
     /// `range`, the display-only slider span) never restricts a write
     /// through the real param-binding write path — the same path a card
-    /// binding write takes. `AffineTransform.scale`'s declared hint is
+    /// binding write takes. `binding fixture.scale`'s declared hint is
     /// `[0.1, 5.0]`; writing 50.0 (10× past the hint max) through
     /// `ResolvedBinding::apply` must read back intact, unclamped.
     #[test]
     fn apply_writes_out_of_hint_value_intact_unclamped() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let binding = resolved_feedback_amount(feedback);
         binding.apply(&mut g, None, 50.0).unwrap();
         let inst = g.get_node(feedback).unwrap();
@@ -1277,7 +1278,7 @@ mod tests {
     #[test]
     fn apply_node_target_doesnt_need_handle() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let binding = resolved_feedback_amount(feedback);
         // None handle should be fine for Node target.
         assert!(binding.apply(&mut g, None, 0.5).is_ok());
@@ -1286,7 +1287,7 @@ mod tests {
     #[test]
     fn apply_to_unknown_param_returns_graph_error() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let binding = ResolvedBinding {
             id: Cow::Borrowed("nonexistent"),
             label: Cow::Borrowed("Nonexistent"),
@@ -1347,7 +1348,7 @@ mod tests {
         // inner-node param name. Test confirms nothing in the routing
         // code conflates the three.
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let binding = ResolvedBinding {
             id: Cow::Borrowed("blend_strength"),
             label: Cow::Borrowed("Blend Strength"),
@@ -1381,7 +1382,7 @@ mod tests {
     fn wraps_angle_loops_applied_value_onto_tau() {
         use std::f32::consts::TAU;
         let mut g = Graph::new();
-        let node = g.add_node(Box::new(AffineTransform::new()));
+        let node = g.add_node(Box::new(GraphFixture::binding()));
         // A binding flagged as an angle knob loops the applied value onto
         // [0, TAU) at the write boundary. The target slot is a plain float;
         // the test pins the wrap arithmetic itself, independent of whether
@@ -1432,7 +1433,7 @@ mod tests {
     #[test]
     fn apply_bindings_iterates_with_default_fallback() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let bindings = vec![
             resolved_feedback_amount(feedback),
             ResolvedBinding {
@@ -1601,7 +1602,7 @@ mod tests {
     #[test]
     fn apply_bindings_supports_fan_out_when_two_bindings_share_source_index() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         // Two distinct inner targets, both reading from the "amount" param.
         let bindings = vec![
             ResolvedBinding {
@@ -1665,7 +1666,7 @@ mod tests {
     #[test]
     fn apply_bindings_skips_when_outer_value_unchanged() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         let values = ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
         let mut cache = LastAppliedCache::new();
@@ -1700,7 +1701,7 @@ mod tests {
     #[test]
     fn apply_bindings_writes_when_outer_value_changes() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
 
@@ -1736,7 +1737,7 @@ mod tests {
     #[test]
     fn apply_bindings_keeps_writing_under_continuous_automation() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
 
@@ -1763,7 +1764,7 @@ mod tests {
     #[test]
     fn seeded_cache_preserves_hydrated_inner_against_outer_default() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         // Default = 0.5 from `resolved_feedback_amount`. Constructor
         // would seed cache to `Applied(0.5)` — simulate that.
@@ -1794,7 +1795,7 @@ mod tests {
     #[test]
     fn seeded_cache_lets_outer_drag_reclaim_control() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
         cache.seed_from_bindings(&bindings);
@@ -1835,7 +1836,7 @@ mod tests {
     #[test]
     fn repeated_seed_does_not_block_outer_drag() {
         let mut g = Graph::new();
-        let feedback = g.add_node(Box::new(AffineTransform::new()));
+        let feedback = g.add_node(Box::new(GraphFixture::binding()));
         let bindings = vec![resolved_feedback_amount(feedback)];
         let mut cache = LastAppliedCache::new();
         cache.seed_from_bindings(&bindings);

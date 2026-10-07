@@ -296,7 +296,7 @@ mod tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    use super::super::liquid_surface_tests::{Harness, params, read};
+    use crate::testkit::liquid_surface::{Harness, params, read};
     use super::*;
     use crate::node_graph::bindings::Slot;
 

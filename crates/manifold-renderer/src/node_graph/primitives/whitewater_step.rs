@@ -84,7 +84,7 @@ fn fused_source() -> String {
 mod reference;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-pub(super) fn reference_proof_node() -> Box<dyn crate::node_graph::effect_node::EffectNode> {
+pub(crate) fn reference_proof_node() -> Box<dyn crate::node_graph::effect_node::EffectNode> {
     let mut node = WhitewaterStep::new();
     node.step.reference.enabled = true;
     node.step.reference.capture = true;
@@ -92,7 +92,7 @@ pub(super) fn reference_proof_node() -> Box<dyn crate::node_graph::effect_node::
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-pub(super) fn fused_proof_node() -> Box<dyn crate::node_graph::effect_node::EffectNode> {
+pub(crate) fn fused_proof_node() -> Box<dyn crate::node_graph::effect_node::EffectNode> {
     let mut node = WhitewaterStep::new();
     node.step.reference.capture = true;
     Box::new(node)

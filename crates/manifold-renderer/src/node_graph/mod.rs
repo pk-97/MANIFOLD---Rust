@@ -39,7 +39,7 @@ mod boundary_nodes;
 mod mesh_boundary;
 pub mod mesh_change;
 mod bound_graph;
-mod bundled_presets;
+pub(crate) mod bundled_presets;
 pub mod catalog_gen;
 mod chain_spec;
 pub mod composites;
@@ -61,8 +61,6 @@ pub(crate) mod whitewater_handoff;
 pub(crate) mod fluid_cache;
 pub(crate) mod fluid_mesh_upload;
 pub(crate) mod instance_upload;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod fragment_mask_continuity_tests;
 mod graph;
 mod graph_loader;
 pub mod resource_allocation;
@@ -211,3 +209,13 @@ pub(crate) mod migration;
 
 #[cfg(test)]
 mod builtins;
+
+#[cfg(test)]
+mod catalog_tests;
+#[cfg(test)]
+mod scene_tests;
+#[cfg(test)]
+mod image_tests;
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub mod liquid_conformance_fixtures;

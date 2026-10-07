@@ -1,6 +1,7 @@
 //! Fixed-size source textures must retain their dimensions during slot reuse.
 use super::*;
-use crate::node_graph::primitives::{AudioSpectrum, Checkerboard, Gain, Mix};
+use crate::node_graph::primitives::{Gain, Mix};
+use crate::testkit::graph::GraphFixture;
 use crate::node_graph::{FinalOutput, Graph, Source, compile};
 
 #[test]
@@ -53,7 +54,7 @@ fn chain_reserves_provided_image_without_a_writable_backing() {
 fn transient_slots_reuse_only_matching_resolved_dimensions() {
     let mut graph = Graph::new();
     let src = graph.add_node(Box::new(Source::new()));
-    let spectrum = graph.add_node(Box::new(AudioSpectrum::new()));
+    let spectrum = graph.add_node(Box::new(GraphFixture::texture_source(Some((512, 256)))));
     let mix = graph.add_node(Box::new(Mix::new()));
     let gain_1 = graph.add_node(Box::new(Gain::new()));
     let gain_2 = graph.add_node(Box::new(Gain::new()));
@@ -110,7 +111,7 @@ fn transient_slots_reuse_only_matching_resolved_dimensions() {
 fn source_independent_plan_does_not_allocate_external_source_slot() {
     let mut graph = Graph::new();
     let source = graph.add_node(Box::new(Source::new()));
-    let checker = graph.add_node(Box::new(Checkerboard::new()));
+    let checker = graph.add_node(Box::new(GraphFixture::texture_source(None)));
     let output = graph.add_node(Box::new(FinalOutput::new()));
     graph.connect((checker, "out"), (output, "in")).unwrap();
 

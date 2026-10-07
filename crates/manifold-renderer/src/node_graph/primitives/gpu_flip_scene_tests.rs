@@ -13,10 +13,9 @@ use super::gpu_flip_volume::{VolumeDrift, volume_and_area};
 use super::liquid_stats::{LIQUID_STATS_WORDS, SOLVER_WORDS, LiquidTickStats};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
-use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
+use crate::testkit::substep_nodes::register_substep_test_nodes;
 use crate::node_graph::{
-    EffectGraphDefExt, ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId, PrimitiveRegistry,
-    ResourceId, StateStore, compile, pre_allocate_resources,
+    EffectGraphDefExt, ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, PrimitiveRegistry, StateStore, compile, pre_allocate_resources,
 };
 
 const G: f64 = 9.81;
@@ -57,14 +56,9 @@ impl FrameGpuTime {
     }
 }
 
-pub(super) fn node_named(graph: &Graph, name: &str) -> NodeInstanceId {
-    graph.nodes().find(|n| n.node_id.as_str() == name).map(|n| n.id).unwrap_or_else(|| panic!("no node {name}"))
-}
 
-pub(super) fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
-    let step = plan.steps().iter().find(|s| s.node == node).expect("node compiled");
-    step.outputs.iter().find(|(name, _)| *name == port).map(|&(_, r)| r).expect("output port")
-}
+
+
 
 /// The node whose id ends with `name`: the flattened surface group's nodes
 /// carry the group's path before their own id.
@@ -2706,3 +2700,5 @@ fn gpu_flip_sheeting_cost_at_64() {
         t_on[t_on.len() / 2]
     );
 }
+
+use crate::testkit::atom::{node_named, output_of};

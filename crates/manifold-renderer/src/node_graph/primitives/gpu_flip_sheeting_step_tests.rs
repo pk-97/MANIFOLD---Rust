@@ -7,7 +7,7 @@
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs, StepBirths};
 use super::gpu_flip_step::GpuFlipStep;
 use super::gpu_flip_step_tests::cpu_sample_on;
-use super::liquid_surface_tests::{Harness, params, read};
+use crate::testkit::liquid_surface::{Harness, params, read};
 use super::particle_identity::{BirthReservation, ParticleIdentity};
 use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels};
 use super::prefix_scan::ScanLabels;

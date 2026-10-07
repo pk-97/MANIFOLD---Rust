@@ -98,7 +98,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::primitives::liquid_surface_tests::{Harness, read};
+    use crate::testkit::liquid_surface::{Harness, read};
 
     fn reference(blobs: &[FluidBlob]) -> [u32; 2] {
         let mut bounds = [0.0f32; 2];

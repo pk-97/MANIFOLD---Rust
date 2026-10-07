@@ -94,7 +94,7 @@ fn face_grid_fusion_in_host_graphs() {
     use super::gpu_flip_preset::{FACE_NODES, WaterScene, water_def};
     use crate::node_graph::FusionReport;
     let mut registry = crate::node_graph::PrimitiveRegistry::with_builtin();
-    crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+    crate::testkit::substep_nodes::register_substep_test_nodes(&mut registry);
     let report = |def| {
         let report = crate::node_graph::fusion_report(&def, &registry);
         assert!(report.preparation_error.is_none(), "{:?}", report.preparation_error);

@@ -1168,10 +1168,10 @@ mod array_buffer_tests {
     fn provided_texture_resize_preserves_fixed_images_without_writable_allocations() {
         use crate::node_graph::{Graph, compile};
         use crate::node_graph::boundary_nodes::FinalOutput;
-        use crate::node_graph::primitives::GltfTextureSource;
+        use crate::testkit::graph::GraphFixture;
         let (device, mut backend) = make_backend();
         let mut graph = Graph::new();
-        let source = graph.add_node(Box::new(GltfTextureSource::new()));
+        let source = graph.add_node(Box::new(GraphFixture::provided_texture()));
         let output = graph.add_node(Box::new(FinalOutput::new()));
         graph.connect((source, "out"), (output, "in")).unwrap();
         let plan = compile(&graph).unwrap();

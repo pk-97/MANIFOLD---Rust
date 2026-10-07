@@ -102,7 +102,7 @@ fn freeze_keeps_surface_stages_and_fuses_the_real_pointwise_tail() {
 
 #[cfg(feature = "gpu-proofs")]
 mod gpu_tests {
-    use super::super::liquid_surface_tests::{Harness, params, read};
+    use crate::testkit::liquid_surface::{Harness, params, read};
     use super::super::rotate_3d::Rotate3D;
     use super::super::smooth_surface_mesh::SmoothSurfaceMesh;
     use super::super::surface_mesh_normals::SurfaceMeshNormals;

@@ -146,44 +146,20 @@ mod chain_error_tests;
 #[path = "tests/amount_zero_passthrough.rs"]
 mod amount_zero_passthrough_tests;
 
-#[cfg(test)]
-#[path = "tests/generator_runtime.rs"]
-mod generator_runtime_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/array_buffers.rs"]
-mod array_buffers_tests;
 
 #[cfg(test)]
 #[path = "tests/trigger_initialization.rs"]
 mod trigger_initialization;
 
-#[cfg(test)]
-#[path = "tests/bool_convert_heal.rs"]
-mod bool_convert_heal_tests;
 
-#[cfg(test)]
-#[path = "tests/layer_skin.rs"]
-mod layer_skin_tests;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/chain_fusion.rs"]
-mod chain_fusion_tests;
 
 #[cfg(test)]
 #[path = "tests/segment_prewarm.rs"]
 mod segment_prewarm_tests;
 
-#[cfg(test)]
-#[path = "tests/bound_param_survives_rebuild.rs"]
-mod bound_param_survives_rebuild_tests;
 
-#[cfg(test)]
-#[path = "tests/modifier_events.rs"]
-mod modifier_events_tests;
 
-#[cfg(test)]
-#[path = "tests/math_view.rs"]
-mod math_view_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/blob_grain_probe.rs"]
@@ -192,3 +168,8 @@ mod blob_grain_probe_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/mosh.rs"]
 mod mosh_tests;
+
+#[cfg(test)]
+#[doc(hidden)]
+#[path = "../testkit/runtime.rs"]
+pub(crate) mod testkit;

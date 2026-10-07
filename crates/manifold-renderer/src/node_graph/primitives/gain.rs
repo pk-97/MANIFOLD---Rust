@@ -178,7 +178,7 @@ mod gpu_tests {
         let r_out = output_resource(&plan, gain_node, "out");
         let src_target = RenderTarget::new(&device, w, h, format, "gain-src");
         let out_target = RenderTarget::new(&device, w, h, format, "gain-out");
-        crate::clear_texture_committed(
+        crate::testkit::gpu::clear_texture_committed(
             &device,
             &src_target.texture,
             [rgba[0] as f64, rgba[1] as f64, rgba[2] as f64, rgba[3] as f64],
@@ -277,7 +277,7 @@ mod gpu_tests {
         let r_out = output_resource(&plan, gain_node, "out");
         let src_target = RenderTarget::new(&device, w, h, format, "gain-wired-src");
         let out_target = RenderTarget::new(&device, w, h, format, "gain-wired-out");
-        crate::clear_texture_committed(
+        crate::testkit::gpu::clear_texture_committed(
             &device,
             &src_target.texture,
             [src_rgba[0] as f64, src_rgba[1] as f64, src_rgba[2] as f64, src_rgba[3] as f64],

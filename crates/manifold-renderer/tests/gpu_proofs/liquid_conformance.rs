@@ -26,7 +26,7 @@ use manifold_renderer::node_graph::liquid::bodies::LiquidBody;
 use manifold_renderer::node_graph::liquid::coupling::HANDOVER_BOUND;
 use manifold_renderer::node_graph::liquid::grid::{FACE_GRID_PORTS, face_len};
 use manifold_renderer::node_graph::liquid::conformance::{
-    BoxScene, Check, FIXTURE_DENSITY, Fixture, LIQUID_SOLVERS, LiquidSolverRow, LiquidTotals, STACK_HEIGHT, set_type_param,
+    BoxScene, Check, FIXTURE_DENSITY, Fixture, LiquidSolverRow, LiquidTotals, STACK_HEIGHT, set_type_param,
 };
 use manifold_renderer::node_graph::physics::{PhysicsStepScope, native_ticks_on_this_thread};
 use manifold_renderer::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
@@ -999,7 +999,7 @@ fn liquid_hydrostatic_lift() {
     for row in running(Check::HydrostaticLift) {
         for &fixture in Check::HydrostaticLift.fixtures(row.coupled) {
             let (def, scene) = if row.type_id == GPU_FLIP_DOMAIN_TYPE_ID {
-                manifold_renderer::node_graph::liquid::conformance::gpu_flip_engine_tank()
+                manifold_renderer::node_graph::liquid_conformance_fixtures::gpu_flip_engine_tank()
             } else {
                 (self::scene(row, fixture), box_scene(fixture))
             };
@@ -1514,7 +1514,7 @@ fn gpu_flip_body_reaction_matches_engine_substeps() {
     let mut failures = Vec::new();
     for shift in [0.0, 0.025] {
         eprintln!("cube moved {shift} m");
-        let (def, scene) = manifold_renderer::node_graph::liquid::conformance::gpu_flip_engine_tank_moved(shift);
+        let (def, scene) = manifold_renderer::node_graph::liquid_conformance_fixtures::gpu_flip_engine_tank_moved(shift);
         let expected = engine_tank(&scene);
         let mass = f64::from(scene.mass);
         let actual = gpu_flip_tank(def, mass);
@@ -2611,7 +2611,7 @@ fn gpu_flip_light_body_stays_bounded_in_the_dam_break() {
     const FRAMES: u32 = 60;
     const BOUND: f64 = 40.0;
     let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).expect("the GPU FLIP row");
-    let (def, scene) = manifold_renderer::node_graph::liquid::conformance::gpu_flip_dam_break_with_box(0.01);
+    let (def, scene) = manifold_renderer::node_graph::liquid_conformance_fixtures::gpu_flip_dam_break_with_box(0.01);
     let mut run = LiquidRun::offline(row, def, 1);
     let mut peak = 0.0f64;
     for frame in 0..FRAMES {
@@ -2626,3 +2626,5 @@ fn gpu_flip_light_body_stays_bounded_in_the_dam_break() {
     }
     eprintln!("gpu_flip_light_body_stays_bounded_in_the_dam_break: {} kg box, peak {peak:.2} m/s", scene.mass);
 }
+
+use manifold_renderer::node_graph::liquid_conformance_fixtures::LIQUID_SOLVERS;

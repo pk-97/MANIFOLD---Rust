@@ -43,7 +43,7 @@ fn group_mask_reads_dry_input_and_updates_without_rebuild() {
                 runtime.run(&mut gpu, &input.texture, &effects, &groups, &ctx).expect("output");
             }
             encoder.commit_and_wait_completed();
-            let bytes = crate::headless_readback::readback_raw_halves(&device, runtime.output_texture().unwrap(), 16, 16);
+            let bytes = crate::testkit::gpu::readback_raw_halves(&device, runtime.output_texture().unwrap(), 16, 16);
             for pixel in bytes.chunks_exact(8) {
                 for (channel, value) in pixel.chunks_exact(2).enumerate() {
                     let actual = f16::from_bits(u16::from_le_bytes([value[0], value[1]])).to_f32();
@@ -122,7 +122,7 @@ fn group_mask_layer_source_reaches_dispatch_and_survives_reload() {
                 crate::node_graph::RtQuality::default(), &registry, None).unwrap().clone()
         };
         encoder.commit_and_wait_completed();
-        let raw = crate::headless_readback::readback_raw_halves(&device, &output, 16, 16);
+        let raw = crate::testkit::gpu::readback_raw_halves(&device, &output, 16, 16);
         let red = f16::from_bits(u16::from_le_bytes([raw[0], raw[1]])).to_f32();
         assert!((red - expected).abs() < 0.002, "channel={channel} source={present}: {red} != {expected}");
     }
@@ -171,8 +171,8 @@ fn group_mask_circle_moves_over_infrared_without_rebuild() {
             masked.run(&mut gpu, &input.texture, &effects, &groups, &ctx).unwrap();
         }
         encoder.commit_and_wait_completed();
-        let wet = crate::headless_readback::readback_raw_halves(&device, plain.output_texture().unwrap(), 64, 32);
-        let output = crate::headless_readback::readback_raw_halves(&device, masked.output_texture().unwrap(), 64, 32);
+        let wet = crate::testkit::gpu::readback_raw_halves(&device, plain.output_texture().unwrap(), 64, 32);
+        let output = crate::testkit::gpu::readback_raw_halves(&device, masked.output_texture().unwrap(), 64, 32);
         let channel = |bytes: &[u8], x: usize, c: usize| {
             let i = (16 * 64 + x) * 8 + c * 2;
             f16::from_bits(u16::from_le_bytes([bytes[i], bytes[i + 1]])).to_f32()

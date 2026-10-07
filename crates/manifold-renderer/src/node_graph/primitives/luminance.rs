@@ -296,7 +296,7 @@ mod gpu_tests {
             let r_src = output_resource(&plan, src, "out");
             let src_target =
                 RenderTarget::new(&device, w, h, format, "test-lum-bw-src");
-            crate::clear_texture_committed(
+            crate::testkit::gpu::clear_texture_committed(
                 &device,
                 &src_target.texture,
                 [rgb[0], rgb[1], rgb[2], 1.0],

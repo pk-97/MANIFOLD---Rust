@@ -97,7 +97,7 @@ fn asset_definition(directory: &std::path::Path, cache_mode: u32) -> EffectGraph
 fn build(state: &Arc<AtomicU8>, directory: &std::path::Path, cache_mode: u32) -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("test.fluid_time", || {
-        Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
+        fluid_time_observer()
     });
     let state = Arc::clone(state);
     registry.register("node.gltf_animation_source", move || {

@@ -434,4 +434,5 @@ impl PresetRuntime {
 }
 
 #[cfg(test)]
-mod tests;
+#[path = "../testkit/impulses.rs"]
+mod testkit;

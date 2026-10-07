@@ -90,7 +90,7 @@ fn definition(directory: &Path, mode: u32) -> EffectGraphDef {
 fn build(def: EffectGraphDef) -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("test.fluid_time", || {
-        Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
+        fluid_time_observer()
     });
     registry.register("test.string_gravity", || {
         Box::new(StringGravity(EffectNodeType::new("test.string_gravity")))

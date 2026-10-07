@@ -22,8 +22,9 @@
     //! pool. This test pins the contract by constructing the exact
     //! topology and asserting the two slots differ.
     use super::*;
+    use crate::testkit::graph::GraphFixture;
     use crate::node_graph::primitives::{
-        AffineTransform, Feedback, Gain, Mix, Vignette,
+        Gain, Mix,
     };
     use crate::node_graph::{FinalOutput, Graph, Source, compile};
 
@@ -31,10 +32,10 @@
     fn feedback_in_and_out_get_distinct_slots_in_the_closed_loop() {
         let mut graph = Graph::new();
         let src = graph.add_node(Box::new(Source::new()));
-        let fb = graph.add_node(Box::new(Feedback::new()));
-        let aff = graph.add_node(Box::new(AffineTransform::new()));
+        let fb = graph.add_node(Box::new(GraphFixture::feedback()));
+        let aff = graph.add_node(Box::new(GraphFixture::texture_filter()));
         let gain = graph.add_node(Box::new(Gain::new()));
-        let vig = graph.add_node(Box::new(Vignette::new()));
+        let vig = graph.add_node(Box::new(GraphFixture::texture_filter()));
         let mix = graph.add_node(Box::new(Mix::new()));
         let out = graph.add_node(Box::new(FinalOutput::new()));
 

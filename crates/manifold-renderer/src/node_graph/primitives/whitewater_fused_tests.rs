@@ -231,9 +231,10 @@ fn whitewater_half_integer_fixture_has_saturated_energy() {
 #[cfg(feature = "gpu-proofs")]
 mod gpu {
     use super::*;
-    use super::super::super::liquid_surface_tests::read;
+    use crate::testkit::liquid_surface::read;
     use super::super::super::whitewater_pool_cpu::empty_slot;
-    use super::super::super::whitewater_scene_tests::{Show, whitewater_render_def, with_tick_probe, with_whitewater_axes};
+    use crate::testkit::whitewater_scene::{Show, whitewater_render_def, with_tick_probe};
+    use crate::node_graph::primitives::gpu_flip_preset::with_whitewater_axes;
     use super::super::super::gpu_flip_preset::WaterScene;
 
     const PORTS: [&str; 6] = ["proof_sampled", "proof_unscaled", "proof_energy", "proof_counts", "proof_dust_energy", "proof_dust_counts"];

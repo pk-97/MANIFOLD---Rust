@@ -16,12 +16,12 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
 use crate::gpu_encoder::GpuEncoder;
-use crate::headless_readback;
+use crate::testkit::gpu as headless_readback;
 use crate::node_graph::{
     compile, EffectGraphDefExt, Executor, FrameTime, MetalBackend, ParamValue, PrimitiveRegistry,
     StateStore, FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID,
 };
-use crate::preset_thumbnail::{build_test_card_input, output_resource, test_card_pixel};
+use crate::testkit::test_card::{build_test_card_input, output_resource, test_card_pixel};
 use crate::render_target::RenderTarget;
 
 const SIZE: u32 = 128;

@@ -31,18 +31,10 @@ type LeafMap = BTreeMap<String, Vec<NodeId>>;
 pub(crate) mod math_events;
 pub(crate) mod shatter;
 
-#[cfg(test)]
-mod acceleration_tests;
 
-#[cfg(test)]
-mod conformance;
 
 #[cfg(test)]
 mod camera_endpoint_tests;
-#[cfg(test)]
-mod parameter_guard_tests;
-#[cfg(test)]
-mod tests;
 
 fn invalid(path: impl Into<String>, detail: impl Into<String>) -> SceneModifierExpandError {
     SceneModifierExpandError::InvalidRecipe {

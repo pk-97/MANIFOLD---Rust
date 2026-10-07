@@ -826,7 +826,3 @@ impl DigestWriter {
         self.bytes.extend_from_slice(&value.to_be_bytes());
     }
 }
-
-#[cfg(test)]
-#[path = "physics_sources_tests.rs"]
-mod tests;

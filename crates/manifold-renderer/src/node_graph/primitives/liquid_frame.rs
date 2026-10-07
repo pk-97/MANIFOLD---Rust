@@ -432,7 +432,7 @@ mod gpu_tests {
     use super::{ParticlePublication, Publication, LIQUID_STATS_WORDS};
     use super::super::liquid_stats::NARROW_BAND_SHORTAGE_WORD;
     use crate::node_graph::fluid_particles::FluidParticle;
-    use super::super::liquid_surface_tests::read;
+    use crate::testkit::liquid_surface::read;
     use manifold_gpu::GpuBuffer;
 
     fn shared<T: bytemuck::Pod>(device: &crate::TestDevice, values: &[T]) -> GpuBuffer {

@@ -15,7 +15,7 @@ use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::freeze::install::fuse_generator_view;
 use manifold_renderer::node_graph::ports::PortType;
 use manifold_renderer::node_graph::resource_allocation::plan_array_allocations;
-use manifold_renderer::node_graph::substeps::test_nodes::{
+use manifold_renderer::testkit::substep_nodes::{
     particle_step_dt, register_substep_test_nodes,
 };
 use manifold_renderer::node_graph::{

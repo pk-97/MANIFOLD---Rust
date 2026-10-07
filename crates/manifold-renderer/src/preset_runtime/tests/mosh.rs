@@ -1,7 +1,7 @@
 //! Multi-frame evidence through the real effect-chain and parameter binding path.
 use super::*;
 use crate::gpu_encoder::GpuEncoder;
-use crate::headless_readback::readback_raw_halves;
+use crate::testkit::gpu::readback_raw_halves;
 use crate::preset_context::PresetContext;
 use half::f16;
 use manifold_core::PresetTypeId;

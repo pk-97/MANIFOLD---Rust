@@ -1,0 +1,24 @@
+//! Capture observations without exposing recipient or capture storage.
+use crate::preset_runtime::{CapturedSceneImpulse, PreparedSceneImpulse};
+use crate::node_graph::physics_events::ImpulseTarget;
+use manifold_core::NodeId;
+use manifold_physics::{FieldValue, input::EventStamp};
+
+impl PreparedSceneImpulse {
+    #[doc(hidden)]
+    pub(crate) fn test_recipient_count(&self) -> usize { self.recipients.len() }
+    #[doc(hidden)]
+    pub(crate) fn test_recipient_id(&self, index: usize) -> &NodeId { &self.recipients[index].id }
+    #[doc(hidden)]
+    pub(crate) fn test_recipient_target(&self, index: usize) -> ImpulseTarget { self.recipients[index].target }
+}
+impl CapturedSceneImpulse {
+    #[doc(hidden)]
+    pub(crate) fn test_recipient_count(&self) -> usize { self.recipients.len() }
+    #[doc(hidden)]
+    pub(crate) fn test_stamp(&self, index: usize) -> EventStamp { self.stamps[index] }
+    #[doc(hidden)]
+    pub(crate) fn test_stamp_storage(&self) -> *const EventStamp { self.stamps.as_ptr() }
+    #[doc(hidden)]
+    pub(crate) fn test_field(&self) -> Option<&FieldValue> { self.field.as_ref() }
+}
