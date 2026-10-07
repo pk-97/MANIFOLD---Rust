@@ -1203,30 +1203,73 @@ def case_manifest(repo: Path, mode="add") -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_dependency_selector_removal(repo: Path, selector="features", gone=False,
+                                    moved_table=False) -> tuple[bool, str]:
+    option = {"features": '["testkit"]', "default-features": "false", "optional": "true"}[selector]
+    base = MANIFEST_BASE + f'[dependencies]\nleaf = {{ path = "../leaf", {selector} = {option} }}\n'
+    commit_tree(repo, {
+        "Cargo.toml": '[workspace]\nmembers = ["crates/app", "crates/leaf"]\n',
+        "crates/leaf/Cargo.toml": '[package]\nname = "leaf"\n',
+        "crates/app/Cargo.toml": base,
+    }, "base")
+    after = MANIFEST_BASE if gone else MANIFEST_BASE + '[dependencies]\nleaf = { path = "../leaf" }\n'
+    if moved_table:
+        after = after.replace("[dependencies]", "[dev-dependencies]")
+    commit_tree(repo, {"crates/app/Cargo.toml": after}, "remove-selector")
+    code, out = run_checker(repo)
+    return (code == int(not gone) and (field(out, "residue") > 0) == (not gone),
+            f"exit={code} {out.splitlines()[0]}")
+
+
+def case_manifest_carveout(repo: Path, kind="lints", new=False, near_miss=False) -> tuple[bool, str]:
+    commit_tree(repo, {
+        "Cargo.toml": '[workspace]\nmembers = ["crates/app", "crates/leaf"]\n',
+        "crates/leaf/Cargo.toml": '[package]\nname = "leaf"\n',
+        "crates/app/Cargo.toml": MANIFEST_BASE,
+    }, "base")
+    if kind == "lints":
+        wiring = '[lints]\nworkspace = true\n'
+        if near_miss:
+            wiring += 'extra = true\n'
+    elif kind == "empty-feature":
+        wiring = '[features]\ntestkit = []\n'
+    else:
+        table = "dependencies" if near_miss else "dev-dependencies"
+        if kind == "build-features":
+            table = "build-dependencies"
+        wiring = f'[{table}]\nleaf = {{ path = "../leaf", features = ["testkit"] }}\n'
+    path = "crates/new/Cargo.toml" if new else "crates/app/Cargo.toml"
+    commit_tree(repo, {path: MANIFEST_BASE + wiring}, "carveout")
+    code, out = run_checker(repo)
+    drift = near_miss or (kind == "empty-feature" and not new) or kind == "build-features"
+    return (code == int(drift) and (field(out, "residue") > 0) == drift,
+            f"exit={code} {out.splitlines()[0]}")
+
+
 def case_path_rewrite(repo: Path, mode="exact") -> tuple[bool, str]:
     before = ('use crate::node_graph::Thing;\n'
               'fn invoke() {\n    crate::node_graph::run(42);\n'
               '    $crate::node_graph::emit!(value);\n}\n')
-    after = before.replace("$crate::node_graph::", "manifold_graph::").replace(
-        "crate::node_graph::", "manifold_graph::")
+    after = before.replace("$crate::node_graph::", "manifold_node_engine::").replace(
+        "crate::node_graph::", "manifold_node_engine::")
     if mode == "argument":
         after = after.replace("run(42)", "run(43)")
     if mode == "boundary":
         before = before.replace("crate::node_graph::run", "othercrate::node_graph::run")
-        after = after.replace("manifold_graph::run", "othermanifold_graph::run")
+        after = after.replace("manifold_node_engine::run", "othermanifold_node_engine::run")
     if mode in {"string-space", "spacing"}:
         before = before.replace("run(42)", 'run("a b")')
         after = after.replace("run(42)", 'run("ab")' if mode == "string-space" else 'run("a b")')
         if mode == "spacing":
-            after = after.replace("    manifold_graph::run", "        manifold_graph::run")
+            after = after.replace("    manifold_node_engine::run", "        manifold_node_engine::run")
     if mode == "moved-collision":
         before += "fn destination() {\n}\n"
         after += "fn destination() {\n    crate::node_graph::run(42);\n}\n"
     commit_tree(repo, {"caller.rs": before, "other.rs": "// other\n"}, "base")
     commit_tree(repo, {"caller.rs": after if mode != "cross-file" else "// caller\n",
                        "other.rs": after if mode == "cross-file" else "// other\n"}, "paths")
-    args = [] if mode == "implicit" else ["--rewrite", "crate::node_graph::=manifold_graph::",
-                                           "--rewrite", "$crate::node_graph::=manifold_graph::"]
+    args = [] if mode == "implicit" else ["--rewrite", "crate::node_graph::=manifold_node_engine::",
+                                           "--rewrite", "$crate::node_graph::=manifold_node_engine::"]
     code, out = run_checker(repo, *args)
     drift = mode not in {"exact", "spacing"}
     ok = code == int(drift) and (field(out, "residue") > 0) == drift
@@ -1334,6 +1377,21 @@ CASES = [
     ("new manifest unsupported table is residue", lambda repo: case_new_manifest(repo, "table")),
     ("manifest wiring additions", case_manifest),
     ("manifest wiring removals", lambda repo: case_manifest(repo, "remove")),
+    ("remove feature-selected dependency entirely", lambda repo: case_dependency_selector_removal(repo, gone=True)),
+    ("drop features from surviving dependency is residue", case_dependency_selector_removal),
+    ("drop default-features from surviving dependency is residue", lambda repo: case_dependency_selector_removal(repo, "default-features")),
+    ("drop optional from surviving dependency is residue", lambda repo: case_dependency_selector_removal(repo, "optional")),
+    ("dependency survives in another table", lambda repo: case_dependency_selector_removal(repo, moved_table=True)),
+    ("existing manifest inherits workspace lints", case_manifest_carveout),
+    ("existing lint table with second key is residue", lambda repo: case_manifest_carveout(repo, near_miss=True)),
+    ("new manifest inherits workspace lints", lambda repo: case_manifest_carveout(repo, new=True)),
+    ("new lint table with second key is residue", lambda repo: case_manifest_carveout(repo, new=True, near_miss=True)),
+    ("new crate defines empty testkit feature", lambda repo: case_manifest_carveout(repo, "empty-feature", new=True)),
+    ("existing crate empty feature is residue", lambda repo: case_manifest_carveout(repo, "empty-feature")),
+    ("added dev-dependency selects testkit", lambda repo: case_manifest_carveout(repo, "dev-features")),
+    ("new manifest dev-dependency selects testkit", lambda repo: case_manifest_carveout(repo, "dev-features", new=True)),
+    ("normal dependency selecting testkit is residue", lambda repo: case_manifest_carveout(repo, "dev-features", near_miss=True)),
+    ("build dependency selecting testkit is residue", lambda repo: case_manifest_carveout(repo, "build-features")),
     ("default feature forwarding is residue", lambda repo: case_manifest(repo, "default")),
     ("path dependency features are residue", lambda repo: case_manifest(repo, "features")),
     ("path dependency default-features is residue", lambda repo: case_manifest(repo, "default-features")),

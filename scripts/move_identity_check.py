@@ -26,7 +26,7 @@ Usage:
   scripts/move_identity_check.py <base>..<head>      # a range
   scripts/move_identity_check.py --cached            # staged changes
   scripts/move_identity_check.py <ref> --show-all    # print all residue lines
-  scripts/move_identity_check.py <ref> --rewrite 'crate::node_graph::=manifold_graph::'
+  scripts/move_identity_check.py <ref> --rewrite 'crate::node_graph::=manifold_node_engine::'
 
 The moved-line detection uses `--color-moved=plain` with `--color-moved-ws=
 ignore-all-space` so re-indented relocations still count as moves, and pins the
@@ -659,16 +659,19 @@ def external_dependency_lines(paths, read_file) -> set[str]:
 
 
 def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
-                    new_crate=False, external_lines=frozenset()) -> tuple[set[int], set[int]]:
+                    new_crate=False, external_lines=frozenset(), other_path=None) -> tuple[set[int], set[int]]:
     """Eligible physical lines, with table context from the complete revision.
 
-    Added dependencies cannot select features. New manifests contain only package
-    metadata, conservative dependencies and non-default forwarding. Explicit
+    Only added dev-dependencies may select features. Removing feature selectors
+    is wiring only when the dependency key disappears from all dependency tables.
+    New manifests may declare empty non-default features. Exact workspace lint
+    inheritance is wiring in any manifest. Explicit
     rejections cannot pass through git move detection or legacy visibility pairs.
     """
     root = tomllib.loads(read_file("Cargo.toml") or "").get("workspace", {})
     other_root = tomllib.loads(read_other("Cargo.toml") or "").get("workspace", {})
     document = tomllib.loads(source)
+    other_document = tomllib.loads(read_other(other_path or path) or "")
 
     def workspace_crate(directory: str) -> bool:
         directory = posixpath.normpath(directory)
@@ -677,13 +680,21 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
                 and bool(read_file(directory + "/Cargo.toml")))
 
     dependencies = {}
+    surviving_dependencies = set()
     for table in ("dependencies", "dev-dependencies", "build-dependencies"):
         dependencies.update(document.get(table, {}))
+        surviving_dependencies.update(other_document.get(table, {}))
 
-    def local_dependency(value, conservative=True) -> bool:
+    def local_dependency(value, conservative=True, dev_features=False) -> bool:
         keys = {"path", "package"}
         if not conservative:
             keys |= {"features", "optional", "default-features"}
+        elif dev_features:
+            keys.add("features")
+            if isinstance(value, dict) and "features" in value and not (
+                    isinstance(value["features"], list)
+                    and all(isinstance(feature, str) for feature in value["features"])):
+                return False
         return (isinstance(value, dict) and isinstance(value.get("path"), str)
                 and set(value) <= keys
                 and workspace_crate(posixpath.join(posixpath.dirname(path), value["path"])))
@@ -692,6 +703,8 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
         return isinstance(value, dict) and value == {"workspace": True}
 
     def eligible(table: str, key: str, value, lines) -> bool:
+        if table == "lints":
+            return key == "workspace" and value is True and len(document["lints"]) == 1
         if table == "package" and new_crate:
             return key in {"name", "version", "edition", "publish", "license", "description"}
         if table == "workspace" and key == "members":
@@ -708,10 +721,11 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
                         return False
             return True
         if table in {"dependencies", "dev-dependencies", "build-dependencies"}:
-            return (local_dependency(value, conservative=sign == "+")
+            return (local_dependency(value, conservative=sign == "+" or key in surviving_dependencies,
+                                     dev_features=sign == "+" and table == "dev-dependencies")
                     or (new_crate and (workspace_dependency(value)
                                        or (len(lines) == 1 and lines[0].strip() in external_lines))))
-        if table == "features" and key != "default" and isinstance(value, list) and value:
+        if table == "features" and key != "default" and isinstance(value, list) and (value or new_crate):
             for feature in value:
                 if not isinstance(feature, str) or not re.fullmatch(r"[\w-]+\??/[\w-]+", feature):
                     return False
@@ -735,11 +749,11 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
     start = 0
 
     def finish_table():
-        if (header is not None and (table in {"dependencies", "dev-dependencies", "build-dependencies", "features"}
+        if (header is not None and (table in {"dependencies", "dev-dependencies", "build-dependencies", "features", "lints"}
                                    or (new_crate and table == "package"))
                 and entries and all(entries)):
             allowed.add(header)
-        elif header is not None and new_crate:
+        elif header is not None and (new_crate or table == "lints"):
             forbidden.add(header)
 
     for number, line in enumerate(source.splitlines(), 1):
@@ -764,9 +778,10 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
         entries.append(ok)
         if ok:
             allowed.update(range(start, number + 1))
-        elif (new_crate or (table == "features" and "default" in entry)
+        elif (new_crate or table == "lints"
+              or (table == "features" and ("default" in entry or any(value == [] for value in entry.values())))
               or (table == "workspace" and "members" in entry)
-              or (sign == "+" and table in {"dependencies", "dev-dependencies", "build-dependencies"}
+              or (table in {"dependencies", "dev-dependencies", "build-dependencies"}
                   and any(isinstance(value, dict) and "path" in value for value in entry.values()))):
             forbidden.update(range(start, number + 1))
         pending = []
@@ -818,7 +833,8 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
                 source = reader(file_path) if file_path != "/dev/null" else ""
                 other = read_new if sign == "-" else read_old
                 eligible[sign], forbidden[sign] = manifest_wiring(
-                    source, file_path, reader, other, sign, new_manifest, external_lines
+                    source, file_path, reader, other, sign, new_manifest, external_lines,
+                    new_path if sign == "-" else old_path
                 ) if source else (set(), set())
         numbers = {"-": 0, "+": 0}
         removed, additions = [], []
