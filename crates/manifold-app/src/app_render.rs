@@ -5,7 +5,7 @@
 //! operate on the struct defined in app.rs.
 
 use manifold_ui::{ClipAction, EditingAction, LayerAction, MarkerAction, ParamsAction, ProjectAction, RootAction, TransportAction};
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_ui_paint::ui_renderer::UIRenderer;
 
 use manifold_ui::node::FontWeight;
 use manifold_ui::panels::{PanelAction, ScrubPhase, ScrubValue, ValueRef};

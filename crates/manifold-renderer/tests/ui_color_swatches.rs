@@ -17,7 +17,7 @@ use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
 use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback};
 use manifold_renderer::presentation::UI_FORMAT;
 use manifold_renderer::render_target::RenderTarget;
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::color;
 
 // W*8 must be 256-byte aligned for the RGBA16Float texture→buffer readback copy.
@@ -124,8 +124,8 @@ fn browser_popup_thumbnails_paint() {
 /// waveform texture path.
 #[test]
 fn clip_waveform_sheet() {
-    use manifold_renderer::clip_content_gpu::ClipContentGpu;
-    use manifold_renderer::clip_draw::{emit_clips, ClipBody};
+    use manifold_ui_paint::clip_content_gpu::ClipContentGpu;
+    use manifold_ui_paint::clip_draw::{emit_clips, ClipBody};
     use manifold_ui::node::Rect;
     use manifold_ui::panels::viewport::ClipScreenRect;
     use manifold_ui::waveform_renderer::WaveformRenderer;
@@ -279,7 +279,7 @@ fn box_downsample_averages_high_frequency() {
     // The section 24 5c-2 P5 capture downsample must AVERAGE a high-frequency source into
     // a cell, not point-sample it (which would alias to an extreme). Downsample a
     // 256×256 1px checkerboard into 64×64 and assert the centre reads mid-grey.
-    use manifold_renderer::clip_thumb_gpu::create_box_downsample_pipeline;
+    use manifold_ui_paint::clip_thumb_gpu::create_box_downsample_pipeline;
 
     let device = GpuDevice::new_queued("ui_color_swatches");
     let pipe = create_box_downsample_pipeline(&device, FORMAT, 64, 64);

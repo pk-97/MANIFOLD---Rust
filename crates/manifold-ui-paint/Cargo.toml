@@ -1,0 +1,27 @@
+[package]
+name = "manifold-ui-paint"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+gpu-proofs = ["manifold-gpu/gpu-proofs"]
+
+[dependencies]
+manifold-foundation = { path = "../manifold-foundation" }
+manifold-gpu = { path = "../manifold-gpu" }
+manifold-ui = { path = "../manifold-ui" }
+ahash = { workspace = true }
+bytemuck = { version = "1", features = ["derive"] }
+log = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-text = "20"
+core-graphics = "0.23"
+core-foundation = "0.9"
+
+[dev-dependencies]
+half = "2"
+
+[lints]
+workspace = true

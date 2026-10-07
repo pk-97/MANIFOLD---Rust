@@ -37,7 +37,7 @@
 //!    (I4).
 
 use manifold_gpu::GpuDevice;
-use manifold_renderer::ui_renderer::{Depth, UIRenderer};
+use manifold_ui_paint::ui_renderer::{Depth, UIRenderer};
 
 use crate::ui_root::UIRoot;
 

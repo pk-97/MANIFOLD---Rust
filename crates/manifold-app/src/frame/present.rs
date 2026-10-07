@@ -324,7 +324,7 @@ impl Application {
                 );
                 let duration_beats =
                     if spb > 0.0 { source_secs.as_f32() / spb } else { 0.0 };
-                Some(manifold_renderer::clip_draw::ClipBody {
+                Some(manifold_ui_paint::clip_draw::ClipBody {
                     rect: manifold_ui::node::Rect::new(
                         vp.beat_to_pixel(manifold_core::Beats::from_f32(start_beat)),
                         vp.track_y(layer_index),
@@ -380,7 +380,7 @@ impl Application {
                     // the two just-split halves, independent of drag state.
                     cr.rect.x += self.ws.ui_root.viewport.split_flick_offset(&cr.clip_id);
                     self.clip_body_scratch
-                        .push(manifold_renderer::clip_draw::ClipBody {
+                        .push(manifold_ui_paint::clip_draw::ClipBody {
                             rect: cr.rect,
                             base_color: cr.base_color,
                             selected,
@@ -507,7 +507,7 @@ impl Application {
                     // Then inset by CLIP_THUMB_INSET on top/left/right (and leave the
                     // same gap above the strip) so the darker well frames the
                     // thumbnail as a dedicated panel instead of bleeding to the edge.
-                    let strip_h = manifold_renderer::clip_draw::clip_strip_height(cr.rect.height)
+                    let strip_h = manifold_ui_paint::clip_draw::clip_strip_height(cr.rect.height)
                         .unwrap_or(0.0);
                     let m = manifold_ui::color::CLIP_THUMB_INSET;
                     let preview_h = (cr.rect.height - strip_h).max(1.0);
@@ -569,7 +569,7 @@ impl Application {
                             (uc - cw, v0, uc + cw, v1)
                         };
                         self.clip_thumb_quad_scratch.push(
-                            manifold_renderer::clip_thumb_gpu::ThumbQuad {
+                            manifold_ui_paint::clip_thumb_gpu::ThumbQuad {
                                 rect: sub,
                                 body_rect: body,
                                 radius: manifold_ui::color::CLIP_RADIUS,

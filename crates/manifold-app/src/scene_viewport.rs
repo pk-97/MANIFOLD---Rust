@@ -190,8 +190,8 @@ pub(crate) struct SceneViewportPaint<'a> {
 }
 
 impl SceneViewportPaint<'_> {
-    pub fn draw(&self, ui: &mut manifold_renderer::ui_renderer::UIRenderer) {
-        use manifold_renderer::ui_renderer::Depth;
+    pub fn draw(&self, ui: &mut manifold_ui_paint::ui_renderer::UIRenderer) {
+        use manifold_ui_paint::ui_renderer::Depth;
         let r = self.rect;
         ui.push_depth(Depth::CONTENT);
         ui.push_immediate_clip(r.x, r.y, r.width, r.height);

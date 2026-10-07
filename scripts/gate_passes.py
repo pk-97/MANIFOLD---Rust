@@ -167,6 +167,7 @@ def rust_paths(repo, packages):
         'Cargo.toml', 'Cargo.lock', 'rust-toolchain', 'rust-toolchain.toml',
         '.cargo', '.config', 'deny.toml', 'clippy.toml', '.clippy.toml',
         'scripts', 'tests', 'assets', 'tools', 'native', 'shaders', 'vendor',
+        'crates/manifold-foundation/assets/fonts',
         'docs/node_catalog', '.gitignore']
 
 
@@ -274,12 +275,13 @@ def command_pass(repo, label, cmd):
 
 def proof_pass(repo, run):
     # Canonical per-invocation selection shared by the proof gate and queue.
-    identity = {'kind': 'gpu-proof-run', 'features': ['gpu-proofs'],
+    package = run.get('package', 'manifold-renderer')
+    identity = {'kind': 'gpu-proof-run', 'package': package, 'features': ['gpu-proofs'],
                 'targets': sorted(run['targets'] if run['targets'] is not None
                                   else ([] if run['lib'] else ['gpu_proofs'])), 'lib': run['lib'],
                 'filters': sorted(run['filters']), 'skips': sorted(run['skips']),
                 'test-threads': 1}
-    return Pass(repo, 'gpu-proofs', lambda: (rust_paths(Path(repo).resolve(), ['manifold-renderer']),
+    return Pass(repo, 'gpu-proofs', lambda: (rust_paths(Path(repo).resolve(), [package]),
                                            identity, True))
 
 
@@ -322,8 +324,10 @@ def queued_proof(command, repo):
                 run['filters'].append(arg)
     except (StopIteration, ValueError):
         return None
-    if packages != ['manifold-renderer'] or sorted(features) != ['gpu-proofs'] or threads != 1:
+    if (len(packages) != 1 or packages[0] not in ('manifold-renderer', 'manifold-ui-paint')
+            or sorted(features) != ['gpu-proofs'] or threads != 1):
         return None
     if not (run['targets'] or run['lib']):
         return None
+    run['package'] = packages[0]
     return proof_pass(repo, run)

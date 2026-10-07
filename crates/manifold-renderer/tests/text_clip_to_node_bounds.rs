@@ -16,7 +16,7 @@ use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
 use manifold_renderer::render_target::RenderTarget;
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::{Color32, TextAlign, UIStyle};
 use manifold_ui::{Rect, UIFlags, UITree, ZTier};
 
