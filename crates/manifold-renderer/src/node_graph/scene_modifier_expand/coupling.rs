@@ -164,7 +164,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire};
-    use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
+    use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 
     use super::*;
 
@@ -240,7 +240,7 @@ mod tests {
         ) {
             let world = self.node(world_name, "node.physics_world");
             let body = self.node(format!("{world_name}_body"), "node.rigid_body");
-            let fluid = self.node(fluid_name, FLIP_DOMAIN_TYPE_ID);
+            let fluid = self.fluid_mesh(fluid_name);
             for &slot in slots {
                 self.wire(body, "body", world, &format!("body_{slot}"));
                 let object = self.node(
@@ -312,10 +312,17 @@ mod tests {
 
         fn fluid_only_scene(&mut self, scene_name: &str, fluid_name: &str) {
             let scene = self.node(scene_name, "node.render_scene");
-            let fluid = self.node(fluid_name, FLIP_DOMAIN_TYPE_ID);
+            let fluid = self.fluid_mesh(fluid_name);
             let object = self.node(format!("{scene_name}_fluid"), "node.scene_object");
             self.wire(fluid, "vertices", object, "vertices");
             self.wire(object, "object", scene, "object_0");
+        }
+
+        fn fluid_mesh(&mut self, fluid_name: &str) -> u32 {
+            let domain = self.node(fluid_name, GPU_FLIP_DOMAIN_TYPE_ID);
+            let mesh = self.node(format!("{fluid_name}_mesh"), "node.grid_mesh");
+            self.wire(domain, "cell_size", mesh, "size_x");
+            mesh
         }
 
         fn finish(self) -> EffectGraphDef {

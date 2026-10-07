@@ -46,7 +46,7 @@ use manifold_core::effect_graph_def::{
 };
 
 use crate::node_graph::FINAL_OUTPUT_TYPE_ID;
-use crate::node_graph::fluid::{FluidDomainLayout, FluidSettings};
+use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
 use crate::node_graph::transform::Transform;
 
 /// `node.render_scene`'s own type_id string (curated vocabulary anchor).
@@ -1398,12 +1398,8 @@ fn trace_fluid_domain(
         if domain_wire || domain_size_driven || resolution_driven {
             return (None, None);
         }
-        let settings = FluidSettings {
-            resolution: param_f32(fluid, "resolution", 24.0).round() as u32,
-            domain_size: param_f32(fluid, "domain_size", 4.0),
-            ..FluidSettings::default()
-        };
-        return (settings.domain_layout().ok(), None);
+        return (domain_layout(None, param_f32(fluid, "domain_size", 4.0),
+            param_f32(fluid, "resolution", 24.0).round() as u32).ok(), None);
     };
 
     let mut domain_scope = scope_path.to_vec();
@@ -1426,18 +1422,14 @@ fn trace_fluid_domain(
         return (None, Some(transform));
     }
 
-    let settings = FluidSettings {
-        resolution: param_f32(fluid, "resolution", 24.0).round() as u32,
-        domain_size: param_f32(fluid, "domain_size", 4.0),
-        domain: Some(Transform {
+    let layout = domain_layout(Some(Transform {
             pos: [transform.pos_value.0, transform.pos_value.1, transform.pos_value.2],
             rot_euler: [transform.rot_value.0, transform.rot_value.1, transform.rot_value.2],
             scale: [transform.scale_value.0, transform.scale_value.1, transform.scale_value.2],
             billboard: false,
-        }),
-        ..FluidSettings::default()
-    };
-    (settings.domain_layout().ok(), Some(transform))
+        }), param_f32(fluid, "domain_size", 4.0),
+        param_f32(fluid, "resolution", 24.0).round() as u32);
+    (layout.ok(), Some(transform))
 }
 
 /// Traces one `node.scene_object`'s full editable surface (D12): name,

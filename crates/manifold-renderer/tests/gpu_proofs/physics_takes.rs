@@ -230,7 +230,7 @@ fn effect_chain_fluid_takes_are_scoped_by_card_and_survive_round_trip() {
     let harness = harness::shared();
     let device = Arc::clone(&harness.device);
     let registry = {
-        let mut registry = PrimitiveRegistry::with_builtin();
+        let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
         registry.register("test.physics_take_liveness", || {
             Box::new(ScalarLivenessObserver(EffectNodeType::new(
                 "test.physics_take_liveness",

@@ -55,23 +55,11 @@ pub fn liquid_domains_in(nodes: &[EffectGraphNode]) -> Vec<NestedLiquidDomain> {
     out
 }
 
-/// Water-panel params per domain type, under FLIP's names where the meaning is
-/// shared (`docs/GPU_MPM_SOLVER_DESIGN.md` D17).
+/// Water-panel params for product GPU liquid domains, under FLIP's names where
+/// the meaning is shared (`docs/GPU_MPM_SOLVER_DESIGN.md` D17). The retired
+/// CPU FLIP node remains recognised above for saved graphs and reference
+/// proofs, but it no longer contributes product controls.
 pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[
-    (
-        FLIP_DOMAIN_TYPE_ID,
-        &[
-            "seed", "domain_size", "fill_height", "liquid_density", "viscosity", "surface_tension",
-            "gravity_x", "gravity", "gravity_z",
-            "emission", "inflow_speed", "speed", "reset", "surface_subdivisions",
-            "surface_particle_scale", "surface_smoothing", "surface_smoothing_iterations",
-            "resolution", "grid_budget_mcells", "transfer", "whitewater", "whitewater_capacity",
-            "whitewater_wavecrest_rate", "whitewater_turbulence_rate",
-            "whitewater_min_energy", "whitewater_max_energy",
-            "closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y",
-            "closed_neg_z", "closed_pos_z",
-        ],
-    ),
     (
         MATTER_DOMAIN_TYPE_ID,
         &[
@@ -201,12 +189,13 @@ mod tests {
 
     #[test]
     fn liquid_dial_params_cover_every_domain() {
-        for type_id in LIQUID_DOMAIN_TYPE_IDS {
+        for type_id in [MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID] {
             assert!(
                 liquid_dial_params(type_id).is_some_and(|params| !params.is_empty()),
                 "{type_id} has no water-panel row in LIQUID_DIAL_PARAMS"
             );
         }
+        assert!(liquid_dial_params(FLIP_DOMAIN_TYPE_ID).is_none());
         for (type_id, _) in LIQUID_DIAL_PARAMS {
             assert!(is_liquid_domain(type_id), "{type_id} has dials but is not a liquid domain");
         }

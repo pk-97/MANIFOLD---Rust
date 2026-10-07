@@ -1,8 +1,8 @@
 # Live Water — Sol and Luna implementation briefs
 
-<!-- index: Historical MLS-MPM implementation assignments; superseded by the CPU FLIP contract and shared scene-physics integration plan. -->
+<!-- index: Historical CPU FLIP integration and reference-engine contract; product liquids use GPU FLIP. -->
 
-**Status:** SUPERSEDED execution plan · 2026-09-26. Current work integrates the upstream CPU FLIP engine; see the current implementation contract in [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md) and proposed app integration in [FLUID_ENGINE_INTEGRATION_PLAN.md](FLUID_ENGINE_INTEGRATION_PLAN.md). S1–S8 below describe the earlier custom GPU approach and are not the active assignments.
+**Status:** SUPERSEDED · 2026-10-07. Historical execution plan. Product water uses GPU FLIP; CPU FLIP is retained for proofs. See LIQUID_SOLVER_SEAM_DESIGN.md.
 **Implementation epic:** `BUG-vglg`; update this work item as proof checkpoints land.
 **Prerequisites:** [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md), authoritative for the decisions below.
 **Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Current AGENTS.md execution limits override older broad-sweep instructions.

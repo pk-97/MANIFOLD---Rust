@@ -159,6 +159,7 @@ impl PresetRuntime {
         selection: &SceneTargetSelection,
         field_node: &NodeId,
         field_port: &str,
+        registry: &PrimitiveRegistry,
     ) -> Result<PreparedSceneImpulse, String> {
         if self.forced_outputs_stale
             || self.graph.forced_outputs_epoch() != self.last_forced_outputs_epoch
@@ -169,7 +170,7 @@ impl PresetRuntime {
             owner,
             scene,
             selection,
-            &PrimitiveRegistry::with_builtin(),
+            registry,
         )
         .map_err(|error| error.to_string())?;
         if targets.is_empty() {

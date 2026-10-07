@@ -37,7 +37,11 @@ impl EffectSlot {
         let registry = match registry {
             Some(registry) => registry,
             None => {
-                fallback_registry = PrimitiveRegistry::with_builtin();
+                #[cfg(feature = "gpu-proofs")]
+                let registry = PrimitiveRegistry::with_cpu_flip_reference();
+                #[cfg(not(feature = "gpu-proofs"))]
+                let registry = PrimitiveRegistry::with_builtin();
+                fallback_registry = registry;
                 &fallback_registry
             }
         };

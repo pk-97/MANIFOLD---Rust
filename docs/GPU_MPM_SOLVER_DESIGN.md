@@ -1659,7 +1659,7 @@ Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P2a (One list) and P2b (One walk and 
   `liquid_domain_of(object)`: follow the object's `vertices` producer upstream to the
   first node satisfying the predicate. Sites whose meaning is FLIP-only (FLIP param tables
   in `manifold-core/src/scene_exposure.rs:69` and `R/scene_exposure.rs:97`, the cache
-  folder in `manifold-core/src/file_loader.rs:81`, `R/scene_exposure/fluid_quality.rs`)
+  folder in `manifold-core/src/file_loader.rs:81`, the former CPU quality migration)
   switch to `FLIP_DOMAIN_TYPE_ID`, and where a table is per-type the matter row is added
   to the same table. `metadata_for_node_type("node.fluid_surface")` calls in
   `manifold-app` read the found node's own type instead. Worked example:

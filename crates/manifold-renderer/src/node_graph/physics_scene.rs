@@ -472,6 +472,7 @@ mod tests {
         assert_eq!(scenes.len(), 1);
     }
 
+    #[cfg(feature = "gpu-proofs")]
     fn built_in_coupled_splice_fixture() -> manifold_core::effect_graph_def::EffectGraphDef {
         serde_json::from_value(serde_json::json!({
             "version": 1,
@@ -499,6 +500,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "gpu-proofs")]
     fn repeated_coupled_splices_use_each_local_id_map() {
         use crate::node_graph::boundary_nodes::Source;
         use crate::node_graph::graph_loader::{BoundaryHandling, HandleScope, instantiate_def};
@@ -506,7 +508,7 @@ mod tests {
         use crate::node_graph::persistence::PrimitiveRegistry;
 
         let def = built_in_coupled_splice_fixture();
-        let registry = PrimitiveRegistry::with_builtin();
+        let registry = PrimitiveRegistry::with_cpu_flip_reference();
         let mut graph = Graph::new();
         let host_a = graph.add_node(Box::new(Source::new()));
         let host_b = graph.add_node(Box::new(Source::new()));

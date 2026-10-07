@@ -617,6 +617,7 @@ impl PresetRuntime {
         // rehydrate — its host rebuilds on structure change); the live ones are
         // `bound`, `node_map`, `generator_input_node`, and the preview maps.
         let segment = EffectSlot {
+            #[cfg(feature = "gpu-proofs")]
             physics_sources: Default::default(),
             effect_id: EffectId::default(),
             effect_type: type_id.clone(),

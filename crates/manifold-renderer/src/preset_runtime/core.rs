@@ -232,6 +232,7 @@ pub(super) enum PresetIo {
 }
 
 pub(super) struct EffectSlot {
+    #[cfg(feature = "gpu-proofs")]
     pub(super) physics_sources: super::physics_source_state::PhysicsSourceState,
     pub(super) effect_id: EffectId,
     pub(super) effect_type: PresetTypeId,
@@ -773,6 +774,7 @@ impl PresetRuntime {
                             &prefix,
                         );
                         effect_nodes.push(EffectSlot {
+                            #[cfg(feature = "gpu-proofs")]
                             physics_sources: Default::default(),
                             effect_id: fx.id.clone(),
                             effect_type: fx.effect_type().clone(),
@@ -910,6 +912,11 @@ impl PresetRuntime {
             };
             let is_mask =
                 fx_group.is_some_and(|group| group.mask_effect_id.as_ref() == Some(&fx.id));
+            let preserve_authored_cpu_flip_graph = fx.graph.as_ref().is_some_and(|def| {
+                manifold_core::retired_cpu_flip::preserve_authored_cpu_flip_graph(
+                    fx.effect_type(), def,
+                )
+            });
             let card_input = if is_mask {
                 let group = open_group.as_ref()?;
                 (group.pre_node, group.pre_port)
@@ -929,6 +936,7 @@ impl PresetRuntime {
                 relight_params,
                 (fx.graph.is_some() || fused_view.is_some())
                     .then(|| (fx.id.clone(), fx.effect_type().clone())),
+                preserve_authored_cpu_flip_graph,
                 &mut errors,
             )?;
             let SpliceResult {
@@ -1136,6 +1144,7 @@ impl PresetRuntime {
                 "",
             );
             effect_nodes.push(EffectSlot {
+                #[cfg(feature = "gpu-proofs")]
                 physics_sources: Default::default(),
                 effect_id: fx.id.clone(),
                 effect_type: fx.effect_type().clone(),
@@ -1367,10 +1376,12 @@ impl PresetRuntime {
         // same one-shot the generator path does at construction (a no-op when
         // no effect in the chain declares any).
         runtime.apply_string_defaults();
+        #[cfg(feature = "gpu-proofs")]
         runtime.initialize_chain_physics_sources(effects, primitives);
         if let Some(prior) = prior {
             runtime.harvest_state_from(prior);
         }
+        #[cfg(feature = "gpu-proofs")]
         runtime.install_physics_source_identities();
         Some(runtime)
     }
@@ -1500,6 +1511,7 @@ impl PresetRuntime {
             // so bound params keep their live value and only the unbound
             // inner-node values change.
             if fx.graph_version != slot.applied_graph_version {
+                #[cfg(feature = "gpu-proofs")]
                 slot.refresh_chain_physics_source(&mut self.graph, fx, None);
                 // `slot.card_prefix` translates `fx.graph`'s (unprefixed,
                 // per-card) node ids into the segment's `c{i}.`-prefixed
@@ -1562,6 +1574,7 @@ impl PresetRuntime {
                 slot.bound.cache.clear_tail(n_static);
             }
             slot.bound.apply(&mut self.graph, &fx.params);
+            #[cfg(feature = "gpu-proofs")]
             slot.physics_sources.set_instance(&mut self.graph, Some(fx));
             // Push the "3D Shading" D3 relight knobs into the spliced graph
             // every frame. Float-knob edits are no longer structural (D8/P7),
@@ -1766,6 +1779,7 @@ impl PresetRuntime {
             seg.bound
                 .apply_inner_overrides(&mut self.graph, &seg.node_map, Some(def));
         }
+        #[cfg(feature = "gpu-proofs")]
         self.refresh_physics_source_graphs(def);
     }
 

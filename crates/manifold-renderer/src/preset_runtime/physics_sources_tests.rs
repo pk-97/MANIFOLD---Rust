@@ -64,7 +64,7 @@ fn prepared_uniform_force() -> (
         .graph;
     let prepared = crate::node_graph::scene_modifier_expand::prepare_scene_modifiers(
         &owner,
-        &PrimitiveRegistry::with_builtin(),
+        &PrimitiveRegistry::with_cpu_flip_reference(),
     )
     .expect("force expands");
     (owner, prepared)
@@ -172,7 +172,7 @@ fn string_binding(id: &str, node_id: &str, param: &str) -> serde_json::Value {
 }
 
 fn digest(def: &EffectGraphDef) -> [u8; 32] {
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let sources = prepare(def, def, &[], &registry).expect("source graph prepares");
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0].fluid, NodeId::new("fluid"));
@@ -181,7 +181,7 @@ fn digest(def: &EffectGraphDef) -> [u8; 32] {
 
 #[test]
 fn asset_inventory_follows_fluid_and_coupled_ancestry_without_cache_or_appearance() {
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let mut def = coupled_graph(false);
     def.nodes.extend([
         node(7, "geometry", "node.gltf_mesh_source"),
@@ -242,7 +242,7 @@ fn asset_inventory_includes_event_only_ancestry() {
         &prepared.def,
         &owner,
         &prepared.impulse_routes,
-        &PrimitiveRegistry::with_builtin(),
+        &PrimitiveRegistry::with_cpu_flip_reference(),
     )
     .unwrap();
     assert!(
@@ -317,7 +317,7 @@ fn string_targets_are_scoped_deduplicated_and_stable() {
         string_binding("fluid_cache", "fluid", "cache_path"),
         string_binding("appearance", "material", "texture"),
     ]));
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let first = prepare(&base, &base, &[], &registry)
         .expect("string source graph")
         .pop()
@@ -370,7 +370,7 @@ fn string_targets_include_coupled_rigid_ancestry() {
         string_binding("fluid_file", "fluid", "surface_asset"),
         string_binding("appearance_file", "body_object", "unrelated_asset"),
     ]));
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let source = prepare(&def, &def, &[], &registry)
         .expect("coupled string source graph")
         .pop()
@@ -388,7 +388,7 @@ fn string_targets_include_coupled_rigid_ancestry() {
 fn coupled_rigid_ancestry_and_body_mask_are_part_of_identity() {
     let one = coupled_graph(false);
     let two = coupled_graph(true);
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let one_sources = prepare(&one, &one, &[], &registry).expect("one-body source graph");
     let two_sources = prepare(&two, &two, &[], &registry).expect("two-body source graph");
     assert_eq!(one_sources.len(), 1);
@@ -436,7 +436,7 @@ fn event_field_ancestry_and_expanded_binding_semantics_are_hashed() {
         !prepared.impulse_routes.is_empty(),
         "force fixture has an event route"
     );
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let base = prepare(&prepared.def, &owner, &prepared.impulse_routes, &registry)
         .expect("event source graph");
     assert!(!base.is_empty());
@@ -629,7 +629,7 @@ fn legacy_handle_identity_is_normalized_and_anonymous_fluid_is_rejected() {
     let mut anonymous = base;
     anonymous.nodes[1].node_id = NodeId::default();
     anonymous.nodes[1].handle = None;
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let error = prepare(&anonymous, &anonymous, &[], &registry)
         .err()
         .expect("anonymous fluid");
@@ -723,7 +723,7 @@ fn relevant_binding_reshape_and_asset_selector_change_identity() {
         .default_value = "b.glb".into();
     assert_ne!(digest(&first), digest(&asset));
 
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let first_source = prepare(&first, &first, &[], &registry)
         .expect("control identity")
         .pop()
@@ -812,6 +812,6 @@ fn nonphysics_graphs_are_not_rejected_for_unrelated_bad_wires() {
     let mut def = graph();
     def.nodes[1].type_id = "node.value".into();
     def.wires.push(wire(900, "out", 1, "in"));
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     assert!(prepare(&def, &def, &[], &registry).unwrap().is_empty());
 }

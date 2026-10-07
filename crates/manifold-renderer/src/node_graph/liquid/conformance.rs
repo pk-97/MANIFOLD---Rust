@@ -26,6 +26,7 @@ use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTick
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use crate::node_graph::primitives::gpu_flip_preset::{SHIPPED_PRESET, WaterScene, render_def};
 use crate::node_graph::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
+use crate::reference_fixtures::cpu_flip_preset_json;
 
 /// A scene the checks run on.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1005,11 +1006,11 @@ fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
 fn flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     match fixture {
         Fixture::StillPool => {
-            let mut def = bundled("WaterBasin");
+            let mut def = reference_fixture("WaterBasin.json");
             set_type_param(&mut def, FLIP_DOMAIN_TYPE_ID, "emission", SerializedParamValue::Float { value: 0.0 });
             Some(def)
         }
-        Fixture::DamBreak => Some(bundled("WaterDamBreak")),
+        Fixture::DamBreak => Some(reference_fixture("WaterDamBreak.json")),
         Fixture::Collision { .. }
         | Fixture::FloatingBox
         | Fixture::SubmergedBox
@@ -1018,6 +1019,10 @@ fn flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
         | Fixture::Stack
         | Fixture::FaceGrid => None,
     }
+}
+
+fn reference_fixture(name: &'static str) -> EffectGraphDef {
+    serde_json::from_str(cpu_flip_preset_json(name)).unwrap_or_else(|error| panic!("invalid CPU FLIP reference fixture {name}: {error}"))
 }
 
 fn bundled(id: &'static str) -> EffectGraphDef {
@@ -1134,7 +1139,22 @@ mod tests {
     }
 
     fn build(row: &LiquidSolverRow, fixture: Fixture, def: &EffectGraphDef) -> LiquidPreset {
-        LiquidPreset::build(def).unwrap_or_else(|error| panic!("{} {fixture:?}: {error}", row.type_id))
+        #[cfg(feature = "gpu-proofs")]
+        let result = LiquidPreset::build_with_registry(def, &PrimitiveRegistry::with_cpu_flip_reference());
+        #[cfg(not(feature = "gpu-proofs"))]
+        let result = LiquidPreset::build(def);
+        result.unwrap_or_else(|error| panic!("{} {fixture:?}: {error}", row.type_id))
+    }
+
+    fn conformance_registry() -> PrimitiveRegistry {
+        #[cfg(feature = "gpu-proofs")]
+        {
+            PrimitiveRegistry::with_cpu_flip_reference()
+        }
+        #[cfg(not(feature = "gpu-proofs"))]
+        {
+            PrimitiveRegistry::with_builtin()
+        }
     }
 
     /// I2: every liquid domain type has one row; every check a row does not
@@ -1146,7 +1166,7 @@ mod tests {
             let rows = LIQUID_SOLVERS.iter().filter(|row| row.type_id == type_id).count();
             assert_eq!(rows, 1, "{type_id} has {rows} conformance rows");
         }
-        let registry = PrimitiveRegistry::with_builtin();
+        let registry = conformance_registry();
         for row in LIQUID_SOLVERS {
             assert!(is_liquid_domain(row.type_id), "{} has a row but is not a liquid domain", row.type_id);
             for (i, (check, reason)) in row.exempt.iter().enumerate() {
@@ -1175,6 +1195,14 @@ mod tests {
                 let code = wgsl.lines().map(|line| line.split("//").next().unwrap_or_default());
                 assert!(!code.clone().any(|line| line.contains("atomic")), "{}: {node}'s hand shader uses an atomic", row.type_id);
                 assert!(code.clone().any(|line| line.contains("@compute")), "{}: {node}'s hand shader has no entry point", row.type_id);
+            }
+            // The retired CPU FLIP node is available only to explicit proof
+            // builds. Keep the shared row metadata checks above in the
+            // default suite, while leaving its native runtime checks to the
+            // GPU-proof build that registers the reference node.
+            #[cfg(not(feature = "gpu-proofs"))]
+            if row.type_id == FLIP_DOMAIN_TYPE_ID {
+                continue;
             }
             let mut scenes: Vec<Fixture> = Vec::new();
             for check in Check::ALL {
@@ -1245,9 +1273,13 @@ mod tests {
     /// words, before any GPU work.
     #[test]
     fn liquid_refusals_name_their_control() {
-        let registry = PrimitiveRegistry::with_builtin();
+        let registry = conformance_registry();
         for row in LIQUID_SOLVERS {
             assert!(!row.refusals.is_empty(), "{} lists no refusals", row.type_id);
+            #[cfg(not(feature = "gpu-proofs"))]
+            if row.type_id == FLIP_DOMAIN_TYPE_ID {
+                continue;
+            }
             let domain = registry.construct(row.type_id).expect("registered domain");
             let words = |name: &str| -> String {
                 if let Some(param) = domain.parameters().iter().find(|param| param.name == name) {

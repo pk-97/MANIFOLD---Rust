@@ -123,7 +123,9 @@ pub(super) fn validate_mask_groups(
 /// an unfused/edited def has none (empty map is correct only when fusion
 /// did not occur). When the divergent (edited/fused) def fails to splice,
 /// record the divergence and fall back to the canonical def + canonical
-/// sidecar. Returns None only when the canonical splice itself fails.
+/// sidecar. Retired CPU FLIP authored graphs explicitly refuse that fallback
+/// so their saved topology cannot be silently replaced. Returns None when the
+/// canonical splice itself fails or a retired graph refuses fallback.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn splice_card_with_canonical_fallback(
     graph: &mut Graph,
@@ -135,6 +137,7 @@ pub(super) fn splice_card_with_canonical_fallback(
     primitives: &PrimitiveRegistry,
     relight_params: Option<&RelightParams>,
     divergent: Option<(EffectId, PresetTypeId)>,
+    preserve_authored_cpu_flip_graph: bool,
     errors: &mut Vec<ChainError>,
 ) -> Option<SpliceResult> {
     if let Some(r) = splice_def_into_chain(
@@ -146,6 +149,12 @@ pub(super) fn splice_card_with_canonical_fallback(
         mesh_rules,
     ) {
         return Some(r);
+    }
+    if preserve_authored_cpu_flip_graph {
+        eprintln!(
+            "[chain-build-fail] retired CPU FLIP authored graph failed to splice; canonical fallback disabled"
+        );
+        return None;
     }
     if let Some((effect_id, effect_type)) = divergent {
         record_chain_error(

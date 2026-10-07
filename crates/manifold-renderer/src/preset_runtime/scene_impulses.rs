@@ -69,6 +69,7 @@ impl PresetRuntime {
                         &modifier.targets,
                         &route.field_node,
                         &route.field_port,
+                        registry,
                     )
                     .map_err(|error| invalid(&modifier.id, error))?;
                 let captured = prepared.new_capture();

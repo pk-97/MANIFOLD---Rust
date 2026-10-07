@@ -1464,6 +1464,7 @@ pub(super) mod tests {
 
     /// Solver presets share the authored surface structure and the FLIP Fluids
     /// engine surface defaults: particle scale 3.0, Surface Detail 0.
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn gpu_flip_surface_group_is_shared_with_all_water_presets() {
         let source = surface_group();
@@ -1482,10 +1483,15 @@ pub(super) mod tests {
             }
             value
         };
-        let registry = PrimitiveRegistry::with_builtin();
+        let registry = PrimitiveRegistry::with_cpu_flip_reference();
         for name in [SHIPPED_PRESET, "WaterDamBreakGpu", "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
-            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
-            let mut preset: Value = serde_json::from_str(&json).unwrap();
+            let mut preset: Value = if name == "WaterDamBreakGpu" {
+                let source = crate::reference_fixtures::cpu_flip_preset_json("WaterDamBreakGpu.json");
+                serde_json::from_str(source).unwrap()
+            } else {
+                let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
+                serde_json::from_str(&json).unwrap()
+            };
             let surface_id = if name == SHIPPED_PRESET { "surface" } else { "liquid_surface" };
             let surface = crate::node_graph::liquid::conformance::json_node_mut(&mut preset, surface_id)
                 .cloned().expect("nested surface");
@@ -1535,7 +1541,8 @@ pub(super) mod tests {
                 assert!(destinations.insert((wire["toNode"].as_u64().unwrap(), wire["toPort"].as_str().unwrap())),
                     "{name}: duplicate input wire {wire}");
             }
-            crate::preset_runtime::PresetRuntime::from_json_str(&json, &registry)
+            let preset_json = serde_json::to_string(&preset).expect("preset serializes");
+            crate::preset_runtime::PresetRuntime::from_json_str(&preset_json, &registry)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let detail = preset["presetMetadata"]["bindings"].as_array().unwrap().iter()
                 .filter(|b| b["id"] == "surface_detail").collect::<Vec<_>>();
@@ -1544,11 +1551,12 @@ pub(super) mod tests {
         }
     }
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn gpu_flip_surface_defaults_match_the_engine_on_both_dam_breaks() {
-        let registry = PrimitiveRegistry::with_builtin();
-        let native = bundled_preset_json(&PresetTypeId::new("WaterDamBreak")).unwrap();
-        let native = crate::preset_runtime::PresetRuntime::from_json_str(&native, &registry).unwrap();
+        let registry = PrimitiveRegistry::with_cpu_flip_reference();
+        let native = crate::reference_fixtures::cpu_flip_preset_json("WaterDamBreak.json");
+        let native = crate::preset_runtime::PresetRuntime::from_json_str(native, &registry).unwrap();
         let gpu = crate::preset_runtime::PresetRuntime::from_def(
             render_def(WaterScene::dam_break(64)), &registry, None,
         ).unwrap();
@@ -1705,7 +1713,7 @@ pub(super) mod tests {
             assert_eq!(group.interface.inputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
                 if obstacle { vec!["role_0"] } else { vec![] });
             assert_eq!(facts(&body.nodes, &body.wires, particles), facts(&group.nodes, &group.wires, particles));
-            assert_eq!(group.nodes.iter().filter(|n| n.type_id == "node.gpu_flip_domain").count(), 1);
+            assert_eq!(group.nodes.iter().filter(|n| n.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID).count(), 1);
             assert_eq!(group.nodes.iter().filter(|n| n.type_id == "node.whitewater_obstacle_source").count(), 1);
             assert!(!group.nodes.iter().any(|n| n.node_id.as_str().starts_with("dust_")));
             let boundary = group.nodes.iter().find(|n| n.node_id.as_str() == LIQUID_BODY_OUTPUT).unwrap().id;
