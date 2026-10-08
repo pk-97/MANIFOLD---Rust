@@ -399,15 +399,13 @@ pub fn registered_assets_root() -> Option<PathBuf> {
 }
 
 #[doc(hidden)]
-pub fn select_assets_root(mut roots: Vec<&str>) -> Option<&str> {
-    roots.sort_unstable();
-    roots.dedup();
-    if roots.len() > 1 {
-        log::error!(
-            "[presets] conflicting stock assets roots registered: {roots:?}; using {}",
-            roots[0],
-        );
-    }
+pub fn select_assets_root(roots: Vec<&str>) -> Option<&str> {
+    assert!(
+        roots.len() <= 1,
+        "expected at most one PresetAssetsRoot registration, got {}: {roots:?}",
+        roots.len(),
+    );
+    // Engine-only binaries have no catalog and therefore no development assets.
     roots.first().copied()
 }
 
@@ -981,13 +979,23 @@ mod tests {
     }
 
     #[test]
-    fn assets_root_selection_handles_missing_duplicate_and_conflicting_registrations() {
+    fn assets_root_selection_handles_missing_or_single_registration() {
         assert_eq!(select_assets_root(Vec::new()), None);
         assert_eq!(select_assets_root(vec!["/stock"]), Some("/stock"));
-        assert_eq!(select_assets_root(vec!["/stock", "/stock"]), Some("/stock"));
-        assert_eq!(select_assets_root(vec!["/z", "/a", "/z"]), Some("/a"));
-        assert_eq!(select_assets_root(vec!["/a", "/z"]), Some("/a"));
     }
+
+    #[test]
+    #[should_panic(expected = "expected at most one PresetAssetsRoot registration, got 2")]
+    fn assets_root_selection_rejects_duplicate_identical_providers() {
+        select_assets_root(vec!["/stock", "/stock"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected at most one PresetAssetsRoot registration, got 2")]
+    fn assets_root_selection_rejects_conflicting_providers() {
+        select_assets_root(vec!["/a", "/z"]);
+    }
+
     /// Unique scratch dir per test, cleaned up at the end.
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
