@@ -476,7 +476,7 @@ def mount_parent(path, inventory):
     return parents[0], name
 
 
-def mount_item(text, name):
+def mount_items(text, name):
     matches = []
     for start, end, header, scope in module_items(text):
         if scope: continue
@@ -497,9 +497,24 @@ def mount_item(text, name):
         if previous.endswith('*/') or (previous and previous.split('\n')[-1].lstrip().startswith('///')):
             raise ValueError(name + ': comment-attached mount requires a separate reviewed fix')
         matches.append((first, last, text[first:last]))
-    if len(matches) != 1:
-        raise ValueError(name + ': module mount must exist exactly once')
-    return matches[0]
+    if len(matches) == 2:
+        predicates = []
+        for _, _, item in matches:
+            # Ordinary mounts in one lexical parent resolve to the same file.
+            # Path/cfg_attr(path) mounts were rejected above. Fail closed on
+            # additional conditional attributes rather than infer their meaning.
+            header = next(header for _, _, header, scope in module_items(item) if not scope)
+            cfg = re.fullmatch(r'\s*#\[cfg\((.*)\)\]\s*', item[:header], re.S)
+            if not cfg:
+                raise ValueError(name + ': paired mounts require one complementary cfg each')
+            tokens = re.findall(r'"(?:\\.|[^"\\])*"|[A-Za-z_]\w*|[^\s]', cfg[1])
+            predicates.append(tokens)
+        a, b = predicates
+        if not (a == ['not', '('] + b + [')'] or b == ['not', '('] + a + [')']):
+            raise ValueError(name + ': paired mounts require complementary cfg predicates')
+    elif len(matches) != 1:
+        raise ValueError(name + ': module mount must exist exactly once or as a complementary pair')
+    return matches
 
 
 def derive_mounts(source, templates, moves):
@@ -514,24 +529,26 @@ def derive_mounts(source, templates, moves):
         if old in MODULES:
             raise ValueError(old + ': path/include module mounts are forbidden')
         parent, name = mount_parent(old, source)
-        start, end, item = mount_item(source[parent][1].decode('utf-8'), name)
+        items = mount_items(source[parent][1].decode('utf-8'), name)
         new_parent, new_name = mount_parent(new, final)
         # The move determines any identifier rename; visibility and attributes are bytes.
-        at = item.rindex('mod ' + name + ';')
-        renamed = item[:at] + 'mod ' + new_name + ';' + item[at+len('mod ' + name + ';'):]
+        renamed = []
+        for _, _, item in items:
+            at = item.rindex('mod ' + name + ';')
+            renamed.append(item[:at] + 'mod ' + new_name + ';' + item[at+len('mod ' + name + ';'):])
         if moves.get(parent, parent) == new_parent and name == new_name:
             continue
-        removals.setdefault(parent, []).append((start, end))
+        removals.setdefault(parent, []).extend((start, end) for start, end, _ in items)
         if new_parent in templates:
-            _, _, mounted = mount_item(templates[new_parent][1].decode('utf-8'), new_name)
-            if mounted != renamed:
+            mounted = mount_items(templates[new_parent][1].decode('utf-8'), new_name)
+            if [item for _, _, item in mounted] != renamed:
                 raise ValueError(new_parent + ': template mount differs from moved item')
         else:
             text = final[new_parent][1].decode('utf-8')
             for _, end2, header, scope in module_items(text):
                 if not scope and re.match(VIS + r'mod ' + re.escape(new_name) + r'\b', text[header:end2]):
                     raise ValueError(new_parent + ': destination module already mounted')
-            additions.setdefault(new_parent, []).append(renamed)
+            additions.setdefault(new_parent, []).extend(renamed)
     return removals, additions
 
 
@@ -593,7 +610,8 @@ def _replay_tree(source, plan, dest):
     if set(CONFIG) - {'version', 'source_crate', 'destination_crate', 'rewrite_roots', 'aliases'}:
         raise ValueError('unsupported plan configuration (body edits require a separate commit)')
     for rel in files(plan):
-        if rel not in ('plan.json', 'moves.tsv', 'rewrites.tsv', 'manifests.json', 'README.md') and not rel.startswith('templates/'):
+        if rel not in ('plan.json', 'moves.tsv', 'rewrites.tsv', 'manifests.json', 'README.md',
+                       'residual-files.txt', 'residual-deleted.txt') and not rel.startswith(('templates/', 'after/')):
             raise ValueError('unsupported plan file: ' + rel)
     for a, b in CONFIG.get('aliases', {}).items(): rust_path(a); rust_path(b)
     manifest_rows(plan)
@@ -620,7 +638,7 @@ def _replay_tree(source, plan, dest):
     collect_path_modules(source, moves)
     mapping = mappings(moves, tsv(plan / 'rewrites.tsv'))
     removals, additions = derive_mounts(source_entries, template_entries, moves)
-    # Source is a materialized Git tree, never a checkout with caches or local secrets.
+    # Source is a validated, materialized Git tree or explicit draft directory.
     write_files(dest, source_entries)
     apply_manifests(dest, plan)
     remove_mounts(dest, removals)
@@ -670,7 +688,7 @@ def main(argv=None):
     run = verbs.add_parser('replay', help='replay HEAD (or --source tree) using a reviewed plan')
     run.add_argument('--plan', type=Path, required=True)
     run.add_argument('--dest', type=Path, required=True)
-    run.add_argument('--source', help='Git revision to replay; default HEAD', default='HEAD')
+    run.add_argument('--source', help='Git revision or draft directory to replay; default HEAD', default='HEAD')
     check = verbs.add_parser('verify', help='compare replay of parent to entire commit tree')
     check.add_argument('--plan', type=Path, required=True)
     check.add_argument('commit')
@@ -679,8 +697,20 @@ def main(argv=None):
         plan = args.plan.resolve()
         repo = Path(git(plan, 'rev-parse', '--show-toplevel').decode('utf-8').strip()).resolve()
         revision = args.commit if args.verb == 'verify' else args.source
-        oid = git(repo, 'rev-parse', '--verify', revision + '^{commit}').decode('utf-8').strip()
-        committed = tree(repo, oid)
+        if args.verb == 'replay' and Path(revision).is_dir():
+            directory = Path(revision).absolute()
+            no_symlink_parents(directory)
+            directory = directory.resolve()
+            output = args.dest.absolute()
+            no_symlink_parents(output)
+            output = output.resolve()
+            if directory == output or directory.is_relative_to(output) or output.is_relative_to(directory):
+                raise ValueError('draft source and destination must be disjoint')
+            committed = files(directory)
+        else:
+            # Commit verification always requires a Git commit, never a directory.
+            oid = git(repo, 'rev-parse', '--verify', revision + '^{commit}').decode('utf-8').strip()
+            committed = tree(repo, oid)
         validate_paths(committed)
         rel, supplied, expected_plan = plan_in_tree(plan, repo, committed)
         if args.verb == 'verify':
@@ -703,9 +733,9 @@ def main(argv=None):
             tmp = Path(temporary)
             source = tmp / 'parent'
             write_files(source, base)
-            if differences(base, files(source)): raise ValueError('parent tree materialization differs from Git tree')
+            if differences(base, files(source)): raise ValueError('parent tree materialization differs from source inventory')
             if args.verb == 'replay':
-                # Draft replay may use a local plan, but never substitutes parent blobs.
+                # Draft replay uses the supplied plan; residual artifacts stay inert.
                 draft_plan = tmp / 'plan'
                 write_files(draft_plan, supplied)
                 # Include draft plan bytes in output for inspection before committing it.
