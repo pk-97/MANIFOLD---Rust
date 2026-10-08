@@ -37,7 +37,6 @@ Confirm the printed acquired HEAD before editing. Never bypass the slot cap.
 
 import argparse
 import errno
-import fcntl
 import json
 import os
 import shutil
@@ -52,9 +51,11 @@ from pathlib import Path
 # The lifecycle tests load this file through importlib from a child process;
 # make the sibling safety module importable there as well as when run directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from storage_budget import (MAINTENANCE_GOAL_BYTES, apply_cache_cleanup, disk_free,
-                            plan_cache_cleanup, target_live_status, maintain_caches,
-                            slot_cap_bytes, incremental_size, STALE_CACHE_SECONDS)
+from storage_budget import (MAINTENANCE_GOAL_BYTES, admission_pool_lock,
+                            apply_cache_cleanup, disk_free, incremental_size,
+                            maintain_caches, plan_cache_cleanup,
+                            registered_worktrees, slot_cap_bytes,
+                            STALE_CACHE_SECONDS, target_live_status, target_size)
 from codex_brokers import stop_idle as stop_idle_codex_brokers
 
 def _main_checkout():
@@ -138,19 +139,11 @@ def pool_lock():
     The lock file is persistent so its inode remains stable across commands;
     flock releases the reservation automatically if a process exits.
     """
-    POOL.mkdir(parents=True, exist_ok=True)
-    with (POOL / POOL_LOCK_NAME).open("a+") as handle:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as error:
-            if error.errno in (errno.EACCES, errno.EAGAIN):
-                sys.exit("REFUSED: worktree pool is busy; another command holds "
-                         "the reservation lock")
-            raise
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    with admission_pool_lock(POOL, create=True) as locked:
+        if not locked:
+            sys.exit("REFUSED: worktree pool is busy; another command holds "
+                     "the reservation lock")
+        yield
 
 
 def lease_blocks(wt):
@@ -239,29 +232,19 @@ def idle_state(wt):
 
 
 def pool_slots():
-    if not POOL.is_dir():
-        return []
-    return sorted(p for p in POOL.iterdir()
-                  if p.name.startswith(SLOT_PREFIX) and (p / ".git").exists())
-
-
-def target_bytes(wt):
-    t = wt / "target"
-    if t.is_symlink() or not t.is_dir():
-        return 0
-    # du -sk is far faster than a python walk over a multi-GB tree.
-    out = subprocess.run(["du", "-sk", str(t)], capture_output=True, text=True)
-    return int(out.stdout.split()[0]) * 1024 if out.returncode == 0 else 0
+    return sorted(path for path in registered_worktrees(REPO)
+                  if path.parent == POOL and path.name.startswith(SLOT_PREFIX))
 
 
 def enforce_target_cap(wt):
-    size = target_bytes(wt)
+    size = target_size(wt / "target")
     cap = slot_cap_bytes()
     if size > cap:
         removed, files, failures = maintain_caches(
             [wt / "target"], wt, cap_bytes=cap,
             process_check=lambda target, **_: (slot_has_live_session(wt)
-                                                or target_live_status(target)))
+                                                or target_live_status(target)),
+            repo=REPO)
         if failures:
             print(f"TARGET:   kept {size / 2**30:.1f}G; removed {files} files "
                   f"({removed / 2**30:.1f}G); cleanup refused: "
@@ -287,7 +270,7 @@ def _cleanup_target(wt, label):
 
     plan = plan_cache_cleanup(wt / "target")
     removed, files, failures = apply_cache_cleanup(
-        plan, dry_run=False, process_check=process_check)
+        plan, dry_run=False, process_check=process_check, repo=REPO)
     if failures:
         print(f"{label}: {wt.name}: {len(failures)} failure(s): " + "; ".join(failures))
     return removed, files, failures
@@ -354,7 +337,7 @@ def cmd_list(_args):
         cat, reason, _ = slot_state(wt, holders)
         branch = git(wt, "branch", "--show-current").stdout.strip() or "(detached)"
         head = git(wt, "rev-parse", "--short", "HEAD").stdout.strip()
-        size = target_bytes(wt)
+        size = target_size(wt / "target")
         incremental = incremental_size(wt / "target")
         warm = (f"{size / 2**30:.1f}G target / {cap / 2**30:g}G cap; "
                 f"{incremental / 2**30:.1f}G incremental"
@@ -496,14 +479,14 @@ def cmd_acquire(args):
         # clean and landed (or a clean duplicate of a branch another slot holds)
         # is finished work, and the only moment anyone cares is the moment the
         # ring is empty — so the check is free and needs no operator.
-        wt = max(free, key=target_bytes)  # warmest target = best build reuse
+        wt = max(free, key=lambda slot: target_size(slot / "target"))  # warmest target = best build reuse
         if states[wt][0] == RECLAIMABLE:
             print(f"RECLAIM {wt.name}: {states[wt][1]}")
         refuse_if_branch_held_elsewhere(args.branch, wt, holders)
         refuse_if_branch_ref_exists(args.branch, wt, holders)
         enforce_target_cap(wt)
         git(wt, "checkout", "-B", args.branch, tip)
-        print(f"REUSED {wt.name} ({target_bytes(wt) / 2**30:.1f}G warm target)")
+        print(f"REUSED {wt.name} ({target_size(wt / 'target') / 2**30:.1f}G warm target)")
     elif len(slots) < MAX_SLOTS:
         refuse_if_branch_held_elsewhere(args.branch, None, holders)
         refuse_if_branch_ref_exists(args.branch, None, holders)
@@ -567,7 +550,7 @@ def cmd_scrub(_args):
     # checkout and branch; only the cargo cache leaves disk. Wiping target/
     # cannot lose work — it is rebuilt from source on the next build.
     for wt, reason in pinned:
-        size = target_bytes(wt)
+        size = target_size(wt / "target")
         if size:
             removed, files, failures = _cleanup_target(wt, "CACHE-ONLY")
             print(f"CACHE-ONLY {wt.name}: removed {files} files "
@@ -582,10 +565,10 @@ def cmd_scrub(_args):
         return int(out.stdout.split()[0]) / 2**20 if out.returncode == 0 else 0
 
     total = pool_gb()
-    victims = sorted((wt for wt in idle if target_bytes(wt)), key=build_recency)
+    victims = sorted((wt for wt in idle if target_size(wt / "target")), key=build_recency)
     while total > SCRUB_TO_GB and victims:
         wt = victims.pop(0)  # least recently built loses its cache first
-        size = target_bytes(wt) / 2**30
+        size = target_size(wt / "target") / 2**30
         removed, files, failures = _cleanup_target(wt, "SCRUBBED")
         print(f"SCRUBBED {wt.name}: removed {files} files "
               f"({removed / 2**30:.1f}G) from {size:.1f}G target (pool over "
@@ -597,7 +580,7 @@ def cmd_scrub(_args):
           f"scrub target {SCRUB_TO_GB}G)")
 
 
-def reclaimable_for_landing(wt, holders):
+def reclaimable_for_landing(wt):
     """Strictly landed, clean, lease-free and process-free — the only slots whose
     cache the landing gate may free unattended. A duplicate-of-unlanded slot is
     RECLAIMABLE for acquire but not here: its branch is not on origin/main."""
@@ -615,21 +598,19 @@ def reclaimable_for_landing(wt, holders):
 
 def cmd_reclaim(args):
     need = max(args.free_bytes, MAINTENANCE_GOAL_BYTES)
-    free = disk_free(POOL)
-    holders = branch_holders()
     victims = []
     stop_idle_brokers(pool_slots())
     for wt in pool_slots():
-        ok, why = reclaimable_for_landing(wt, holders)
+        ok, why = reclaimable_for_landing(wt)
         if not ok:
             print(f"KEEP {wt.name}: {why}")
-        elif target_bytes(wt):
+        elif target_size(wt / "target"):
             victims.append(wt)
     removed, files, failures = maintain_caches(
         [wt / "target" for wt in victims], POOL, reserve_bytes=need,
         process_check=lambda target, **_: (slot_has_live_session(target.parent)
                                           or target_live_status(target)),
-        free_check=disk_free)
+        free_check=disk_free, repo=REPO)
     print(f"RECLAIMED: removed {files} stale cache files ({removed / 2**30:.1f}G)")
     for failure in failures:
         print(failure)

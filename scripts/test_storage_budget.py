@@ -5,6 +5,8 @@ import os
 import fcntl
 import tempfile
 import time
+import subprocess
+import sys
 from pathlib import Path
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -14,14 +16,21 @@ import storage_budget as sb
 
 
 PASS, FAIL = [], []
+REAL_REGISTRY = sb.registered_worktrees
 
 
 @contextmanager
 def fixture_directory():
     """Dispose only of generated test fixtures, one file at a time."""
     root = Path(tempfile.mkdtemp(prefix="storage-budget-")).resolve()
+    pool = root / ".claude" / "worktrees"
+    pool.mkdir(parents=True)
+    (pool / ".agent-worktree.lock").touch()
+    def registry(_repo):
+        return tuple(dict.fromkeys([root, *(p.parent.parent for p in root.rglob(".rustc_info.json"))]))
     try:
-        yield str(root)
+        with patch.object(sb, "registered_worktrees", side_effect=registry):
+            yield str(root)
     finally:
         for directory, dirs, files in os.walk(root, topdown=False, followlinks=False):
             for name in files:
@@ -37,6 +46,21 @@ def fixture_directory():
 
 def check(name, condition, detail=""):
     (PASS if condition else FAIL).append(name if condition else (name, detail))
+
+
+def lsof_result(output):
+    """Synthetic lsof records carry device/inode fields just like real files."""
+    lines = []
+    for line in output.splitlines():
+        lines.append(line)
+        if line.startswith("n"):
+            try:
+                st = Path(line[1:]).stat()
+                device, inode = st.st_dev, st.st_ino
+            except OSError:
+                device, inode = 0, 0
+            lines.extend((f"D{device:x}", f"i{inode}"))
+    return SimpleNamespace(returncode=0, stdout="\n".join(lines), stderr="")
 
 
 def marker(target):
@@ -99,7 +123,8 @@ def test_build_admission():
         check("unknown target override rejected", not unknown and "canonical" in unknown.reason, unknown.reason)
         check("low free space rejected", not low and "reserve" in low.reason, low.reason)
         check("canonical target with reserve accepted", bool(good), good.reason)
-        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="", stderr="registry unavailable")):
+        with patch.object(sb, "registered_worktrees", REAL_REGISTRY), \
+                patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="", stderr="registry unavailable")):
             report = sb.inventory_targets(repo, tmp_root=root / "no-tmp")
         check("inventory reports Git registry failure", report.errors and "registry unavailable" in report.errors[0], str(report.errors))
 
@@ -108,9 +133,9 @@ def test_manifest_dry_run_apply_and_identity():
     with fixture_directory() as raw:
         target = Path(raw).resolve() / "target"
         marker(target)
-        cache = target / "debug" / "deps"
+        cache = target / "debug" / "build" / "other-abcdef"
         cache.mkdir(parents=True)
-        generated = cache / "libgenerated-abcdef.rlib"
+        generated = cache / "output"
         generated.write_bytes(b"generated")
         unknown = target / "debug" / "manifold-proof.bin"
         unknown.write_bytes(b"proof")
@@ -120,7 +145,7 @@ def test_manifest_dry_run_apply_and_identity():
         link.symlink_to(unknown)
         for subtree in ("incremental", ".fingerprint", "build", "examples"):
             subtree_root = target / "debug" / subtree
-            subtree_root.mkdir(parents=True)
+            subtree_root.mkdir(parents=True, exist_ok=True)
             (subtree_root / "proof.png").write_bytes(b"unknown")
             (subtree_root / "notes.txt").write_bytes(b"unknown")
         (target / "debug" / "incremental" / "crate-abcdef").mkdir(parents=True)
@@ -158,9 +183,9 @@ def test_live_and_uninspectable_refused():
     with fixture_directory() as raw:
         target = Path(raw).resolve() / "target"
         marker(target)
-        cache = target / "release" / "build"
+        cache = target / "release" / "build" / "crate-abcdef"
         cache.mkdir(parents=True)
-        file = cache / "build-script"
+        file = cache / "output"
         file.write_bytes(b"build")
         plan = sb.plan_cache_cleanup(target)
         live = sb.apply_cache_cleanup(plan, dry_run=False, process_check=lambda _: True)
@@ -181,16 +206,16 @@ def test_lsof_and_cargo_lock_safety():
         file.write_bytes(b"safe")
         plan = sb.plan_cache_cleanup(target)
         lsof = "p123\nfcwd\nn" + str(root / "checkout") + "\n"
-        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(lsof)):
             check("checkout cwd is live", sb.target_live_status(target) is True)
         lsof = "p123\nf3\nn" + str(file) + "\n"
-        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(lsof)):
             check("open target descriptor is live", sb.target_live_status(target) is True)
         lsof = "p123\nfcwd\nn" + str(root / "outside") + "\n"
-        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(lsof)):
             check("unrelated process is idle", sb.target_live_status(target) is False)
 
-        cargo_lock = target / ".cargo-lock"
+        cargo_lock = target / "debug" / ".cargo-lock"
         cargo_lock.write_bytes(b"lock")
         lock_handle = cargo_lock.open("rb")
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -277,7 +302,7 @@ def test_hashed_executables():
         check("unhashed example kept", unhashed not in planned, str(planned))
         check("symlink kept", link not in planned, str(planned))
         applied = sb.apply_cache_cleanup(plan, dry_run=False, process_check=lambda _: False)
-        check("executables removed", applied[1] == 2 and not exe.exists() and not example.exists(), str(applied))
+        check("executables retained without launch exclusion", applied[1] == 0 and exe.exists() and example.exists() and applied[2], str(applied))
         check("kept files remain", all(p.exists() for p in (no_exec_bit, script, short_hash, unhashed)) and link.is_symlink(), "kept file removed")
         exe.write_bytes(macho)
         exe.chmod(0o755)
@@ -337,7 +362,7 @@ def test_bounded_reclaim_order_and_preservation():
         check("fresh sessions survive cap pressure", fresh_file.exists(), result)
         result = sb.maintain_caches([target], root, process_check=lambda *a, **k: False,
                                    free_check=lambda _: 0)
-        check("other stale Cargo artifacts reclaimed after sessions", not deps.exists(), result)
+        check("deps retained even under exhausted reserve", deps.exists() and result[2], result)
         check("protected files survive exhausted reserve", fresh_file.exists() and mixed_file.exists()
               and all(p.exists() for p in protected), result)
 
@@ -360,17 +385,17 @@ def test_bounded_reclaim_liveness_and_lock():
             check("bounded reclaim respects held cargo lock", cache.exists() and result[2], result)
         checkout = target.parent
         lsof = f"p123\nfcwd\nn{checkout}\n"
-        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(lsof)):
             check("same-slot cwd permits maintenance", sb.target_live_status(target, include_checkout=False) is False)
             check("foreign-slot cwd blocks maintenance", sb.target_live_status(target) is True)
         lsof += f"f4\nn{cache}\n"
-        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(lsof)):
             check("same-slot open cache still blocks maintenance", sb.target_live_status(target, include_checkout=False) is True)
         lsof = f"p{os.getpid()}\nf3\nn{lock}\np123\nfcwd\nn/outside\n"
-        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(lsof)):
             check("maintenance's own Cargo lock does not mark target live", sb.target_live_status(target) is False)
         lsof = f"p{os.getpid()}\nf4\nn{cache}\n"
-        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(lsof)):
             check("caller's own open cache is protected", sb.target_live_status(target) is True)
         for response in (SimpleNamespace(returncode=0, stdout="malformed"),
                          SimpleNamespace(returncode=0, stdout=lsof, stderr="incomplete process scan")):
@@ -402,7 +427,7 @@ def test_admission_reclaims_same_slot_and_idle_only():
         check("admission reclaims owning leased slot and idle slot", admitted.ok and not cache.exists() and not idle_cache.exists(), admitted)
         check("admission never reclaims main or foreign leased slot", main_cache.exists() and leased_cache.exists())
         check("only admitting slot ignores checkout cwd", live.call_args_list[1].kwargs == {"include_checkout": False}
-              and live.call_args_list[0].kwargs == {"include_checkout": True}, live.call_args_list)
+              and live.call_args_list[0].kwargs == {}, live.call_args_list)
         with patch.object(sb, "registered_worktrees", return_value=(repo, own, idle, leased)), \
                 patch.object(sb, "idle_slot", return_value=False), \
                 patch.object(sb, "process_snapshot", return_value=lambda *a, **k: False), \
@@ -413,6 +438,8 @@ def test_admission_reclaims_same_slot_and_idle_only():
 
 
 def test_cap_configuration():
+    with patch.dict(os.environ, {}, clear=True):
+        check("default cap is 160 GiB", sb.slot_cap_bytes() == 160 * sb.GIB)
     with patch.dict(os.environ, {"MANIFOLD_SLOT_TARGET_CAP_GIB": "31"}):
         check("slot cap configurable", sb.slot_cap_bytes() == 31 * sb.GIB)
     for value in ("0", "-1", "nan", "inf", "bad"):
@@ -434,7 +461,7 @@ def test_same_slot_open_session_and_log():
         log.parent.mkdir()
         log.write_text("keep this open log")
         lsof = f"p123\nfcwd\nn{root}\nf3\nn{busy_file}\nf4\nn{log}\n"
-        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(lsof)):
             snapshot = sb.process_snapshot()
         result = sb.maintain_caches([target], root, same_slot=target,
                                    process_check=snapshot, free_check=lambda _: 0)
@@ -478,6 +505,188 @@ def test_admission_pool_reservation_safety():
             check("released pool reservation permits maintenance", locked)
 
 
+def test_build_starting_during_cleanup():
+    """A subprocess follows Cargo's flock protocol at the inventory barrier."""
+    with fixture_directory() as raw:
+        root = Path(raw)
+        target = root / "target"
+        _, cache = stale_session(target)
+        lock = target / "debug" / ".cargo-lock"
+        check("race starts without a Cargo lock file", not lock.exists())
+        original_plan = sb.plan_cache_cleanup
+        builders = []
+        program = """
+import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o666)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    print('UNEXPECTED', flush=True)
+except BlockingIOError:
+    print('BLOCKED', flush=True)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+print('ACQUIRED', flush=True)
+os.close(fd)
+"""
+        def inventory_after_builder_start(path, profiles=None):
+            child = subprocess.Popen([sys.executable, "-c", program, str(lock)],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            builders.append(child)
+            import select
+            ready, _, _ = select.select([child.stdout], [], [], 5)
+            assert ready, "builder did not reach lock barrier"
+            check("build starting before inventory blocks on created Cargo lock",
+                  child.stdout.readline().strip() == "BLOCKED")
+            return original_plan(path, profiles)
+        try:
+            with patch.object(sb, "plan_cache_cleanup", side_effect=inventory_after_builder_start):
+                result = sb.maintain_caches([target], root, same_slot=target,
+                                           process_check=lambda *a, **k: False,
+                                           free_check=lambda _: 0)
+            check("rustc session removed while exclusion is held", not cache.exists(), result)
+            output, errors = builders[0].communicate(timeout=5)
+            check("waiting build acquires Cargo lock after cleanup", output.strip() == "ACQUIRED"
+                  and builders[0].returncode == 0, (output, errors))
+            check("Cargo lock inode remains for future builds", lock.is_file())
+        finally:
+            for child in builders:
+                if child.poll() is None:
+                    child.kill()
+                child.communicate()
+
+
+def test_busy_profile_does_not_block_other_profiles():
+    with fixture_directory() as raw:
+        root = Path(raw)
+        target = root / "target"
+        _, busy = stale_session(target)
+        metadata = target / "release" / "build" / "crate-abcdef" / "output"
+        metadata.parent.mkdir(parents=True)
+        metadata.write_text("metadata")
+        os.utime(metadata, (time.time() - 7200,) * 2)
+        lock = target / "debug" / ".cargo-lock"
+        with lock.open("w+") as holder:
+            fcntl.flock(holder, fcntl.LOCK_EX)
+            with patch.object(sb, "plan_cache_cleanup", wraps=sb.plan_cache_cleanup) as inventory:
+                result = sb.maintain_caches([target], root, process_check=lambda _: False,
+                                           free_check=lambda _: 0)
+            check("busy profile excluded before inventory", inventory.call_args.args[1] == [target / "release"])
+            check("busy profile preserved while unlocked profile reclaimed",
+                  busy.exists() and not metadata.exists() and "Cargo lock" in str(result[2]), result)
+
+
+def test_binary_opened_after_enumeration():
+    for same_slot in (False, True):
+        with fixture_directory() as raw:
+            root = Path(raw)
+            target = root / "target"
+            _, cache = stale_session(target)
+            artifacts = []
+            for subtree in ("deps", "examples"):
+                directory = target / "debug" / subtree
+                directory.mkdir()
+                for name in ("runner-0123456789abcdef", "libfoo-abcdef.dylib"):
+                    artifact = directory / name
+                    artifact.write_bytes(b"\xcf\xfa\xed\xfe" + bytes(60))
+                    artifact.chmod(0o755)
+                    os.utime(artifact, (time.time() - 7200,) * 2)
+                    artifacts.append(artifact)
+            if same_slot:
+                (root / ".worktree-lease.json").write_text('{"holder_pid": %d}' % os.getpid())
+            original_plan = sb.plan_cache_cleanup
+            opened = []
+            def open_after_inventory(path, profiles=None):
+                plan = original_plan(path, profiles)
+                opened.extend(p.open("rb") for p in artifacts)
+                return plan
+            try:
+                with patch.object(sb, "plan_cache_cleanup", side_effect=open_after_inventory):
+                    result = sb.maintain_caches([target], root,
+                                               same_slot=target if same_slot else None,
+                                               process_check=lambda *a, **k: False,
+                                               free_check=lambda _: 0)
+                check(f"late-open artifacts survive same_slot={same_slot}",
+                      all(p.exists() for p in artifacts) and result[2], result)
+                check(f"rustc-only state remains reclaimable same_slot={same_slot}", not cache.exists(), result)
+            finally:
+                for handle in opened:
+                    handle.close()
+
+
+def test_hard_link_liveness_identity():
+    with fixture_directory() as raw:
+        root = Path(raw)
+        target = root / "checkout" / "target"
+        session, cache = stale_session(target)
+        alias = root / "outside-alias"
+        os.link(cache, alias)
+        with alias.open("rb") as opened:
+            st = os.fstat(opened.fileno())
+            # The descriptor remains open even if its old name no longer resolves.
+            alias.unlink()
+            output = f"p{os.getpid()}\nf3\nD{st.st_dev:x}\ni{st.st_ino}\nn{alias}\n"
+            with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0, stdout=output, stderr="")):
+                snapshot = sb.process_snapshot()
+            check("hard-link descriptor pins checkout by device and inode", snapshot(target) is True)
+            check("hard-link descriptor pins same-slot session by identity",
+                  snapshot(session, include_checkout=False) is True)
+            result = sb.maintain_caches([target], root, same_slot=target,
+                                       process_check=snapshot, free_check=lambda _: 0)
+            check("hard-link held cache is never removed", cache.exists() and result[1] == 0, result)
+
+
+def test_unregistered_target_executor_confinement():
+    with fixture_directory() as raw:
+        root = Path(raw)
+        rogue = root / ".claude" / "worktrees" / "slot-99"
+        target = rogue / "target"
+        _, cache = stale_session(target)
+        (rogue / ".git").write_text("gitdir: nowhere")
+        plan = sb.plan_cache_cleanup(target)
+        with patch.object(sb, "registered_worktrees", return_value=(root,)):
+            for result in (
+                    sb.maintain_caches([target], root, free_check=lambda _: 0,
+                                       process_check=lambda _: False),
+                    sb.apply_cache_cleanup(plan, dry_run=False, repo=root,
+                                           process_check=lambda _: False)):
+                check("shared executor refuses unregistered Cargo-tagged checkout",
+                      cache.exists() and result[1] == 0 and "registered worktree" in str(result[2]), result)
+        check("refused checkout gets no Cargo lock writes", not (target / "debug" / ".cargo-lock").exists())
+
+
+def test_executor_holds_reservation_for_validation_and_unlink():
+    with fixture_directory() as raw:
+        root = Path(raw)
+        target = root / "target"
+        _, cache = stale_session(target)
+        lock = root / ".claude" / "worktrees" / ".agent-worktree.lock"
+        original_validate, original_unlink = sb.canonical_target, sb._unlink_entry
+        def assert_reserved():
+            with lock.open("rb") as contender:
+                try:
+                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return
+                raise AssertionError("executor lost pool reservation")
+        def validate(*args):
+            assert_reserved()
+            return original_validate(*args)
+        def unlink(*args):
+            assert_reserved()
+            return original_unlink(*args)
+        with patch.object(sb, "canonical_target", side_effect=validate), \
+                patch.object(sb, "_unlink_entry", side_effect=unlink):
+            result = sb.maintain_caches([target], root, process_check=lambda _: False,
+                                       free_check=lambda _: 0)
+        check("registry validation and deletion hold shared reservation", not cache.exists(), result)
+        with lock.open("rb") as holder:
+            fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _, cache = stale_session(target)
+            result = sb.maintain_caches([target], root, process_check=lambda _: False,
+                                       free_check=lambda _: 0)
+            check("busy reservation refuses direct maintenance", cache.exists() and result[2], result)
+
+
 for test in (test_inventory_and_symlink_boundary, test_build_admission,
              test_manifest_dry_run_apply_and_identity, test_live_and_uninspectable_refused,
              test_lsof_and_cargo_lock_safety, test_ancestor_symlink_refused_by_fd_traversal,
@@ -486,7 +695,13 @@ for test in (test_inventory_and_symlink_boundary, test_build_admission,
              test_admission_reclaims_same_slot_and_idle_only, test_cap_configuration,
              test_same_slot_open_session_and_log,
              test_admission_cap_with_healthy_reserve_and_fresh_refusal,
-             test_admission_pool_reservation_safety):
+             test_admission_pool_reservation_safety,
+             test_build_starting_during_cleanup,
+             test_busy_profile_does_not_block_other_profiles,
+             test_binary_opened_after_enumeration,
+             test_hard_link_liveness_identity,
+             test_unregistered_target_executor_confinement,
+             test_executor_holds_reservation_for_validation_and_unlink):
     try:
         test()
     except Exception as error:

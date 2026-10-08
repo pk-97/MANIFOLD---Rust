@@ -63,6 +63,10 @@ def build_pool(tmp):
     sh(repo, "git", "fetch", "-q", "origin", "main")
     aw.REPO, aw.POOL = repo, repo / ".claude" / "worktrees"
     aw.POOL.mkdir(parents=True)
+    # Direct command tests bypass pool_lock, but cleanup now verifies the
+    # shared reservation through storage_budget's admission lock.
+    with aw.admission_pool_lock(aw.POOL, create=True):
+        pass
     return repo
 
 
@@ -542,19 +546,22 @@ def fake_target(wt, name="gen_node_catalog-0f1c97c31eb2a77a", size=2 * 2**20):
     """A Cargo-tagged target holding one hashed Mach-O executable in deps/."""
     deps = wt / "target" / "debug" / "deps"
     deps.mkdir(parents=True)
-    (wt / "target" / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+    (wt / "target" / ".rustc_info.json").write_text("{}\n")
+    metadata = wt / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef"
+    metadata.mkdir(parents=True)
+    cache_file = metadata / "invoked.timestamp"
+    cache_file.write_text("generated\n")
     exe = deps / name
     exe.write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * (size - 4))
     exe.chmod(0o755)
     old = time.time() - 7200
     os.utime(exe, (old, old))
+    os.utime(cache_file, (old, old))
     return exe
 
 
 def test_scrub_frees_an_idle_slot_over_its_cap(repo):
-    """BUG-vnp8: `release slot-0` reported "removed 0 files (0.0G) from 49.0G"
-    because the residue was all hashed executables. Over-cap idle slots must
-    actually lose that cache."""
+    """Over-cap cleanup frees metadata but preserves directly runnable files."""
     wt = add_slot(repo, "slot-0", "lane/landed")
     exe = fake_target(wt)
     with patch.object(aw, "slot_cap_bytes", return_value=1), \
@@ -562,14 +569,18 @@ def test_scrub_frees_an_idle_slot_over_its_cap(repo):
             patch.object(aw, "target_live_status", return_value=False), \
             redirect_stdout(io.StringIO()) as out:
         aw.cmd_scrub(SimpleNamespace())
-    check("over-cap idle slot loses its executables", not exe.exists(), out.getvalue())
-    check("scrub reports the removed file", "removed 1 cache files" in out.getvalue(), out.getvalue())
+    check("over-cap idle slot preserves linked executables", exe.exists(), out.getvalue())
+    check("over-cap idle slot loses fingerprint metadata",
+          not (wt / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp").exists(),
+          out.getvalue())
+    check("scrub reports the removed file", "removed 1 files" in out.getvalue(), out.getvalue())
     check("checkout untouched", (wt / "f.txt").read_text() == "base\n")
 
 
 def test_reclaim_touches_only_landed_clean_idle_slots(repo):
     landed = add_slot(repo, "slot-0", "lane/landed")
     landed_exe = fake_target(landed)
+    landed_cache = landed / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp"
     dirty = add_slot(repo, "slot-1", "lane/dirty")
     (dirty / "f.txt").write_text("uncommitted\n")
     dirty_exe = fake_target(dirty)
@@ -589,7 +600,7 @@ def test_reclaim_touches_only_landed_clean_idle_slots(repo):
         os.utime(path, (old, old))
 
     def free_space(_path):
-        return 10**15 if not landed_exe.exists() else 0
+        return 10**15 if not landed_cache.exists() else 0
 
     with patch.object(aw, "disk_free", side_effect=free_space), \
             patch.object(aw, "slot_has_live_session", return_value=False), \
@@ -597,7 +608,8 @@ def test_reclaim_touches_only_landed_clean_idle_slots(repo):
             redirect_stdout(io.StringIO()) as out:
         aw.cmd_reclaim(SimpleNamespace(free_bytes=100 * 2**30))
     text = out.getvalue()
-    check("landed idle slot cache reclaimed", not landed_exe.exists(), text)
+    check("landed idle slot cache reclaimed", not landed_cache.exists(), text)
+    check("landed linked executable preserved", landed_exe.exists(), text)
     check("reclaim stops once the reserve is met", spare_exe.exists(), text)
     check("dirty slot untouched", dirty_exe.exists() and (dirty / "f.txt").read_text() == "uncommitted\n", text)
     check("unlanded slot untouched", unlanded_exe.exists(), text)
@@ -629,7 +641,10 @@ def test_reclaim_refuses_a_live_process(repo):
             aw.cmd_reclaim(SimpleNamespace(free_bytes=100 * 2**30))
         except SystemExit:
             pass
-    check("live target keeps its cache", exe.exists(), out.getvalue())
+    check("live target keeps its executable", exe.exists(), out.getvalue())
+    check("live target keeps its fingerprint metadata",
+          (wt / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp").exists(),
+          out.getvalue())
     check("live refusal is reported", "live process" in out.getvalue(), out.getvalue())
 
 
@@ -649,13 +664,25 @@ def test_scrub_continues_past_a_victim_that_frees_nothing(repo):
             patch.object(aw, "target_live_status", return_value=False), \
             redirect_stdout(io.StringIO()) as out:
         aw.cmd_scrub(SimpleNamespace())
-    check("scrub reaches the cache behind a no-op victim", not exe.exists(), out.getvalue())
+    check("scrub reaches the cache behind a no-op victim",
+          not (warm / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp").exists(),
+          out.getvalue())
+
+
+def test_pool_ignores_unregistered_cargo_slot(repo):
+    """A Cargo-tagged directory under the pool is not a Git worktree seat."""
+    rogue = aw.POOL / "slot-99"
+    fake_target(rogue)
+    (rogue / ".git").write_text("gitdir: unregistered-checkout\n")
+    check("unregistered Cargo slot is excluded from the ring", rogue not in aw.pool_slots(),
+          str(aw.pool_slots()))
 
 
 TESTS += [test_scrub_frees_an_idle_slot_over_its_cap,
           test_reclaim_touches_only_landed_clean_idle_slots,
           test_reclaim_refuses_a_live_process,
-          test_scrub_continues_past_a_victim_that_frees_nothing]
+          test_scrub_continues_past_a_victim_that_frees_nothing,
+          test_pool_ignores_unregistered_cargo_slot]
 
 
 def test_list_exposes_cache_budgets(repo):
