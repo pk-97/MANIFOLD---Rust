@@ -9,7 +9,7 @@ use manifold_core::scene_modifier_preset::{
     SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
 };
 
-use crate::node_graph::gltf_import::upgrade::project::upgrade_project_materials;
+use manifold_nodes_scene::node_graph::gltf_import::upgrade::project::upgrade_project_materials;
 
 fn physics_boxes() -> EffectGraphDef {
     serde_json::from_str(include_str!(
@@ -182,9 +182,9 @@ fn corrected_import_defaults_preserve_custom_and_automated_instance_values() {
                 points: Vec::new(),
             }]);
         }
-        crate::node_graph::gltf_import::upgrade::project::testkit::apply_binding_updates(
+        manifold_nodes_scene::node_graph::gltf_import::upgrade::project::testkit::apply_binding_updates(
             instance,
-            &[crate::node_graph::gltf_import::upgrade::MaterialBindingUpdate {
+            &[manifold_nodes_scene::node_graph::gltf_import::upgrade::MaterialBindingUpdate {
                 id: id.into(),
                 old_value: 0.2,
                 new_value: 1.0,

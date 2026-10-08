@@ -1,4 +1,4 @@
-use crate::node_graph::scene_exposure::{look_metadata, testkit::SCENE_VOCABULARY_TYPE_IDS};
+use manifold_nodes_scene::node_graph::scene_exposure::{look_metadata, testkit::SCENE_VOCABULARY_TYPE_IDS};
 
     #[test]
     fn water_look_metadata_exposes_only_size() {
@@ -15,8 +15,8 @@ use crate::node_graph::scene_exposure::{look_metadata, testkit::SCENE_VOCABULARY
         }
     }
 
-    use crate::node_graph::scene_exposure::{metadata_for_node_type, migrate_scene_exposures};
-    use crate::node_graph::scene_exposure::testkit::{migrate_bokeh_source_coc, section_name_for_node};
+    use manifold_nodes_scene::node_graph::scene_exposure::{metadata_for_node_type, migrate_scene_exposures};
+    use manifold_nodes_scene::node_graph::scene_exposure::testkit::{migrate_bokeh_source_coc, section_name_for_node};
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_core::effect_graph_def::{
         EffectGraphNode, EffectGraphWire, GroupDef, GroupInterface,

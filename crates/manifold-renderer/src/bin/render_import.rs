@@ -74,7 +74,7 @@ use manifold_renderer::compositor::{Compositor, CompositorFrame, CompositeLayerD
 use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback};
 use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 use manifold_renderer::presentation::{
     DisplayCapabilities, DisplayPlan, LinearPresentationTarget, LinearSceneFrame,
     PresentationPipeline, UI_FORMAT,

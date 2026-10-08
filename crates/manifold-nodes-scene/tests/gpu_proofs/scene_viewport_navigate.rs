@@ -12,7 +12,7 @@
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::viewport_camera::ViewportCamera, manifold_renderer::node_graph::ViewportOverlayConfig, manifold_renderer::node_graph::build_overlay_lines, manifold_renderer::node_graph::composite_overlay_lines_rgba8, manifold_renderer::node_graph::override_camera_def, manifold_renderer::node_graph::project_lines, manifold_renderer::node_graph::render_viewport_frame};
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::viewport_camera::ViewportCamera, crate::node_graph::viewport_overlay::ViewportOverlayConfig, crate::node_graph::viewport_overlay::build_overlay_lines, crate::node_graph::viewport_overlay::composite_overlay_lines_rgba8, crate::node_graph::viewport_render::override_camera_def, crate::node_graph::viewport_overlay::project_lines, crate::node_graph::viewport_render::render_viewport_frame};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 

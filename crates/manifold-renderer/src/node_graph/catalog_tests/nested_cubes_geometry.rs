@@ -13,7 +13,7 @@ mod gpu_tests {
     use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
-    use crate::node_graph::primitives::NestedCubesGeometry;
+    use manifold_nodes_scene::node_graph::primitives::nested_cubes_geometry::NestedCubesGeometry;
 
     fn frame_time() -> FrameTime {
         FrameTime {

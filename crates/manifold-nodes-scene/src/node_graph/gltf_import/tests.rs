@@ -58,7 +58,7 @@ fn import_camera_far_scales_with_scene_size() {
     let small = cam_far(0.5);
     assert_eq!(
         small,
-        crate::node_graph::primitives::DEFAULT_FAR,
+        crate::node_graph::primitives::camera_orbit::DEFAULT_FAR,
         "compact asset keeps the default far exactly (golden stability)"
     );
 

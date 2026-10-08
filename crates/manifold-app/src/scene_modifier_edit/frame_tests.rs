@@ -9,7 +9,7 @@ use manifold_editing::commands::graph::{
     AddSceneObjectCommand, DuplicateSceneObjectCommand, RemoveSceneObjectCommand,
 };
 use manifold_editing::service::EditingService;
-use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 
 use super::{SceneModifierAction, build_action, with_admission};
 
@@ -138,11 +138,11 @@ fn add_cube_object(project: &mut Project, layer_id: &LayerId, service: &mut Edit
         render_id,
         index,
         (900.0, 200.0 + 40.0 * index as f32),
-        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
             "node.pbr_material",
         ),
-        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
-        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
+        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
+        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
         host_graph(project, layer_id).clone(),
     );
     service.execute(with_admission(Box::new(command)), project);

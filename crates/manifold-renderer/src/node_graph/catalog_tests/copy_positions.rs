@@ -1,9 +1,9 @@
-    use crate::node_graph::primitives::copy_positions::{CopyPositions, Uniforms};
+    use manifold_nodes_scene::node_graph::primitives::copy_positions::{CopyPositions, Uniforms};
     use manifold_gpu::GpuBinding;
     use manifold_node_engine::mesh::{InstanceTransform, Vec4Vertex};
     use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use crate::node_graph::primitives::displace_copies::DisplaceCopies;
+    use manifold_nodes_scene::node_graph::primitives::displace_copies::DisplaceCopies;
     use manifold_nodes_image::node_graph::primitives::wave_field_3d::WaveField3d;
 
     fn dispatch(src: &[InstanceTransform]) -> Vec<Vec4Vertex> {
@@ -213,7 +213,7 @@
             _pad0: 0,
             _pad1: 0,
         };
-        let du = crate::node_graph::primitives::displace_copies::Uniforms {
+        let du = manifold_nodes_scene::node_graph::primitives::displace_copies::Uniforms {
             amount,
             direction_x: 0.0,
             direction_y: 1.0,

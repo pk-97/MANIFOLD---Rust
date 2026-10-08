@@ -21,9 +21,7 @@ use manifold_node_engine::exec::execution_plan::ResourceId;
 use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
-use super::{
-    BakeEquirectEnvmap, CameraOrbit, GenerateCubeMesh, LightNode, PbrMaterial, Render3DMesh,
-};
+use crate::node_graph::primitives::{bake_equirect_envmap::BakeEquirectEnvmap, camera_orbit::CameraOrbit, generate_cube_mesh::GenerateCubeMesh, light::LightNode, pbr_material::PbrMaterial, render_3d_mesh::Render3DMesh};
 
 fn frame_time() -> FrameTime {
     FrameTime {
@@ -84,7 +82,7 @@ use manifold_node_engine::parameters::ParamDef;
 use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use manifold_node_engine::scene::boundary_nodes::Source;
 use crate::node_graph::primitives::scene_object::SceneObjectNode;
-use super::{CelMaterial, RenderScene, Transform3D, UnlitMaterial};
+use crate::node_graph::primitives::{cel_material::CelMaterial, render_scene::RenderScene, transform_3d::Transform3D, unlit_material::UnlitMaterial};
 
 /// `Graph::connect` needs a `&'static str` port name; these helpers only
 /// ever address the first handful of scene objects, so a small literal

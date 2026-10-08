@@ -3,7 +3,7 @@ use manifold_node_engine::{graph::Graph, exec::execution_plan::compile};
     #[test]
     fn provided_texture_outputs_are_held_but_feedback_back_edges_stay_writable() {
         use manifold_node_engine::scene::boundary_nodes::FinalOutput;
-        use {crate::node_graph::primitives::GltfTextureSource, manifold_nodes_image::node_graph::primitives::temporal::Feedback};
+        use {manifold_nodes_scene::node_graph::primitives::gltf_texture_source::GltfTextureSource, manifold_nodes_image::node_graph::primitives::temporal::Feedback};
         for feedback in [false, true] {
             let mut graph = Graph::new();
             let source = graph.add_node(Box::new(GltfTextureSource::new()));

@@ -579,7 +579,7 @@ fn imported_modifiers_content(recipes: &[&str]) -> crate::content_thread::Conten
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/fixtures/gltf/cc0___mushroom.glb"
     ));
-    let (graph, _) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(source)
+    let (graph, _) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(source)
         .expect("import SceneLoop host");
     let mut project = Project::default();
     project.settings.bpm = Bpm(BPM);

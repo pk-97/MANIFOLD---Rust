@@ -171,7 +171,7 @@ fn modifier_card() -> (PresetRuntime, String) {
     )))
     .unwrap();
     let top = |node: &str| SceneNodeRef { scope: Vec::new(), node: manifold_core::NodeId::new(node) };
-    let instance = crate::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+    let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
         &owner,
         &recipe,
         manifold_core::NodeId::new("kick"),

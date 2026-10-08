@@ -540,7 +540,7 @@ fn paste(
     }
     let handle_rewrites = cloned_handle_rewrites(&clipboard.graph, &graph, &stable);
     let remaps = transfer_metadata(&clipboard.graph, &mut graph, &stable, &handle_rewrites)?;
-    manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut graph);
+    manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut graph);
     let mut after = before.clone();
     after.graph = Some(graph);
     after.refresh_manifest_from_graph();

@@ -2,7 +2,7 @@
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers};
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers};
 
 const LOOP: &str = include_str!("fixtures/scene-modifiers/scene_loop_applied_v2.json");
 const FOG: &str = include_str!("fixtures/scene-modifiers/scene_fog_applied_v2.json");

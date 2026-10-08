@@ -3,7 +3,7 @@
 // Merges skull_salazar_downloadable.glb INTO abandoned_warehouse_-_interior_scene.glb's
 // imported scene, using the real production parse path end to end.
 
-use manifold_renderer::node_graph::gltf_import::{assemble_import_graph, assemble_merge_plan};
+use crate::node_graph::gltf_import::{assemble_import_graph, assemble_merge_plan};
 use std::path::Path;
 
 fn fixture(name: &str) -> std::path::PathBuf {

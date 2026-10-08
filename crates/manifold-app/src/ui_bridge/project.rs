@@ -404,7 +404,7 @@ pub(super) fn dispatch_project(
                     Vec::new(),
                     *render_scene_node_id,
                     (0.0, 0.0),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                    manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
                         "node.bake_environment",
                     ),
                     default,
@@ -424,7 +424,7 @@ pub(super) fn dispatch_project(
                     Vec::new(),
                     *render_scene_node_id,
                     (0.0, 0.0),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                    manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
                         "node.atmosphere",
                     ),
                     default,
@@ -591,13 +591,13 @@ pub(super) fn dispatch_project(
                     *render_scene_node_id,
                     *next_index,
                     centroid,
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                    manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
                         "node.pbr_material",
                     ),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                    manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
                         "node.transform_3d",
                     ),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                    manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
                         "node.scene_object",
                     ),
                     default,
@@ -618,7 +618,7 @@ pub(super) fn dispatch_project(
                 if let Some(domain) = domain {
                     let command = manifold_editing::commands::graph::AssignSceneFluidRoleCommand::new(
                         target, *render_scene_node_id, *object_index, domain, *role,
-                        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.fluid_role_source"),
+                        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.fluid_role_source"),
                         default,
                     );
                     ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
@@ -668,7 +668,7 @@ pub(super) fn dispatch_project(
         ProjectAction::SceneSetupAddFluid(layer_id, render_scene_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 use manifold_editing::commands::graph::ExposureSet;
-                use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
+                use manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type;
                 let template = DEFAULT_LIQUID_TEMPLATE();
                 let simulation = template
                     .exposed_type_id(ExposureSet::Fluid)
@@ -714,13 +714,13 @@ pub(super) fn dispatch_project(
                     centroid,
                     aspect,
                     1.0,
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                    manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
                         "node.pbr_material",
                     ),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                    manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
                         "node.transform_3d",
                     ),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                    manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
                         "node.scene_object",
                     ),
                     default,
@@ -741,7 +741,7 @@ pub(super) fn dispatch_project(
                     *render_scene_node_id,
                     *next_index,
                     pos,
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+                    manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
                         "node.light",
                     ),
                     default,
@@ -862,7 +862,7 @@ pub(super) fn dispatch_project(
         }
         ProjectAction::SceneSetupDuplicateSubmesh(layer_id, render_scene_node_id, physical_index) => {
             if let Some(mut default) = generator_catalog_default(project, layer_id) {
-                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
+                manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let cmd = manifold_editing::commands::graph::DuplicateSceneSubmeshCommand::new(
                     target,
@@ -876,10 +876,10 @@ pub(super) fn dispatch_project(
         }
         ProjectAction::SceneSetupEnablePhysics(layer_id, render_scene_node_id, object_index)
         | ProjectAction::SceneSetupDisablePhysics(layer_id, render_scene_node_id, object_index) => {
-            use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+            use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
             let enabled = matches!(action, ProjectAction::SceneSetupEnablePhysics(..));
             if let Some(mut default) = generator_catalog_default(project, layer_id) {
-                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
+                manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let physics = project.graph_for_target(&target, Some(&default))
                     .and_then(SceneVm::from_def)
@@ -897,9 +897,9 @@ pub(super) fn dispatch_project(
                 } else if enabled {
                     Box::new(manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
                         target, *render_scene_node_id, *object_index,
-                        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
+                        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
                         default,
-                    ).with_world_metadata(manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.physics_world")))
+                    ).with_world_metadata(manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world")))
                 } else {
                     return DispatchResult::handled();
                 };
@@ -914,7 +914,7 @@ pub(super) fn dispatch_project(
         // scene-panel control shares (bound → binding slot, else def write).
         // All writes land as ONE CompositeCommand so a frame is one undo.
         ProjectAction::SceneSetupFrameSelected(layer_id, _render_scene_node_id, object_node_id) => {
-            use manifold_renderer::node_graph::scene_vm::{CameraVm, SceneVm};
+            use manifold_nodes_scene::node_graph::scene_vm::{CameraVm, SceneVm};
             let Some(default) = generator_catalog_default(project, layer_id) else {
                 return DispatchResult::handled();
             };
@@ -930,7 +930,7 @@ pub(super) fn dispatch_project(
                 eprintln!("[Scene] frame-selected: no scene in this graph");
                 return DispatchResult::handled();
             };
-            let Some(target) = manifold_renderer::node_graph::gizmo_target_for(&vm, *object_node_id) else {
+            let Some(target) = manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for(&vm, *object_node_id) else {
                 eprintln!("[Scene] frame-selected: object {object_node_id} has no transform target");
                 return DispatchResult::handled();
             };
@@ -1074,7 +1074,7 @@ pub(super) fn dispatch_project(
                 return DispatchResult::handled();
             };
 
-            let plan = match manifold_renderer::node_graph::gltf_import::assemble_merge_plan(
+            let plan = match manifold_nodes_scene::node_graph::gltf_import::assemble_merge_plan(
                 &effective_def,
                 &path,
             ) {
@@ -1271,7 +1271,7 @@ pub(super) fn dispatch_project(
                 .find_layer_by_id(layer_id)
                 .and_then(|(_, layer)| layer.generator_graph().cloned())
                 .unwrap_or_else(|| default.clone());
-            if manifold_renderer::node_graph::scene_vm::is_param_exposed(
+            if manifold_nodes_scene::node_graph::scene_vm::is_param_exposed(
                 &effective_def,
                 *node_doc_id,
                 param_id,
@@ -1628,7 +1628,7 @@ mod tests {
         let render_scene_id = def
             .nodes
             .iter()
-            .find(|n| n.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
+            .find(|n| n.type_id == manifold_nodes_scene::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
             .expect("Scene has a render_scene node")
             .id;
         (project, layer_id, render_scene_id)
@@ -1649,7 +1649,7 @@ mod tests {
         let render_scene_id = def
             .nodes
             .iter()
-            .find(|n| n.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
+            .find(|n| n.type_id == manifold_nodes_scene::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
             .expect("PhysicsSolids has a render_scene node")
             .id;
         (project, layer_id, render_scene_id)
@@ -1790,7 +1790,7 @@ mod tests {
 
     #[test]
     fn scene_setup_physics_toggle_preserves_body_settings_and_undo() {
-        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
         let (mut project, layer_id, scene_id) = physics_solids_layer_project();
         let body = |project: &Project| {
             SceneVm::from_def(&effective_def(project, &layer_id)).unwrap().objects
@@ -1849,7 +1849,7 @@ mod tests {
 
     #[test]
     fn scene_setup_add_object_then_explicit_physics_reuses_world_and_roundtrips() {
-        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
         let (mut project, layer_id, render_scene_id) = physics_solids_layer_project();
         let original = effective_def(&project, &layer_id);
@@ -2167,7 +2167,7 @@ mod tests {
     #[test]
     fn scene_physics_add_fluid_is_content_owned_selectable_and_reloadable() {
         use crate::content_command::ContentCommand;
-        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
         let (mut project, layer_id, render_scene_id) = scene_layer_project();
         let original = effective_def(&project, &layer_id);
@@ -2275,9 +2275,9 @@ mod tests {
         let shared_ids: Vec<_> = ["gravity_x", "gravity_y", "gravity_z", "speed", "reset"]
             .into_iter().map(|param| format!("{}_{}", world.id, param)).collect();
         let mut migrated = reloaded_def.clone();
-        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut migrated);
+        manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut migrated);
         let once = migrated.clone();
-        assert!(!manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut migrated));
+        assert!(!manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut migrated));
         assert_eq!(migrated, once);
         for id in &shared_ids {
             let before = metadata.params.iter().find(|spec| &spec.id == id).unwrap();
@@ -2306,7 +2306,7 @@ mod tests {
     /// way through leaves the project untouched.
     #[test]
     fn scene_physics_add_gpu_fluid_id_exhaustion_is_atomic() {
-        use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
+        use manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type;
         let (mut project, layer_id, render_scene_id) = scene_layer_project();
         let target = manifold_core::GraphTarget::Generator(layer_id.clone());
         let mut def = effective_def(&project, &layer_id);
@@ -2339,7 +2339,7 @@ mod tests {
     #[test]
     fn scene_liquid_recognition_survives_edit_undo_save_and_reload() {
         use manifold_core::effect_graph_def::EffectGraphDef;
-        use manifold_renderer::node_graph::scene_vm::{SceneObjectKnownRow, SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectKnownRow, SceneObjectVm, SceneVm};
 
         fn water(def: &EffectGraphDef) -> SceneObjectKnownRow {
             SceneVm::from_def(def).expect("matter scene").objects.into_iter().find_map(|object| match object {
@@ -2370,7 +2370,7 @@ mod tests {
         let original = effective_def(&project, &layer_id);
         assert_water(&original, "bundled");
         let render_scene_id = original.nodes.iter()
-            .find(|node| node.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
+            .find(|node| node.type_id == manifold_nodes_scene::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
             .expect("the matter scene has a render_scene node").id;
         let lights = SceneVm::from_def(&original).unwrap().lights.len() as u32;
 
@@ -2406,7 +2406,7 @@ mod tests {
     fn scene_physics_assign_fluid_role_is_content_owned_and_reloadable() {
         use crate::content_command::ContentCommand;
         use manifold_core::effect_graph_def::BindingTarget;
-        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
         let (mut project, layer_id, render_scene_id) = scene_layer_project();
         let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
@@ -2669,7 +2669,7 @@ mod tests {
     /// distance covering radius + the object's horizontal offset.
     #[test]
     fn scene_setup_frame_selected_writes_orbit_camera_params() {
-        use manifold_renderer::node_graph::scene_vm::{CameraVm, SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{CameraVm, SceneObjectVm, SceneVm};
         let (mut project, layer_id, render_scene_id) = scene_layer_project();
         let def_before = effective_def(&project, &layer_id);
         let vm = SceneVm::from_def(&def_before).expect("Scene resolves as a scene");
@@ -2773,9 +2773,9 @@ mod tests {
 
         let source_index = before;
         let source_def = effective_def(&project, &layer_id);
-        let source_vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&source_def).unwrap();
+        let source_vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&source_def).unwrap();
         let source_transform = source_vm.objects.iter().find_map(|object| match object {
-            manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row)
+            manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row)
                 if row.index == source_index as usize => row.transform.as_ref(),
             _ => None,
         }).unwrap();
@@ -2813,13 +2813,13 @@ mod tests {
         assert!(command.was_applied(), "{:?}", command.rejection_reason());
         assert!(matches!(pending.resolve(&project), Some(crate::edit_selection::EditSelection::Object { .. })));
         let def = effective_def(&project, &layer_id);
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
+        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def)
             .expect("Scene scene VM after duplicate");
         let (transform_id, duplicate_name) = vm
             .objects
             .iter()
             .find_map(|object| match object {
-                manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row)
+                manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row)
                     if row.index == (source_index + 1) as usize =>
                 {
                     row.transform
@@ -2937,10 +2937,10 @@ mod tests {
             "content applies the queued duplication");
 
         let def = effective_def(&project, &layer_id);
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
+        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def)
             .expect("PhysicsSolids scene VM after duplicate");
         let transform_of = |index: usize| vm.objects.iter().find_map(|object| match object {
-            manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row) if row.index == index => {
+            manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) if row.index == index => {
                 row.transform.clone()
             }
             _ => None,
@@ -3070,7 +3070,7 @@ mod tests {
             group_node_id,
             "node.twist_mesh".to_string(),
             None,
-            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
                 "node.twist_mesh",
             ),
             def,
@@ -3230,8 +3230,8 @@ mod tests {
             .expect("the new layer plane group is present");
         let body = added_group.group.as_ref().expect("is a group");
         assert!(!body.nodes.iter().any(|n| n.type_id == "node.layer_source"));
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
-        let manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(plane) =
+        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
+        let manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(plane) =
             vm.objects.last().unwrap()
         else {
             panic!("added plane must be editable");
@@ -3383,7 +3383,7 @@ mod tests {
     /// generator-manifest slots created by scene exposure migration.
     #[test]
     fn scene_setup_param_changed_writes_the_effective_value() {
-        use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, CameraVm, SceneLightVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{AtmosphereVm, CameraVm, SceneLightVm, SceneVm};
         fn scene_vm(project: &Project, layer_id: &LayerId) -> SceneVm {
             SceneVm::from_def(&effective_def(project, layer_id)).expect("scene vm")
         }

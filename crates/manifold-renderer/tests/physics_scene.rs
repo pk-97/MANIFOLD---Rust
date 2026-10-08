@@ -13,8 +13,8 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::effects::ParamConvert;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures;
-use manifold_renderer::node_graph::scene_vm::{MaterialVm, SceneObjectVm, SceneVm};
+use manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures;
+use manifold_nodes_scene::node_graph::scene_vm::{MaterialVm, SceneObjectVm, SceneVm};
 use manifold_node_engine::runtime::PresetRuntime;
 
 const PHYSICS_SOLIDS_JSON: &str = include_str!("../assets/generator-presets/PhysicsSolids.json");

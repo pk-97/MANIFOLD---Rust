@@ -1175,7 +1175,7 @@ impl Application {
             return false;
         }
         let Some(def) = self.viewport_def_cloned() else { return false };
-        let Some(mut scene) = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def) else {
+        let Some(mut scene) = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def) else {
             return false;
         };
         if let Some(ed) = self.graph_editor.as_ref() {
@@ -1193,10 +1193,10 @@ impl Application {
 
         // Try the currently selected object's gizmo handles first.
         if let Some(obj_id) = selected
-            && let Some(target) = manifold_renderer::node_graph::gizmo_target_for(&scene, obj_id)
-            && let Some(axis) = manifold_renderer::node_graph::pick_axis(mode, &target, &cam, w, h, (cx, cy))
+            && let Some(target) = manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for(&scene, obj_id)
+            && let Some(axis) = manifold_nodes_scene::node_graph::viewport_gizmo::pick_axis(mode, &target, &cam, w, h, (cx, cy))
         {
-            if let Some((_, _, driven)) = manifold_renderer::node_graph::drag_write(mode, axis, &target)
+            if let Some((_, _, driven)) = manifold_nodes_scene::node_graph::viewport_gizmo::drag_write(mode, axis, &target)
                 && driven
             {
                 // D8: "the viewport never fights the graph" — refuse the
@@ -1205,7 +1205,7 @@ impl Application {
                 // through to orbit.
                 return true;
             }
-            let fluid_domain = if target.kind == manifold_renderer::node_graph::GizmoTargetKind::FluidDomain {
+            let fluid_domain = if target.kind == manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetKind::FluidDomain {
                 match crate::fluid_domain_edit::FluidDomainDrag::begin(
                     &self.local_project, layer_id.clone(), obj_id, mode, axis,
                 ) {
@@ -1258,7 +1258,7 @@ impl Application {
         }
 
         // No gizmo hit (or nothing selected yet) — try an object pick.
-        match manifold_renderer::node_graph::pick_object(&scene, &cam, w, h, (cx, cy)) {
+        match manifold_nodes_scene::node_graph::viewport_gizmo::pick_object(&scene, &cam, w, h, (cx, cy)) {
             Some(obj_id) => {
                 self.ws.ui_root.scene_setup_panel.set_selection(
                     layer_id,
@@ -1326,10 +1326,10 @@ impl Application {
             return false;
         };
         let Some(def) = self.viewport_def_cloned() else { return true };
-        let Some(scene) = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def) else {
+        let Some(scene) = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def) else {
             return true;
         };
-        let Some(target) = manifold_renderer::node_graph::gizmo_target_for(&scene, drag.object_node_id) else {
+        let Some(target) = manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for(&scene, drag.object_node_id) else {
             // The object vanished mid-drag (deleted, or the graph edit that
             // just ran wasn't self-consistent) — drop the drag rather than
             // write against stale state (no-silent-fallbacks).
@@ -1346,7 +1346,7 @@ impl Application {
             (config.width, config.height, config.camera.to_camera(), ed.viewport_gizmo_mode)
         };
         let Some((addr, current, driven)) =
-            manifold_renderer::node_graph::drag_write(mode, drag.axis, &target)
+            manifold_nodes_scene::node_graph::viewport_gizmo::drag_write(mode, drag.axis, &target)
         else {
             return true;
         };
@@ -1355,15 +1355,15 @@ impl Application {
         }
         let mouse_delta = (x - drag.last_x, y - drag.last_y);
         let new_value = match mode {
-            manifold_renderer::node_graph::GizmoMode::Move => {
+            manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::Move => {
                 target.projected_drag_delta(drag.axis, &cam, w, h, mouse_delta)
                     .map(|d| current + d)
             }
-            manifold_renderer::node_graph::GizmoMode::Scale => {
+            manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::Scale => {
                 target.projected_drag_delta(drag.axis, &cam, w, h, mouse_delta)
                     .map(|d| (current + d).max(0.01))
             }
-            manifold_renderer::node_graph::GizmoMode::Rotate => manifold_renderer::node_graph::rotate_drag_delta(
+            manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::Rotate => manifold_nodes_scene::node_graph::viewport_gizmo::rotate_drag_delta(
                 target.origin,
                 &cam,
                 w,
@@ -2279,11 +2279,11 @@ impl Application {
                 {
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.viewport_gizmo_mode = if c.eq_ignore_ascii_case("w") {
-                            manifold_renderer::node_graph::GizmoMode::Move
+                            manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::Move
                         } else if c.eq_ignore_ascii_case("e") {
-                            manifold_renderer::node_graph::GizmoMode::Rotate
+                            manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::Rotate
                         } else {
-                            manifold_renderer::node_graph::GizmoMode::Scale
+                            manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::Scale
                         };
                     }
                     handled = true;

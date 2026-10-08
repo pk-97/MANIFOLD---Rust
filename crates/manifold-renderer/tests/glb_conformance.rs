@@ -32,7 +32,7 @@ use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8};
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;

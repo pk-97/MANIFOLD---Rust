@@ -8,8 +8,8 @@ use manifold_core::effect_graph_def::EffectGraphNode;
 use manifold_core::preset_type_id::PresetTypeId;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 use manifold_core::NodeId;
-use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-use manifold_renderer::node_graph::scene_modifier_authoring::scene_modifier_objects;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::scene_modifier_objects;
 use manifold_renderer::node_graph::bundled_preset_def;
 
 pub fn stock_recipe(name: &str) -> EffectGraphDef {

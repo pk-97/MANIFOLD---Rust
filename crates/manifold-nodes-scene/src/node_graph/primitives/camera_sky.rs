@@ -137,7 +137,7 @@ mod tests {
     use manifold_node_engine::exec::execution_plan::compile;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::parameters::ParamValue;
-    use crate::node_graph::primitives::{FreeCamera, HdriSource};
+    use crate::node_graph::primitives::{free_camera::FreeCamera, hdri_source::HdriSource};
     use manifold_node_engine::scene::boundary_nodes::FinalOutput;
 
     /// A 2:1 HDRI feeding the sky must not size it: the output is the frame.

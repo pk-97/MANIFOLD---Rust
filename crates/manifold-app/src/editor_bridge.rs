@@ -1655,7 +1655,7 @@ impl Application {
             // `ws.viewport_gizmo_mode` doc comments (`workspace.rs`).
             let mut scene = viewport_def
                 .as_ref()
-                .and_then(manifold_renderer::node_graph::scene_vm::SceneVm::from_def);
+                .and_then(manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def);
             if let Some(scene) = scene.as_mut() {
                 crate::fluid_domain_edit::apply_runtime_domains(scene, &ws.viewport_fluid_domains);
             }
@@ -1667,17 +1667,17 @@ impl Application {
                 .as_ref()
                 .zip(ws.viewport_selected_object)
                 .filter(|_| draft.is_none())
-                .and_then(|(scene, object_id)| manifold_renderer::node_graph::gizmo_target_for(scene, object_id));
+                .and_then(|(scene, object_id)| manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for(scene, object_id));
             let gizmo_lines = draft.map(|drag| (&drag.target, drag.mode))
                 .or_else(|| target.as_ref().map(|target| (target, ws.viewport_gizmo_mode)))
-                .map(|(target, mode)| manifold_renderer::node_graph::gizmo_lines(mode, target))
+                .map(|(target, mode)| manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_lines(mode, target))
                 .unwrap_or_default();
             let fluid_domain = draft.map(|drag| drag.layout).or_else(|| scene
                 .as_ref()
                 .zip(ws.viewport_selected_object)
                 .and_then(|(scene, object_id)| {
                     scene.objects.iter().find_map(|object| match object {
-                        manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row)
+                        manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row)
                             if row.object_node_id == object_id => row.fluid_domain,
                         _ => None,
                     })
@@ -1686,7 +1686,7 @@ impl Application {
             ws.viewport_overlay_lines.extend_from_slice(&ws.viewport_grid_lines);
             if let Some(domain) = fluid_domain {
                 ws.viewport_overlay_lines.extend(
-                    manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines(domain),
+                    manifold_nodes_scene::node_graph::viewport_overlay::fluid_domain_lines(domain),
                 );
             }
             ws.viewport_overlay_lines.extend(gizmo_lines);

@@ -63,8 +63,8 @@ pub fn import_rt_manifest(
 /// given the async accel build time to land.
 pub fn capture_rt_channels(
     render_one_armed_frame: impl FnOnce(),
-) -> Vec<manifold_renderer::node_graph::primitives::RtCaptureSlot> {
-    use manifold_renderer::node_graph::primitives::{arm_rt_capture, disarm_rt_capture, take_rt_captures};
+) -> Vec<crate::node_graph::primitives::render_scene::RtCaptureSlot> {
+    use crate::node_graph::primitives::render_scene::{arm_rt_capture, disarm_rt_capture, take_rt_captures};
     take_rt_captures();
     arm_rt_capture(false);
     render_one_armed_frame();
@@ -89,7 +89,7 @@ pub fn assert_rt_dispatched(render_one_armed_frame: impl FnOnce(), context: &str
 /// zero.
 pub fn read_rt_channel(
     device: &GpuDevice,
-    cap: &manifold_renderer::node_graph::primitives::RtCaptureSlot,
+    cap: &crate::node_graph::primitives::render_scene::RtCaptureSlot,
 ) -> Vec<f32> {
     let (bpp, comps) = match cap.tex.format {
         GpuTextureFormat::Rgba16Float => (8u32, 4usize),

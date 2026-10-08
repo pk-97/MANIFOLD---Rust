@@ -55,7 +55,7 @@ pub fn loaded_generator_presets_from_bundled()
             // scene preset (Scene, the default scene) shows exposed card
             // rows whose backing instance slot never exists. Same deterministic
             // migration, applied on this parallel parse path.
-            crate::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
+            manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
             def.preset_metadata
         })
         .collect()

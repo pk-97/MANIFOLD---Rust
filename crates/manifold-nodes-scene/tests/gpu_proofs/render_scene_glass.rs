@@ -828,7 +828,7 @@ fn glass_above_a_blend_layer_transmits_the_blended_colour() {
 /// before and after glass in draw order; offscreen glass keeps Pass B active.
 #[test]
 fn blend_snapshot_elision_is_bit_exact() {
-    use manifold_renderer::node_graph::primitives::blend_snapshot_proof;
+    use crate::node_graph::primitives::render_scene::blend_snapshot_proof;
     for (glass_x, glass_y, blend_y) in [(20.0, 1.0, 1.0), (0.0, 2.0, 1.0), (0.0, 1.0, 2.0)] {
         for roughness in [0.0, 0.6] {
             let mut graph: serde_json::Value = serde_json::from_str(

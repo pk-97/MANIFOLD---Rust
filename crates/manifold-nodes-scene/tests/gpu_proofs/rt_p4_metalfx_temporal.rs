@@ -19,7 +19,7 @@
 use half::f16;
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::metalfx_temporal_upscaler::MetalFxTemporalUpscaler;
+use crate::metalfx_temporal_upscaler::MetalFxTemporalUpscaler;
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_node_engine::exec::temporal_reset::TemporalResetDetector;
 

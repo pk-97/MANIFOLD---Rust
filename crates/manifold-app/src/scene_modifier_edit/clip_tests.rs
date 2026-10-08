@@ -10,7 +10,7 @@ use manifold_core::units::Beats;
 use manifold_core::{ClipId, LayerId, NodeId, PresetTypeId};
 use manifold_editing::commands::clip::SetClipStringParamCommand;
 use manifold_editing::service::EditingService;
-use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 
 use super::{SceneModifierAction, build_action, with_admission};
 

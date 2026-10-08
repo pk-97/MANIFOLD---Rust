@@ -2,14 +2,14 @@ use std::path::{Path, PathBuf};
 
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, SerializedParamValue};
 
-use crate::node_graph::gltf_import::upgrade::{MaterialUpgradeCache, upgrade_material_graph};
-use crate::node_graph::gltf_import::testkit::write_synthetic_multimaterial_glb;
-use crate::node_graph::gltf_import::testkit::full_material;
-use crate::node_graph::gltf_load;
+use manifold_nodes_scene::node_graph::gltf_import::upgrade::{MaterialUpgradeCache, upgrade_material_graph};
+use manifold_nodes_scene::node_graph::gltf_import::testkit::write_synthetic_multimaterial_glb;
+use manifold_nodes_scene::node_graph::gltf_import::testkit::full_material;
+use manifold_nodes_scene::node_graph::gltf_load;
 
 fn imported_fixture() -> (PathBuf, EffectGraphDef) {
     let path = write_synthetic_multimaterial_glb(1);
-    let (graph, _) = crate::node_graph::gltf_import::assemble_import_graph(&path).expect("synthetic import");
+    let (graph, _) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path).expect("synthetic import");
     (path, graph)
 }
 
@@ -432,11 +432,11 @@ fn custom_material_and_manual_transform_are_not_marked_completed() {
 }
 
 fn calibrated_legacy_fixture() -> (PathBuf, EffectGraphDef) {
-    use crate::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
+    use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
     use manifold_core::{NodeId, SceneNodeRef, SceneTargetSelection};
 
     let path = write_synthetic_multimaterial_glb(2);
-    let (mut graph, _) = crate::node_graph::gltf_import::assemble_import_graph(&path).unwrap();
+    let (mut graph, _) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path).unwrap();
     graph.version = 3;
     visit_group_nodes(&mut graph.nodes, &mut |node| {
         if node.type_id == "node.gltf_mesh_source" {
@@ -583,7 +583,7 @@ fn project_upgrade_preserves_calibrated_inline_and_embedded_graphs() {
         def: graph,
         origin: EmbeddedOrigin::Saved,
     });
-    let result = crate::node_graph::gltf_import::upgrade::project::upgrade_project_materials(&mut project);
+    let result = manifold_nodes_scene::node_graph::gltf_import::upgrade::project::upgrade_project_materials(&mut project);
     assert!(result.changed_graphs >= 2);
     assert!(result.notices.is_empty(), "{:?}", result.notices);
     let mut reloaded: Project =
@@ -597,7 +597,7 @@ fn project_upgrade_preserves_calibrated_inline_and_embedded_graphs() {
         }
     }
     assert_eq!(
-        crate::node_graph::gltf_import::upgrade::project::upgrade_project_materials(&mut reloaded).changed_graphs,
+        manifold_nodes_scene::node_graph::gltf_import::upgrade::project::upgrade_project_materials(&mut reloaded).changed_graphs,
         0
     );
     std::fs::remove_file(path).unwrap();

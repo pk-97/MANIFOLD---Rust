@@ -71,10 +71,10 @@ const PARTIAL_SHADERS: &[&str] = &[
 ];
 
 const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
-const PBR_BRDF: &str = include_str!("../src/node_graph/primitives/shaders/pbr_brdf.wgsl");
+const PBR_BRDF: &str = include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/pbr_brdf.wgsl");
 const TONEMAP_COMMON: &str = include_str!("../src/effects/shaders/tonemap_common.wgsl");
 const SAMPLE_FACE_COMMON: &str =
-    include_str!("../src/node_graph/primitives/shaders/sample_face_common.wgsl");
+    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/sample_face_common.wgsl");
 /// `node.gpu_flip_step`'s prelude: pose, collider sampling and the force
 /// field, in its `step_source` order.
 const GPU_FLIP_STEP_PRELUDE: &str = concat!(

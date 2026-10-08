@@ -105,7 +105,7 @@ mod gpu_tests {
     use manifold_node_engine::freeze::classify::CapacityExpr;
     use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec};
     use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
-    use crate::node_graph::primitives::{RemapCutWeights, RemapMeshCut};
+    use crate::node_graph::primitives::{remap_cut_weights::RemapCutWeights, remap_mesh_cut::RemapMeshCut};
     use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend, effect_node::NodeInstanceId};
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuBinding;

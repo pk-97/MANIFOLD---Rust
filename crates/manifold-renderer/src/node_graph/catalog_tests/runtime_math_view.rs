@@ -909,7 +909,7 @@ fn retired_params_leave_before_scene_modifier_value_writes() {
     )))
     .unwrap();
     let scene = manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") };
-    let force = crate::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+    let force = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
         &def,
         &recipe,
         NodeId::new("force"),

@@ -48,7 +48,7 @@ fn default_factor_params(
     material: &SceneNodeRef,
 ) -> Result<Vec<String>, String> {
     let material_roles =
-        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material");
+        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material");
     let mut params = Vec::new();
     for binding in meta.bindings.iter().filter(|binding| {
         matches!(
@@ -167,7 +167,7 @@ mod tests {
         )
         .expect("PhysicsSolids is bundled")
         .clone();
-        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
+        manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
         let (object, material) =
             material_object_refs(&def).expect("PhysicsSolids has a PBR object");
         project.with_preset_graph_mut(&target, |instance| {
@@ -542,7 +542,7 @@ mod tests {
         fixture
             .project
             .with_preset_graph_mut(&fixture.target, |instance| {
-                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(
+                manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(
                     instance.graph.as_mut().unwrap(),
                 );
             });

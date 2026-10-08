@@ -1,7 +1,7 @@
 //! Native render regression for additions to an imported scene while paused.
 use super::*;
 use manifold_editing::commands::graph::{AddSceneLayerPlaneCommand, AddSceneObjectCommand};
-use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type as metadata;
+use manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type as metadata;
 
 #[test]
 fn scene_additions_render_while_paused_and_roundtrip_undo() {
@@ -64,7 +64,7 @@ fn scene_additions_render_while_paused_and_roundtrip_undo() {
     capture_output_when_ready(&mut ct, &tx, &out.join("object.png"));
     ct.handle_command(ContentCommand::Undo);
     assert_eq!(
-        manifold_renderer::node_graph::scene_vm::SceneVm::from_def(
+        manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(
             ct.engine.project().unwrap().timeline.layers[0]
                 .generator_graph()
                 .unwrap()

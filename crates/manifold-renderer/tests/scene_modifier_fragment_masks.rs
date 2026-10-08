@@ -7,8 +7,8 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::{NodeId, PresetTypeId};
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
-use manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
+use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
 
 #[path = "common/scene_modifier.rs"]
 mod common;

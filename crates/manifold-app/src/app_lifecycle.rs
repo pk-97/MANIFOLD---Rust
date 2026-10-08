@@ -799,7 +799,7 @@ impl Application {
         &mut self,
         path: &std::path::Path,
         mut graph: manifold_core::effect_graph_def::EffectGraphDef,
-        report: manifold_renderer::node_graph::gltf_import::ImportReport,
+        report: manifold_nodes_scene::node_graph::gltf_import::ImportReport,
         conversion_report_line: Option<String>,
         drop_beat: f32,
         layer_under_cursor: Option<usize>,
@@ -952,7 +952,7 @@ impl Application {
         // assets are parsed only once and notices are not duplicated.
         if !action.material_upgrade_applied {
             if let Some(project) = action.apply_project.as_mut() {
-                let material_report = manifold_renderer::node_graph::gltf_import::upgrade_project_materials(project);
+                let material_report = manifold_nodes_scene::node_graph::gltf_import::upgrade_project_materials(project);
                 if material_report.changed_graphs > 0 {
                     crate::project_io::install_project_preset_overlay(project);
                     project.load_report.unresolved_preset_templates =

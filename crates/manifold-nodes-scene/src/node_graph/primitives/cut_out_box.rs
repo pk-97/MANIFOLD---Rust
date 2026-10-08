@@ -138,7 +138,7 @@ mod gpu_tests {
     use manifold_node_engine::freeze::classify::CapacityExpr;
     use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use crate::node_graph::primitives::ocean_displace::{self, OceanDisplace};
+    use {crate::node_graph::primitives::ocean_displace, crate::node_graph::primitives::ocean_displace::OceanDisplace};
 
     fn cut() -> CutUniforms {
         CutUniforms { center_x: 40.0, center_y: 0.0, center_z: -60.0, size_x: 120.0, size_y: 20.0, size_z: 80.0, feather: 6.0, dispatch_count: 0 }

@@ -48,7 +48,7 @@ fn stage_event_shows_toast_before_done_dispatches_the_layer() {
     // A real graph — CPU-only parse, no GPU, no `validate_def` call (the
     // worker's `Validating` stage is deliberately never reached in this
     // test; validate_def's own correctness is proven by its own tests).
-    let (graph, report) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(&path)
+    let (graph, report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path)
         .unwrap_or_else(|e| panic!("assemble_import_graph({}) failed: {e}", path.display()));
 
     // 1. Hand-feed a `Stage` event, exactly as `run_import_worker` would

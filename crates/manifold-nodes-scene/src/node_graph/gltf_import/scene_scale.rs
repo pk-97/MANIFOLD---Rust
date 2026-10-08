@@ -24,7 +24,7 @@ use std::collections::HashMap;
 
 use manifold_core::effect_graph_def::{BindingDef, BindingTarget, ParamSpecDef};
 
-use crate::node_graph::primitives::DEFAULT_FAR as CAMERA_FAR_DEFAULT;
+use crate::node_graph::primitives::camera_orbit::DEFAULT_FAR as CAMERA_FAR_DEFAULT;
 
 /// The single scene-scale fact imported scenes stamp their slider ranges
 /// from. Radius in world units; every derived range width is a multiple of

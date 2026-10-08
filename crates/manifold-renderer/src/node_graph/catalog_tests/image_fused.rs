@@ -2,7 +2,7 @@ use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNod
     use manifold_node_engine::freeze::codegen::generate_fused;
     use manifold_node_engine::exec::effect_node::NodeInstanceId;
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use {crate::node_graph::primitives::LerpInstanceFields as L, manifold_nodes_image::node_graph::primitives::neighbor_smooth::NeighborSmooth as N};
+    use {manifold_nodes_scene::node_graph::primitives::lerp_instance_fields::LerpInstanceFields as L, manifold_nodes_image::node_graph::primitives::neighbor_smooth::NeighborSmooth as N};
 
     fn member<P: PrimitiveSpec>(
         i: u32,

@@ -225,7 +225,7 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
 
 /// Region-mean irradiance from the captured RT irradiance channel ("irr_full").
 /// Irradiance channel is RGBA16Float: RGB = env+GI gather, A unused.
-fn region_irradiance(channels: &[manifold_renderer::node_graph::primitives::RtCaptureSlot], cx: f32, cy: f32, radius: i32) -> f64 {
+fn region_irradiance(channels: &[crate::node_graph::primitives::render_scene::RtCaptureSlot], cx: f32, cy: f32, radius: i32) -> f64 {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let irr_channel = channels.iter()
         .find(|c| c.label == "irr_full")
@@ -421,7 +421,7 @@ fn white_enclosure_returns_the_field_radiance_within_the_truncation_budget() {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let (mut runtime, target) = build_runtime(&json);
     let mut ready_frame: Option<i64> = None;
-    let mut ref_channels: Option<Vec<manifold_renderer::node_graph::primitives::RtCaptureSlot>> = None;
+    let mut ref_channels: Option<Vec<crate::node_graph::primitives::render_scene::RtCaptureSlot>> = None;
 
     for frame in 0..(DISPATCH_HEADROOM + REFERENCE_SETTLE_FRAMES) {
         let dispatched = harness::capture_rt_channels(|| render_frame(&mut runtime, &target, frame));
@@ -448,7 +448,7 @@ fn white_enclosure_returns_the_field_radiance_within_the_truncation_budget() {
     // Leg 2: the shipping path + RT channel capture.
     let (mut ship_runtime, ship_target) = build_runtime(&json);
     let mut ship_ready_frame: Option<i64> = None;
-    let mut ship_channels: Option<Vec<manifold_renderer::node_graph::primitives::RtCaptureSlot>> = None;
+    let mut ship_channels: Option<Vec<crate::node_graph::primitives::render_scene::RtCaptureSlot>> = None;
 
     for frame in 0..(DISPATCH_HEADROOM + SHIPPING_SETTLE_FRAMES) {
         let dispatched = harness::capture_rt_channels(|| render_frame(&mut ship_runtime, &ship_target, frame));

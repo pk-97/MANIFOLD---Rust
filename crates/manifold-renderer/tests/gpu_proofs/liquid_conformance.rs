@@ -1820,7 +1820,7 @@ fn with_force_and_impulse(def: &EffectGraphDef, strength: f32) -> (EffectGraphDe
         metadata.bindings.iter_mut().find(|binding| binding.id == id).unwrap().default_value = value;
     }
     let top = |node: &str| SceneNodeRef { scope: vec![], node: NodeId::new(node) };
-    let instance = manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+    let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
         def,
         &recipe,
         NodeId::new("impulse"),

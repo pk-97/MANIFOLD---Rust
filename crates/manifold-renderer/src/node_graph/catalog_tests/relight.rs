@@ -1,5 +1,5 @@
 
-    use crate::node_graph::relight::{relight_augment, testkit::{RL_PREFIX, find_height_source, wire}};
+    use manifold_nodes_scene::node_graph::relight::{relight_augment, testkit::RL_PREFIX, testkit::find_height_source, testkit::wire};
     use manifold_core::effects::RelightParams;
     use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire};
     use manifold_node_engine::persistence::PrimitiveRegistry;

@@ -514,7 +514,7 @@ fn run_production_configuration(device: &Arc<GpuDevice>, configuration: Configur
         let gpu_ms = timed_commit(encoder);
         if frame == WARMUP_FRAMES - 1 {
             if rt_enabled {
-                observed_triangles = manifold_renderer::node_graph::primitives::render_scene::rt_proof::rt_probe_scene(&runtime)
+                observed_triangles = crate::node_graph::primitives::render_scene::rt_proof::rt_probe_scene(&runtime)
                     .expect("actual RT geometry")
                     .objects
                     .iter()

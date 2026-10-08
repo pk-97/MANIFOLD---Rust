@@ -10,10 +10,10 @@ use std::collections::BTreeSet;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode};
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 use manifold_core::NodeId;
-use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
-use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
+use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
-use manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
+use manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
 #[path = "common/scene_modifier.rs"]

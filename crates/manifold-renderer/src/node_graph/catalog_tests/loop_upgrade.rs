@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::node_graph::scene_modifier_legacy_migration::loop_upgrade::{node_mut, upgrade_known_loop};
+    use manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::loop_upgrade::{node_mut, upgrade_known_loop};
     use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, SerializedParamValue};
     use manifold_core::effects::ParamConvert;
 

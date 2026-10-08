@@ -568,7 +568,7 @@ use manifold_node_engine::runtime::*;
         );
         assert!(
             cg.graph.nodes().any(|n| {
-                crate::node_graph::relight::is_relight_node_id(n.node_id.as_str())
+                manifold_nodes_scene::node_graph::relight::is_relight_node_id(n.node_id.as_str())
             }),
             "relight template nodes must be present in the fused segment graph"
         );

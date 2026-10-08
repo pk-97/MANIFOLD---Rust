@@ -1,4 +1,4 @@
-use crate::node_graph::primitives::gltf_animation_source::{GltfAnimationSource, testkit::{translation_channel, anim_set_one_clip}};
+use manifold_nodes_scene::node_graph::primitives::gltf_animation_source::{GltfAnimationSource, testkit::translation_channel, testkit::anim_set_one_clip};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime};
 use manifold_node_engine::parameters::{ParamDef, ParamValue};
 use std::{borrow::Cow, sync::Arc};

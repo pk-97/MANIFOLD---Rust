@@ -1,12 +1,12 @@
-use crate::node_graph::gltf_load;
-use crate::node_graph::gltf_import::testkit::*;
-use crate::node_graph::gltf_import::*;
-use crate::node_graph::gltf_import::assembly::*;
-use crate::node_graph::gltf_import::merge::*;
-use crate::node_graph::gltf_import::scene::*;
+use manifold_nodes_scene::node_graph::gltf_load;
+use manifold_nodes_scene::node_graph::gltf_import::testkit::*;
+use manifold_nodes_scene::node_graph::gltf_import::*;
+use manifold_nodes_scene::node_graph::gltf_import::assembly::*;
+use manifold_nodes_scene::node_graph::gltf_import::merge::*;
+use manifold_nodes_scene::node_graph::gltf_import::scene::*;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
-use crate::node_graph::gltf_load::GltfImportSummary;
+use manifold_nodes_scene::node_graph::gltf_load::GltfImportSummary;
 use manifold_node_engine::runtime::PresetRuntime;
 #[cfg(feature = "gpu-proofs")]
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
@@ -100,7 +100,7 @@ fn default_material_primitive_imports_as_one_object() {
         .expect("flattened graph has a gltf_mesh_source node");
     assert_eq!(
         mesh_node.params.get("material_index"),
-        Some(&int(crate::node_graph::gltf_load::DEFAULT_MATERIAL_MESH_PARAM)),
+        Some(&int(manifold_nodes_scene::node_graph::gltf_load::DEFAULT_MATERIAL_MESH_PARAM)),
         "the synthetic object's mesh source must select via the D4 sentinel, not a real \
          material index or the -1 'unset' value"
     );
@@ -201,11 +201,11 @@ fn legacy_compound_import_migrates_to_editable_children_once() {
     for binding in &mut metadata.bindings {
         if let BindingTarget::Node { param, .. } = &mut binding.target && param == "parent_visible" { *param = "visible".into(); }
     }
-    assert!(crate::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
+    assert!(manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
     let saved = def.clone();
-    assert!(!crate::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
+    assert!(!manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
     assert_eq!(def, saved);
-    let vm = crate::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
+    let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
     assert_eq!(vm.header.object_count, 1);
     assert_eq!(vm.objects.len(), 3);
     def.into_graph(&PrimitiveRegistry::with_builtin(), &Default::default()).unwrap();
@@ -218,7 +218,7 @@ fn legacy_compound_import_migrates_to_editable_children_once() {
 /// summary — one textured, one not — so it needs no `.glb` on disk.
 #[test]
 fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
-    use crate::node_graph::gltf_load::GltfMaterialInfo;
+    use manifold_nodes_scene::node_graph::gltf_load::GltfMaterialInfo;
     use manifold_core::effect_graph_def::GROUP_TYPE_ID;
     use manifold_core::flatten::flatten_groups;
 
@@ -245,11 +245,11 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         specular_color_factor: [1.0, 1.0, 1.0],
         specular_texture: None,
         specular_color_texture: None,
-        base_color_uv_transform: crate::node_graph::gltf_load::IDENTITY_UV_TRANSFORM,
-        normal_uv_transform: crate::node_graph::gltf_load::IDENTITY_UV_TRANSFORM,
-        mr_uv_transform: crate::node_graph::gltf_load::IDENTITY_UV_TRANSFORM,
-        occlusion_uv_transform: crate::node_graph::gltf_load::IDENTITY_UV_TRANSFORM,
-        emissive_uv_transform: crate::node_graph::gltf_load::IDENTITY_UV_TRANSFORM,
+        base_color_uv_transform: manifold_nodes_scene::node_graph::gltf_load::IDENTITY_UV_TRANSFORM,
+        normal_uv_transform: manifold_nodes_scene::node_graph::gltf_load::IDENTITY_UV_TRANSFORM,
+        mr_uv_transform: manifold_nodes_scene::node_graph::gltf_load::IDENTITY_UV_TRANSFORM,
+        occlusion_uv_transform: manifold_nodes_scene::node_graph::gltf_load::IDENTITY_UV_TRANSFORM,
+        emissive_uv_transform: manifold_nodes_scene::node_graph::gltf_load::IDENTITY_UV_TRANSFORM,
         core_tex_coords: [0; 5],
         mr_texture_is_gloss_alpha: false,
         transmission_factor: 0.0,
@@ -286,11 +286,11 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         vertex_color_varies: false,
         unlit: false,
         vertex_count: verts,
-        base_color_sampler: crate::node_graph::gltf_load::GltfSamplerInfo::default(),
-        normal_sampler: crate::node_graph::gltf_load::GltfSamplerInfo::default(),
-        mr_sampler: crate::node_graph::gltf_load::GltfSamplerInfo::default(),
-        occlusion_sampler: crate::node_graph::gltf_load::GltfSamplerInfo::default(),
-        emissive_sampler: crate::node_graph::gltf_load::GltfSamplerInfo::default(),
+        base_color_sampler: manifold_nodes_scene::node_graph::gltf_load::GltfSamplerInfo::default(),
+        normal_sampler: manifold_nodes_scene::node_graph::gltf_load::GltfSamplerInfo::default(),
+        mr_sampler: manifold_nodes_scene::node_graph::gltf_load::GltfSamplerInfo::default(),
+        occlusion_sampler: manifold_nodes_scene::node_graph::gltf_load::GltfSamplerInfo::default(),
+        emissive_sampler: manifold_nodes_scene::node_graph::gltf_load::GltfSamplerInfo::default(),
         extension_maps: [manifold_node_engine::scene::material::MaterialMapInfo::default(); 14],
         animations: Vec::new(),
         skin: None,
@@ -903,7 +903,7 @@ fn round_trip_preserves_map_wires_and_sun_coherence_bindings() {
 /// gets no such node (never fabricated).
 #[test]
 fn animated_material_wires_animation_source_into_its_own_transform_3d() {
-    use crate::node_graph::gltf_load::{GltfObjectAnimation, QuatTrack, Vec3Track};
+    use manifold_nodes_scene::node_graph::gltf_load::{GltfObjectAnimation, QuatTrack, Vec3Track};
 
     let mut animated = full_material(0, "Inner", 1000);
     animated.animations = vec![Some(GltfObjectAnimation {
@@ -997,7 +997,7 @@ fn animated_material_wires_animation_source_into_its_own_transform_3d() {
 /// section per object.
 #[test]
 fn animation_cards_are_one_linked_section_per_glb() {
-    use crate::node_graph::gltf_load::{GltfAnimationInfo, GltfObjectAnimation, Vec3Track};
+    use manifold_nodes_scene::node_graph::gltf_load::{GltfAnimationInfo, GltfObjectAnimation, Vec3Track};
 
     let track = |node: usize| GltfObjectAnimation {
         duration_s: 2.0,
@@ -1103,7 +1103,7 @@ fn animated_and_rigged_import_passes_card_lints() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/skeleton_animated.glb");
     let (def, _report) =
-        crate::node_graph::gltf_import::assemble_import_graph(&path).expect("assemble skeleton_animated.glb");
+        manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path).expect("assemble skeleton_animated.glb");
     let registry = PrimitiveRegistry::with_builtin();
     let graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("import graph must build");
     let (errors, _warnings) =
@@ -1145,7 +1145,7 @@ fn hostile_fixtures_assemble_validate_and_build() {
     use manifold_node_engine::persistence::EffectGraphDefExt;
     for path in hostile_fixture_paths() {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        let (def, _report) = crate::node_graph::gltf_import::assemble_import_graph(&path)
+        let (def, _report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path)
             .unwrap_or_else(|e| panic!("{name}: assemble_import_graph failed: {e}"));
         let registry = PrimitiveRegistry::with_builtin();
         let graph = def
@@ -1170,12 +1170,12 @@ fn hostile_fixtures_assemble_validate_and_build() {
 #[test]
 fn hostile_fixtures_merge_into_existing_scene() {
     use manifold_node_engine::persistence::EffectGraphDefExt;
-    let (target, _report) = crate::node_graph::gltf_import::assemble_import_graph(&azalea_fixture_path())
+    let (target, _report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&azalea_fixture_path())
         .expect("assemble azalea target scene");
     let (render_id, existing_objects) = render_scene_objects(&target);
     for path in hostile_fixture_paths() {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        let plan = crate::node_graph::gltf_import::assemble_merge_plan(&target, &path)
+        let plan = manifold_nodes_scene::node_graph::gltf_import::assemble_merge_plan(&target, &path)
             .unwrap_or_else(|e| panic!("{name}: assemble_merge_plan failed: {e}"));
 
         let had_skin =
@@ -1353,7 +1353,7 @@ fn hostile_fixtures_render_within_framing_invariants() {
     for path in hostile_fixture_paths() {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         for &phase in PHASES {
-            let (def, _report) = crate::node_graph::gltf_import::assemble_import_graph(&path)
+            let (def, _report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path)
                 .unwrap_or_else(|e| panic!("{name}: assemble failed: {e}"));
             let duration_s = skeleton_pose_duration_s_or_static(&def);
             let rgba = render_import_def_at_progress(def, w, h, phase, duration_s, &name);
@@ -1405,7 +1405,7 @@ fn hostile_fixtures_render_within_framing_invariants() {
 /// the STANDARD section 5 gate must PROVE this, not assume it.
 #[test]
 fn animation_selectors_survive_json_round_trip() {
-    use crate::node_graph::gltf_load::{GltfObjectAnimation, QuatTrack, Vec3Track};
+    use manifold_nodes_scene::node_graph::gltf_load::{GltfObjectAnimation, QuatTrack, Vec3Track};
 
     let mut animated = full_material(0, "Inner", 1000);
     animated.animations = vec![Some(GltfObjectAnimation {
@@ -1575,7 +1575,7 @@ fn set_bound_param(def: &mut EffectGraphDef, node_id: &str, param: &str, value: 
             if node.node_id.as_str() == node_id {
                 assert!(
                     node.params.contains_key(param)
-                        || crate::node_graph::scene_exposure::metadata_for_node_type(&node.type_id)
+                        || manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(&node.type_id)
                             .iter()
                             .any(|m| m.name == param),
                     "node `{node_id}` ({}) has no param `{param}`",
@@ -3587,7 +3587,7 @@ fn bug221_pivot_spins_in_place_after_fix_but_not_before() {
         .iter()
         .enumerate()
         .max_by(|(_, a), (_, b)| {
-            let mag = |m: &crate::node_graph::gltf_load::GltfMaterialInfo| {
+            let mag = |m: &manifold_nodes_scene::node_graph::gltf_load::GltfMaterialInfo| {
                 let d = [m.own_center[0] - center[0], m.own_center[1] - center[1], m.own_center[2] - center[2]];
                 d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
             };

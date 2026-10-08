@@ -1,5 +1,5 @@
 use crate::node_graph::{bundled_preset_def, bundled_preset_json, bundled_preset_type_ids};
-use {crate::node_graph::primitives::GltfTextureSource, crate::node_graph::primitives::RenderScene, crate::node_graph::primitives::ScatterOnMesh, manifold_nodes_image::node_graph::primitives::seed_particles_from_texture::SeedParticlesFromTexture};
+use {manifold_nodes_scene::node_graph::primitives::gltf_texture_source::GltfTextureSource, manifold_nodes_scene::node_graph::primitives::render_scene::RenderScene, manifold_nodes_scene::node_graph::primitives::scatter_on_mesh::ScatterOnMesh, manifold_nodes_image::node_graph::primitives::seed_particles_from_texture::SeedParticlesFromTexture};
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_core::effects::RelightParams;
 use manifold_core::preset_def::PresetKind;
@@ -75,7 +75,7 @@ impl GeneratorRegistry {
         // with MSAA depth render-pipeline variants keyed on material kind /
         // blend / velocity+AO+denoise auxiliary outputs.
         RenderScene::prewarm_pipelines(device);
-        crate::node_graph::primitives::RenderMeshDiagram::prewarm_pipelines(device);
+        manifold_nodes_scene::node_graph::primitives::render_mesh_diagram::RenderMeshDiagram::prewarm_pipelines(device);
         // COMPILE_CONTRACT_DESIGN P1: the RT shadow-ray pipeline set (MSL
         // library + seven PSOs) is device-global code — populate it here so
         // even the first RenderScene construction compiles nothing.
@@ -100,7 +100,7 @@ impl GeneratorRegistry {
         manifold_nodes_image::node_graph::primitives::watercolor::Watercolor::prewarm_pipelines(device);
         // COMPILE_CONTRACT_DESIGN P2: hdri_source's stretch-blit pipeline is
         // fixed-source, warmed when the first HDRI decode lands. Warm it here.
-        crate::node_graph::primitives::hdri_source::HdriSource::prewarm_pipeline(device);
+        manifold_nodes_scene::node_graph::primitives::hdri_source::HdriSource::prewarm_pipeline(device);
         // COMPILE_CONTRACT_DESIGN P2: layer_source's registry blit is
         // fixed-source, dispatched every frame a layer skin is bound.
         manifold_nodes_image::node_graph::primitives::layer_source::LayerSource::prewarm_pipeline(device);
@@ -255,7 +255,7 @@ impl GeneratorRegistry {
             // WGSL) is knob-invariant; the live values are written per-frame via
             // `PresetRuntime::set_relight_params`.
             let def_for_fusion = if relight.is_some() {
-                crate::node_graph::relight::relight_augment(
+                manifold_nodes_scene::node_graph::relight::relight_augment(
                     &def,
                     &registry,
                     &RelightParams::default(),

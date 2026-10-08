@@ -269,7 +269,7 @@ fn sampler_component(name: &str) -> Option<(MaterialMapFamily, SamplerComponent)
 mod tests {
     use super::*;
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use crate::node_graph::primitives::PbrMaterial;
+    use crate::node_graph::primitives::pbr_material::PbrMaterial;
 
     #[test]
     fn material_inspector_schema_covers_pbr() {

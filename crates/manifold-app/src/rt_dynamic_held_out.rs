@@ -37,7 +37,7 @@ const MEASURED_FRAMES: usize = 120;
 const PROFILE_SAMPLER_MAX_SPANS: usize = 8192;
 const REFERENCE_TRIANGLES: u64 = 65_536;
 const REFERENCE_JSON: &str = include_str!(
-    "../../manifold-renderer/tests/fixtures/scene-modifiers/rt_dynamic_reference.json"
+    "../../manifold-nodes-scene/tests/fixtures/scene-modifiers/rt_dynamic_reference.json"
 );
 
 fn hash_bytes(bytes: &[u8]) -> String {

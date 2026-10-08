@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex, Weak, mpsc};
 
-use super::gltf_load::{self, GltfInterp, Mat4};
+use {crate::node_graph::gltf_load, super::gltf_load::GltfInterp, super::gltf_load::Mat4};
 
 pub(crate) type LoadedAnimSet = manifold_node_engine::scene::source_asset::LoadedAsset<GltfAnimSet>;
 

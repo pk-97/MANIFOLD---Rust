@@ -1,7 +1,7 @@
 //! CPU graph proofs for physical recipients of force recipes.
 
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use crate::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 use manifold_node_engine::load::expand::{SceneModifierExpandError, prepare_scene_modifiers};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
@@ -29,7 +29,7 @@ fn recipe() -> EffectGraphDef {
 /// insert the all-object force, then resolve frames and apply the selection.
 #[test]
 fn scene_modifier_grouped_water_add_and_retarget_expand() {
-    use crate::node_graph::scene_modifier_authoring::scene_modifier_objects;
+    use manifold_nodes_scene::node_graph::scene_modifier_authoring::scene_modifier_objects;
     use manifold_node_engine::load::expand::resolve_modifier_mesh_frames;
     use manifold_core::scene_modifier_edit::retarget_scene_modifier;
     use manifold_core::scene_index::FlatSceneIndex;

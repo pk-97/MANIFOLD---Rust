@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 
 #[path = "common/scene_modifier.rs"]

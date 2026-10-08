@@ -9,7 +9,7 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_core::scene_modifier_edit::{delete_scene_modifier, insert_scene_modifier};
 use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::NodeId;
-use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
 use manifold_node_engine::runtime::PresetRuntime;

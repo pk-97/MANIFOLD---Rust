@@ -598,7 +598,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
 /// differently. Fresh runtime per arm (no state bleed).
 fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>, args: &[&str]) {
     use manifold_core::params::Param;
-    use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+    use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 
     const SCENE_WARMUP: u32 = 60;
     let scene_frames: usize =

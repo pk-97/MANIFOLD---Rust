@@ -2,7 +2,7 @@
 use super::*;
 use crate::object_modifier_transfer::ObjectModifierAction;
 use manifold_editing::commands::graph::RemoveMeshModifierCommand;
-use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
 fn owner(project: &Project, layer: &LayerId) -> u32 {
     SceneVm::from_def(generator_graph(project, layer))

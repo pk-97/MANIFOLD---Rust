@@ -1,6 +1,6 @@
-use crate::node_graph::scene_vm::{SceneVm, SceneObjectVm, MaterialVm};
+use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, SceneObjectVm, MaterialVm};
 use manifold_core::{SceneNodeRef, effect_graph_def::EffectGraphDef};
-use crate::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
+use manifold_nodes_scene::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
 
     /// Regression gate for the migrated-project shape `migrate_scene_object_wires`
     /// actually produces (D5's "same-scope re-point"): a minted `node.scene_object`

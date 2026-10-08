@@ -497,7 +497,7 @@ fn build_transfer(
         owner_id,
         clipboard.node.type_id.clone(),
         position,
-        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
             &clipboard.node.type_id,
         ),
         default,
@@ -692,7 +692,7 @@ pub(crate) fn build_action(
                 owner_id,
                 type_id.clone(),
                 position,
-                manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(&type_id),
+                manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(&type_id),
                 default,
             );
             command.execute(&mut scratch);
@@ -761,7 +761,7 @@ mod tests {
             owner_id,
             "node.twist_mesh".into(),
             None,
-            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
+            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(
                 "node.twist_mesh",
             ),
             default,

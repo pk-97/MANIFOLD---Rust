@@ -2,10 +2,10 @@
     use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
     use manifold_core::liquid_domain::is_liquid_domain;
     use manifold_core::NodeId;
-    use crate::node_graph::scene_exposure::testkit::migrate_fluid_objects as migrate;
-    use crate::node_graph::scene_vm::RENDER_SCENE_TYPE_ID;
+    use manifold_nodes_scene::node_graph::scene_exposure::testkit::migrate_fluid_objects as migrate;
+    use manifold_nodes_scene::node_graph::scene_vm::RENDER_SCENE_TYPE_ID;
     const ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
-    use crate::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
     use manifold_core::flatten::flatten_groups;
 
     const GPU_FLIP_DAM_BREAK_JSON: &str =

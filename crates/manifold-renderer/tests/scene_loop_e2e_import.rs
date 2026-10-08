@@ -16,7 +16,7 @@
 use std::path::Path;
 
 use manifold_core::effect_graph_def::SerializedParamValue;
-use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 

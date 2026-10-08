@@ -23,7 +23,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effect_graph_def::ParamSpecDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_renderer::node_graph::ViewportOverlayConfig, manifold_renderer::node_graph::ViewportSession};
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, crate::node_graph::viewport_overlay::ViewportOverlayConfig, crate::node_graph::viewport_session::ViewportSession};
 use manifold_node_engine::water::fluid::{FluidDomainSnapshot, FluidDomainState, FluidSettings};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 
@@ -33,9 +33,9 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 #[test]
 fn viewport_session_fluid_domain_draft_redraws_without_rebuilding() {
     use manifold_core::effect_graph_def::SerializedParamValue;
-    use manifold_renderer::node_graph::{GizmoMode, gizmo_lines, gizmo_target_for};
-    use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-    use manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines;
+    use crate::node_graph::viewport_gizmo::{GizmoMode, gizmo_lines, gizmo_target_for};
+    use crate::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    use crate::node_graph::viewport_overlay::fluid_domain_lines;
 
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
@@ -497,7 +497,7 @@ fn viewport_session_refreshes_effective_controls_and_fluid_bounds() {
     assert_eq!(recolored_snapshot.epoch, epoch_after_reset);
     assert_eq!(*session.camera(), camera);
     let initial_bounds = session.composite_overlays(&ViewportOverlayConfig::default(), None, &[],
-        &manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines(recolored_snapshot.accepted_layout.unwrap()));
+        &crate::node_graph::viewport_overlay::fluid_domain_lines(recolored_snapshot.accepted_layout.unwrap()));
     std::fs::write("/tmp/fluid_runtime_bounds_initial.png", encode_rgba8_png(&initial_bounds, frame_ctx.width, frame_ctx.height)).unwrap();
 
     // An unchanged manifest at a later context time is a cache hit: both the
@@ -537,7 +537,7 @@ fn viewport_session_refreshes_effective_controls_and_fluid_bounds() {
     session.orbit(1.0, 0.0, 0.005);
     session.refresh(&frame_ctx, &params);
     let edited_bounds = session.composite_overlays(&ViewportOverlayConfig::default(), None, &[],
-        &manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines(expected));
+        &crate::node_graph::viewport_overlay::fluid_domain_lines(expected));
     std::fs::write("/tmp/fluid_runtime_bounds_edited.png", encode_rgba8_png(&edited_bounds, frame_ctx.width, frame_ctx.height)).unwrap();
     assert!(initial_bounds != edited_bounds, "accepted domain edits must redraw the outline");
 

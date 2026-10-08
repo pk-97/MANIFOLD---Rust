@@ -111,12 +111,12 @@ pub struct Workspace {
     /// gizmo mode (move/rotate/scale) — a plain toggle, not project state
     /// (editor state per `docs/REALTIME_3D_DESIGN.md` section 5's "Forbidden"
     /// list: "viewport/gizmo state in `manifold-core`").
-    pub viewport_gizmo_mode: manifold_renderer::node_graph::GizmoMode,
+    pub viewport_gizmo_mode: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode,
     /// Persistent ground grid reused by each editor redraw.
-    pub viewport_grid_lines: Vec<manifold_renderer::node_graph::WorldLine>,
+    pub viewport_grid_lines: Vec<manifold_nodes_scene::node_graph::viewport_overlay::WorldLine>,
     /// Reusable world-space editor lines appended to the viewport's gizmo
     /// lines for selected scene overlays (currently fluid domain bounds).
-    pub viewport_overlay_lines: Vec<manifold_renderer::node_graph::WorldLine>,
+    pub viewport_overlay_lines: Vec<manifold_nodes_scene::node_graph::viewport_overlay::WorldLine>,
     /// The `node.scene_object` doc id the gizmo is attached to this session,
     /// set by a viewport object-pick (`viewport_gizmo::pick_object`) and
     /// cleared when the viewport closes or the def no longer resolves it
@@ -134,7 +134,7 @@ pub struct Workspace {
 /// preview until release; content commits the complete gesture once.
 #[derive(Debug, Clone)]
 pub struct GizmoDrag {
-    pub axis: manifold_renderer::node_graph::GizmoAxis,
+    pub axis: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoAxis,
     pub object_node_id: u32,
     pub layer_id: manifold_core::LayerId,
     pub last_x: f32,
@@ -145,7 +145,7 @@ pub struct GizmoDrag {
 impl Workspace {
     pub fn new(kind: WorkspaceKind) -> Self {
         let mut ui_root = UIRoot::new();
-        let viewport_grid_lines = manifold_renderer::node_graph::grid_lines(10.0, 1.0);
+        let viewport_grid_lines = manifold_nodes_scene::node_graph::viewport_overlay::grid_lines(10.0, 1.0);
         let viewport_overlay_capacity = viewport_grid_lines.len() + 84;
         if kind == WorkspaceKind::GraphEditor {
             // BUG-121 root fix: the editor window's inspector column is the
@@ -175,7 +175,7 @@ impl Workspace {
             viewport_open: false,
             viewport_rect: None,
             viewport_drag: None,
-            viewport_gizmo_mode: manifold_renderer::node_graph::GizmoMode::default(),
+            viewport_gizmo_mode: manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode::default(),
             viewport_grid_lines,
             // Largest gizmo geometry plus the persistent grid and fluid bounds
             // fit without a display-frame reallocation.

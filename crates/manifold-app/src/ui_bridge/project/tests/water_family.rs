@@ -3,7 +3,7 @@ use super::*;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::{GraphTarget, NodeId};
 use manifold_editing::service::EditingService;
-use manifold_renderer::node_graph::scene_vm::{SceneObjectKnownRow, SceneObjectVm, SceneVm};
+use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectKnownRow, SceneObjectVm, SceneVm};
 
 pub(super) fn water_project() -> (Project, LayerId, u32) {
     water_project_with_preset("WaterDamBreakGpuFlip")
@@ -87,7 +87,7 @@ fn water_family_add_undo_redo() {
     let mut editing = EditingService::new();
     let default = effective_def(&project, &layer);
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
-    let plan = manifold_renderer::node_graph::gltf_import::assemble_merge_plan(&default, &fixture).expect("import compound fixture");
+    let plan = manifold_nodes_scene::node_graph::gltf_import::assemble_merge_plan(&default, &fixture).expect("import compound fixture");
     editing.execute(Box::new(manifold_editing::commands::graph::ImportModelIntoSceneCommand::new(
         GraphTarget::Generator(layer.clone()), vec![], plan.render_scene_node_id, plan.new_nodes,
         plan.new_wires, plan.new_objects_count, plan.new_card_params, plan.new_card_bindings,
@@ -246,7 +246,7 @@ fn water_family_delete_undo() {
     let family = rows(&def);
     let water = family.iter().find(|row| row.name == "Water 1").unwrap().clone();
     let source_slot = objects_param(&project, &layer, render) as u32;
-    let metadata = manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
+    let metadata = manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type;
     editing.execute(Box::new(AddSceneObjectCommand::new(target.clone(), vec![], render,
         source_slot, (0.0, 0.0), metadata("node.pbr_material"), metadata("node.transform_3d"),
         metadata("node.scene_object"), def)), &mut project);
@@ -255,7 +255,7 @@ fn water_family_delete_undo() {
     let source = rows(&def).into_iter().find(|row| row.index == source_slot as usize).unwrap();
     let domain = water.liquid_domain.clone().unwrap();
     editing.execute(Box::new(AssignSceneFluidRoleCommand::new(target.clone(), render, source_slot,
-        domain, 0, manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.fluid_role_source"), def)), &mut project);
+        domain, 0, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.fluid_role_source"), def)), &mut project);
     assert_eq!(editing.take_rejection(), None);
     let before = effective_def(&project, &layer);
     let source_group = source.group_node_id.unwrap();

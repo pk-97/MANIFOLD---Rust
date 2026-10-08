@@ -17,10 +17,10 @@
 //! it needs already is; this file is the import-level proof, on a def a real GLB
 //! import produces.
 
-use crate::node_graph::gltf_load::GltfImportSummary;
+use manifold_nodes_scene::node_graph::gltf_load::GltfImportSummary;
 
-use crate::node_graph::gltf_import::scene::build_import_graph;
-use crate::node_graph::gltf_import::testkit::full_material;
+use manifold_nodes_scene::node_graph::gltf_import::scene::build_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::testkit::full_material;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::PresetRuntime;
 

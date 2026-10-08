@@ -1,7 +1,7 @@
 //! Load-time repair for imported graphs written before material fidelity fields
 //! were added. The graph is the authority: only absent importer fields and
 //! values that still equal an old generated default are repaired.
-use crate::node_graph::gltf_load::{self, GltfImportSummary};
+use {crate::node_graph::gltf_load, crate::node_graph::gltf_load::GltfImportSummary};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,

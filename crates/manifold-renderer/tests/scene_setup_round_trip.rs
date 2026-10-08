@@ -17,7 +17,7 @@ use manifold_core::effect_graph_def::{
 use manifold_core::preset_type_id::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, SceneVm};
+use manifold_nodes_scene::node_graph::scene_vm::{AtmosphereVm, SceneVm};
 
 fn node(id: u32, type_id: &str, params: BTreeMap<String, SerializedParamValue>) -> EffectGraphNode {
     EffectGraphNode {

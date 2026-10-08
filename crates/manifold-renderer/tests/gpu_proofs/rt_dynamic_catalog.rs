@@ -21,7 +21,7 @@ use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::loaded_scene_modifier_presets_from_bundled;
-use manifold_renderer::node_graph::primitives::{RtProbeObject, RtProbeScene};
+use manifold_nodes_scene::node_graph::primitives::render_scene::rt_proof::{RtProbeObject, RtProbeScene};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
@@ -108,7 +108,7 @@ fn catalog_host() -> EffectGraphDef {
 fn physics_catalog_host() -> EffectGraphDef {
     use manifold_core::{GraphTarget, project::Project, types::LayerType};
     use manifold_editing::{command::Command, commands::graph::EnableSceneObjectPhysicsCommand};
-    use manifold_renderer::node_graph::{gltf_import::assemble_import_graph, scene_exposure::metadata_for_node_type};
+    use manifold_nodes_scene::node_graph::{gltf_import::assemble_import_graph, scene_exposure::metadata_for_node_type};
 
     // Shatter requires an imported object with authored Physics. Use the same
     // compound source as the existing release/material preservation proof.
@@ -185,7 +185,7 @@ fn attach(mut owner: EffectGraphDef, ids: &[&str]) -> EffectGraphDef {
         // the existing production combo proof. Fresh authoring capture is
         // deliberately restricted to imported glTF sources.
         let recipe = serde_json::from_str(recipe_json(id)).expect("stock recipe must parse");
-        let graph = manifold_renderer::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(&owner, &recipe).unwrap();
+        let graph = manifold_nodes_scene::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(&owner, &recipe).unwrap();
         let mut instance = manifold_core::scene_modifier_preset::SceneModifierInstanceDef {
             id: format!("catalog_{index}_{id}").into(),
             scene: render_scene_ref(&owner),
@@ -737,7 +737,7 @@ fn render_and_witness_controlled(
                 let mut gpu = RendererGpuEncoder::new(&mut encoder, &h.device);
                 gpu.capture_rt_geometry = true;
                 runtime.render(&mut gpu, &target.texture, &context, &manifest);
-                let scene = manifold_renderer::node_graph::primitives::render_scene::rt_proof::rt_probe_scene(&runtime)
+                let scene = manifold_nodes_scene::node_graph::primitives::render_scene::rt_proof::rt_probe_scene(&runtime)
                     .unwrap_or_else(|| panic!("{label} frame {frame} must capture RT geometry"));
                 snapshot = Some(snapshot_scene(&h.device, gpu.native_enc, scene));
                 status = Some(gpu.frame_status());

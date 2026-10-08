@@ -29,7 +29,7 @@ thread_local! { static POSITIONS: Cell<[f32; 2]> = const { Cell::new([0.0; 2]) }
 struct ObservePositions(EffectNodeType);
 // The native worlds and field graph are real. Only raster presentation is a
 // no-op, keeping these scheduling proofs CPU-only.
-struct CpuScene(crate::node_graph::primitives::render_scene::RenderScene);
+struct CpuScene(manifold_nodes_scene::node_graph::primitives::render_scene::RenderScene);
 impl EffectNode for CpuScene {
     fn type_id(&self) -> &EffectNodeType {
         self.0.type_id()
@@ -136,7 +136,7 @@ fn registry() -> PrimitiveRegistry {
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("node.render_scene", || {
         Box::new(CpuScene(
-            crate::node_graph::primitives::render_scene::RenderScene::new(),
+            manifold_nodes_scene::node_graph::primitives::render_scene::RenderScene::new(),
         ))
     });
     registry.register("test.positions", || {

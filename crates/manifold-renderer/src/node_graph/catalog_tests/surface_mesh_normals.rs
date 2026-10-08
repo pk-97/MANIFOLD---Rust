@@ -2,7 +2,7 @@ use manifold_node_engine::parameters::ParamValue;
 
 #[test]
 fn surface_stage_defaults_and_manifest_bindings() {
-    use crate::node_graph::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
+    use manifold_nodes_scene::node_graph::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
     use manifold_node_engine::primitive::PrimitiveSpec;
     let iterations = SmoothSurfaceMesh::PARAMS
         .iter()
@@ -18,12 +18,12 @@ fn surface_stage_defaults_and_manifest_bindings() {
         manifold_node_engine::water::primitives::gpu_flip_preset::WaterScene::dam_break(64),
     );
     let metadata = def.preset_metadata.as_ref().unwrap();
-    let scene = crate::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
+    let scene = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
     let water = scene
         .objects
         .iter()
         .find_map(|object| match object {
-            crate::node_graph::scene_vm::SceneObjectVm::Known(row)
+            manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row)
                 if row.liquid_domain.is_some() =>
             {
                 Some(row)

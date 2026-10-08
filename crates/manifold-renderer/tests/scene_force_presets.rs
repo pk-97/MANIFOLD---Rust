@@ -11,7 +11,7 @@ use manifold_core::{Beats, Seconds};
 use manifold_physics::interaction::VectorField;
 use manifold_node_engine::persistence::EffectGraphDefExt;
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, exec::execution::Executor, exec::effect_node::FrameTime, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::compile};
 

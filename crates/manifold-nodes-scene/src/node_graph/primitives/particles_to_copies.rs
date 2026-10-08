@@ -96,7 +96,7 @@ mod gpu_tests {
     use manifold_node_engine::freeze::classify::FusionKind;
     use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec};
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use crate::node_graph::primitives::DisplaceCopies;
+    use crate::node_graph::primitives::displace_copies::DisplaceCopies;
     use manifold_gpu::{GpuBuffer, GpuDevice};
 
     fn particles() -> Vec<FluidParticle> {

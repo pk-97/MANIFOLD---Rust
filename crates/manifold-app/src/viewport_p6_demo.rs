@@ -26,8 +26,8 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_gpu::GpuDevice;
 use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
-use manifold_renderer::node_graph::scene_vm::SceneVm;
-use {manifold_renderer::node_graph::GizmoMode, manifold_node_engine::persistence::PrimitiveRegistry, manifold_renderer::node_graph::ViewportOverlayConfig, manifold_renderer::node_graph::ViewportSession, manifold_renderer::node_graph::drag_write, manifold_renderer::node_graph::gizmo_lines, manifold_renderer::node_graph::gizmo_target_for, manifold_renderer::node_graph::pick_object};
+use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
+use {manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode, manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_scene::node_graph::viewport_overlay::ViewportOverlayConfig, manifold_nodes_scene::node_graph::viewport_session::ViewportSession, manifold_nodes_scene::node_graph::viewport_gizmo::drag_write, manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_lines, manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for, manifold_nodes_scene::node_graph::viewport_gizmo::pick_object};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// A `node.scene_object`-shaped scene (SCENE_OBJECT_AND_PANEL_V2_DESIGN
@@ -190,7 +190,7 @@ fn each_gizmo_mode_renders_and_locked_axis_shows_gray() {
     let locked_scene = SceneVm::from_def(&locked_def).expect("locked scene resolves");
     let locked_target = gizmo_target_for(&locked_scene, 6).expect("locked gizmo target resolves");
     let (_, _, driven) =
-        drag_write(GizmoMode::Move, manifold_renderer::node_graph::GizmoAxis::X, &locked_target)
+        drag_write(GizmoMode::Move, manifold_nodes_scene::node_graph::viewport_gizmo::GizmoAxis::X, &locked_target)
             .expect("transform is wired, drag_write must resolve");
     assert!(driven, "pos_x is wired in the locked fixture — drag_write must report it driven");
     let locked_lines = gizmo_lines(GizmoMode::Move, &locked_target);

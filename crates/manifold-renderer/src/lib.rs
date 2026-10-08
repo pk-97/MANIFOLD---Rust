@@ -7,8 +7,6 @@ pub mod generators;
 pub mod presentation;
 pub mod display_capture;
 pub mod layer_compositor;
-pub mod denoiser;
-pub mod metalfx_temporal_upscaler;
 pub mod metalfx_upscaler;
 pub mod node_graph;
 pub mod pq_encoder;
