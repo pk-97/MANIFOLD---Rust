@@ -739,7 +739,7 @@ pub struct ContentPipeline {
     /// Holds the in-flight blit between `submit_still_readback` (one tick) and
     /// `take_still_readback` (the next). Idle except during a still capture.
     #[cfg(target_os = "macos")]
-    still_readback: manifold_renderer::gpu_readback::ReadbackRequest,
+    still_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest,
     /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
     /// MetalFX Spatial full-frame upscaler. Present only when render_scale < 1.0
@@ -877,7 +877,7 @@ pub struct ContentPipeline {
     clip_thumb_cache: Option<crate::clip_thumb_cache::ClipThumbCache>,
     /// Async RGBA8 readback of the persistent atlas for the debounced disk save.
     #[cfg(target_os = "macos")]
-    clip_atlas_readback: manifold_renderer::gpu_readback::ReadbackRequest,
+    clip_atlas_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest,
     /// Fill-frame at which a debounced save should fire (0 = none scheduled).
     clip_atlas_persist_due: u64,
     /// `(layout, clip→hash)` snapshot captured when the save readback was submitted,
@@ -1120,7 +1120,7 @@ impl ContentPipeline {
             sdr_output: None,
             pq_encoder: None,
             #[cfg(target_os = "macos")]
-            still_readback: manifold_renderer::gpu_readback::ReadbackRequest::new(),
+            still_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest::new(),
             shared_output: shared,
             #[cfg(target_os = "macos")]
             metalfx: None,
@@ -1185,7 +1185,7 @@ impl ContentPipeline {
                 CLIP_ATLAS_CELL_H,
             ),
             #[cfg(target_os = "macos")]
-            clip_atlas_readback: manifold_renderer::gpu_readback::ReadbackRequest::new(),
+            clip_atlas_readback: manifold_node_engine::gpu::gpu_readback::ReadbackRequest::new(),
             clip_atlas_persist_due: 0,
             clip_atlas_persist_pending: None,
             #[cfg(target_os = "macos")]
@@ -3934,13 +3934,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn prewarm_layer_chains(
         &mut self,
         layer: &manifold_core::layer::Layer,
-        budget: manifold_core::WarmupBudget,
+        pass: &mut manifold_core::WarmupPass,
     ) -> manifold_core::WarmupOutcome {
         let device = self
             .native_device
             .as_ref()
             .expect("native device required for chain warmup");
-        self.compositor.prewarm_layer_chains(layer, budget, device)
+        self.compositor.prewarm_layer_chains(layer, pass, device)
     }
 
     /// P7 D17 (WARMUP_DESIGN section 5): build every unique per-clip chain
@@ -3952,14 +3952,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn prewarm_clip_chain_topologies(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: manifold_core::WarmupBudget,
+        pass: &mut manifold_core::WarmupPass,
     ) -> manifold_core::WarmupOutcome {
         let device = self
             .native_device
             .as_ref()
             .expect("native device required for clip-topology warmup");
         self.compositor
-            .prewarm_clip_chain_topologies(project, budget, device)
+            .prewarm_clip_chain_topologies(project, pass, device)
     }
 
     /// Warm up LED tap / composite resources when the loaded project routes
@@ -3983,7 +3983,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn prewarm_master_chain(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: manifold_core::WarmupBudget,
+        pass: &mut manifold_core::WarmupPass,
     ) -> manifold_core::WarmupOutcome {
         let device = self
             .native_device
@@ -3991,7 +3991,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             .expect("native device required for master-chain warmup");
         self.compositor.prewarm_master_chain(
             project,
-            budget,
+            pass,
             device,
             self.texture_pool.as_ref(),
             self.led_grid_size,
@@ -4004,7 +4004,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn prewarm_group_chains(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: manifold_core::WarmupBudget,
+        pass: &mut manifold_core::WarmupPass,
         output_dims: (u32, u32),
     ) -> manifold_core::WarmupOutcome {
         let device = self
@@ -4013,7 +4013,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             .expect("native device required for group-chain warmup");
         self.compositor.prewarm_group_chains(
             project,
-            budget,
+            pass,
             device,
             self.texture_pool.as_ref(),
             self.led_grid_size,

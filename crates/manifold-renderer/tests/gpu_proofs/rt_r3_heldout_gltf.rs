@@ -54,7 +54,7 @@ fn ctx(frame_count: i64) -> PresetContext {
 
 fn frame(
     runtime: &mut PresetRuntime,
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     target: &manifold_gpu::GpuTexture,
     f: i64,
     params: &manifold_core::params::ParamManifest,
@@ -63,7 +63,7 @@ fn frame(
     // A commit can be an InnocentVictim of a shared-GPU contention transient
     // (BUG-m0c9); re-rendering the same idempotent frame absorbs it. A real
     // wedge still panics after the single retry.
-    harness::retry_on_gpu_commit_error(|| {
+    manifold_node_engine::testkit::gpu_harness::retry_on_gpu_commit_error(|| {
         let mut enc = h.device.create_encoder("r3-heldout-frame");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
@@ -125,7 +125,7 @@ fn make_512_target(device: &GpuDevice, label: &str) -> manifold_gpu::GpuTexture 
 /// groups) so the mutation always sees the real, executable wire list
 /// regardless of whether the importer happened to group this asset.
 fn build_variant(
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     strip_mr_map: bool,
 ) -> (PresetRuntime, manifold_gpu::GpuTexture, manifold_core::params::ParamManifest, bool) {
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -188,7 +188,7 @@ fn build_variant(
 /// render is lit relative to an rt=0 baseline fraction, returning the
 /// readback at that point.
 fn render_until_lit(
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     runtime: &mut PresetRuntime,
     target: &manifold_gpu::GpuTexture,
     params: &manifold_core::params::ParamManifest,
@@ -221,7 +221,7 @@ fn render_until_lit(
 /// threshold to make it pass.
 #[test]
 fn heldout_helmet_mr_map_changes_traced_reflection() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
 
     // rt=0 baseline (both variants poll against this SAME lit-fraction floor).
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -239,7 +239,7 @@ fn heldout_helmet_mr_map_changes_traced_reflection() {
     )
     .expect("baseline def must build a runtime");
     let tex_off = make_512_target(&h.device, "r3-heldout-baseline");
-    // Bounded retry: this fixture shares `harness::shared()`'s one resident
+    // Bounded retry: this fixture shares `manifold_node_engine::testkit::gpu_harness::shared()`'s one resident
     // device with every other test in the gpu-proofs binary — a pure-raster
     // baseline (no RT, no async accel dependency at all) reading back
     // all-black after the first attempt has been observed only under heavy

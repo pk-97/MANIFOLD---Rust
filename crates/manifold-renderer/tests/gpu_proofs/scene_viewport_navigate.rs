@@ -11,12 +11,11 @@
 
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::headless_readback::encode_rgba8_png;
+use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
 use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::viewport_camera::ViewportCamera, manifold_renderer::node_graph::ViewportOverlayConfig, manifold_renderer::node_graph::build_overlay_lines, manifold_renderer::node_graph::composite_overlay_lines_rgba8, manifold_renderer::node_graph::override_camera_def, manifold_renderer::node_graph::project_lines, manifold_renderer::node_graph::render_viewport_frame};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// Ground plane lit by one sun, wired to an `orbit_camera` (the SHOW
 /// camera) — deliberately simple, this proof is about the viewport's
@@ -72,7 +71,7 @@ fn scene_json() -> String {
         .to_string()
 }
 
-fn ctx(h: &harness::ParityHarness, frame_count: i64) -> PresetContext {
+fn ctx(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, frame_count: i64) -> PresetContext {
     PresetContext {
         time: 0.1,
         beat: 0.2,
@@ -92,7 +91,7 @@ fn ctx(h: &harness::ParityHarness, frame_count: i64) -> PresetContext {
 
 fn render_show_frame(
     runtime: &mut PresetRuntime,
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     target: &manifold_node_engine::gpu::render_target::RenderTarget,
     frame_count: i64,
 ) -> Vec<u8> {
@@ -115,7 +114,7 @@ fn render_show_frame(
 /// overlays composited on top.
 #[test]
 fn viewport_render_is_isolated_and_produces_overlay_png() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json();
 

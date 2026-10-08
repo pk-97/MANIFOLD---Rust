@@ -23,7 +23,6 @@ use manifold_gpu::raytrace::{
 };
 use manifold_gpu::GpuDevice;
 
-use crate::harness;
 
 /// `packed_float3` stride-12 vertex layout — matches the position-only
 /// convention the emissive table builder reads (offset 0, stride 12).
@@ -166,7 +165,7 @@ fn rt_object_geom<'a>(
 /// ≈ obj0 tri 1 (0.1063) > obj3 tri (0.0361).
 #[test]
 fn emissive_table_contents_match_cpu_oracle() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     // Object 0: unit square in XY at z=0 — 2 triangles (6 verts, non-indexed), emissive red
@@ -322,7 +321,7 @@ fn emissive_table_contents_match_cpu_oracle() {
 /// (the old contract returned `None` instead of a table).
 #[test]
 fn emissive_table_zero_stats_when_all_zero_emissive() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let verts = [
@@ -366,7 +365,7 @@ fn emissive_table_zero_stats_when_all_zero_emissive() {
 /// entries.
 #[test]
 fn emissive_table_truncates_at_cap() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     // Build one large vertex buffer with enough quads.

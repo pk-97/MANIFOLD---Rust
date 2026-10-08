@@ -1,4 +1,4 @@
-use crate::generators::registry::GeneratorRegistry;
+use manifold_node_engine::runtime::generator_provider::{GeneratorProvider, generator_provider};
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::runtime::preset_context::{PresetContext, ProjectTempo};
@@ -169,7 +169,7 @@ pub struct GeneratorRenderer {
     width: u32,
     height: u32,
     format: GpuTextureFormat,
-    registry: GeneratorRegistry,
+    registry: &'static GeneratorProvider,
     active_clips: AHashMap<ClipId, ActiveClip>,
     layer_generators: AHashMap<LayerId, LayerGeneratorState>,
     /// section 24 5c cold-start thumbnail instances, keyed by clip id (parked clips).
@@ -231,7 +231,7 @@ impl GeneratorRenderer {
         pool_size: usize,
     ) -> Self {
         let renderer = Self::new_unwarmed(device, width, height, format, pool_size);
-        renderer.registry.prewarm_all(&renderer.device);
+        (renderer.registry.prewarm)(&renderer.device, renderer.format);
         renderer
     }
 
@@ -249,7 +249,7 @@ impl GeneratorRenderer {
 
         let uniform_arena = UniformArena::new(&device);
 
-        let registry = GeneratorRegistry::new(format);
+        let registry = generator_provider();
 
         Self {
             next_physics_event: 0,
@@ -1302,8 +1302,9 @@ impl GeneratorRenderer {
         // live edits). The registry's fuse gate consults this; the rebuild
         // sweeps consult `built_watched` to re-instantiate when it toggles.
         let is_watched = self.preview_layer.as_ref() == Some(&layer_id);
-        let Some(mut generator) = self.registry.create_with_override(
+        let Some(mut generator) = (self.registry.create)(
             Arc::clone(&self.device),
+            self.format,
             &gen_type,
             override_def,
             self.width,
@@ -1393,8 +1394,9 @@ impl GeneratorRenderer {
             .get(clip_id)
             .is_none_or(|t| t.gen_type != gen_type);
         if needs_create {
-            let runtime = self.registry.create_with_override(
+            let runtime = (self.registry.create)(
                 Arc::clone(&self.device),
+                self.format,
                 &gen_type,
                 None,
                 THUMB_W,
@@ -1616,8 +1618,12 @@ impl ClipRenderer for GeneratorRenderer {
     fn prewarm_layer(
         &mut self,
         layer: &Layer,
-        budget: manifold_core::WarmupBudget,
+        run: manifold_core::WarmupRun,
     ) -> manifold_core::WarmupOutcome {
+        if let Some(outcome) = run.exhausted(std::time::Instant::now(), 0) {
+            return outcome;
+        }
+        let budget = run.budget;
         let layer_id = layer.layer_id.clone();
         let gen_type = layer.generator_type().clone();
         if gen_type.is_none() {
@@ -1703,7 +1709,6 @@ impl ClipRenderer for GeneratorRenderer {
 
         const DT: f64 = 1.0 / 60.0;
         let default_manifest = ParamManifest::default();
-        let layer_start = std::time::Instant::now();
         let mut outcome = manifold_core::WarmupOutcome::BudgetExhausted {
             cap: manifold_core::WarmupCap::PerLayerFrames,
             elapsed: std::time::Duration::ZERO,
@@ -1712,11 +1717,9 @@ impl ClipRenderer for GeneratorRenderer {
         for frame in 0..budget.per_layer_frames {
             // Wall-clock is the primary per-layer cap; the frame cap is only
             // a safety bound for runaway spin loops.
-            if layer_start.elapsed() >= budget.per_layer {
-                outcome = manifold_core::WarmupOutcome::BudgetExhausted {
-                    cap: manifold_core::WarmupCap::PerLayerWallClock,
-                    elapsed: layer_start.elapsed(),
-                };
+            let pump_start = std::time::Instant::now();
+            if let Some(exhausted) = run.exhausted(std::time::Instant::now(), frame) {
+                outcome = exhausted;
                 break;
             }
 
@@ -1774,24 +1777,22 @@ impl ClipRenderer for GeneratorRenderer {
             }
             self.uniform_arena.flush(&device);
 
-            if let Some(ls) = self.layer_generators.get(&layer_id)
-                && !ls.generator.warmup_pending()
-                && warmup_frame_status.presentable()
-            {
-                outcome = manifold_core::WarmupOutcome::Quiescent;
+            let runtime = self.layer_generators.get(&layer_id);
+            if let Some(done) = run.pending_outcome(
+                runtime.is_some_and(|ls| ls.generator.warmup_pending()),
+                warmup_frame_status.presentable(),
+                runtime.is_some(),
+            ) {
+                outcome = done;
                 break;
             }
 
             // Paced wait: if async work is still in flight, yield so the
             // background threads (GLB parse, accel build) can land without
             // burning a whole frame budget on spin-rendered no-ops.
-            if !warmup_frame_status.presentable()
-                || self
-                    .layer_generators
-                    .get(&layer_id)
-                    .is_some_and(|ls| ls.generator.warmup_pending())
-            {
-                std::thread::sleep(std::time::Duration::from_millis(2));
+            let delay = run.pending_pump_delay(std::time::Instant::now(), pump_start.elapsed());
+            if !delay.is_zero() {
+                std::thread::sleep(delay);
             }
         }
 
@@ -1799,19 +1800,8 @@ impl ClipRenderer for GeneratorRenderer {
         scratch.resize(&device, self.width, self.height);
         self.available_rts.push(scratch);
 
-        // The frame-cap exhausted path leaves the initial placeholder value
-        // with a zero elapsed — stamp the real wall time so the log is honest
-        // and budget-exhausted layers don't look like install failures.
-        if let manifold_core::WarmupOutcome::BudgetExhausted {
-            cap: manifold_core::WarmupCap::PerLayerFrames,
-            elapsed,
-        } = outcome
-            && elapsed.is_zero()
-        {
-            return manifold_core::WarmupOutcome::BudgetExhausted {
-                cap: manifold_core::WarmupCap::PerLayerFrames,
-                elapsed: layer_start.elapsed(),
-            };
+        if matches!(outcome, manifold_core::WarmupOutcome::BudgetExhausted { .. }) {
+            outcome = run.exhausted(std::time::Instant::now(), budget.per_layer_frames).unwrap();
         }
         outcome
     }
@@ -2273,10 +2263,9 @@ mod warmup_tests {
         status: manifold_node_engine::runtime::frame_status::FrameRenderStatus,
     ) {
         let gen_type = PresetTypeId::new("Plasma");
-        let runtime = renderer
-            .registry
-            .create_with_override(
+        let runtime = (renderer.registry.create)(
                 renderer.device.clone(),
+                renderer.format,
                 &gen_type,
                 None,
                 THUMB_W,
@@ -2536,7 +2525,12 @@ mod warmup_tests {
         let layer = &project.timeline.layers[0];
 
         // Warmup is where first-touch costs are expected and logged.
-        let outcome = renderer.prewarm_layer(layer, manifold_core::WarmupBudget::default());
+        let mut pass = manifold_core::WarmupPass::new(
+            manifold_core::WarmupBudget::default(), std::time::Instant::now(),
+        );
+        let outcome = renderer.prewarm_layer(
+            layer, pass.layer(&layer.layer_id, std::time::Instant::now()),
+        );
         assert!(
             matches!(outcome, manifold_core::WarmupOutcome::Quiescent),
             "fixture scene must warm within default budget; got {:?}",
@@ -2581,11 +2575,17 @@ mod warmup_tests {
         let layer = &project.timeline.layers[0];
 
         let tight_budget = manifold_core::WarmupBudget {
+            frame_interval: std::time::Duration::from_secs_f64(1.0 / 60.0),
             per_layer: std::time::Duration::from_nanos(1),
             per_layer_frames: 600,
             total: std::time::Duration::from_secs(60),
         };
-        let outcome = renderer.prewarm_layer(layer, tight_budget);
+        let mut pass = manifold_core::WarmupPass::new(
+            tight_budget, std::time::Instant::now(),
+        );
+        let outcome = renderer.prewarm_layer(
+            layer, pass.layer(&layer.layer_id, std::time::Instant::now()),
+        );
         assert!(
             matches!(
                 outcome,
@@ -2611,7 +2611,12 @@ mod warmup_tests {
         let layer = &project.timeline.layers[0];
         let layer_id = layer.layer_id.clone();
 
-        let outcome = renderer.prewarm_layer(layer, manifold_core::WarmupBudget::default());
+        let mut pass = manifold_core::WarmupPass::new(
+            manifold_core::WarmupBudget::default(), std::time::Instant::now(),
+        );
+        let outcome = renderer.prewarm_layer(
+            layer, pass.layer(&layer.layer_id, std::time::Instant::now()),
+        );
         assert!(
             matches!(outcome, manifold_core::WarmupOutcome::Quiescent),
             "fixture scene must warm within default budget; got {:?}",
@@ -2671,7 +2676,12 @@ mod warmup_tests {
 
         // Simulate the command path: type change notification, then warm.
         renderer.update_active_types_for_layer(&layer_id, layer.generator_type().clone());
-        let outcome = renderer.prewarm_layer(&layer, manifold_core::WarmupBudget::default());
+        let mut pass = manifold_core::WarmupPass::new(
+            manifold_core::WarmupBudget::default(), std::time::Instant::now(),
+        );
+        let outcome = renderer.prewarm_layer(
+            &layer, pass.layer(&layer.layer_id, std::time::Instant::now()),
+        );
         assert!(
             matches!(outcome, manifold_core::WarmupOutcome::Quiescent),
             "edit-time warm of Plasma must quiesce; got {:?}",

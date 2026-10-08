@@ -26,7 +26,7 @@ use std::time::Instant;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuDevice;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::headless_readback::readback_raw_halves;
+use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 use manifold_node_engine::runtime::preset_context::PresetContext;

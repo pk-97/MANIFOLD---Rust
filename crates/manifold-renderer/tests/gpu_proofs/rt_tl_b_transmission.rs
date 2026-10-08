@@ -119,7 +119,7 @@ fn run_tl_fixture(
     gi_materials: &[GiMaterial],
     base_color_tex: Option<&manifold_gpu::GpuTexture>,
 ) -> [f32; 2] {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let tracer = MetalShadowRayTracer::new(device);
@@ -320,7 +320,7 @@ fn run_tl_fixture(
 
 #[test]
 fn single_translucent_occluder_attenuates_half() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let verts = quad_verts_z(1.0);
@@ -378,7 +378,7 @@ fn single_translucent_occluder_attenuates_half() {
 
 #[test]
 fn factor_zero_control_stays_fully_shadowed() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let verts = quad_verts_z(1.0);
@@ -436,7 +436,7 @@ fn factor_zero_control_stays_fully_shadowed() {
 
 #[test]
 fn stacked_petals_compound_to_quarter() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let verts1 = quad_verts_z(1.0);
@@ -528,7 +528,7 @@ fn stacked_petals_compound_to_quarter() {
 
 #[test]
 fn cutout_texel_passes_unattenuated_accepted_texel_attenuates() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let verts = quad_verts_z(1.0);
@@ -595,7 +595,7 @@ fn cutout_texel_passes_unattenuated_accepted_texel_attenuates() {
 
 #[test]
 fn transmission_colour_is_independent_of_albedo() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let verts = quad_verts_z(1.0);

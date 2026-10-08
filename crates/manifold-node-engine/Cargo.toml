@@ -16,6 +16,7 @@ manifold-playback = { path = "../manifold-playback" }
 log = { workspace = true }
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 half = "2"
+png = "0.18"
 serde = { workspace = true }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 ahash = { workspace = true }

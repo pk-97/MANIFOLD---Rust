@@ -21,7 +21,7 @@ use manifold_core::{BlendMode, LayerId, LayerType};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, CompositorFrame};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_renderer::headless_readback::readback_raw_halves;
+use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
 use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;

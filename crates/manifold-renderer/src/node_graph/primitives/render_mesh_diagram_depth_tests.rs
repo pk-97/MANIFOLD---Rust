@@ -6,7 +6,7 @@
 //! is non-empty.
 
 use super::*;
-use crate::headless_readback::{encode_rgba8_png, readback_raw_halves, readback_srgb_rgba8};
+use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, readback_raw_halves, readback_srgb_rgba8};
 use manifold_node_engine::scene::camera::Camera;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction, GpuTextureDesc,

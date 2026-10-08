@@ -5,7 +5,7 @@
 //! `cargo test` / `cargo nextest` sweep stays fast and non-flaky — run
 //! deliberately with `cargo test -p manifold-renderer --features gpu-proofs`.
 //!
-//! Two suites live here, both sharing one `harness::shared()` device so the
+//! Two suites live here, both sharing one `manifold_node_engine::testkit::gpu_harness::shared()` device so the
 //! ~5s `GpuDevice::new()` cost is paid once:
 //!
 //! - `alpha_contract` — the premultiplied-alpha invariant guard: every
@@ -19,6 +19,7 @@
 //! there is nothing left to be "at parity" with.)
 
 mod harness;
+mod generator_provider;
 mod scene_modifier_legacy;
 
 mod alpha_contract;

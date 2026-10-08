@@ -36,7 +36,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// BUG-uo3z (rt first-frame stall assert load-flaky): shared stall-ceiling
 /// math for this file's `rt_enable_first_frame_never_stalls_past_20ms` and
@@ -191,7 +190,7 @@ fn scene_json(rt_enabled: bool) -> String {
 const RT_WARMUP_FRAMES: i64 = 16;
 
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -395,7 +394,7 @@ fn rt_shadow_darkens_occluded_region_and_leaves_lit_region_alone() {
 #[cfg(feature = "rt-perf-proofs")]
 #[test]
 fn rt_enable_first_frame_never_stalls_past_20ms() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &scene_json(true),

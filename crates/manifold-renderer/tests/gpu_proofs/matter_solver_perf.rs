@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 
 use manifold_node_engine::scene::transform::Transform;
 
-use crate::harness;
 use crate::matter_scene::{MatterScene, SceneSettings};
 
 const WARMUP_FRAMES: u32 = 16;
@@ -82,7 +81,7 @@ fn measure(settings: &SceneSettings, frame_interval: f64, warmup: u32, measured:
         })
         .collect();
     frame_ms.sort_by(f64::total_cmp);
-    let sampler = harness::shared()
+    let sampler = manifold_node_engine::testkit::gpu_harness::shared()
         .device
         .create_timestamp_sampler(4096)
         .expect("timestamp counters on this GPU");

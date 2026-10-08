@@ -39,7 +39,7 @@ use manifold_native::depth_estimator::DepthEstimator;
 
 use manifold_node_engine::runtime::background_worker::BackgroundWorker;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use crate::gpu_readback::ReadbackRequest;
+use manifold_node_engine::gpu::gpu_readback::ReadbackRequest;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;

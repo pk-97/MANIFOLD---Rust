@@ -13,7 +13,6 @@ use manifold_gpu::raytrace::{
 };
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
-use crate::harness;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -228,7 +227,7 @@ fn fresh_build_hit(
 
 #[test]
 fn rt_dynamic_selective_refit_matches_fresh_build_and_instances() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let tracer = MetalShadowRayTracer::new(device);
     let vertices = write_vertices(device, &triangle_at(0.0));
@@ -441,7 +440,7 @@ fn rt_dynamic_selective_refit_matches_fresh_build_and_instances() {
 
 #[test]
 fn rt_dynamic_refit_atomic_validation_and_retained_lifetime() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let tracer = MetalShadowRayTracer::new(device);
     let vertices = write_vertices(device, &triangle_at(0.0));

@@ -98,7 +98,7 @@ pub use stage::{
 };
 pub use types::*;
 pub use units::{Beats, Bpm, Seconds};
-pub use warmup::{WarmupBudget, WarmupCap, WarmupOutcome, WarmupProgress};
+pub use warmup::{WarmupBudget, WarmupCap, WarmupOutcome, WarmupPass, WarmupProgress, WarmupRun};
 
 // Re-export the cross-cutting cold-touch detector from `manifold-foundation`
 // so `manifold-app` can reach it through `manifold_core`.

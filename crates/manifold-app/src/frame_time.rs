@@ -771,7 +771,7 @@ fn write_png(ct: &mut crate::content_thread::ContentThread, path: &str) {
     };
     let texture = ct.content_pipeline.export_output_texture();
     // The graph tone-maps in-graph (node.tone_map), so display-encode only.
-    let png = manifold_renderer::headless_readback::readback_to_srgb_png_linear(&device, texture, texture.width, texture.height);
+    let png = manifold_node_engine::gpu::headless_readback::readback_to_srgb_png_linear(&device, texture, texture.width, texture.height);
     match std::fs::write(path, png) {
         Ok(()) => eprintln!("frame-time: wrote {path}"),
         Err(e) => eprintln!("frame-time: write {path}: {e}"),

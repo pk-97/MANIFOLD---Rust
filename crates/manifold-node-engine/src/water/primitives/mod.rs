@@ -140,6 +140,14 @@ pub mod whitewater_step;
 #[cfg(test)]
 mod whitewater_step_tests;
 pub mod whitewater_type;
+pub mod blob_bounds;
+#[cfg(test)]
+mod face_grid_extent_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod face_grid_tests;
+pub mod fluid_role_source;
+mod grid_to_matter;
+mod rigid_body;
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 mod gpu_flip_tile_tests;

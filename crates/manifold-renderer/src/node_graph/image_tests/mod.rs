@@ -1,4 +1,3 @@
-mod fused;
 #[cfg(feature = "gpu-proofs")]
 mod codegen;
 

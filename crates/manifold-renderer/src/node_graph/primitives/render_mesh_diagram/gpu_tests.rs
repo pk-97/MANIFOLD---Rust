@@ -1,5 +1,5 @@
 use super::*;
-use crate::headless_readback::readback_raw_halves;
+use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
 use manifold_node_engine::scene::camera::CameraMode;
 use manifold_gpu::GpuTextureFormat;
 
@@ -364,8 +364,8 @@ fn math_view_trails_render_recorded_copy_motion() {
     let b = apply_copy_cpu(expected_vertices[8][0].position, instance_frame(8)[1]);
     let two_copies = render(2, 1);
     if let Ok(path) = std::env::var("MANIFOLD_MATH_TRAILS_PREVIEW") {
-        let rgba = crate::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
-        std::fs::write(path, crate::headless_readback::encode_rgba8_png(&rgba, W, H)).unwrap();
+        let rgba = manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
+        std::fs::write(path, manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H)).unwrap();
     }
     assert!(
         max_alpha_around(&two_copies, a) > 0.05,
@@ -553,10 +553,10 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
         "inactive zero-sentinel copies must not draw"
     );
     if let Ok(path) = std::env::var("MANIFOLD_MATH_COPIES_PREVIEW") {
-        let rgba = crate::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
+        let rgba = manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
         std::fs::write(
             path,
-            crate::headless_readback::encode_rgba8_png(&rgba, W, H),
+            manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H),
         )
         .unwrap();
     }
@@ -740,7 +740,7 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
         }
     }
     if let Ok(path) = std::env::var("MANIFOLD_MATH_GRID_PREVIEW") {
-        let rgba = crate::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
-        std::fs::write(path, crate::headless_readback::encode_rgba8_png(&rgba, W, H)).unwrap();
+        let rgba = manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
+        std::fs::write(path, manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H)).unwrap();
     }
 }

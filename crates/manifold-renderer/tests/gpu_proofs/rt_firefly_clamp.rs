@@ -29,7 +29,6 @@
 
 use manifold_gpu::raytrace::MetalShadowRayTracer;
 
-use crate::harness;
 
 const TOLERANCE: f32 = 1e-4;
 /// Mirrors the MSL `FIREFLY_MEDIAN_GAIN` constant.
@@ -89,7 +88,7 @@ fn assert_close(got: [f32; 3], expected: [f32; 3], label: &str) {
 
 #[test]
 fn firefly_clamp_void_center_passes_through_unclamped() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let tracer = MetalShadowRayTracer::new(&h.device);
 
     // I7 case 1: a sun-disc-bright texel in the void background is legit
@@ -112,7 +111,7 @@ fn firefly_clamp_void_center_passes_through_unclamped() {
 
 #[test]
 fn firefly_clamp_isolated_glint_passes_through_unclamped() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let tracer = MetalShadowRayTracer::new(&h.device);
 
     // I7 case 2: an isolated 1-px glint — center non-void, every neighbor
@@ -135,7 +134,7 @@ fn firefly_clamp_isolated_glint_passes_through_unclamped() {
 
 #[test]
 fn firefly_clamp_hot_outlier_surrounded_by_dim_neighbors_is_clamped() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let tracer = MetalShadowRayTracer::new(&h.device);
 
     // Positive case: hot center (luma 100) surrounded by 8 dim non-void
@@ -159,7 +158,7 @@ fn firefly_clamp_hot_outlier_surrounded_by_dim_neighbors_is_clamped() {
 
 #[test]
 fn firefly_clamp_median_matches_cpu_expected() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let tracer = MetalShadowRayTracer::new(&h.device);
 
     // Median-value case: neighbors with lumas 1..8, center luma 100. The
@@ -200,7 +199,7 @@ fn firefly_clamp_median_matches_cpu_expected() {
 /// (50) — max(median, 50) is the same order statistic the kernel computes.
 #[test]
 fn firefly_clamp_mean_power_raises_floor() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let tracer = MetalShadowRayTracer::new(&h.device);
 
     const FLOOR: f32 = 4.0;

@@ -10,7 +10,6 @@ use manifold_node_engine::water::physics::PhysicsStepScope;
 use manifold_renderer::node_graph::primitives::WaveShearMesh;
 use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
-use crate::harness;
 
 struct Runtime {
     graph: Graph,
@@ -39,7 +38,7 @@ fn resource_for(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> Resou
         .unwrap_or_else(|| panic!("missing output {node:?}.{port}"))
 }
 
-fn make_runtime(harness: &harness::ParityHarness, max_capacity: f32) -> Runtime {
+fn make_runtime(harness: &manifold_node_engine::testkit::gpu_harness::ParityHarness, max_capacity: f32) -> Runtime {
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let mut graph = Graph::new();
     let fluid = graph.add_node(
@@ -172,7 +171,7 @@ fn assert_finite_nonzero_geometry(snapshot: &Snapshot) {
 
 #[test]
 fn fluid_mesh_growth_reaches_downstream_deformer_without_truncation() {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let _render = PhysicsStepScope::for_render(true);
     let mut compact = make_runtime(harness, 3.0);
     let mut roomy = make_runtime(harness, 100_000.0);

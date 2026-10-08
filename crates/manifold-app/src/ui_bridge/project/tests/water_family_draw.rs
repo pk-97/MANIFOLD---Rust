@@ -79,7 +79,7 @@ mod gpu {
         device: &std::sync::Arc<manifold_gpu::GpuDevice>,
     ) -> Vec<u8> {
         content.content_pipeline.wait_for_render_complete();
-        manifold_renderer::headless_readback::readback_raw_halves(
+        manifold_node_engine::gpu::headless_readback::readback_raw_halves(
             device,
             content.content_pipeline.export_output_texture(),
             W,
@@ -97,13 +97,13 @@ mod gpu {
                 if channel == 3 {
                     (value.clamp(0.0, 1.0) * 255.0).round() as u8
                 } else {
-                    manifold_renderer::headless_readback::linear_to_srgb8(value)
+                    manifold_node_engine::gpu::headless_readback::linear_to_srgb8(value)
                 }
             })
             .collect();
         std::fs::write(
             path,
-            manifold_renderer::headless_readback::encode_rgba8_png(&rgba, W, H),
+            manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H),
         )
         .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
     }

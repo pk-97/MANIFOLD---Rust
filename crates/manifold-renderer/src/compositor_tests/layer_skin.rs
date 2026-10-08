@@ -637,13 +637,13 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
             let mut rgba8 = Vec::with_capacity(px.len());
             for c in px.chunks(4) {
                 for v in c.iter().take(3) {
-                    rgba8.push(crate::headless_readback::linear_to_srgb8(
+                    rgba8.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(
                         half::f16::from_bits(*v).to_f32(),
                     ));
                 }
                 rgba8.push(255);
             }
-            let png = crate::headless_readback::encode_rgba8_png(&rgba8, texture.width, texture.height);
+            let png = manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba8, texture.width, texture.height);
             std::fs::write(&path, png).expect("write demo png");
             println!("demo artifact: {}", path.display());
         };

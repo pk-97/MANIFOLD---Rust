@@ -2205,7 +2205,7 @@ pub(crate) fn fuse_canonical_def_masked(
             // by type_id — `derived_uniform_registry::recompute`, gated at
             // fuse-build time above by `has_recompute`). See
             // `docs/CINEMATIC_POST_DESIGN.md` D7 and
-            // `crates/manifold-renderer/src/node_graph/freeze/derived_uniform_registry.rs`.
+            // `crates/manifold-node-engine/src/freeze/derived_uniform_registry.rs`.
         }
         // D7/P0: wire each distinct Camera external this region's derived-uniform
         // members need onto the fused node's synthesized `camera_ext_N` port —

@@ -23,7 +23,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// D22 point 1: `RT_TEMPORAL_RENDER_SCALE_NUM`/`_DEN` mirrored here as a
 /// plain oracle (not `use`d from `render_scene.rs` — that fn is private to
@@ -44,15 +43,15 @@ const UPSCALE_COARSE_EPSILON: f32 = 0.2;
 /// jitter-phase-drift reason in this file's module doc.
 const CUT_RESET_EPSILON: f32 = 0.12;
 
-// Deliberately the SAME fixed dims `harness::ParityHarness` uses
+// Deliberately the SAME fixed dims `manifold_node_engine::testkit::gpu_harness::ParityHarness` uses
 // (`PARITY_WIDTH`/`PARITY_HEIGHT`) — every render target in this file comes
 // from `h.make_target()`, which is hardcoded to those dims; building the
 // `PresetRuntime` at a different canvas size than the target it renders into
 // is a graph/target dims mismatch, not a `render_scene` question (caught via
 // a real GPU page fault during authoring — matching sizes here isn't
 // optional).
-const NATIVE_W: u32 = harness::PARITY_WIDTH;
-const NATIVE_H: u32 = harness::PARITY_HEIGHT;
+const NATIVE_W: u32 = manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH;
+const NATIVE_H: u32 = manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT;
 
 /// A single flat-lit quad, one light, camera head-on and static — simple
 /// enough that both native and upscaled renders should closely agree, and
@@ -101,7 +100,7 @@ fn scene_json(temporal_upscale: bool) -> String {
     )
 }
 
-fn build_runtime(h: &harness::ParityHarness, temporal_upscale: bool) -> PresetRuntime {
+fn build_runtime(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, temporal_upscale: bool) -> PresetRuntime {
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json(temporal_upscale);
     let mut runtime = PresetRuntime::from_json_str_with_device(
@@ -136,7 +135,7 @@ fn ctx(owner_key: i64, frame_count: i64) -> PresetContext {
     }
 }
 
-fn render_frame(runtime: &mut PresetRuntime, h: &harness::ParityHarness, target: &manifold_gpu::GpuTexture, owner_key: i64, frame_count: i64) {
+fn render_frame(runtime: &mut PresetRuntime, h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, target: &manifold_gpu::GpuTexture, owner_key: i64, frame_count: i64) {
     let c = ctx(owner_key, frame_count);
     let mut enc = h.device.create_encoder("rt-t2b-frame");
     {
@@ -180,7 +179,7 @@ fn mean_abs_diff_rgb(a: &[f32], b: &[f32]) -> f32 {
 /// touches `depth`/`velocity`.
 #[test]
 fn temporal_upscale_color_output_is_exact_native_res() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut runtime = build_runtime(h, true);
     let target = h.make_target("rt-t2b-native-target");
     render_frame(&mut runtime, h, &target.texture, 1, 0);
@@ -201,7 +200,7 @@ fn temporal_upscale_color_output_is_exact_native_res() {
 /// `execution.rs::resolve_dims` both use.
 #[test]
 fn temporal_upscale_depth_velocity_outputs_stay_render_res() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     // rt_enabled off, temporal_upscale on: force_consumed_outputs still
     // forces depth/velocity (P4's `|| temporal_upscale` branch), proving
     // D22's render-res sizing fires independent of RT.
@@ -242,7 +241,7 @@ fn temporal_upscale_depth_velocity_outputs_stay_render_res() {
 /// `rt_p4_metalfx_temporal.rs`).
 #[test]
 fn temporal_upscale_vs_native_still_frame_mean_abs_diff_below_coarse_epsilon() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
 
     let mut native_runtime = build_runtime(h, false);
     let native_target = h.make_target("rt-t2b-native-still");
@@ -274,7 +273,7 @@ fn temporal_upscale_vs_native_still_frame_mean_abs_diff_below_coarse_epsilon() {
 /// history so the cut frame looks like a cold start, not scene A's ghost.
 #[test]
 fn temporal_upscale_cut_reset_matches_cold_start_within_epsilon() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
 
     // Warmed: 8 frames under owner_key 1, then a 9th frame under owner_key
     // 2 (the cut).
@@ -314,7 +313,7 @@ fn temporal_upscale_cut_reset_matches_cold_start_within_epsilon() {
 /// `width`/`height` shadow leaking into the non-upscale branch).
 #[test]
 fn native_mode_render_is_deterministic_across_independent_runtimes() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
 
     let mut runtime_a = build_runtime(h, false);
     let target_a = h.make_target("rt-t2b-native-det-a");
@@ -348,7 +347,7 @@ fn native_mode_render_is_deterministic_across_independent_runtimes() {
 #[cfg(feature = "rt-perf-proofs")]
 #[test]
 fn temporal_upscale_toggle_never_stalls_past_20ms() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut native_runtime = build_runtime(h, false);
     let mut upscale_runtime = build_runtime(h, true);
     let native_target = h.make_target("rt-t2b-toggle-native");
@@ -431,7 +430,7 @@ fn temporal_upscale_toggle_never_stalls_past_20ms() {
 /// (proves the recompiled path actually upscales the scene, not garbage).
 #[test]
 fn live_temporal_upscale_toggle_is_inert_and_does_not_panic() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
 
     let mut runtime = build_runtime(h, false);
     let target = h.make_target("rt-t2b-live-toggle");
@@ -490,7 +489,7 @@ fn live_temporal_upscale_toggle_is_inert_and_does_not_panic() {
 /// not the magenta fallback).
 #[test]
 fn live_rt_toggle_with_scene_object_does_not_dangle_mesh_slots() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let json = r#"{"version":2,"name":"RtBug318","nodes":[
         {"id":0,"typeId":"system.generator_input","nodeId":"input"},

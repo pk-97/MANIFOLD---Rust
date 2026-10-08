@@ -9,7 +9,6 @@
 
 use std::collections::BTreeMap;
 
-use crate::harness;
 use crate::matter_scene::{MatterScene, SceneSettings};
 
 const WARMUP_TICKS: u32 = 16;
@@ -70,7 +69,7 @@ fn probe(fill_height: f32, block_p2g: bool, stiffness: f32) -> Row {
     for _ in 0..WARMUP_TICKS {
         scene.tick();
     }
-    let sampler = harness::shared()
+    let sampler = manifold_node_engine::testkit::gpu_harness::shared()
         .device
         .create_timestamp_sampler(1024)
         .expect("timestamp counters on this GPU");

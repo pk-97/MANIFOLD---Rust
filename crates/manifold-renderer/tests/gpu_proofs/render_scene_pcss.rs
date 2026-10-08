@@ -37,7 +37,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// Ground plane (10×10 at y=0) + a small plate occluder (3×3) at height
 /// `occluder_y`, lit by one Sun at `(3, 20, 3)` aimed at the origin — the
@@ -119,7 +118,7 @@ fn pcss_scene_json(occluder_y: f32, softness: u32, light_size: f32) -> String {
 /// hard-checks for Metal GPU errors, so a bad shader compile surfaces as a
 /// panic here, not a silently wrong frame.
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -363,7 +362,7 @@ fn pcss_rt_toggle_scene_json(occluder_y: f32, softness: u32, light_size: f32) ->
 }
 
 fn render_rt_toggle_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,

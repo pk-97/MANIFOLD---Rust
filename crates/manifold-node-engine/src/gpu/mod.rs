@@ -4,3 +4,6 @@ pub mod gpu_types;
 pub mod render_target;
 pub mod render_target_pool;
 pub mod uniform_arena;
+pub mod shader_sources;
+pub mod gpu_readback;
+pub mod headless_readback;

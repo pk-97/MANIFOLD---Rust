@@ -28,7 +28,7 @@ use manifold_core::{
     Beats, Bpm, LayerId, NodeId, PresetTypeId,
     cold_touch::{ColdTouchKind, cold_touch_count, reset_cold_touch_counts},
 };
-use manifold_renderer::headless_readback::{encode_rgba8_png, linear_to_srgb8};
+use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, linear_to_srgb8};
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 
 use crate::content_command::ContentCommand;

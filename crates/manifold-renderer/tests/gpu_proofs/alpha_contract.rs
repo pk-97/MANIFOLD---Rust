@@ -50,7 +50,7 @@ use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::primitives::RenderText;
 use manifold_node_engine::{exec::backend::Backend, descriptor::Category, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, parameters::ParamValue, persistence::PrimitiveRegistry, bindings::Slot, exec::execution_plan::compile, descriptor::descriptor_for};
 
-use crate::harness::{self, port_is_texture};
+use manifold_node_engine::testkit::gpu_harness::port_is_texture;
 
 /// Display-effect categories whose `Texture2D` output is a finished image
 /// that reaches the compositor. The alpha contract — transparent in →
@@ -91,7 +91,7 @@ const ALPHA_EPS: f32 = 0.01;
 
 #[test]
 fn effects_preserve_transparency() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
 
     let mut type_ids: Vec<String> = registry
@@ -231,7 +231,7 @@ fn effects_preserve_transparency() {
 ///    generator actually drew something.
 #[test]
 fn render_text_respects_premultiplied_alpha_producer_contract() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let (w, h_dim) = (h.width, h.height);
     let format = GpuTextureFormat::Rgba16Float;
 

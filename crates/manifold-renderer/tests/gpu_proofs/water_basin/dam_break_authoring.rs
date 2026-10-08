@@ -6,7 +6,7 @@ use manifold_core::{EffectId, NodeId};
 
 #[test]
 fn migrated_dam_break_publishes_progress_while_live_preview_is_behind() {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let mut def: EffectGraphDef = serde_json::from_str(
         manifold_renderer::reference_fixtures::cpu_flip_preset_json("WaterDamBreak.json"),
     )
@@ -60,7 +60,7 @@ fn migrated_dam_break_publishes_progress_while_live_preview_is_behind() {
     let _live = PhysicsStepScope::for_render(false);
     // Preparation at zero precedes the first native tick that creates water.
     for frame in 0..=1 {
-        let wait = crate::harness::BackgroundWait::new(format!("water frame {frame}"));
+        let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new(format!("water frame {frame}"));
         loop {
             let mut encoder = harness.device.create_encoder("dam-break-initial-frame");
             let status = {

@@ -34,7 +34,6 @@ use manifold_gpu::{
 };
 use manifold_node_engine::mesh::InstanceTransform;
 
-use crate::harness;
 
 /// `pos` + `normal` interleaved vertex (stride 24, normal at offset 12) —
 /// same record shape `rt_instancing.rs` uses.
@@ -153,7 +152,7 @@ fn len(v: [f32; 3]) -> f32 {
 /// per-entry world-area weight (the OTHER copy is in the proposal mass).
 #[test]
 fn instanced_emissive_object_lights_receiver_both_copies_emit() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let tracer = MetalShadowRayTracer::new(device);
 

@@ -209,7 +209,7 @@ struct Probe {
 /// with `slots` wired, then one primary ray per [`Probe`] and returns the
 /// readback `out_n` rows (`.w` = object index or -1, `.xyz` = normal).
 fn run_probes(slots: &[InstanceTransform], probes: &[Probe]) -> Vec<[f32; 4]> {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let tracer = MetalShadowRayTracer::new(device);
 
@@ -622,7 +622,7 @@ fn probe_worker_static_frames() {
     if std::env::var("RT_INSTANCING_PROBE_WORKER").as_deref() != Ok("1") {
         return;
     }
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let json = r#"{"version":2,"name":"RtInstancingProbeWorker","nodes":[
         {"id":0,"typeId":"system.generator_input","nodeId":"input"},

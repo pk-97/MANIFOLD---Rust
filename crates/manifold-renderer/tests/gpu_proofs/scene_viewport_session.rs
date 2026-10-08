@@ -22,12 +22,11 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effect_graph_def::ParamSpecDef;
 use manifold_core::params::{Param, ParamManifest};
-use manifold_renderer::headless_readback::encode_rgba8_png;
+use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
 use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_renderer::node_graph::ViewportOverlayConfig, manifold_renderer::node_graph::ViewportSession};
 use manifold_node_engine::water::fluid::{FluidDomainSnapshot, FluidDomainState, FluidSettings};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 
-use crate::harness;
 
 /// Bounds and handles must redraw over the cached scene while a setup drag
 /// is still a UI draft. No fluid solver or graph rebuild should run for it.
@@ -38,7 +37,7 @@ fn viewport_session_fluid_domain_draft_redraws_without_rebuilding() {
     use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
     use manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines;
 
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let def: EffectGraphDef = serde_json::from_str(&scene_json()).unwrap();
     let mut frame_ctx = ctx(h);
@@ -155,14 +154,14 @@ fn shared_scene_viewport_navigates_without_advancing_fluid_or_changing_show() {
     use manifold_gpu::GpuTextureFormat;
     use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-    use manifold_renderer::headless_readback::{readback_raw_halves, readback_srgb_rgba8};
+    use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_srgb_rgba8};
     use manifold_node_engine::scene::viewport_camera::ViewportCamera;
     use manifold_node_engine::water::physics::PhysicsStepScope;
     use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportError};
     use manifold_node_engine::runtime::PresetRuntime;
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
     // Keep the diagnostic scalar ports live through ordinary graph wires;
     // the executor intentionally does not allocate unconsumed outputs.
@@ -281,7 +280,7 @@ fn shared_scene_viewport_does_not_activate_a_hidden_fluid_branch() {
     use manifold_node_engine::runtime::PresetRuntime;
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let mut def = fluid_session_json();
     def["nodes"].as_array_mut().unwrap().push(serde_json::json!({
@@ -332,12 +331,12 @@ fn shared_scene_viewport_preserves_rt_and_temporal_show_history() {
     use manifold_gpu::GpuTextureFormat;
     use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-    use manifold_renderer::headless_readback::readback_raw_halves;
+    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
     use manifold_node_engine::scene::scene_viewport::SceneViewportConfig;
     use manifold_node_engine::runtime::PresetRuntime;
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut def: serde_json::Value = serde_json::from_str(&scene_json()).unwrap();
     let scene = def["nodes"].as_array_mut().unwrap().iter_mut()
@@ -421,7 +420,7 @@ fn shared_scene_viewport_preserves_rt_and_temporal_show_history() {
 fn viewport_session_refreshes_effective_controls_and_fluid_bounds() {
     use manifold_node_engine::water::physics::PhysicsStepScope;
 
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let def: EffectGraphDef = serde_json::from_value(fluid_session_json()).unwrap();
     let mut frame_ctx = ctx(h);
@@ -684,7 +683,7 @@ fn scene_json() -> String {
         .to_string()
 }
 
-fn ctx(h: &harness::ParityHarness) -> PresetContext {
+fn ctx(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness) -> PresetContext {
     PresetContext {
         time: 0.1,
         beat: 0.2,
@@ -712,7 +711,7 @@ fn ctx(h: &harness::ParityHarness) -> PresetContext {
 /// (doesn't reset the camera / force a spurious rebuild-driven redraw).
 #[test]
 fn viewport_session_navigates_and_debounces() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json();
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse scene def");
@@ -779,7 +778,7 @@ fn viewport_session_navigates_and_debounces() {
 /// re-renders — proven by pixel change with the camera held fixed.
 #[test]
 fn viewport_session_rebuilds_on_def_change() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json();
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse scene def");

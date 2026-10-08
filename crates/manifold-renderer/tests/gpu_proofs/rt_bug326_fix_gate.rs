@@ -45,7 +45,7 @@ fn ctx(frame_count: i64) -> PresetContext {
 /// both arms rendered pure raster and the ratio assert passed trivially.
 fn frame(
     runtime: &mut PresetRuntime,
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     target: &manifold_gpu::GpuTexture,
     f: i64,
     manifest: &manifold_core::params::ParamManifest,
@@ -54,7 +54,7 @@ fn frame(
     // A commit can be an InnocentVictim of a shared-GPU contention transient
     // (BUG-m0c9); re-rendering the same idempotent frame absorbs it. A real
     // wedge still panics after the single retry.
-    harness::retry_on_gpu_commit_error(|| {
+    manifold_node_engine::testkit::gpu_harness::retry_on_gpu_commit_error(|| {
         let mut enc = h.device.create_encoder("bug326-import-frame");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
@@ -111,7 +111,7 @@ fn make_512_target(device: &GpuDevice, label: &str) -> manifold_gpu::GpuTexture 
 }
 
 fn build_helmet_harness(
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     rt_enabled: bool,
     rt_reflections: bool,
 ) -> (
@@ -141,7 +141,7 @@ fn build_helmet_harness(
         Some(&manifest),
     )
     .expect("imported def must build a runtime");
-    harness::assert_no_shadowed_def_params(&runtime, "bug326 helmet import");
+    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(&runtime, "bug326 helmet import");
 
     let target = make_512_target(&h.device, "bug326-gate-target");
     (runtime, target, manifest)
@@ -151,14 +151,14 @@ fn build_helmet_harness(
 /// to the rt=0 baseline. Must stay within 80% of baseline.
 #[test]
 fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
 
     // Baseline: rt=0.
     // Frames rendered while the import is still loading don't count toward
     // either arm's budget (the load's length depends on machine load).
     const SETTLED_FRAME_BUDGET: u32 = 600;
     let (mut rt_baseline, tex_baseline, base_manifest) = build_helmet_harness(h, false, false);
-    let wait = harness::BackgroundWait::new("bug326 baseline");
+    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("bug326 baseline");
     let mut baseline_frac = 0.0;
     let mut settled = 0;
     for f in 0i64.. {
@@ -188,7 +188,7 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     // frame persists). Window length is load-dependent (completion-handler
     // delivery), so a fixed frame count is flaky under full-suite load.
     let (mut rt_on, tex_on, on_manifest) = build_helmet_harness(h, true, true);
-    let wait = harness::BackgroundWait::new("bug326 rt-on");
+    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("bug326 rt-on");
     let threshold = 0.20 * baseline_frac;
     let mut on_frac = 0.0f64;
     let mut settled = 0;

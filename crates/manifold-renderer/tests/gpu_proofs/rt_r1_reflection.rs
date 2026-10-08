@@ -25,7 +25,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 const ORBIT: f32 = 0.7;
 const TILT: f32 = 0.95;
@@ -158,7 +157,7 @@ fn scene_json_full(rt_reflections: bool, with_emitter: bool, env_intensity: f32)
 const RT_WARMUP_FRAMES: i64 = 16;
 
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -404,7 +403,7 @@ fn reflection_of_empty_scene_equals_env_only() {
 #[cfg(feature = "rt-perf-proofs")]
 #[test]
 fn rt_reflections_dispatch_never_stalls_past_20ms() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &scene_json(true),

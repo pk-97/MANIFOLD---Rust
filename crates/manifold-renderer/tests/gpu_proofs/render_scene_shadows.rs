@@ -25,7 +25,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// Ground plane (8×8 at y=0) + an occluder plane (3×3 at y=1.5) lit by
 /// `num_lights` suns positioned overhead-and-to-one-side so the occluder's
@@ -123,7 +122,7 @@ fn shadow_scene_json(cast: bool, num_lights: usize) -> String {
 /// hard-checks for Metal GPU errors, so a bad shadow-map bind or a failed
 /// depth-only PSO surfaces as a panic here, not a silently wrong frame.
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,

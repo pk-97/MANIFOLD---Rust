@@ -15,7 +15,7 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
-const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
+const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`amount`,
 /// `seed` f32), then the derived `weights_len` (u32), then the codegen-injected

@@ -22,7 +22,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// `node.linear_gradient` (id `id_base`) -> `node.gradient_map`
 /// (id `id_base+1`) with `color_a == color_b == rgba` -- a solid-colour
@@ -49,7 +48,7 @@ fn solid_texture_nodes(id_base: u32, rgba: [f32; 4]) -> (String, String, u32) {
 /// Two committed frames (pipeline warm-up + F-P1's per-frame IBL
 /// convolution past); `commit_and_wait_completed` hard-checks Metal errors.
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,

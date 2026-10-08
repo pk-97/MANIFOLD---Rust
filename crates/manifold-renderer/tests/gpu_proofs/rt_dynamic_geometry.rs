@@ -17,7 +17,6 @@ use manifold_gpu::raytrace::{
 };
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
-use crate::harness;
 
 /// `pos` (16 bytes) + `normal` (16 bytes) + `uv` (8 bytes) interleaved
 /// vertex — the same field offsets render_scene's `MeshVertex` carries
@@ -196,7 +195,7 @@ mod rt_dynamic_oracle {
 
     #[test]
     fn rt_dynamic_oracle_rejects_wrong_hits() {
-        let h = harness::shared();
+        let h = manifold_node_engine::testkit::gpu_harness::shared();
         let device = &h.device;
         let tracer = MetalShadowRayTracer::new(device);
 
@@ -632,7 +631,7 @@ fn cs_main() {
     /// in place at equal capacity — the update must report a rebuild.
     #[test]
     fn rt_dynamic_same_frame_gpu_write_then_hit() {
-        let h = harness::shared();
+        let h = manifold_node_engine::testkit::gpu_harness::shared();
         let device = &h.device;
         let tracer = MetalShadowRayTracer::new(device);
         let flat_pipe =
@@ -658,7 +657,7 @@ fn cs_main() {
     /// lifetime/ordering probes at the seam level.
     #[test]
     fn rt_dynamic_unsubmitted_teardown_and_multiframe() {
-        let h = harness::shared();
+        let h = manifold_node_engine::testkit::gpu_harness::shared();
         let device = &h.device;
         let tracer = MetalShadowRayTracer::new(device);
         let faults_before = manifold_gpu::gpu_fault::fault_count();
@@ -1052,7 +1051,7 @@ fn cs_main() {
     /// valid.
     #[test]
     fn rt_dynamic_admission_is_atomic() {
-        let h = harness::shared();
+        let h = manifold_node_engine::testkit::gpu_harness::shared();
         let device = &h.device;
         let tracer = MetalShadowRayTracer::new(device);
 

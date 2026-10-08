@@ -3,7 +3,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_renderer::headless_readback::{readback_raw_halves, readback_to_srgb_png};
+use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_to_srgb_png};
 use manifold_node_engine::water::physics::{PhysicsStepScope, native_ticks_on_this_thread};
 use manifold_node_engine::{persistence::PrimitiveRegistry, water::physics_metrics};
 use manifold_node_engine::runtime::preset_context::PresetContext;
@@ -16,7 +16,7 @@ const JSON: &str = include_str!("../../assets/generator-presets/PhysicsBoxes.jso
 fn physics_boxes_render_motion_and_latch_count_until_reset() {
     // Authored history must use the live clock from its first observation.
     let _live = PhysicsStepScope::for_render(false);
-    let harness = super::harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
     let (width, height) = (640, 400);
     let def: EffectGraphDef = serde_json::from_str(JSON).unwrap();
@@ -98,7 +98,7 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
     )
     .unwrap();
     assert!(
-        manifold_renderer::headless_readback::mean_abs_half_diff(&initial, &dropped) > 0.0005,
+        manifold_node_engine::gpu::headless_readback::mean_abs_half_diff(&initial, &dropped) > 0.0005,
         "falling boxes must visibly move"
     );
     params.get_mut("40_copy_count").unwrap().value = 32.0;
@@ -123,7 +123,7 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
     );
     let floor = readback_raw_halves(device, &target.texture, width, height);
     assert!(
-        manifold_renderer::headless_readback::mean_abs_half_diff(&sparse, &floor) > 0.00005,
+        manifold_node_engine::gpu::headless_readback::mean_abs_half_diff(&sparse, &floor) > 0.00005,
         "zero instances must remove boxes from the rendered scene"
     );
     for bytes in floor.chunks_exact(2) {
@@ -138,7 +138,7 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
     assert_eq!(render(184, &params).body_count, 4_003);
     assert_eq!(render(185, &params).body_count, 4_003);
     let full = readback_raw_halves(device, &target.texture, width, height);
-    assert!(manifold_renderer::headless_readback::mean_abs_half_diff(&full, &floor) > 0.001);
+    assert!(manifold_node_engine::gpu::headless_readback::mean_abs_half_diff(&full, &floor) > 0.001);
     for bytes in full.chunks_exact(2) {
         assert!(
             half::f16::from_le_bytes([bytes[0], bytes[1]])

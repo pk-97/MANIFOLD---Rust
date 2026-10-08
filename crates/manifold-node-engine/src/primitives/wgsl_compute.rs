@@ -720,9 +720,8 @@ fn select_compute_entry(module: &naga::Module) -> Result<&naga::EntryPoint, Stri
 
 /// The entry-point name a `create_compute_pipeline` call for `source` will use
 /// (parse + the BUG-010 rule above). The freeze worker's pipeline prewarm goes
-/// through here so prewarm and the lazy `evaluate()` compile can never pick
-/// different entries.
-#[cfg(not(any(test, feature = "testkit")))]
+/// through here so installation and source-change compilation select the same
+/// entry as the worker prewarm.
 pub(crate) fn select_compute_entry_name(source: &str) -> Option<String> {
     let module = naga::front::wgsl::parse_str(source).ok()?;
     select_compute_entry(&module).ok().map(|e| e.name.clone())
@@ -2174,6 +2173,20 @@ impl EffectNode for WgslCompute {
         }
     }
 
+    fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.compile_failed {
+            return;
+        }
+        let source_hash = hash_str(&self.source);
+        if self.pipeline.is_none() || self.compiled_hash != Some(source_hash) {
+            let Some(entry) = select_compute_entry_name(&self.source) else {
+                return;
+            };
+            self.pipeline = Some(device.create_compute_pipeline(&self.source, &entry, TYPE_ID));
+            self.compiled_hash = Some(source_hash);
+        }
+    }
+
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         if self.compile_failed {
             return;
@@ -2207,24 +2220,11 @@ impl EffectNode for WgslCompute {
             }
         }
 
-        // Compile (or recompile) the pipeline lazily on source change.
-        let source_hash = hash_str(&self.source);
-        if self.pipeline.is_none() || self.compiled_hash != Some(source_hash) {
-            let gpu = ctx.gpu_encoder();
-            // Naga has already validated this source in `reparse` — a successful
-            // introspect implies a valid module. Pick the SAME entry `introspect`
-            // chose (`select_compute_entry`), never `entry_points[0]`, so a stray
-            // leading `@compute fn` can't dispatch in place of `cs_main` (BUG-010).
-            let entry = match naga::front::wgsl::parse_str(&self.source)
-                .ok()
-                .and_then(|m| select_compute_entry(&m).ok().map(|e| e.name.clone()))
-            {
-                Some(name) => name,
-                None => return,
-            };
-            self.pipeline =
-                Some(gpu.device.create_compute_pipeline(&self.source, &entry, TYPE_ID));
-            self.compiled_hash = Some(source_hash);
+        // Installation prepares the configured source; direct evaluation and
+        // source changes still use the same entry selection and cache key.
+        self.prepare_pipelines(ctx.gpu_encoder().device);
+        if self.pipeline.is_none() {
+            return;
         }
 
         // Lazy-create sampler if any binding needs one.

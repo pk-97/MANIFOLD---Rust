@@ -272,7 +272,7 @@ fn scene_physics_explicit_object_uses_shared_world_after_fluid_authoring() {
         manifold_core::flatten::flatten_groups(restored.graph_for_target(&target, None).unwrap())
             .unwrap();
     instrument(&mut def, &body_id);
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     registry.register("test.explicit_physics_observer", || {
         Box::new(Observe(EffectNodeType::new(

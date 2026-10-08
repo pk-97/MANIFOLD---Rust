@@ -1,0 +1,453 @@
+//! Shared device, readback and graph helpers for GPU proofs.
+
+use std::ffi::c_void;
+use std::slice;
+use std::sync::{Arc, OnceLock};
+
+use half::f16;
+use manifold_core::{Beats, Seconds};
+use manifold_gpu::{
+    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
+use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use crate::{exec::backend::Backend, exec::effect_node::EffectNode, exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, ports::PortType, exec::execution_plan::ResourceId, bindings::Slot, scene::boundary_nodes::Source, exec::execution_plan::compile};
+use crate::gpu::render_target::RenderTarget;
+
+/// Fixed render dimensions. Small enough that readbacks finish in
+/// milliseconds; large enough to exercise non-trivial dispatch shapes
+/// (multiple of the 16×16 workgroup size).
+pub const PARITY_WIDTH: u32 = 128;
+pub const PARITY_HEIGHT: u32 = 128;
+
+/// Bytes per pixel for the canonical format (`Rgba16Float`).
+const BYTES_PER_PIXEL: u32 = 8;
+
+/// Owns the `GpuDevice` and the canonical render dimensions. A single
+/// instance is shared across both suites via [`shared`].
+pub struct ParityHarness {
+    pub device: Arc<GpuDevice>,
+    pub width: u32,
+    pub height: u32,
+    pub format: GpuTextureFormat,
+}
+
+/// Process-wide cached harness. The expensive part of construction is
+/// `GpuDevice::new()` plus building each plugin-using effect's background
+/// worker (~5s on M-series). Sharing it across both suites pays that once.
+static SHARED: OnceLock<ParityHarness> = OnceLock::new();
+
+/// Anti-vacuity guard for the whole class `import_rt_manifest` documents: fail
+/// unless every value this runtime's def baked onto a node actually survived the
+/// build.
+///
+/// `BoundGraph::new` plants each card binding's default over its target node, so
+/// a param written onto a node the card owns is a silent no-op (BUG-1l7f). Call
+/// this right after building a runtime from a def you mutated — it turns "my
+/// measurement is secretly of the card default" into a failure at the point of
+/// the mistake, instead of a wrong number read as a conclusion.
+pub fn assert_no_shadowed_def_params(
+    runtime: &crate::runtime::PresetRuntime,
+    context: &str,
+) {
+    let findings: Vec<String> = runtime
+        .shadowed_def_params()
+        .map(|f| f.to_string())
+        .collect();
+    assert!(
+        findings.is_empty(),
+        "{context}: {} def-baked node param(s) were overwritten by their card \
+         bindings at build, so this test is measuring the card defaults and not \
+         what it asked for (BUG-1l7f). Drive them through the card manifest:\n{}",
+        findings.len(),
+        findings.join("\n"),
+    );
+}
+
+/// Return the process-wide cached harness.
+pub fn shared() -> &'static ParityHarness {
+    SHARED.get_or_init(ParityHarness::new)
+}
+
+impl ParityHarness {
+    pub fn new() -> Self {
+        let device = Arc::new(GpuDevice::new_queued("gpu_proofs"));
+        // Prewarm the plugin-using effects so background FFI workers
+        // (BlobDetector, DepthEstimator, WireframeDepth) are running
+        // before the first sweep. The graph path looks primitives up via
+        // `primitive_registry()`, so we never touch the returned
+        // processors again — `mem::forget` keeps them alive without
+        // storing them in `ParityHarness` (which lives in a `OnceLock`
+        // and would need `Sync`, but `PostProcessEffect` is only `Send`).
+        std::mem::forget(crate::runtime::plugin_prewarm::prewarm_all(&device));
+        Self {
+            device,
+            width: PARITY_WIDTH,
+            height: PARITY_HEIGHT,
+            format: GpuTextureFormat::Rgba16Float,
+        }
+    }
+
+    pub fn make_target(&self, label: &str) -> RenderTarget {
+        RenderTarget::new(&self.device, self.width, self.height, self.format, label)
+    }
+
+    /// Upload a host-prepared `Vec<f16>` pixel buffer to a fresh
+    /// **CPU-uploadable** texture. Caller is responsible for matching
+    /// `w × h × 4` element count (RGBA, row-major, top-down).
+    ///
+    /// The returned texture uses `CPU_UPLOAD` + `SHADER_READ` +
+    /// `COPY_SRC` so `replaceRegion` works (Shared storage) and the
+    /// first compute pass can read it. Metal samples Shared and Private
+    /// textures identically, so this deviation from production
+    /// `RENDER_TARGET_FULL` (Private) doesn't skew the read.
+    pub fn upload_f16_rgba(&self, label: &str, pixels: &[f16]) -> GpuTexture {
+        assert_eq!(
+            pixels.len() as u32,
+            self.width * self.height * 4,
+            "fixture buffer size mismatch"
+        );
+        let texture = self.device.create_texture(&GpuTextureDesc {
+            width: self.width,
+            height: self.height,
+            depth: 1,
+            format: self.format,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_SRC,
+            label,
+            mip_levels: 1,
+        });
+        // Reinterpret &[f16] as &[u8] — f16 is bit-identical to its
+        // little-endian u16 representation on our targets.
+        let bytes = unsafe {
+            slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
+        };
+        self.device.upload_texture(&texture, bytes);
+        texture
+    }
+
+    /// Feed a fully-transparent (all-zero, premultiplied) fixture into
+    /// EVERY `Texture2D` input of `prim` and read back its first
+    /// `Texture2D` output as raw `Rgba16Float` bytes.
+    ///
+    /// Returns `None` when `prim` isn't a texture→texture effect (no
+    /// texture input or no texture output) or the graph fails to
+    /// compile/bind — the alpha-contract sweep reports those as
+    /// "skipped", never as passes.
+    ///
+    /// The contract under test: an effect handed nothing (alpha 0
+    /// everywhere) must output nothing (alpha stays 0). Any shader that
+    /// hardcodes the output alpha to 1.0 manufactures opacity from a
+    /// transparent layer — that's the bug class this probe detects.
+    pub fn run_transparent_probe(&self, prim: Box<dyn EffectNode>) -> Option<Vec<u8>> {
+        let tex_inputs: Vec<String> = prim
+            .inputs()
+            .iter()
+            .filter(|p| port_is_texture(&p.ty))
+            .map(|p| p.name.to_string())
+            .collect();
+        if tex_inputs.is_empty() {
+            return None;
+        }
+        let out_port: String = prim
+            .outputs()
+            .iter()
+            .find(|p| port_is_texture(&p.ty))
+            .map(|p| p.name.to_string())?;
+
+        let mut graph = Graph::new();
+        let prim_id = graph.add_node(prim);
+        let final_out = graph.add_node(Box::new(FinalOutput::new()));
+
+        // One Source per texture input — every one fed the transparent
+        // fixture below, so the effect sees "nothing" on all texture ports.
+        let mut sources: Vec<NodeInstanceId> = Vec::with_capacity(tex_inputs.len());
+        for port in &tex_inputs {
+            let src = graph.add_node(Box::new(Source::new()));
+            let port_leak: &'static str = leak_static_str(port.clone());
+            graph.connect((src, "out"), (prim_id, port_leak)).ok()?;
+            sources.push(src);
+        }
+        let out_leak: &'static str = leak_static_str(out_port);
+        graph.connect((prim_id, out_leak), (final_out, "in")).ok()?;
+
+        let plan = compile(&graph).ok()?;
+
+        // All-zero fixture = transparent black, premultiplied. Copy it into
+        // a private RT per source so the executor samples it through the
+        // same memory mode production graphs use.
+        let zeros = vec![f16::from_f32(0.0); (self.width * self.height * 4) as usize];
+        let transparent = self.upload_f16_rgba("alpha-probe-transparent", &zeros);
+
+        let mut backend =
+            MetalBackend::new(Arc::clone(&self.device), self.width, self.height, self.format);
+        let mut copy_enc = self.device.create_encoder("alpha-probe-copy-in");
+        let mut rts: Vec<RenderTarget> = Vec::with_capacity(sources.len());
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut copy_enc, &self.device);
+            for _ in &sources {
+                let rt = self.make_target("alpha-probe-source");
+                gpu.copy_texture_to_texture(&transparent, &rt.texture, self.width, self.height);
+                rts.push(rt);
+            }
+        }
+        copy_enc.commit_and_wait_completed();
+
+        let mut rts_iter = rts.into_iter();
+        for src in &sources {
+            let res = resource_for_output(&plan, *src, "out");
+            let rt = rts_iter.next()?;
+            backend.pre_bind_texture_2d(res, rt);
+        }
+        let prim_output_slot = Slot(backend.slot_count());
+
+        let frame_time = FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        };
+
+        let mut native_enc = self.device.create_encoder("alpha-probe-render");
+        let mut exec = Executor::new(Box::new(backend));
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &self.device);
+            exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let prim_tex = exec.backend().texture_2d(prim_output_slot)?;
+        Some(self.readback(prim_tex))
+    }
+
+    /// Read a texture's contents back to host memory as raw bytes.
+    /// Allocates a shared (CPU-visible) Metal buffer, issues a
+    /// texture→buffer copy, commits, waits, and snapshots the bytes.
+    pub fn readback(&self, texture: &GpuTexture) -> Vec<u8> {
+        let bytes_per_row = self.width * BYTES_PER_PIXEL;
+        let total_bytes = u64::from(self.height * bytes_per_row);
+        let buf = self.device.create_buffer_shared(total_bytes);
+
+        let mut enc = self.device.create_encoder("gpu-proof-readback");
+        enc.copy_texture_to_buffer(texture, &buf, self.width, self.height, bytes_per_row);
+        enc.commit_and_wait_completed();
+
+        let ptr = buf
+            .mapped_ptr()
+            .expect("shared readback buffer must expose mapped pointer");
+        let bytes: &[u8] = unsafe {
+            slice::from_raw_parts(ptr.cast::<c_void>().cast::<u8>(), total_bytes as usize)
+        };
+        bytes.to_vec()
+    }
+}
+
+impl Default for ParityHarness {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Look up the `ResourceId` of a node's named output port in an
+/// `ExecutionPlan`. Mirrors `output_resource` in
+/// `node_graph/primitives/compose.rs` — same signature, same
+/// fall-through panic message.
+fn resource_for_output(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
+    for step in plan.steps() {
+        if step.node == node {
+            for &(name, id) in &step.outputs {
+                if name == port {
+                    return id;
+                }
+            }
+        }
+    }
+    panic!("no output `{port}` on node {node:?} in plan");
+}
+
+/// Leak a `String` into a `&'static str` so it satisfies the
+/// `Graph::connect` API which requires static port-name slices. Only
+/// used in tests; the leak is bounded by the (small, finite) number of
+/// graphs built per process.
+fn leak_static_str(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+/// True for the texture port kinds the alpha-contract sweep treats as
+/// image data — plain `Texture2D` and typed-channel `Texture2DTyped`.
+pub fn port_is_texture(ty: &PortType) -> bool {
+    matches!(ty, PortType::Texture2D | PortType::Texture2DTyped(_))
+}
+
+/// Retry a closure once if it panics with the GPU-contention signature
+/// (`command buffer did not reach Completed`, the panic from
+/// `GpuEncoder::commit_and_wait_completed` when the device wedges or kills the
+/// buffer as `InnocentVictim`).
+///
+/// Two sessions sharing one Metal device make the gpu-proofs suite contend:
+/// another process hammers the device, a commit times out, and the commit
+/// panic is a liar — the frame itself was fine, the device was just busy
+/// (BUG-m0c9). Every observed failure of this class is a commit error, never a
+/// value assert, and each named victim passes in isolation on a quiet machine.
+/// This turns that transient into a single re-render of the same idempotent
+/// frame instead of a red run.
+///
+/// A REAL persistent wedge still fails the test: after the one retry the
+/// ORIGINAL panic is resumed, and the retry is announced on stderr with a
+/// greppable `RETRY` line so a swallowed hang never passes silently.
+///
+/// Wrap at the per-frame render+commit boundary (the idempotent unit), never
+/// the whole test — a retried whole test would re-run convergence loops and
+/// readbacks, measuring the retry itself.
+pub fn retry_on_gpu_commit_error<T>(mut f: impl FnMut() -> T) -> T {
+    const SIGNATURE: &str = "command buffer did not reach Completed";
+    let mut first_error: Option<Box<dyn std::any::Any + Send>> = None;
+    for attempt in 1..=2 {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut f));
+        let payload = match result {
+            Ok(value) => return value,
+            Err(payload) => payload,
+        };
+        let msg = panic_message(&payload);
+        if attempt == 1 && msg.contains(SIGNATURE) {
+            eprintln!(
+                "RETRY (BUG-m0c9): GPU commit error under contention — re-rendering the frame once. \
+                 Original panic: {msg}"
+            );
+            first_error = Some(payload);
+            continue;
+        }
+        // Not a commit error, or the retry failed too: a real wedge must fail
+        // the test exactly as it would have without the wrapper.
+        std::panic::resume_unwind(first_error.take().unwrap_or(payload));
+    }
+    unreachable!("the loop returns or resumes on every iteration")
+}
+
+/// How long a test waits on a runtime's background work (file decode, mesh
+/// publish, collider build, RT accel build) before calling it hung. It tells a
+/// hang from a loaded machine and is never a speed claim: under the full
+/// parallel binary a cold DamagedHelmet import took 44 s (BUG-ca67, RT proofs
+/// time out the GPU).
+pub const BACKGROUND_HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Paces a render loop that waits on a runtime's background work. A frame
+/// rendered while work is in flight is not settled: it must not count toward a
+/// frame budget or a stability window. The wait is bounded only by
+/// [`BACKGROUND_HANG_GUARD`], so load makes the test slower, not red.
+pub struct BackgroundWait {
+    label: String,
+    started: std::time::Instant,
+}
+
+impl BackgroundWait {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self { label: label.into(), started: std::time::Instant::now() }
+    }
+
+    /// Call once per rendered frame. True while `runtime` has background work
+    /// in flight, after yielding to its worker threads.
+    pub fn pending(&self, runtime: &crate::runtime::PresetRuntime) -> bool {
+        let pending = runtime.io_pending() || runtime.warmup_pending();
+        if pending {
+            self.hold();
+        }
+        pending
+    }
+
+    /// Yield to the worker threads once. For loops whose readiness test is
+    /// more than [`Self::pending`], such as a frame status.
+    pub fn hold(&self) {
+        assert!(
+            self.started.elapsed() < BACKGROUND_HANG_GUARD,
+            "{}: background work still pending after {:?}, treating it as hung",
+            self.label,
+            self.started.elapsed()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// Best-effort human-readable message for a panic payload. `panic!` produces
+/// either `&str` (no interpolation) or `String`; anything else is shown as its
+/// debug representation, which the signature check below will not match.
+///
+/// Takes `&Box<dyn Any + Send>`, not `&(dyn Any + Send)`: the inherent
+/// `downcast_ref` on `dyn Any` resolves correctly only when called on the
+/// boxed receiver (the canonical `catch_unwind` pattern) — on a bare
+/// `&(dyn Any + Send)` trait-object reference the type_id comparison silently
+/// fails even for a matching payload.
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        format!("{payload:?}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::retry_on_gpu_commit_error;
+
+    /// The exact message shape `GpuEncoder::verify_completed` panics with.
+    /// Panicked via `panic!("{msg}")` with a `String` local — the same form
+    /// the encoder uses — so the payload is a `String` like the real wedge's.
+    const SIG_PANIC: &str = "[GPU] commit_and_wait_completed: command buffer did not reach Completed (status=4, code=1): hang";
+
+    fn commit_error_panic() -> ! {
+        let msg = SIG_PANIC.to_string();
+        panic!("{msg}");
+    }
+
+    #[test]
+    fn retry_recovers_when_the_first_attempt_hits_the_commit_error_signature() {
+        let calls = AtomicUsize::new(0);
+        let value = retry_on_gpu_commit_error(|| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                commit_error_panic();
+            }
+            42
+        });
+        assert_eq!(value, 42, "the retried call must produce the closure's result");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "exactly one contended panic, then one retry"
+        );
+    }
+
+    #[test]
+    fn retry_resumes_the_original_panic_when_the_retry_also_fails() {
+        let calls = AtomicUsize::new(0);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            retry_on_gpu_commit_error(|| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                commit_error_panic();
+            })
+        }));
+        assert!(outcome.is_err(), "a persistent commit hang must still fail the test");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "two attempts, no more — the one retry is used up"
+        );
+    }
+
+    #[test]
+    fn retry_does_not_swallow_an_unrelated_panic() {
+        let calls = AtomicUsize::new(0);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            retry_on_gpu_commit_error(|| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                panic!("a real value assertion, not a GPU commit error");
+            })
+        }));
+        assert!(outcome.is_err(), "an unrelated panic must propagate immediately");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "no retry for non-commit errors");
+    }
+}

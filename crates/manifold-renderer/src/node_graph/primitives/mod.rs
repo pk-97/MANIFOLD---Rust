@@ -46,7 +46,7 @@ mod blob_detect_ffi;
 mod blob_overlay_render;
 mod block_displace_field;
 mod block_sample;
-mod bokeh_gather;
+pub(crate) mod bokeh_gather;
 pub use bokeh_gather::BokehGather;
 mod box_mask;
 mod blur_3d_separable;
@@ -188,7 +188,6 @@ mod magnitude_db;
 mod lut1d;
 mod matcap_two_tone;
 mod math;
-mod grid_to_matter;
 mod particles_to_copies;
 mod zero_array;
 mod unlit_material;
@@ -303,17 +302,8 @@ mod trigger_ease_to;
 mod trigger_gate;
 mod transform_3d;
 mod transform_components;
-pub(crate) mod blob_bounds;
 pub(crate) mod divide_by_value;
 // Standalone staged encoder; the step keeps its existing pressure path.
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod particle_publication_gpu_tests;
-#[cfg(test)]
-mod face_grid_extent_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod face_grid_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod face_grid_scene_tests;
 mod smooth_surface_mesh;
 mod surface_mesh_normals;
 #[cfg(test)]
@@ -500,7 +490,6 @@ pub use magnitude_db::MagnitudeDb;
 pub use lut1d::ColorLut;
 pub use math::{MATH_OPS, Math};
 pub use matcap_two_tone::MatcapTwoTone;
-pub use grid_to_matter::GridToMatter;
 pub use particles_to_copies::ParticlesToCopies;
 pub use zero_array::ZeroArray;
 pub use melt_mesh::MeltMesh;
@@ -930,19 +919,9 @@ use super::*;
     }
 }
 
-mod rigid_body;
-mod fluid_role_source;
 mod platonic_mesh;
 
 mod interpolate_particle_frames;
 mod mix_arrays;
 pub use interpolate_particle_frames::InterpolateParticleFrames;
 pub use mix_arrays::MixArrays;
-
-#[cfg(test)]
-mod particle_frame_blend_tests;
-
-
-
-
-

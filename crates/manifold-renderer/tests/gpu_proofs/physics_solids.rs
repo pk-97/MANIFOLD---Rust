@@ -15,7 +15,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 const PHYSICS_SOLIDS_JSON: &str = include_str!("../../assets/generator-presets/PhysicsSolids.json");
 const FRAME_COUNT: u32 = 120;
@@ -169,7 +168,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
         .as_ref()
         .expect("authored metadata")
         .clone();
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut runtime = PresetRuntime::from_def_with_device(
         attached,
         &registry,
@@ -211,7 +210,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
 
     // Warm the imported convex hull on the same runtime that will receive the
     // release. A fresh released runtime would bypass the baseline latch.
-    let wait = harness::BackgroundWait::new("collider warmup");
+    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("collider warmup");
     let mut frame = 0;
     loop {
         render_frame_with_params(
@@ -296,7 +295,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
     );
     std::fs::write(
         "/tmp/standard-box3d-shatter-released.png",
-        manifold_renderer::headless_readback::readback_to_srgb_png(
+        manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(
             &h.device,
             &target.texture,
             h.width,
@@ -324,7 +323,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
     );
     std::fs::write(
         "/tmp/standard-box3d-shatter-intact.png",
-        manifold_renderer::headless_readback::readback_to_srgb_png(
+        manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(
             &h.device,
             &target.texture,
             h.width,
@@ -341,7 +340,7 @@ fn imported_flower_empty_scene_clears_and_restores() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
     let (imported, _) = assemble_import_graph(&fixture).expect("original flower imports");
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut visible = manifold_renderer::generators::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
         .create_with_override(h.device.clone(), &imported.preset_metadata.as_ref().unwrap().id,
             Some(&imported), h.width, h.height, false, None, None)
@@ -453,7 +452,7 @@ fn imported_flower_submesh_controls_preserve_siblings_and_parent_visibility() {
     let set = |params: &mut ParamManifest, id: &str, value: f32| {
         let param = params.get_mut(id).unwrap(); param.base = value; param.value = value;
     };
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut runtime = manifold_renderer::generators::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
         .create_with_override(h.device.clone(), &metadata.id, Some(&imported), h.width, h.height, false, None, None).unwrap();
     let target = h.make_target("flower-submesh-controls");
@@ -476,7 +475,7 @@ fn imported_flower_submesh_controls_preserve_siblings_and_parent_visibility() {
     render_frame_with_params(&mut runtime, &target, 4, h.width, h.height, &h.device, &edited);
     assert!(mean_abs_diff(&original, &h.readback(&target.texture)) > 0.001, "local child transform changes the render");
     assert!(runtime.errors().is_empty(), "{:?}", runtime.errors());
-    std::fs::write("/tmp/flower-submesh-controls.png", manifold_renderer::headless_readback::readback_to_srgb_png(&h.device, &target.texture, h.width, h.height)).unwrap();
+    std::fs::write("/tmp/flower-submesh-controls.png", manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(&h.device, &target.texture, h.width, h.height)).unwrap();
 }
 
 #[test]
@@ -581,7 +580,7 @@ fn imported_flower_physics_off_renders_authored_transform() {
         "Physics OFF must disable the authored body through its bool parameter"
     );
 
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let runtime = manifold_renderer::generators::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
         .create_with_override(h.device.clone(), &enabled_graph.preset_metadata.as_ref().unwrap().id,
             Some(&enabled_graph), h.width, h.height, false, None, None)
@@ -593,7 +592,7 @@ fn imported_flower_physics_off_renders_authored_transform() {
     runtime.apply_inner_param_overrides(&def);
     render_frame(&mut runtime, &target, 0, h.width, h.height, &h.device);
     let after = h.readback(&target.texture);
-    std::fs::write("/tmp/flower-live-physics-off.png", manifold_renderer::headless_readback::readback_to_srgb_png(&h.device, &target.texture, h.width, h.height)).unwrap();
+    std::fs::write("/tmp/flower-live-physics-off.png", manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(&h.device, &target.texture, h.width, h.height)).unwrap();
     assert!(mean_abs_diff(&before, &after) < 0.002,
         "paused Physics OFF must preserve appearance: diff={}", mean_abs_diff(&before, &after));
     assert!(
@@ -613,8 +612,8 @@ fn warm_imported_runtime(
     target: &manifold_node_engine::gpu::render_target::RenderTarget,
     params: &ParamManifest,
 ) {
-    let h = harness::shared();
-    let wait = harness::BackgroundWait::new("import warmup");
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
+    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("import warmup");
     loop {
         render_frame_with_params(runtime, target, 0, h.width, h.height, &h.device, params);
         assert!(runtime.errors().is_empty(), "import errors: {:?}", runtime.errors());
@@ -715,7 +714,7 @@ fn mean_abs_diff(before: &[u8], after: &[u8]) -> f64 {
 
 #[test]
 fn physics_solids_renders_finite_nonempty_scene_and_moves() {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         PHYSICS_SOLIDS_JSON,
@@ -740,7 +739,7 @@ fn physics_solids_renders_finite_nonempty_scene_and_moves() {
     let initial = harness.readback(&target.texture);
     std::fs::write(
         "/tmp/physics_solids_initial.png",
-        manifold_renderer::headless_readback::readback_to_srgb_png(
+        manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(
             &harness.device,
             &target.texture,
             harness.width,
@@ -763,7 +762,7 @@ fn physics_solids_renders_finite_nonempty_scene_and_moves() {
 
     std::fs::write(
         "/tmp/physics_solids_settled.png",
-        manifold_renderer::headless_readback::readback_to_srgb_png(
+        manifold_node_engine::gpu::headless_readback::readback_to_srgb_png(
             &harness.device,
             &target.texture,
             harness.width,
@@ -791,7 +790,7 @@ fn physics_solids_renders_finite_nonempty_scene_and_moves() {
 
 #[test]
 fn physics_nonlinear_animated_graph_matches_irregular_frame_delivery() {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut def: serde_json::Value = serde_json::from_str(PHYSICS_SOLIDS_JSON).unwrap();
     for node in def["nodes"].as_array_mut().unwrap() {

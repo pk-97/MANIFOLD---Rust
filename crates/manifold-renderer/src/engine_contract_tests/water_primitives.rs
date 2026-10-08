@@ -2,6 +2,10 @@
 mod liquid_bricks;
 #[path = "whitewater_step.rs"]
 mod whitewater_step;
+#[path = "face_grid_extent_tests.rs"]
+mod face_grid_extent_tests;
+#[path = "fluid_role_source.rs"]
+mod fluid_role_source;
 
 #[cfg(feature = "gpu-proofs")]
 #[path = "gpu_flip_scene_tests.rs"]

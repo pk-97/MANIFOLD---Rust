@@ -18,7 +18,6 @@ use manifold_node_engine::exec::resource_allocation::plan_array_allocations;
 use manifold_node_engine::testkit::substep_nodes::{particle_step_dt, register_substep_test_nodes};
 use manifold_node_engine::{exec::backend::Backend, persistence::EffectGraphDefExt, exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
-use crate::harness;
 
 pub(crate) const N: usize = 1000;
 const ITERATIONS: u32 = 4;
@@ -105,7 +104,7 @@ struct Run {
 }
 
 fn run(mut graph: Graph) -> Run {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
     let plan = compile(&graph).expect("proof def compiles");
     assert_eq!(plan.substep_regions().len(), 1, "one substep region");
@@ -256,7 +255,7 @@ struct StorageRun {
 }
 
 fn run_with_storage(mut graph: Graph, frames: u32, storage: Storage) -> StorageRun {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
     let plan = compile(&graph).expect("proof def compiles");
     let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
@@ -404,7 +403,7 @@ fn post_frame_readers_never_see_reused_storage() {
     graph.add_external_output(node_of(&graph, "test.particle_source"), "out").expect("seed output");
     graph.add_external_output(node_of(&graph, "test.force_source"), "out").expect("force output");
     let plan = compile(&graph).expect("compiles");
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
     let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
     pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");

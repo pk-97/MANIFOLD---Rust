@@ -17,7 +17,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// A single tilted grid plane (wide FOV, close camera — R = reflect(-V,N)
 /// sweeps a large arc across the visible surface even though N is
@@ -77,7 +76,7 @@ fn ibl_scene_json(roughness: f32) -> String {
 /// convolution) is past; `commit_and_wait_completed` hard-checks for Metal
 /// GPU errors.
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -169,7 +168,7 @@ mod gating_gpu_tests {
     use super::*;
     use manifold_core::effect_graph_def::EffectGraphDef;
 
-    fn frame_ctx(frame_count: i64, h: &harness::ParityHarness) -> PresetContext {
+    fn frame_ctx(frame_count: i64, h: &manifold_node_engine::testkit::gpu_harness::ParityHarness) -> PresetContext {
         PresetContext {
             time: 0.1,
             beat: 0.2,
@@ -187,7 +186,7 @@ mod gating_gpu_tests {
         }
     }
 
-    fn render_one_frame(runtime: &mut PresetRuntime, h: &harness::ParityHarness, frame_count: i64) -> Vec<u8> {
+    fn render_one_frame(runtime: &mut PresetRuntime, h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, frame_count: i64) -> Vec<u8> {
         let target = h.make_target("render-scene-ibl-gate");
         let ctx = frame_ctx(frame_count, h);
         let mut enc = h.device.create_encoder("render-scene-ibl-gate-enc");
@@ -199,7 +198,7 @@ mod gating_gpu_tests {
         h.readback(&target.texture)
     }
 
-    fn build_runtime(json: &str, h: &harness::ParityHarness) -> PresetRuntime {
+    fn build_runtime(json: &str, h: &manifold_node_engine::testkit::gpu_harness::ParityHarness) -> PresetRuntime {
         let registry = PrimitiveRegistry::with_builtin();
         PresetRuntime::from_json_str_with_device(
             json,
@@ -218,7 +217,7 @@ mod gating_gpu_tests {
     /// scene — the re-convolution gate never drifts the steady-state image.
     #[test]
     fn static_envmap_frame30_matches_fresh_executor_frame1() {
-        let h = harness::shared();
+        let h = manifold_node_engine::testkit::gpu_harness::shared();
         let json = ibl_scene_json(0.4);
 
         let mut live = build_runtime(&json, h);
@@ -242,7 +241,7 @@ mod gating_gpu_tests {
     /// FRESH executor built with that changed param from the start.
     #[test]
     fn envmap_param_change_on_live_executor_matches_fresh_executor() {
-        let h = harness::shared();
+        let h = manifold_node_engine::testkit::gpu_harness::shared();
         let json_before = ibl_scene_json(0.4);
         let json_after = json_before.replace(
             r#"{"id":8,"typeId":"node.bake_environment","nodeId":"env","params":{
@@ -426,7 +425,7 @@ fn prefilter_and_irradiance_cost_is_measured_and_reported() {
     const FRAMES: u32 = 8;
 
     fn render_n_frames(json: &str, frames: u32) -> std::time::Duration {
-        let h = harness::shared();
+        let h = manifold_node_engine::testkit::gpu_harness::shared();
         let registry = PrimitiveRegistry::with_builtin();
         let mut runtime = PresetRuntime::from_json_str_with_device(
             json,
@@ -517,7 +516,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_4096x2048_is_measured_and_re
     const FRAMES: u32 = 8;
 
     fn render_n_frames(json: &str, frames: u32) -> std::time::Duration {
-        let h = harness::shared();
+        let h = manifold_node_engine::testkit::gpu_harness::shared();
         let registry = PrimitiveRegistry::with_builtin();
         let mut runtime = PresetRuntime::from_json_str_with_device(
             json,
@@ -603,7 +602,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_2048x1024_is_measured_and_re
     const FRAMES: u32 = 8;
 
     fn render_n_frames(json: &str, frames: u32) -> std::time::Duration {
-        let h = harness::shared();
+        let h = manifold_node_engine::testkit::gpu_harness::shared();
         let registry = PrimitiveRegistry::with_builtin();
         let mut runtime = PresetRuntime::from_json_str_with_device(
             json,

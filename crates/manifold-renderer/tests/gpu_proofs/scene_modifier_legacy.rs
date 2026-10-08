@@ -35,7 +35,7 @@ fn illuminate(def: &mut EffectGraphDef) {
 }
 
 fn render(def: EffectGraphDef, context: &PresetContext) -> Vec<u8> {
-    let device = crate::harness::shared().device.clone();
+    let device = manifold_node_engine::testkit::gpu_harness::shared().device.clone();
     let mut runtime = manifold_node_engine::runtime::PresetRuntime::from_def_with_device(
         def,
         &PrimitiveRegistry::with_builtin(),
@@ -70,7 +70,7 @@ fn render(def: EffectGraphDef, context: &PresetContext) -> Vec<u8> {
             runtime.errors()
         );
     }
-    manifold_renderer::headless_readback::readback_tonemapped_rgba8(
+    manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(
         &device,
         &target.texture,
         256,

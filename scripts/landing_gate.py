@@ -651,7 +651,19 @@ def _main(stack):
                 results.append(('FAIL', label, duration, tail))
                 print_result(label, 'FAIL', duration, tail)
                 unbuilt.add(package)
-        pending_tests = [leg for leg in pending_tests if leg[1][leg[1].index('-p') + 1] not in unbuilt]
+        # Inventory can widen a path-derived module with no tests. Replace both
+        # the command and its receipt key so the whole suite actually runs.
+        selections = cpu_plan.selections()
+        for index, (label, cmd, passed) in enumerate(test_legs):
+            package = cmd[cmd.index('-p') + 1]
+            if package not in unbuilt and cmd[cmd.index('-E') + 1] != selections[package]:
+                cmd = [*cmd]
+                cmd[cmd.index('-E') + 1] = selections[package]
+                test_legs[index] = (label, cmd, gate_passes.command_pass(repo, label, cmd))
+        for reason in sorted(cpu_plan.widening_reasons):
+            print(f"[tests] {reason}", flush=True)
+        pending_tests = [leg for leg in test_legs if not leg[2].record
+                         and leg[1][leg[1].index('-p') + 1] not in unbuilt]
     elif test_legs:
         skip(results, 'tests-build', 'all selected tests already passed; no artifacts needed')
     else:

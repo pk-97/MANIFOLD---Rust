@@ -22,18 +22,17 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use std::io::Write;
 
-use crate::harness;
 
 fn ctx(frame_count: i64) -> PresetContext {
     PresetContext {
         time: frame_count as f64 / 60.0,
         beat: 0.0,
         dt: 1.0 / 60.0,
-        width: harness::PARITY_WIDTH,
-        height: harness::PARITY_HEIGHT,
-        output_width: harness::PARITY_WIDTH,
-        output_height: harness::PARITY_HEIGHT,
-        aspect: harness::PARITY_WIDTH as f32 / harness::PARITY_HEIGHT as f32,
+        width: manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH,
+        height: manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT,
+        output_width: manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH,
+        output_height: manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT,
+        aspect: manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH as f32 / manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT as f32,
         owner_key: 0,
         is_clip_level: false,
         frame_count,
@@ -43,7 +42,7 @@ fn ctx(frame_count: i64) -> PresetContext {
 }
 
 fn build_variant(
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     strip_tail: bool,
 ) -> (PresetRuntime, manifold_core::params::ParamManifest) {
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -120,8 +119,8 @@ fn build_variant(
         flat,
         &registry,
         std::sync::Arc::clone(&h.device),
-        harness::PARITY_WIDTH,
-        harness::PARITY_HEIGHT,
+        manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH,
+        manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT,
         GpuTextureFormat::Rgba16Float,
         Some(&manifest),
     )
@@ -131,14 +130,14 @@ fn build_variant(
 
 /// Render one frame into a fresh target and read back the exact bytes.
 fn render_one(
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     runtime: &mut PresetRuntime,
     manifest: &manifold_core::params::ParamManifest,
     f: i64,
 ) -> Vec<u8> {
     let target = h.make_target("cinematic-tail-I1");
     let c = ctx(f);
-    harness::retry_on_gpu_commit_error(|| {
+    manifold_node_engine::testkit::gpu_harness::retry_on_gpu_commit_error(|| {
         let mut enc = h.device.create_encoder("cinematic-tail-I1-frame");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
@@ -154,7 +153,7 @@ fn render_one(
 /// (tail stripped) produce byte-identical `final` at the default lens.
 #[test]
 fn import_tail_is_byte_clean_passthrough_at_neutral_lens() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let (mut with_tail, manifest_tail) = build_variant(h, false);
     let (mut stripped, manifest_stripped) = build_variant(h, true);
 
@@ -164,7 +163,7 @@ fn import_tail_is_byte_clean_passthrough_at_neutral_lens() {
     // count; once both have settled, require visible output that holds
     // byte-stable across two pairs.
     const SETTLED_PAIR_BUDGET: u32 = 64;
-    let wait = harness::BackgroundWait::new("cinematic-tail-I1");
+    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("cinematic-tail-I1");
     let visible = |bytes: &[u8]| bytes.chunks_exact(8).any(|px| {
         half::f16::from_bits(u16::from_le_bytes([px[0], px[1]])).to_f32() > 0.03
     });
@@ -240,7 +239,7 @@ fn import_tail_frame_cost_reported_at_1080p() {
     const WARMUP: u64 = 12;
     const STEADY: u64 = 40;
 
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/apricot_tl05.glb");
     assert!(glb.exists(), "I4 fixture missing: {glb:?}");
@@ -294,7 +293,7 @@ fn import_tail_frame_cost_reported_at_4k() {
     const WARMUP: u64 = 12;
     const STEADY: u64 = 40;
 
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/apricot_tl05.glb");
     assert!(glb.exists(), "I4 fixture missing: {glb:?}");
@@ -333,7 +332,7 @@ fn import_tail_frame_cost_reported_at_4k() {
 /// Per-frame drain (empty commit) makes wall time the true GPU cost.
 #[allow(clippy::too_many_arguments)]
 fn measure_tail(
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     glb: &std::path::Path,
     strip_tail: bool,
     w: u32,
@@ -423,7 +422,7 @@ fn measure_tail(
                 anim_progress: 0.0,
                 trigger_count: 0,
             };
-            harness::retry_on_gpu_commit_error(|| {
+            manifold_node_engine::testkit::gpu_harness::retry_on_gpu_commit_error(|| {
                 let mut enc = h.device.create_encoder("cinematic-tail-I4-frame");
                 {
                     let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);

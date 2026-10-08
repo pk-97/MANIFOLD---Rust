@@ -150,7 +150,7 @@ const TRUNCATION_TOLERANCE: f64 = 0.03;
 const SHIPPING_TOLERANCE: f64 = 0.06;
 
 fn build_runtime(json: &str) -> (PresetRuntime, RenderTarget) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -167,7 +167,7 @@ fn build_runtime(json: &str) -> (PresetRuntime, RenderTarget) {
 }
 
 fn render_frame(runtime: &mut PresetRuntime, target: &RenderTarget, frame_count: i64) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let ctx = PresetContext {
         time: 0.1,
         beat: 0.2,
@@ -226,7 +226,7 @@ fn region_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) -> f
 /// Region-mean irradiance from the captured RT irradiance channel ("irr_full").
 /// Irradiance channel is RGBA16Float: RGB = env+GI gather, A unused.
 fn region_irradiance(channels: &[manifold_renderer::node_graph::primitives::RtCaptureSlot], cx: f32, cy: f32, radius: i32) -> f64 {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let irr_channel = channels.iter()
         .find(|c| c.label == "irr_full")
         .expect("RT irradiance channel 'irr_full' must be captured");
@@ -418,7 +418,7 @@ fn white_enclosure_returns_the_field_radiance_within_the_truncation_budget() {
     let json = white_enclosure_scene_json();
 
     // Leg 1: brute-force converged reference + RT channel capture.
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let (mut runtime, target) = build_runtime(&json);
     let mut ready_frame: Option<i64> = None;
     let mut ref_channels: Option<Vec<manifold_renderer::node_graph::primitives::RtCaptureSlot>> = None;

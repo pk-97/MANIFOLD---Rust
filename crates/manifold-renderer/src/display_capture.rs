@@ -133,9 +133,9 @@ impl<'a> LinearUiReadback<'a> {
             let alpha = sanitize_unit(a);
             match self.alpha {
                 AlphaInterpretation::Opaque => {
-                    out.push(crate::headless_readback::linear_to_srgb8(r));
-                    out.push(crate::headless_readback::linear_to_srgb8(g));
-                    out.push(crate::headless_readback::linear_to_srgb8(b));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(r));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(g));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(b));
                     out.push(u8::MAX);
                 }
                 AlphaInterpretation::Premultiplied => {
@@ -148,30 +148,30 @@ impl<'a> LinearUiReadback<'a> {
                         g = 0.0;
                         b = 0.0;
                     }
-                    out.push(crate::headless_readback::linear_to_srgb8(r));
-                    out.push(crate::headless_readback::linear_to_srgb8(g));
-                    out.push(crate::headless_readback::linear_to_srgb8(b));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(r));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(g));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(b));
                     out.push(linear_alpha_to_u8(alpha));
                 }
                 AlphaInterpretation::PremultipliedOverBlack => {
-                    out.push(crate::headless_readback::linear_to_srgb8(r));
-                    out.push(crate::headless_readback::linear_to_srgb8(g));
-                    out.push(crate::headless_readback::linear_to_srgb8(b));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(r));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(g));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(b));
                     out.push(u8::MAX);
                 }
                 AlphaInterpretation::StraightOverBlack => {
                     r *= alpha;
                     g *= alpha;
                     b *= alpha;
-                    out.push(crate::headless_readback::linear_to_srgb8(r));
-                    out.push(crate::headless_readback::linear_to_srgb8(g));
-                    out.push(crate::headless_readback::linear_to_srgb8(b));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(r));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(g));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(b));
                     out.push(u8::MAX);
                 }
                 AlphaInterpretation::Straight => {
-                    out.push(crate::headless_readback::linear_to_srgb8(r));
-                    out.push(crate::headless_readback::linear_to_srgb8(g));
-                    out.push(crate::headless_readback::linear_to_srgb8(b));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(r));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(g));
+                    out.push(manifold_node_engine::gpu::headless_readback::linear_to_srgb8(b));
                     out.push(linear_alpha_to_u8(alpha));
                 }
             }

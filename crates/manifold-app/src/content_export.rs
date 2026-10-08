@@ -1100,7 +1100,7 @@ impl ContentThread {
                 .content_pipeline
                 .native_device()
                 .expect("SDR colour proof requires the export Metal device");
-            sdr_mapped_rgba16f = Some(manifold_renderer::headless_readback::readback_raw_halves(
+            sdr_mapped_rgba16f = Some(manifold_node_engine::gpu::headless_readback::readback_raw_halves(
                 device,
                 texture,
                 texture.width,
@@ -1115,7 +1115,7 @@ impl ContentThread {
                 .content_pipeline
                 .native_device()
                 .expect("HDR colour proof requires the export Metal device");
-            hdr_scene_rgba16f = Some(manifold_renderer::headless_readback::readback_raw_halves(
+            hdr_scene_rgba16f = Some(manifold_node_engine::gpu::headless_readback::readback_raw_halves(
                 device,
                 texture,
                 texture.width,

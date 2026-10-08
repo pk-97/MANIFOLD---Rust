@@ -25,7 +25,6 @@ use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile};
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
-use crate::harness;
 
 /// The old thumbnail gradient fixture (R=u, G=v, B=(u+v)/2), reproduced
 /// here (test-only) rather than exporting a production helper just for this.
@@ -97,7 +96,7 @@ struct FilmGrainFrame {
 }
 
 fn render_film_grain_frame(w: u32, h: u32, frame_count: i64) -> FilmGrainFrame {
-    let h_ctx = harness::shared();
+    let h_ctx = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h_ctx.device;
     let format = GpuTextureFormat::Rgba16Float;
 

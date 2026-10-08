@@ -3,7 +3,8 @@
 
 Source files select their module (including nested tests), existing sibling
 *_tests modules and explicitly mapped integration binaries. Test files select
-their integration binary. No reverse-dependent or whole-crate fallback.
+their integration binary. Empty path-derived module selections widen to the
+package suite after compiled inventory validation; explicit mappings fail closed.
 """
 
 import re
@@ -40,10 +41,12 @@ class Plan:
     filters: set = field(default_factory=set)
     whole: set = field(default_factory=set)
     gpu_binaries: set = field(default_factory=set)
+    path_filters: dict = field(default_factory=dict)
+    widening_reasons: set = field(default_factory=set)
 
     @property
     def filterset(self):
-        return " | ".join(sorted(self.filters)) or "none()"
+        return " | ".join(sorted(self.selections().values())) or "none()"
 
     def args(self):
         return [a for p in sorted(self.packages) for a in ("-p", p)] + ["-E", self.filterset]
@@ -54,7 +57,8 @@ class Plan:
                 for package in sorted(self.packages)}
 
     def describe(self):
-        return "mode: scoped (changed modules + mapped integration binaries)\nfilterset: " + self.filterset
+        return "\n".join(["mode: scoped (changed modules + mapped integration binaries)",
+                          "filterset: " + self.filterset, *sorted(self.widening_reasons)])
 
 
 GPU_PROOF_TESTS = re.compile(r'#\[cfg\(all\(test,\s*feature\s*=\s*"gpu-proofs"\)\)\]')
@@ -78,6 +82,7 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
         if ownership:
             raise ValueError('; '.join(ownership))
     rows = integration_rows()
+    explicit_filters = set()
     for path in sorted(set(paths)):
         if path in rows:
             package, binaries = rows[path]
@@ -86,7 +91,9 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
         for prefix, suffix, package, modules, binaries in PREFIX_ROWS:
             if path.startswith(prefix) and path.endswith(suffix):
                 plan.packages.add(package)
-                plan.filters.update(f"(package(={package}) & test(/^{module}::/))" for module in modules)
+                expressions = {f"(package(={package}) & test(/^{module}::/))" for module in modules}
+                plan.filters.update(expressions)
+                explicit_filters.update(expressions)
                 plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
         package = workspace.owner(path)
         if package and path == workspace.roots[package] + '/Cargo.toml':
@@ -157,7 +164,9 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
                 modules.append(module_name(sibling.resolve(), root, aliases))
             for module in modules:
                 prefix = "::".join(module) + "::" if module else "tests::"
-                plan.filters.add(f"(package(={package}){binary_filter} & test(/^{prefix}/))")
+                expression = f"(package(={package}){binary_filter} & test(/^{prefix}/))"
+                plan.filters.add(expression)
+                plan.path_filters.setdefault(expression, set()).add(path)
         else:
             # A metadata target outside Cargo's conventional src/tests layout
             # changes the package; do not invent a path-derived module filter.
@@ -189,11 +198,13 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
             touched = sources.intersection(paths)
             if root + '/Cargo.toml' not in old or (sources and len(touched) * 2 >= len(sources)):
                 plan.whole.add(package)
+    plan.path_filters = {expression: sources for expression, sources in plan.path_filters.items()
+                         if expression in plan.filters and expression not in explicit_filters}
     return plan
 
 
 def validate_inventory(plan, package, listing):
-    """A nonempty union must not conceal an ownership mapping typo."""
+    """Widen empty source modules, but keep explicit ownership mappings fail-closed."""
     suites = list(listing['rust-suites'].values())
 
     def matches(expression):
@@ -209,9 +220,17 @@ def validate_inventory(plan, package, listing):
     if not selected:
         raise ValueError(f'{package}: default-feature inventory contains no tests')
     if package not in plan.whole:
+        missing_paths = set()
         for expression in sorted(plan.filters):
             if f'package(={package})' in expression and not matches(expression):
-                raise ValueError(f'{package}: ownership mapping resolves to no tests: {expression}')
+                if expression not in plan.path_filters:
+                    raise ValueError(f'{package}: ownership mapping resolves to no tests: {expression}')
+                missing_paths.update(plan.path_filters[expression])
+        if missing_paths:
+            plan.whole.add(package)
+            plan.widening_reasons.update(
+                f'{Path(path).name} has no tests of its own: running {package} whole'
+                for path in missing_paths)
     return selected
 
 

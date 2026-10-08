@@ -47,7 +47,6 @@ use manifold_node_engine::freeze::install::fused_generator_view_for;
 use manifold_node_engine::scene::mesh_change::PreparedMeshRules;
 use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
-use crate::harness;
 
 /// 3×3 grid in the XZ plane (y=0), smooth +Y normals, distinct UVs — the
 /// layout `render_scene`'s MeshVertex carries (pos 0, normal 4, uv0 8,
@@ -151,7 +150,7 @@ fn render_and_readback(
     frames: u64,
     tail_node_id: &str,
 ) -> Vec<[f32; VERTEX_WORDS]> {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let registry = PrimitiveRegistry::with_builtin();
 

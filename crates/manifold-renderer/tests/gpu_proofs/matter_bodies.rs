@@ -15,7 +15,6 @@ use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution:
 
 use manifold_node_engine::scene::transform::Transform;
 
-use crate::harness;
 use crate::matter_scene::{MatterScene, SceneSettings};
 use crate::matter_transfer::{HostArray, output_of, set};
 
@@ -52,7 +51,7 @@ impl Bench {
             graph.add_external_output(node, port).unwrap_or_else(|e| panic!("{port}: {e:?}"));
         }
         let plan = compile(&graph).expect("bench compiles");
-        let device = &harness::shared().device;
+        let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
         let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
         let hosts = host_nodes.iter().map(|&h| (h, output_of(&plan, h, "out"))).collect();
@@ -73,7 +72,7 @@ impl Bench {
     }
 
     pub(crate) fn run(&mut self) {
-        let device = &harness::shared().device;
+        let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
         let time = FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(TICK), frame_count: 0 };
         let mut enc = device.create_encoder("matter-bodies");
         {

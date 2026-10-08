@@ -13,7 +13,6 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use serde_json::{json, Value};
 
-use crate::harness;
 
 #[derive(Clone, Copy)]
 struct Fixture {
@@ -392,7 +391,7 @@ fn context(frame: i64, width: u32, height: u32) -> PresetContext {
 }
 
 fn render(json: &str, registry: &PrimitiveRegistry) -> Vec<u8> {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
         registry,

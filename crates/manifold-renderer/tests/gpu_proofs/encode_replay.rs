@@ -13,7 +13,6 @@ use manifold_node_engine::{exec::backend::Backend, persistence::EffectGraphDefEx
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 use crate::substeps::{
     N, copy_chains_def, def, forces, node_of, registry, resource, seed_particles,
 };
@@ -45,7 +44,7 @@ fn read_shared(buffer: &manifold_gpu::GpuBuffer, bytes: usize, out: &mut Vec<u8>
     let source = if buffer.mapped_ptr().is_some() {
         buffer
     } else {
-        let device = &harness::shared().device;
+        let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
         staging = device.create_buffer_shared(bytes as u64);
         let mut enc = device.create_encoder("encode-replay-readback");
         enc.copy_buffer_to_buffer(buffer, &staging, bytes as u64);
@@ -67,7 +66,7 @@ fn run_graph(
     frames: u32,
     change: impl Fn(u32, &mut Graph),
 ) -> Outcome {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
     let mut graph = def.into_graph(&registry(), &Default::default()).expect("proof def builds");
     let plan = compile(&graph).expect("proof def compiles");
@@ -316,7 +315,7 @@ fn run_preset(
     read: bool,
     change: impl Fn(u32, &mut ParamManifest),
 ) -> PresetOutcome {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let json = manifold_renderer::node_graph::bundled_preset_json(&manifold_core::PresetTypeId::new(id))
         .expect("bundled preset");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("preset parses");

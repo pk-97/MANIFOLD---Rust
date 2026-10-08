@@ -32,7 +32,7 @@ use manifold_gpu::{
 };
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 
-use crate::harness::shared;
+use manifold_node_engine::testkit::gpu_harness::shared;
 
 /// RT-T1-C (BUG-311): `accumulate_irradiance` now reprojects through
 /// `inv_view_proj`/`prev_view_proj` — IDENTITY for both makes the

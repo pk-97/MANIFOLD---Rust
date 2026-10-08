@@ -22,7 +22,6 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::{ChainBuildInputs, PresetRuntime};
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
-use crate::harness;
 
 const WIDTH: u32 = 16;
 const HEIGHT: u32 = 16;
@@ -223,7 +222,7 @@ fn assert_ready(runtime: &PresetRuntime, effect_id: &EffectId) -> FluidDomainSna
 
 #[test]
 fn effect_chain_fluid_takes_are_scoped_by_card_and_survive_round_trip() {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = Arc::clone(&harness.device);
     let registry = {
         let mut registry = PrimitiveRegistry::with_cpu_flip_reference();

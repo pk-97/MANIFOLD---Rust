@@ -90,7 +90,7 @@ fn caster_scene(
     )
 }
 
-fn context(frame: i64, h: &harness::ParityHarness) -> PresetContext {
+fn context(frame: i64, h: &manifold_node_engine::testkit::gpu_harness::ParityHarness) -> PresetContext {
     PresetContext {
         time: frame as f64 / 60.0,
         beat: frame as f64 / 30.0,
@@ -113,7 +113,7 @@ fn render_frame(
     target: &manifold_node_engine::gpu::render_target::RenderTarget,
     frame: i64,
 ) -> (Vec<u8>, usize, FrameRenderStatus) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut status = FrameRenderStatus::Complete;
     let captures = harness::capture_rt_channels(|| {
         let mut enc = h.device.create_encoder("rt-8caster-shadow");
@@ -133,7 +133,7 @@ fn render_frame(
 }
 
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32, usize) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -242,7 +242,7 @@ fn caster_contract_overflow_and_sparse_light_indices() {
 #[test]
 fn caster_contract_live_rt_and_shadow_toggles() {
     use manifold_core::NodeId;
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let json = caster_scene(0xff, (1u16 << 7) | (1u16 << 8), true, true);
     let mut runtime = PresetRuntime::from_json_str_with_device(
@@ -317,7 +317,7 @@ fn trace_ms_2vs6_caster_delta_reported_as_number() {
     let scene_6 = caster_scene(0x3f, 0x3f, true, true);
 
     fn measure_frames(json: &str, label: &str, runs: usize) -> Vec<f64> {
-        let h = harness::shared();
+        let h = manifold_node_engine::testkit::gpu_harness::shared();
         let registry = PrimitiveRegistry::with_builtin();
         let mut runtime = PresetRuntime::from_json_str_with_device(
             json,

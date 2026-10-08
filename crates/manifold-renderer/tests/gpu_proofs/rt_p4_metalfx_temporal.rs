@@ -23,7 +23,7 @@ use manifold_renderer::metalfx_temporal_upscaler::MetalFxTemporalUpscaler;
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_node_engine::exec::temporal_reset::TemporalResetDetector;
 
-use crate::harness::shared;
+use manifold_node_engine::testkit::gpu_harness::shared;
 
 const SRC_W: u32 = 64;
 const SRC_H: u32 = 64;

@@ -35,7 +35,6 @@ use manifold_renderer::preset_thumbnail::{THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, ren
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::json;
 
-use crate::harness;
 
 const PROBE_TYPE: &str = "test.liquid_probe";
 const SIZE: u32 = 64;
@@ -358,7 +357,7 @@ impl LiquidRun {
         clock: Option<Clocked>,
         project_fps: f64,
     ) -> Self {
-        let device = clock.as_ref().map_or_else(|| Arc::clone(&harness::shared().device), |clock| Arc::clone(&clock.device));
+        let device = clock.as_ref().map_or_else(|| Arc::clone(&manifold_node_engine::testkit::gpu_harness::shared().device), |clock| Arc::clone(&clock.device));
         let scope = PhysicsStepScope::for_settings(!live, manifold_physics::PhysicsSettings {
             sim_rate: manifold_physics::SimRate::try_from(project_fps as u32).expect("authored rate"),
         });
@@ -2477,7 +2476,7 @@ fn holds_liquid(nodes: &[EffectGraphNode]) -> bool {
 /// thumbnail is the same bytes with every core busy as with the machine idle.
 #[test]
 fn liquid_thumbnail_ignores_contention() {
-    let device = &harness::shared().device;
+    let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
     let mut changed = Vec::new();
     let mut rendered = 0;
     for id in bundled_preset_type_ids(PresetKind::Generator) {

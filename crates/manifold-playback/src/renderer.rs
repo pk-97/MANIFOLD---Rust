@@ -77,7 +77,7 @@ pub trait ClipRenderer: Any + Send {
     fn prewarm_layer(
         &mut self,
         _layer: &Layer,
-        _budget: manifold_core::WarmupBudget,
+        _run: manifold_core::WarmupRun,
     ) -> manifold_core::WarmupOutcome {
         manifold_core::WarmupOutcome::Quiescent
     }

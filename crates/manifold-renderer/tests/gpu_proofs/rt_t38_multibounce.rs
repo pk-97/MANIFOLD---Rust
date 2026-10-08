@@ -45,7 +45,6 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
-use crate::harness;
 
 /// Matches `tools/rt_prototype/compare/RtBleed.json`'s companion
 /// `graph_tool render` default output size — the program's captures and
@@ -85,7 +84,7 @@ fn readback_rgba16f(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::Gp
 }
 
 fn render_fixture(json: &str) -> Vec<u8> {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,

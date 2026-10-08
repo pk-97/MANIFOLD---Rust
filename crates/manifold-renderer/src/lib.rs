@@ -4,8 +4,6 @@ pub mod compositor;
 pub mod fsr1;
 pub mod generator_renderer;
 pub mod generators;
-pub mod gpu_readback;
-pub mod headless_readback;
 pub mod presentation;
 pub mod display_capture;
 pub mod layer_compositor;
@@ -27,8 +25,6 @@ inventory::submit!(preset_loader::PresetAssetsRoot {
 
 
 // Standalone CPU specification; deliberately absent from runtime builds.
-#[cfg(test)]
-mod live_sim_clock_reference;
 
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub mod reference_fixtures;

@@ -34,7 +34,7 @@ use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use crate::headless_readback::readback_tonemapped_rgba8;
+use manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::scene::viewport_camera::ViewportCamera;
 use crate::node_graph::viewport_overlay::{ViewportOverlayConfig, build_overlay_lines, composite_overlay_lines_rgba8, project_lines};

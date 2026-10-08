@@ -15,8 +15,8 @@ use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
-const W: u32 = harness::PARITY_WIDTH;
-const H: u32 = harness::PARITY_HEIGHT;
+const W: u32 = manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH;
+const H: u32 = manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT;
 
 fn ctx(frame_count: i64) -> PresetContext {
     PresetContext {
@@ -38,7 +38,7 @@ fn ctx(frame_count: i64) -> PresetContext {
 
 fn frame(
     runtime: &mut PresetRuntime,
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     target: &manifold_gpu::GpuTexture,
     f: i64,
     manifest: &manifold_core::params::ParamManifest,
@@ -66,7 +66,7 @@ fn magenta_fraction(px: &[f32]) -> f32 {
 
 #[test]
 fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/hostile/mixamo_like.glb");
     assert!(glb.exists(), "fixture missing: {glb:?}");
@@ -92,7 +92,7 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
         Some(&manifest),
     )
     .expect("imported def must build a runtime");
-    harness::assert_no_shadowed_def_params(&runtime, "bug318 mixamo import");
+    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(&runtime, "bug318 mixamo import");
 
     let target = h.make_target("bug318-import");
     for f in 0..4 {
@@ -158,7 +158,7 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
 
 #[test]
 fn live_temporal_upscale_off_from_reduced_import_scene_stays_finite() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/hostile/mixamo_like.glb");
     let (def, report) = assemble_import_graph(&glb).expect("import must succeed");
@@ -184,7 +184,7 @@ fn live_temporal_upscale_off_from_reduced_import_scene_stays_finite() {
         Some(&manifest),
     )
     .expect("imported def must build a runtime");
-    harness::assert_no_shadowed_def_params(&runtime, "bug318 reduced import");
+    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(&runtime, "bug318 reduced import");
     let target = h.make_target("bug318-reduced-off");
     let scene_node = runtime
         .graph
@@ -254,7 +254,7 @@ fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
         eprintln!("[bug319] held-out fixture absent, skipping: {glb:?}");
         return;
     }
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let (def, report) = assemble_import_graph(&glb).expect("apricot import must succeed");
     eprintln!("[bug319] import report: {report:?}");
 
@@ -269,7 +269,7 @@ fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
         None,
     )
     .expect("apricot def must build a runtime");
-    harness::assert_no_shadowed_def_params(&runtime, "bug319 apricot import");
+    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(&runtime, "bug319 apricot import");
 
     // This case toggles RT on the LIVE graph rather than at build, which does
     // survive: the skip-on-unchanged cache only writes a binding when the card
