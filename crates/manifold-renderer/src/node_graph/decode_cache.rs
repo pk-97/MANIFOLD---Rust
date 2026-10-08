@@ -917,7 +917,6 @@ fn read_hash(cursor: &mut &[u8]) -> Option<[u8; 32]> {
 }
 
 #[cfg(test)]
-#[path = "decode_cache_dependency_tests.rs"]
 mod dependency_tests;
 
 #[cfg(test)]

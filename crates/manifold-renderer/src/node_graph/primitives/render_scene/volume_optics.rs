@@ -5,7 +5,7 @@ use manifold_gpu::*;
 
 use super::{ObjectDraw, mat4_inverse};
 
-const SHADER: &str = include_str!("shaders/volume_optics.wgsl");
+const SHADER: &str = include_str!("../shaders/volume_optics.wgsl");
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -214,5 +214,4 @@ fn bindings<'a>(
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "volume_optics_tests.rs"]
 mod tests;

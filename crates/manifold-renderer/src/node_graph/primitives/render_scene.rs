@@ -67,9 +67,7 @@
 //! scene.
 
 mod rt_changes;
-#[path = "volume_optics.rs"]
 mod volume_optics;
-#[path = "live_draw_args.rs"]
 mod live_draw_args;
 #[cfg(feature = "gpu-proofs")]
 pub mod rt_proof;
@@ -9643,11 +9641,11 @@ inventory::submit! {
 #[cfg(test)]
 mod tests;
 
-/// BUG-037 — GPU-backed proof `prewarm_pipelines` actually populates the
-/// device's shared render-pipeline cache, so a later `pipeline_for` call (on
-/// any layer, any project) is a cache hit instead of a lazy first-draw
-/// compile. Run deliberately: `cargo test -p manifold-renderer --features
-/// gpu-proofs node_graph::primitives::render_scene::gpu_tests`.
+#[doc = "BUG-037 — GPU-backed proof `prewarm_pipelines` actually populates the"]
+#[doc = "device's shared render-pipeline cache, so a later `pipeline_for` call (on"]
+#[doc = "any layer, any project) is a cache hit instead of a lazy first-draw"]
+#[doc = "compile. Run deliberately: `cargo test -p manifold-renderer --features"]
+#[doc = "gpu-proofs node_graph::primitives::render_scene::gpu_tests`."]
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
 mod subsurface;

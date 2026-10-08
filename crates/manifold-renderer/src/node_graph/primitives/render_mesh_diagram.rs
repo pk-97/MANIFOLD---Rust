@@ -780,11 +780,9 @@ mod tests {
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "render_mesh_diagram/gpu_tests.rs"]
 mod gpu_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "render_mesh_diagram_depth_tests.rs"]
 mod depth_tests;
 
 #[cfg(test)]

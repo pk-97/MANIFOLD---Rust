@@ -403,6 +403,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod dependency_tests {
-    include!("gltf_anim_cache_tests.rs");
-}
+mod dependency_tests;

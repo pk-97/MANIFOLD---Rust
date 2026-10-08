@@ -242,5 +242,4 @@ impl Primitive for AnalyticEchoInstances {
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "analytic_echo_instances_gpu_tests.rs"]
 mod gpu_tests;

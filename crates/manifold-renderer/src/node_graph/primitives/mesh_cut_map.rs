@@ -21,7 +21,6 @@ const VEC4_VERTEX_SIZE: u64 = std::mem::size_of::<Vec4Vertex>() as u64;
 const SHADER: &str = include_str!("shaders/mesh_cut_map.wgsl");
 
 #[cfg(test)]
-#[path = "../mesh_cut.rs"]
 mod oracle;
 
 #[repr(C)]

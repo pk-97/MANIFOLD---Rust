@@ -13,7 +13,7 @@ use super::upgrade_project_materials;
 
 fn physics_boxes() -> EffectGraphDef {
     serde_json::from_str(include_str!(
-        "../../../../assets/generator-presets/PhysicsBoxes.json"
+        "../../../../../assets/generator-presets/PhysicsBoxes.json"
     ))
     .expect("PhysicsBoxes preset fixture")
 }

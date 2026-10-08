@@ -16,7 +16,6 @@ use super::{
 };
 
 #[cfg(test)]
-#[path = "project_tests.rs"]
 mod project_tests;
 
 /// Summary returned to the project loader.  Notices are user-facing but

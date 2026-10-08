@@ -47,17 +47,17 @@ impl LiveDrawArgs {
     pub(super) fn prepare(&mut self, device: &GpuDevice, objects: usize) -> GpuBuffer {
         if self.pipeline.is_none() {
             self.pipeline = Some(device.create_compute_pipeline(
-                include_str!("shaders/live_draw_args.wgsl"),
+                include_str!("../shaders/live_draw_args.wgsl"),
                 "write_draw_args",
                 "node.render_scene live draw args",
             ));
             self.fixed = Some(device.create_compute_pipeline(
-                include_str!("shaders/live_instances.wgsl"),
+                include_str!("../shaders/live_instances.wgsl"),
                 "fixed_args",
                 "node.render_scene fixed draw args",
             ));
             self.trim = Some(device.create_compute_pipeline(
-                include_str!("shaders/live_instances.wgsl"),
+                include_str!("../shaders/live_instances.wgsl"),
                 "trim_instances",
                 "node.render_scene live instances",
             ));
