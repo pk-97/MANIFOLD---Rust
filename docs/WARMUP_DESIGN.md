@@ -141,8 +141,20 @@ exactly like today. Warmup must never make a project unopenable.
 The per-layer wall clock (10 s by default) is authoritative; the 600-frame cap
 is a spin guard. Pending pumps wait out the project frame interval, or the
 wall-budget/guard interval when that is longer, minus time already spent pumping.
-The wait never exceeds the remaining wall budget. Quiescent pumps return immediately;
-pacing does not change the readiness predicate (BUG-7qz2l).
+`WarmupPass` owns one absolute 60 s pass deadline and a ledger of absolute
+10 s layer deadlines. Accounting starts before construction. `WarmupRun` carries
+the original deadlines through renderer pumps, chains, topology revisits and fusion
+drains; nested calls never renew either allowance. Master chains share a separate
+layer-sized deadline. Topology and group fusion drains run under the owning layer's
+deadline, including retries. Every wait is clipped to both remaining deadlines.
+Synchronous GPU work and scheduler overshoot remain soft-cap exceptions.
+
+Only `warmup_pending() == true` permits pacing. A non-presentable frame with
+nothing pending returns `PreparationFailed` immediately; `InstallFailed` remains
+construction failure and `GpuFailed` remains an execution fault. Successful
+`Quiescent` still requires an installed runtime, no pending work and a presentable
+frame (BUG-7qz2l). Deterministic clock tests cover nested deadline sharing,
+construction accounting, terminal failures and 24/30/60/120 fps pacing.
 
 **D7 — Clips added during editing warm at add-time, transport-gated.** Adding a
 generator to a layer while the transport is stopped warms that layer immediately
@@ -176,8 +188,15 @@ content hash) in P3. Not in P1: correctness of the pre-roll must not depend on a
 // manifold-core — both types cross crate lines: ContentState is manifold-app,
 // ClipRenderer is manifold-playback, and playback depends only on core.
 pub struct WarmupProgress { pub done: u32, pub total: u32, pub label: String }
-pub struct WarmupBudget { pub per_layer_frames: u32, pub total: std::time::Duration }
-pub enum WarmupOutcome { Quiescent, BudgetExhausted }
+// WarmupBudget holds limits and the project frame interval; WarmupPass starts
+// absolute deadlines once, and WarmupRun carries them into nested work.
+pub enum WarmupOutcome {
+    Quiescent,
+    BudgetExhausted { cap: WarmupCap, elapsed: std::time::Duration },
+    InstallFailed,
+    PreparationFailed,
+    GpuFailed,
+}
 ```
 
 `ContentState` gains `pub warmup: Option<WarmupProgress>` — `None` when no load is
@@ -292,9 +311,10 @@ driven by `ContentState.warmup`. The window is otherwise the normal load state
   D9's counter + headless test `warmup_gate_zero_cold_touches_during_playback`
   (load fixture project, warm, play 60 frames across scenes, assert zero) + loud log
   in app builds. Lands in P1 as the counter, P4 as the CI gate.
-- **INV2 — Warmup never blocks open past budget.** *Enforcement:* per-layer and total
-  budget constants; unit test with an artificially never-quiescent stub node asserts
-  the pass terminates and logs.
+- **INV2 — Warmup obeys shared pass/layer deadlines.** *Enforcement:* absolute
+  deadlines checked before construction and pumping, with every wait clipped to
+  both. Deterministic tests cover never-quiescent and nested work; synchronous GPU
+  work and scheduler overshoot are the soft-cap exceptions described in D6.
 - **INV3 — First launch does no construction.** After warmup, `acquire_clip` must not
   rebuild. *Enforcement:* test asserts `layer_generators` hit for every generator
   layer post-warmup (the `needs_create` inputs compared against the layer's current

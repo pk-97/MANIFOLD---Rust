@@ -9,12 +9,13 @@ use crate::tonemap::TonemapPipeline;
 use manifold_node_engine::gpu::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::effects::{EffectContainer, EffectGroup, PresetInstance};
-use manifold_core::{BlendMode, EffectId, LayerId, NodeId, PresetTypeId, WarmupBudget, WarmupCap, WarmupOutcome};
+use manifold_core::{BlendMode, EffectId, LayerId, NodeId, PresetTypeId, WarmupCap, WarmupOutcome, WarmupPass, WarmupRun};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::time::Instant;
 
 /// Descriptor for a single clip to composite.
 pub struct CompositeClipDescriptor<'a> {
@@ -922,11 +923,11 @@ impl LayerCompositor {
     pub fn prewarm_layer_chains(
         &mut self,
         layer: &manifold_core::layer::Layer,
-        budget: WarmupBudget,
+        pass: &mut WarmupPass,
         device: &GpuDevice,
     ) -> WarmupOutcome {
         let output_dims = (self.main.width(), self.main.height());
-        self.prewarm_layer_chains_with_output(layer, budget, device, output_dims)
+        self.prewarm_layer_chains_with_output(layer, pass, device, output_dims)
     }
 
     /// Warm up the per-layer post-fx chain for `layer`, using the supplied
@@ -936,13 +937,18 @@ impl LayerCompositor {
     pub fn prewarm_layer_chains_with_output(
         &mut self,
         layer: &manifold_core::layer::Layer,
-        budget: WarmupBudget,
+        pass: &mut WarmupPass,
         device: &GpuDevice,
         output_dims: (u32, u32),
     ) -> WarmupOutcome {
         let effects = layer.effects();
         if !has_enabled_effects(effects) {
             return WarmupOutcome::Quiescent;
+        }
+
+        let run = pass.layer(&layer.layer_id, Instant::now());
+        if let Some(outcome) = run.exhausted(Instant::now(), 0) {
+            return outcome;
         }
 
         // Pre-insert the chain slot and mark it used so the first render's
@@ -966,18 +972,18 @@ impl LayerCompositor {
         );
 
         const DT: f64 = 1.0 / 60.0;
-        let layer_start = std::time::Instant::now();
         let mut outcome = WarmupOutcome::BudgetExhausted {
             cap: manifold_core::WarmupCap::PerLayerFrames,
             elapsed: std::time::Duration::ZERO,
         };
         let group_id = layer.layer_id.clone();
         let mut warmup_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus;
-        for frame in 0..budget.per_layer_frames {
+        for frame in 0..run.budget.per_layer_frames {
             // Wall-clock is the primary per-layer cap; the frame cap is only
             // a safety bound for runaway spin loops.
             let pump_start = std::time::Instant::now();
-            if let Some(exhausted) = budget.exhausted(layer_start.elapsed(), frame) {
+            let now = Instant::now();
+            if let Some(exhausted) = run.exhausted(now, frame) {
                 outcome = exhausted;
                 break;
             }
@@ -1036,26 +1042,27 @@ impl LayerCompositor {
             }
             self.uniform_arena.flush(device);
 
-            if let Some(chain) = self.effect_chains.get(&group_id)
-                && let Some(cg) = chain.as_ref()
-                && !cg.warmup_pending()
-                && warmup_frame_status.presentable()
-            {
-                outcome = WarmupOutcome::Quiescent;
+            let pending = self
+                .effect_chains
+                .get(&group_id)
+                .and_then(|chain| chain.as_ref())
+                .is_some_and(|cg| cg.warmup_pending());
+            let installed = self
+                .effect_chains
+                .get(&group_id)
+                .is_some_and(|chain| chain.is_some());
+            if let Some(next) = run.pending_outcome(
+                pending,
+                warmup_frame_status.presentable(),
+                installed,
+            ) {
+                outcome = next;
                 break;
             }
 
-            // Paced wait: if async work is still in flight, yield so the
-            // background threads can land without burning a whole frame budget
-            // on spin-rendered no-ops.
-            if !warmup_frame_status.presentable()
-                || self
-                    .effect_chains
-                    .get(&group_id)
-                    .and_then(|chain| chain.as_ref())
-                    .is_some_and(|cg| cg.warmup_pending())
-            {
-                let delay = budget.pending_pump_delay(layer_start.elapsed(), pump_start.elapsed());
+            if pending {
+                let now = Instant::now();
+                let delay = run.pending_pump_delay(now, pump_start.elapsed());
                 if !delay.is_zero() {
                     std::thread::sleep(delay);
                 }
@@ -1067,7 +1074,9 @@ impl LayerCompositor {
         // A warmed chain's output target is owned by the cached PresetRuntime;
         // the scratch is only an input stand-in.
         if matches!(outcome, WarmupOutcome::BudgetExhausted { .. }) {
-            outcome = budget.exhausted(layer_start.elapsed(), budget.per_layer_frames).unwrap();
+            outcome = run
+                .exhausted(Instant::now(), run.budget.per_layer_frames)
+                .unwrap();
         }
         outcome
     }
@@ -1086,9 +1095,14 @@ impl LayerCompositor {
     pub fn prewarm_clip_chain_topologies(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: WarmupBudget,
+        pass: &mut WarmupPass,
         device: &GpuDevice,
     ) -> WarmupOutcome {
+        let pass_run = pass.run();
+        if let Some(outcome) = pass_run.exhausted(Instant::now(), 0) {
+            pass.record_outcome(outcome);
+            return outcome;
+        }
         let width = self.main.width();
         let height = self.main.height();
         let topologies = unique_clip_chain_topologies(&project.timeline.layers, width, height);
@@ -1096,38 +1110,56 @@ impl LayerCompositor {
             return WarmupOutcome::Quiescent;
         }
 
-        let mut scratch = RenderTarget::new(
-            device,
-            width,
-            height,
-            GpuTextureFormat::Rgba16Float,
-            "warmup clip-topology scratch",
-        );
+        let mut scratch: Option<RenderTarget> = None;
         // One scratch slot for every topology: `dispatch_chain` hands the
         // outgoing runtime to the next build as the state-harvest donor, so
         // reuse here matches production's rebuild handoff.
         let mut slot: Option<PresetRuntime> = None;
-        let walk_start = std::time::Instant::now();
         let mut any_failure: Option<WarmupOutcome> = None;
         let mut covered = 0usize;
 
         for t in &topologies {
-            // D6: the total budget bounds the whole walk. Exhaustion is a
-            // loud stop naming how far it got — never a silent truncation.
-            if walk_start.elapsed() >= budget.total {
-                log::warn!(
-                    "[LayerCompositor] Clip-topology warmup total budget exhausted after \
-                     {covered}/{} unique topologies ({:.1?}); later clips' chains may \
-                     first-touch once at play",
-                    topologies.len(),
-                    walk_start.elapsed(),
-                );
-                any_failure = Some(WarmupOutcome::BudgetExhausted {
-                    cap: WarmupCap::TotalWallClock,
-                    elapsed: walk_start.elapsed(),
-                });
-                break;
+            let run = pass.layer(&t.layer_id, Instant::now());
+            if let Some(outcome) = run.exhausted(Instant::now(), 0) {
+                pass.record_outcome(outcome);
+                match outcome {
+                    WarmupOutcome::BudgetExhausted {
+                        cap: WarmupCap::TotalWallClock,
+                        ..
+                    } => {
+                        log::warn!(
+                            "[LayerCompositor] Clip-topology warmup total budget exhausted \
+                             after {covered}/{} unique topologies; later clips' chains may \
+                             first-touch once at play",
+                            topologies.len(),
+                        );
+                        any_failure = Some(outcome);
+                        break;
+                    }
+                    _ => {
+                        log::warn!(
+                            "[LayerCompositor] Clip-topology warmup layer '{}' budget \
+                             exhausted; continuing with later topologies",
+                            t.layer_id.as_str(),
+                        );
+                        any_failure = Some(outcome);
+                        continue;
+                    }
+                }
             }
+
+            if scratch.is_none() {
+                scratch = Some(RenderTarget::new(
+                    device,
+                    width,
+                    height,
+                    GpuTextureFormat::Rgba16Float,
+                    "warmup clip-topology scratch",
+                ));
+            }
+            let scratch_target = scratch
+                .as_ref()
+                .expect("clip-topology scratch initialized after layer deadline check");
 
             // The layer's resident chain (warmed above with the first
             // clip's topology) already covers this topology when the
@@ -1162,18 +1194,44 @@ impl LayerCompositor {
                 trigger_count: 0,
             };
             let scope = fx_scope(&t.layer_id);
-            let outcome = Self::pump_chain_warmup(
-                &mut self.uniform_arena,
-                &mut slot,
-                device,
-                &scratch.texture,
-                &t.effects,
-                &t.groups,
-                &ctx,
-                &scope,
-                budget,
-                &self.layer_skin_registry,
-            );
+            let mut outcome = WarmupOutcome::Quiescent;
+            for attempt in 0..3 {
+                let run = pass.layer(&t.layer_id, Instant::now());
+                if let Some(exhausted) = run.exhausted(Instant::now(), 0) {
+                    outcome = exhausted;
+                    break;
+                }
+                outcome = Self::pump_chain_warmup(
+                    &mut self.uniform_arena,
+                    &mut slot,
+                    device,
+                    &scratch_target.texture,
+                    &t.effects,
+                    &t.groups,
+                    &ctx,
+                    &scope,
+                    run,
+                    &self.layer_skin_registry,
+                );
+                if outcome != WarmupOutcome::Quiescent {
+                    break;
+                }
+                let had_pending =
+                    manifold_node_engine::runtime::prewarm_worker_pending_count() > 0;
+                if !had_pending {
+                    break;
+                }
+                if let Some(exhausted) = Self::drain_fusion_warmup(
+                    pass.layer(&t.layer_id, Instant::now()),
+                ) {
+                    outcome = exhausted;
+                    break;
+                }
+                if attempt == 2 {
+                    break;
+                }
+            }
+            pass.record_outcome(outcome);
             match outcome {
                 WarmupOutcome::GpuFailed => return WarmupOutcome::GpuFailed,
                 WarmupOutcome::Quiescent => {}
@@ -1194,22 +1252,51 @@ impl LayerCompositor {
                     );
                     any_failure = Some(outcome);
                 }
+                WarmupOutcome::PreparationFailed => {
+                    log::error!(
+                        "[LayerCompositor] Clip-topology warmup preparation failed on a \
+                         topology of layer '{}'; that topology will be cold on stage",
+                        t.layer_id.as_str(),
+                    );
+                    any_failure = Some(outcome);
+                }
             }
             covered += 1;
         }
 
         if topologies.len() > 1 {
             log::info!(
-                "[LayerCompositor] Clip-topology warmup covered {covered}/{} unique \
-                 topologies in {:.1?}",
+                "[LayerCompositor] Clip-topology warmup covered {covered}/{} unique topologies",
                 topologies.len(),
-                walk_start.elapsed(),
             );
         }
 
         // Recycle the scratch target at the current canvas size.
-        scratch.resize(device, width, height);
+        if let Some(scratch) = scratch.as_mut() {
+            scratch.resize(device, width, height);
+        }
         any_failure.unwrap_or(WarmupOutcome::Quiescent)
+    }
+
+    /// Drain fusion results while the owning warmup run is still live. A
+    /// topology's fused view is global, but its wait must consume the same
+    /// per-layer deadline as the topology that queued it.
+    fn drain_fusion_warmup(run: WarmupRun) -> Option<WarmupOutcome> {
+        while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
+            let now = Instant::now();
+            if let Some(outcome) = run.exhausted(now, 0) {
+                return Some(outcome);
+            }
+            manifold_node_engine::freeze::install::pump_segment_results();
+            if manifold_node_engine::runtime::prewarm_worker_pending_count() == 0 {
+                break;
+            }
+            let delay = run.clamp_wait(Instant::now(), std::time::Duration::from_millis(2));
+            if !delay.is_zero() {
+                std::thread::sleep(delay);
+            }
+        }
+        None
     }
 
     /// Pump a single effect-chain slot against a cleared stand-in input until
@@ -1223,19 +1310,18 @@ impl LayerCompositor {
         groups: &[EffectGroup],
         ctx: &PresetContext,
         scope: &str,
-        budget: WarmupBudget,
+        run: WarmupRun,
         layer_sources: &manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
     ) -> WarmupOutcome {
-        let start = std::time::Instant::now();
         let mut outcome = WarmupOutcome::BudgetExhausted {
             cap: WarmupCap::PerLayerFrames,
             elapsed: std::time::Duration::ZERO,
         };
         let mut warmup_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 
-        for frame in 0..budget.per_layer_frames {
+        for frame in 0..run.budget.per_layer_frames {
             let pump_start = std::time::Instant::now();
-            if let Some(exhausted) = budget.exhausted(start.elapsed(), frame) {
+            if let Some(exhausted) = run.exhausted(Instant::now(), frame) {
                 outcome = exhausted;
                 break;
             }
@@ -1270,18 +1356,20 @@ impl LayerCompositor {
             }
             uniform_arena.flush(device);
 
-            if let Some(cg) = chain.as_ref()
-                && !cg.warmup_pending()
-                && warmup_frame_status.presentable()
-            {
-                outcome = WarmupOutcome::Quiescent;
+            let pending = chain.as_ref().is_some_and(|cg| cg.warmup_pending());
+            let installed = chain.is_some();
+            if let Some(next) = run.pending_outcome(
+                pending,
+                warmup_frame_status.presentable(),
+                installed,
+            ) {
+                outcome = next;
                 break;
             }
 
-            if !warmup_frame_status.presentable()
-                || chain.as_ref().is_some_and(|cg| cg.warmup_pending())
-            {
-                let delay = budget.pending_pump_delay(start.elapsed(), pump_start.elapsed());
+            if pending {
+                let now = Instant::now();
+                let delay = run.pending_pump_delay(now, pump_start.elapsed());
                 if !delay.is_zero() {
                     std::thread::sleep(delay);
                 }
@@ -1289,7 +1377,9 @@ impl LayerCompositor {
         }
 
         if matches!(outcome, WarmupOutcome::BudgetExhausted { .. }) {
-            outcome = budget.exhausted(start.elapsed(), budget.per_layer_frames).unwrap();
+            outcome = run
+                .exhausted(Instant::now(), run.budget.per_layer_frames)
+                .unwrap();
         }
         outcome
     }
@@ -1300,7 +1390,7 @@ impl LayerCompositor {
     pub fn prewarm_master_chain(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: WarmupBudget,
+        pass: &mut WarmupPass,
         device: &GpuDevice,
         pool: Option<&manifold_gpu::TexturePool>,
         led_grid_size: (u32, u32),
@@ -1308,6 +1398,10 @@ impl LayerCompositor {
         let effects = &project.settings.master_effects;
         if !has_enabled_effects(effects) {
             return WarmupOutcome::Quiescent;
+        }
+        let run = pass.master(Instant::now());
+        if let Some(outcome) = run.exhausted(Instant::now(), 0) {
+            return outcome;
         }
         let groups = project.settings.master_effect_groups.as_deref().unwrap_or(&[]);
 
@@ -1348,9 +1442,14 @@ impl LayerCompositor {
             groups,
             &ctx,
             "master",
-            budget,
+            run,
             &self.layer_skin_registry,
         );
+
+        if outcome != WarmupOutcome::Quiescent {
+            scratch.resize(device, width, height);
+            return outcome;
+        }
 
         let has_led_layers = project.timeline.layers.iter().any(|l| l.routes_to_led());
         if !has_led_layers {
@@ -1358,6 +1457,11 @@ impl LayerCompositor {
             return outcome;
         }
 
+        let led_run = pass.master(Instant::now());
+        if let Some(outcome) = led_run.exhausted(Instant::now(), 0) {
+            scratch.resize(device, width, height);
+            return outcome;
+        }
         let (led_w, led_h) = (led_grid_size.0.max(1), led_grid_size.1.max(1));
         if self.led_main.as_ref().is_none_or(|l| l.width() != led_w || l.height() != led_h) {
             self.led_main = Some(PingPong::new(device, pool, led_w, led_h, "LED Composite"));
@@ -1396,16 +1500,12 @@ impl LayerCompositor {
             groups,
             &led_ctx,
             "led:master",
-            budget,
+            led_run,
             &self.layer_skin_registry,
         );
 
         scratch.resize(device, width, height);
-        if outcome == WarmupOutcome::Quiescent {
-            led_outcome
-        } else {
-            outcome
-        }
+        led_outcome
     }
 
     /// Warm up every group-level effect chain that carries enabled effects.
@@ -1415,7 +1515,7 @@ impl LayerCompositor {
     pub fn prewarm_group_chains(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: WarmupBudget,
+        pass: &mut WarmupPass,
         device: &GpuDevice,
         pool: Option<&manifold_gpu::TexturePool>,
         led_grid_size: (u32, u32),
@@ -1439,14 +1539,15 @@ impl LayerCompositor {
         let mut last_outcome = WarmupOutcome::Quiescent;
 
         for group in group_layers {
+            let group_run = pass.layer(&group.layer_id, Instant::now());
+            if let Some(outcome) = group_run.exhausted(Instant::now(), 0) {
+                pass.record_outcome(outcome);
+                any_exhausted = true;
+                last_outcome = outcome;
+                continue;
+            }
             self.ensure_group_buf(&group.layer_id, device, pool);
             self.ensure_group_chain(&group.layer_id);
-            let Some(group_buf) = self.group_bufs.get_mut(&group.layer_id) else {
-                continue;
-            };
-            let Some(group_chain) = self.group_effect_chains.get_mut(&group.layer_id) else {
-                continue;
-            };
             let ctx = PresetContext {
                 time: 0.0,
                 beat: 0.0,
@@ -1467,34 +1568,66 @@ impl LayerCompositor {
                 trigger_count: 0,
             };
             let scope = fx_scope(&group.layer_id);
-            let outcome = Self::pump_chain_warmup(
-                &mut self.uniform_arena,
-                group_chain,
-                device,
-                group_buf.source_texture(),
-                group.effects(),
-                group.effect_groups(),
-                &ctx,
-                &scope,
-                budget,
-                &self.layer_skin_registry,
-            );
+            let mut outcome = WarmupOutcome::Quiescent;
+            loop {
+                let run = pass.layer(&group.layer_id, Instant::now());
+                if let Some(exhausted) = run.exhausted(Instant::now(), 0) {
+                    outcome = exhausted;
+                    break;
+                }
+                let Some(group_buf) = self.group_bufs.get_mut(&group.layer_id) else {
+                    break;
+                };
+                let Some(group_chain) = self.group_effect_chains.get_mut(&group.layer_id) else {
+                    break;
+                };
+                outcome = Self::pump_chain_warmup(
+                    &mut self.uniform_arena,
+                    group_chain,
+                    device,
+                    group_buf.source_texture(),
+                    group.effects(),
+                    group.effect_groups(),
+                    &ctx,
+                    &scope,
+                    run,
+                    &self.layer_skin_registry,
+                );
+                if outcome != WarmupOutcome::Quiescent {
+                    break;
+                }
+                if manifold_node_engine::runtime::prewarm_worker_pending_count() == 0 {
+                    break;
+                }
+                if let Some(exhausted) = Self::drain_fusion_warmup(
+                    pass.layer(&group.layer_id, Instant::now()),
+                ) {
+                    outcome = exhausted;
+                    break;
+                }
+            }
             if outcome != WarmupOutcome::Quiescent {
+                if outcome == WarmupOutcome::GpuFailed {
+                    return WarmupOutcome::GpuFailed;
+                }
+                pass.record_outcome(outcome);
                 any_exhausted = true;
                 last_outcome = outcome;
+                continue;
             }
 
             if !has_led_layers {
                 continue;
             }
+            let led_run = pass.layer(&group.layer_id, Instant::now());
+            if let Some(outcome) = led_run.exhausted(Instant::now(), 0) {
+                pass.record_outcome(outcome);
+                any_exhausted = true;
+                last_outcome = outcome;
+                continue;
+            }
             self.ensure_led_group_buf(&group.layer_id, device, pool, led_w, led_h);
             self.ensure_led_group_chain(&group.layer_id);
-            let Some(led_group_buf) = self.led_group_bufs.get_mut(&group.layer_id) else {
-                continue;
-            };
-            let Some(led_group_chain) = self.led_group_effect_chains.get_mut(&group.layer_id) else {
-                continue;
-            };
             let led_ctx = PresetContext {
                 time: 0.0,
                 beat: 0.0,
@@ -1515,19 +1648,49 @@ impl LayerCompositor {
                 trigger_count: 0,
             };
             let led_scope = led_scope(&group.layer_id);
-            let led_outcome = Self::pump_chain_warmup(
-                &mut self.uniform_arena,
-                led_group_chain,
-                device,
-                led_group_buf.source_texture(),
-                group.effects(),
-                group.effect_groups(),
-                &led_ctx,
-                &led_scope,
-                budget,
-                &self.layer_skin_registry,
-            );
+            let mut led_outcome = WarmupOutcome::Quiescent;
+            loop {
+                let run = pass.layer(&group.layer_id, Instant::now());
+                if let Some(exhausted) = run.exhausted(Instant::now(), 0) {
+                    led_outcome = exhausted;
+                    break;
+                }
+                let Some(led_group_buf) = self.led_group_bufs.get_mut(&group.layer_id) else {
+                    break;
+                };
+                let Some(led_group_chain) = self.led_group_effect_chains.get_mut(&group.layer_id) else {
+                    break;
+                };
+                led_outcome = Self::pump_chain_warmup(
+                    &mut self.uniform_arena,
+                    led_group_chain,
+                    device,
+                    led_group_buf.source_texture(),
+                    group.effects(),
+                    group.effect_groups(),
+                    &led_ctx,
+                    &led_scope,
+                    run,
+                    &self.layer_skin_registry,
+                );
+                if led_outcome != WarmupOutcome::Quiescent {
+                    break;
+                }
+                if manifold_node_engine::runtime::prewarm_worker_pending_count() == 0 {
+                    break;
+                }
+                if let Some(exhausted) = Self::drain_fusion_warmup(
+                    pass.layer(&group.layer_id, Instant::now()),
+                ) {
+                    led_outcome = exhausted;
+                    break;
+                }
+            }
             if led_outcome != WarmupOutcome::Quiescent {
+                if led_outcome == WarmupOutcome::GpuFailed {
+                    return WarmupOutcome::GpuFailed;
+                }
+                pass.record_outcome(led_outcome);
                 any_exhausted = true;
                 last_outcome = led_outcome;
             }
@@ -3113,20 +3276,20 @@ impl Compositor for LayerCompositor {
     fn prewarm_layer_chains(
         &mut self,
         layer: &manifold_core::layer::Layer,
-        budget: WarmupBudget,
+        pass: &mut WarmupPass,
         device: &GpuDevice,
     ) -> WarmupOutcome {
-        self.prewarm_layer_chains(layer, budget, device)
+        self.prewarm_layer_chains(layer, pass, device)
     }
 
     fn prewarm_layer_chains_with_output(
         &mut self,
         layer: &manifold_core::layer::Layer,
-        budget: WarmupBudget,
+        pass: &mut WarmupPass,
         device: &GpuDevice,
         output_dims: (u32, u32),
     ) -> WarmupOutcome {
-        self.prewarm_layer_chains_with_output(layer, budget, device, output_dims)
+        self.prewarm_layer_chains_with_output(layer, pass, device, output_dims)
     }
 
     fn prewarm_led_resources(
@@ -3142,33 +3305,33 @@ impl Compositor for LayerCompositor {
     fn prewarm_master_chain(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: WarmupBudget,
+        pass: &mut WarmupPass,
         device: &GpuDevice,
         pool: Option<&manifold_gpu::TexturePool>,
         led_grid_size: (u32, u32),
     ) -> WarmupOutcome {
-        self.prewarm_master_chain(project, budget, device, pool, led_grid_size)
+        self.prewarm_master_chain(project, pass, device, pool, led_grid_size)
     }
 
     fn prewarm_clip_chain_topologies(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: WarmupBudget,
+        pass: &mut WarmupPass,
         device: &GpuDevice,
     ) -> WarmupOutcome {
-        self.prewarm_clip_chain_topologies(project, budget, device)
+        self.prewarm_clip_chain_topologies(project, pass, device)
     }
 
     fn prewarm_group_chains(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: WarmupBudget,
+        pass: &mut WarmupPass,
         device: &GpuDevice,
         pool: Option<&manifold_gpu::TexturePool>,
         led_grid_size: (u32, u32),
         output_dims: (u32, u32),
     ) -> WarmupOutcome {
-        self.prewarm_group_chains(project, budget, device, pool, led_grid_size, output_dims)
+        self.prewarm_group_chains(project, pass, device, pool, led_grid_size, output_dims)
     }
 
     fn render(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) -> &GpuTexture {
@@ -3687,10 +3850,11 @@ mod chain_pool_tests {
         device: &manifold_gpu::testkit::TestDevice,
         layer: &manifold_core::layer::Layer,
     ) {
+        let mut pass = WarmupPass::new(manifold_core::WarmupBudget::default(), Instant::now());
         assert_eq!(
             comp.prewarm_layer_chains(
                 layer,
-                manifold_core::WarmupBudget::default(),
+                &mut pass,
                 device,
             ),
             manifold_core::WarmupOutcome::Quiescent,
@@ -3771,10 +3935,11 @@ mod chain_pool_tests {
         project.settings.master_effects.push(
             manifold_core::preset_definition_registry::create_default(&PresetTypeId::MIRROR),
         );
+        let mut pass = WarmupPass::new(manifold_core::WarmupBudget::default(), Instant::now());
         assert_eq!(
             comp.prewarm_master_chain(
                 &project,
-                manifold_core::WarmupBudget::default(),
+                &mut pass,
                 &device,
                 None,
                 (1, 1),
@@ -4083,9 +4248,10 @@ mod chain_pool_tests {
         layer.effects_mut().push(fx);
 
         // Warmup should build the per-layer chain.
+        let mut pass = WarmupPass::new(manifold_core::WarmupBudget::default(), Instant::now());
         let outcome = comp.prewarm_layer_chains(
             &layer,
-            manifold_core::WarmupBudget::default(),
+            &mut pass,
             &device,
         );
         assert_eq!(

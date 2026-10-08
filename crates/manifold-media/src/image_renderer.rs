@@ -381,7 +381,7 @@ impl ClipRenderer for ImageRenderer {
     fn prewarm_layer(
         &mut self,
         layer: &Layer,
-        _budget: manifold_core::WarmupBudget,
+        run: manifold_core::WarmupRun,
     ) -> manifold_core::WarmupOutcome {
         // Collect image clips on this layer; most-likely-first = timeline order.
         let mut image_clips: Vec<&TimelineClip> = layer
@@ -401,6 +401,9 @@ impl ClipRenderer for ImageRenderer {
 
         let mut used_bytes: u64 = 0;
         for clip in image_clips {
+            if let Some(outcome) = run.exhausted(std::time::Instant::now(), 0) {
+                return outcome;
+            }
             let est = estimate_native_bytes(&clip.image_path).unwrap_or(0);
             if used_bytes.saturating_add(est) > IMAGE_WARMUP_BUDGET_BYTES {
                 log::warn!(
@@ -638,7 +641,12 @@ mod tests {
             Beats(4.0),
         ));
 
-        let outcome = renderer.prewarm_layer(&layer, manifold_core::WarmupBudget::default());
+        let mut pass = manifold_core::WarmupPass::new(
+            manifold_core::WarmupBudget::default(), std::time::Instant::now(),
+        );
+        let outcome = renderer.prewarm_layer(
+            &layer, pass.layer(&layer.layer_id, std::time::Instant::now()),
+        );
         assert_eq!(outcome, manifold_core::WarmupOutcome::Quiescent);
 
         assert_eq!(
