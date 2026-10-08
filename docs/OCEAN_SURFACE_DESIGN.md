@@ -159,7 +159,7 @@ and the foam of D6. fade_c = 1 − smoothstep(Fade Start_c, Fade End_c, |rest_xz
 so short waves vanish before the grid stops resolving them.
 Rejected: one displace node per cascade. The fold test needs the summed deformation, so
 chained nodes would have to hand partial sums down in a spare vertex slot. That hidden
-state is the sign that the cut is too fine, per DECOMPOSING_GENERATORS.md section 1.2 (Specialised solvers are stage nodes).
+state is the sign that the cut is too fine, per DECOMPOSING_GENERATORS.md section 1.2 (Engine internals are stage nodes).
 
 **D10 — Cards are preset bindings, never extra nodes.** Wind Speed, Wind Direction,
 Choppiness (λ), Wave Size (amplitude multiplier, applied once, in the spectrum), Swell

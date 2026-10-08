@@ -24,7 +24,7 @@ The `≥2-use` filter applies (design doc section 1.2):
 
 ## What counts as "one primitive" (bundle-vs-atom criterion)
 
-A primitive does **one composable thing**:
+In effect and generator graphs (2D, TouchDesigner-style), a primitive does **one composable thing**. Engine internals (specialised solvers and 3D scenes) use user boundaries, with modular code inside, under DECOMPOSING_GENERATORS.md section 1.2 (Engine internals are stage nodes). The atom criteria below apply to the effect and generator graphs:
 
 - **GPU compute / fragment** — one dispatch with one well-defined operation. Multiple operations in one shader is the bundle anti-pattern; build them as separate primitives and wire them in the graph.
 - **DNN inference** — one inference call (e.g. `depth_estimate_midas`, `optical_flow_estimate`). The pre/post processing and the consuming effect are separate primitives.
@@ -35,7 +35,7 @@ What's **not** allowed:
 
 - A "this is the whole effect" or "this is the whole generator" kernel that bundles multiple distinct dispatches behind a single primitive. The no-fused-monolith rule (`CLAUDE.md` hard rules, `DECOMPOSING_GENERATORS.md` section 1.1) prohibits this.
 - A primitive that wears primitive clothing but internally calls `dispatch_compute` multiple times for distinct operations. Each dispatch should be its own primitive.
-- A primitive named after one consumer effect or generator (`my_effect_pipeline`, `digital_plants_render`, `fluid_simulate` bundling Euler + noise + diffusion). Those are bundles, not primitives.
+- A primitive named after one consumer effect or generator (`my_effect_pipeline`, `fluid_simulate` bundling Euler + noise + diffusion). Those are bundles, not primitives.
 
 What's **fine** when it's the right granularity:
 
@@ -131,10 +131,10 @@ name which one when you claim an exemption:
    the CPU. Either way the texture/scalar must materialize regardless.
 4. **Draw-call rasterization** — exempt. The `render_*` family are render passes, not
    compute.
-6. **Specialised-solver stage internals** — exempt. A stage node under
-   DECOMPOSING_GENERATORS.md section 1.2 (Specialised solvers are stage nodes)
-   runs hand-written passes that fuse freely inside it. The stage is proven
-   against its reference at the boundary; its internal passes need no
+6. **Engine stage internals** — exempt. A stage node under
+   DECOMPOSING_GENERATORS.md section 1.2 (Engine internals are stage nodes)
+   runs modular hand-written passes that fuse freely inside it. The stage is
+   proven at its boundary against its reference or rendering contract; its internal passes need no
    per-atom proofs and no codegen path. The stage node itself is not an atom,
    so this exemption never covers a catalog atom.
 5. **BLOCKED is not exempt.** An atom that PASSES the test but has an input the codegen
@@ -441,7 +441,7 @@ fn invert_decomposes_pixel_exactly_across_all_fixtures() {
   that's a fusion boundary. Codegen path only; the generated-vs-hand parity test proves it.
 - **Don't skip the parity test when replacing an existing effect.** Strict bit-equality is the gate.
 - **Don't add a primitive for speculative future use.** The `≥2-use` filter is enforced at review time.
-- **Don't ship a fused single-effect / single-generator bundle.** If your primitive internally orchestrates multiple distinct dispatches that each do a different operation, that's a graph, not a primitive. Build the atoms separately and wire them in JSON. The recurring failure mode in past decomposition passes was reaching for a fused kernel to pass parity quickly; the no-fused-monolith rule prohibits this regardless of parity-test pressure. If parity drift is the concern, spec intermediate texture formats up to `Rgba32Float` to eliminate the rounding gap — the bandwidth cost is negligible on M-series and the bundle-as-primitive cost is structural.
+- **Don't ship a fused single-effect / single-generator bundle.** This applies to effect and generator graphs (2D, TouchDesigner-style). Engine internals follow DECOMPOSING_GENERATORS.md section 1.2 (Engine internals are stage nodes), including its code-modularity rule. If your graph primitive internally orchestrates multiple distinct dispatches that each do a different operation, that's a graph, not a primitive. Build the atoms separately and wire them in JSON. The recurring failure mode in past decomposition passes was reaching for a fused kernel to pass parity quickly; the no-fused-monolith rule prohibits this regardless of parity-test pressure. If parity drift is the concern, spec intermediate texture formats up to `Rgba32Float` to eliminate the rounding gap — the bandwidth cost is negligible on M-series and the bundle-as-primitive cost is structural.
 - **Don't touch the kernel without re-reading the purpose.** `purpose` states the math (`docs/archive/NODE_VOCABULARY_AUDIT.md` section 2 (Conventions (pinned))) and lives right next to the shader in the same file, on screen during the edit — there's no excuse for it drifting. Touch the kernel, re-read the purpose.
 - **Rasterizer with texture inputs → declare `output_canvas_scale` `(1, 1)`.** The plan compiler's default sizes a node's output as *max of its texture input dims* — right for image-processing nodes, wrong for a rasterizer whose texture inputs are scene resources (envmap, base-color/normal maps, LUT-like lookups): without the declaration your render target inherits the largest wired map's dims instead of the canvas. BUG-140 (glb-import-non-square-aspect-distortion) shipped exactly this — imported glb scenes rendered into the envmap's 1024×1024 and were stretched to canvas (aspect distortion + resolution loss). `render_scene` / `render_3d_mesh` / `render_instanced_3d_mesh` are the reference impls (`impl Primitive` override, one method). Explicit declarations beat the max-of-inputs heuristic since 2026-07-12.
 - **Async initialization (background parse, model load, GPU accel build) → override `warmup_pending()`.** The load-time pre-roll renders every layer until no node reports pending; an async primitive without the override first-touches on stage and trips the cold-touch detector. Contract: WARMUP_DESIGN.md D4 (quiescence query). Reference impls: `gltf_mesh_source`, `hdri_source` (the `io_pending` idiom), `render_scene` (rt_accel readiness).
