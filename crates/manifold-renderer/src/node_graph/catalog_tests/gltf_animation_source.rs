@@ -32,7 +32,7 @@ use std::{borrow::Cow, sync::Arc};
         use manifold_node_engine::exec::execution_plan::compile;
         use manifold_node_engine::graph::Graph;
         use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-        use crate::node_graph::primitives::lfo::Lfo;
+        use manifold_nodes_image::node_graph::primitives::lfo::Lfo;
         use manifold_node_engine::exec::execution::Executor;
         use manifold_core::{Beats, Seconds};
         use std::sync::Mutex;

@@ -468,9 +468,7 @@ mod custom {
 #[cfg(test)]
 mod dispatch_regression {
     use manifold_node_engine::freeze::codegen::{standalone_for_node, standalone_for_spec};
-    use manifold_renderer::node_graph::primitives::{
-        BlobOverlayRender, DrawConnections, DrawDots, DrawGauge, DrawMarkers, DrawTicks,
-    };
+    use manifold_nodes_image::node_graph::primitives::{blob_overlay_render::BlobOverlayRender, draw_connections::DrawConnections, draw_dots::DrawDots, draw_gauge::DrawGauge, draw_markers::DrawMarkers, draw_ticks::DrawTicks};
 
     fn same<P: manifold_node_engine::primitive::Primitive + Default + 'static>() {
         let typed = standalone_for_spec::<P>().expect("typed standalone codegen");

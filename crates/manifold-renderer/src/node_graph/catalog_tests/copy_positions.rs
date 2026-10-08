@@ -4,7 +4,7 @@
     use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
     use manifold_node_engine::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::displace_copies::DisplaceCopies;
-    use crate::node_graph::primitives::wave_field_3d::WaveField3d;
+    use manifold_nodes_image::node_graph::primitives::wave_field_3d::WaveField3d;
 
     fn dispatch(src: &[InstanceTransform]) -> Vec<Vec4Vertex> {
         let device = manifold_gpu::testkit::test_device();
@@ -203,7 +203,7 @@
             _pad1: 0,
             _pad2: 0,
         };
-        let wu = crate::node_graph::primitives::wave_field_3d::Uniforms {
+        let wu = manifold_nodes_image::node_graph::primitives::wave_field_3d::Uniforms {
             frequency,
             phase,
             direction_x: direction[0],

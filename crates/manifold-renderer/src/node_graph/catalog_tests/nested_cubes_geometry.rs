@@ -9,7 +9,7 @@ mod gpu_tests {
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_node_engine::parameters::TableData;
-    use crate::node_graph::primitives::CycleTableRow;
+    use manifold_nodes_image::node_graph::primitives::cycle_table_row::CycleTableRow;
     use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
     use manifold_node_engine::gpu::render_target::RenderTarget;
 

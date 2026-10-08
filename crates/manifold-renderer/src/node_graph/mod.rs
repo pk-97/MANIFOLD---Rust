@@ -15,7 +15,6 @@ pub mod viewport_render;
 pub mod viewport_session;
 pub(crate) mod bundled_presets;
 pub mod catalog_gen;
-pub mod composites;
 pub(crate) mod decode_cache;
 mod gltf_anim_cache;
 mod gltf_anim_identity;

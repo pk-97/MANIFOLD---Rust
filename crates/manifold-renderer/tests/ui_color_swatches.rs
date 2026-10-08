@@ -133,7 +133,7 @@ fn font_list_picker_paints() {
     let device = GpuDevice::new_queued("ui_color_swatches");
     let mut ui = UIRenderer::new(&device, FORMAT);
 
-    let families = manifold_renderer::text_rasterizer::TextRasterizer::available_font_families();
+    let families = manifold_nodes_image::text_rasterizer::TextRasterizer::available_font_families();
     let current = families.iter().position(|f| f == "Georgia");
     let items: Vec<PickerItem> = families
         .iter()

@@ -2279,6 +2279,7 @@ dependencies = [
  "manifold-led",
  "manifold-media",
  "manifold-node-engine",
+ "manifold-nodes-image",
  "manifold-playback",
  "manifold-profiler",
  "manifold-recording",
@@ -2471,6 +2472,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "manifold-nodes-image"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "bytemuck",
+ "core-foundation 0.9.4",
+ "core-graphics",
+ "core-text",
+ "half",
+ "image",
+ "inventory",
+ "log",
+ "manifold-core",
+ "manifold-foundation",
+ "manifold-gpu",
+ "manifold-native",
+ "manifold-node-engine",
+ "manifold-physics",
+ "naga",
+ "serde_json",
+ "tiff 0.9.1",
+]
+
+[[package]]
 name = "manifold-physics"
 version = "0.1.0"
 dependencies = [
@@ -2547,6 +2572,7 @@ dependencies = [
  "manifold-io",
  "manifold-native",
  "manifold-node-engine",
+ "manifold-nodes-image",
  "manifold-physics",
  "manifold-playback",
  "manifold-ui",

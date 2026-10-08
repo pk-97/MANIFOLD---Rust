@@ -13,8 +13,6 @@ pub mod metalfx_upscaler;
 pub mod node_graph;
 pub mod pq_encoder;
 pub mod preset_thumbnail;
-#[cfg(target_os = "macos")]
-pub mod text_rasterizer;
 pub mod tonemap;
 
 // This registration moves with the assets to the catalog crate at P3.

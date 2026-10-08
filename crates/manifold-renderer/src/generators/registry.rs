@@ -1,7 +1,5 @@
 use crate::node_graph::{bundled_preset_def, bundled_preset_json, bundled_preset_type_ids};
-use crate::node_graph::primitives::{
-    GltfTextureSource, RenderScene, ScatterOnMesh, SeedParticlesFromTexture,
-};
+use {crate::node_graph::primitives::GltfTextureSource, crate::node_graph::primitives::RenderScene, crate::node_graph::primitives::ScatterOnMesh, manifold_nodes_image::node_graph::primitives::seed_particles_from_texture::SeedParticlesFromTexture};
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_core::effects::RelightParams;
 use manifold_core::preset_def::PresetKind;
@@ -89,7 +87,7 @@ impl GeneratorRegistry {
         manifold_node_engine::water::primitives::physics_world::PhysicsWorldNode::prewarm_pipeline(device);
         #[cfg(feature = "gpu-proofs")]
         manifold_node_engine::water::fluid_mesh_upload::FluidMeshUpload::prewarm(device);
-        crate::node_graph::primitives::terminal_analysis::prewarm_pipeline(device);
+        manifold_nodes_image::node_graph::primitives::terminal_analysis::prewarm_pipeline(device);
         // `node.scatter_on_mesh` is a barriered three-pass scan/reduce; exempt
         // from the codegen path.
         ScatterOnMesh::prewarm_pipelines(device);
@@ -99,21 +97,21 @@ impl GeneratorRegistry {
 
         // COMPILE_CONTRACT_DESIGN P2: watercolor's seven specialized pipelines
         // are asset-independent, fixed-source. Warm them at startup.
-        crate::node_graph::primitives::watercolor::Watercolor::prewarm_pipelines(device);
+        manifold_nodes_image::node_graph::primitives::watercolor::Watercolor::prewarm_pipelines(device);
         // COMPILE_CONTRACT_DESIGN P2: hdri_source's stretch-blit pipeline is
         // fixed-source, warmed when the first HDRI decode lands. Warm it here.
         crate::node_graph::primitives::hdri_source::HdriSource::prewarm_pipeline(device);
         // COMPILE_CONTRACT_DESIGN P2: layer_source's registry blit is
         // fixed-source, dispatched every frame a layer skin is bound.
-        crate::node_graph::primitives::layer_source::LayerSource::prewarm_pipeline(device);
+        manifold_nodes_image::node_graph::primitives::layer_source::LayerSource::prewarm_pipeline(device);
         // COMPILE_CONTRACT_DESIGN P2: variable_blur's 6 quality×weighting variants
         // are fixed-source, specialized by enum params only. Warm them here.
-        crate::node_graph::primitives::gaussian_blur_variable_width::GaussianBlurVariableWidth::prewarm_pipelines(device);
+        manifold_nodes_image::node_graph::primitives::gaussian_blur_variable_width::GaussianBlurVariableWidth::prewarm_pipelines(device);
         // COMPILE_CONTRACT_DESIGN P2: multi_blend's num_inputs variants (2..8) are
         // fixed-source, specialized by input count only. Warm them all here.
-        crate::node_graph::primitives::multi_blend::MultiBlend::prewarm_pipelines(device);
-        crate::node_graph::primitives::Blur::prewarm_pipelines(device);
-        crate::node_graph::primitives::BokehGather::prewarm_pipelines(device);
+        manifold_nodes_image::node_graph::primitives::multi_blend::MultiBlend::prewarm_pipelines(device);
+        manifold_nodes_image::node_graph::primitives::filter::Blur::prewarm_pipelines(device);
+        manifold_nodes_image::node_graph::primitives::bokeh_gather::BokehGather::prewarm_pipelines(device);
 
         // BUG-146: the two mechanisms above only reach atoms a BUNDLED
         // preset's *structure* happens to reference (the loop above never

@@ -3,7 +3,7 @@ use manifold_node_engine::testkit::liquid_surface::{Harness, params};
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 use manifold_node_engine::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::generate_fused};
 use manifold_node_engine::testkit::water_codegen::{member, fused, run};
-use crate::node_graph::primitives::{divide_by_value::DivideByValue, };
+use manifold_nodes_image::node_graph::primitives::divide_by_value::DivideByValue;
 
 use manifold_node_engine::water::primitives::testkit::GridBox as Box3;
 fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {

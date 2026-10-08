@@ -1648,7 +1648,7 @@ impl Application {
                     });
                     if let Some((current, r)) = font_pick {
                         let families =
-                            manifold_renderer::text_rasterizer::TextRasterizer::available_font_families();
+                            manifold_nodes_image::text_rasterizer::TextRasterizer::available_font_families();
                         let actions = families
                             .iter()
                             .map(|name| PanelAction::Params(ParamsAction::GenStringParamSelected(*sp_idx, name.clone())))

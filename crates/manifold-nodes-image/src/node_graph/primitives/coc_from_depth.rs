@@ -478,7 +478,7 @@ mod gpu_tests {
     };
 
     use super::{CocFromDepth, CocFromDepthUniforms};
-    use crate::node_graph::primitives::GaussianBlurVariableWidth;
+    use crate::node_graph::primitives::gaussian_blur_variable_width::GaussianBlurVariableWidth;
     use manifold_node_engine::gpu::render_target::RenderTarget;
 
     /// A custom, CPU-uploadable texture (unlike `RenderTarget`, whose usage

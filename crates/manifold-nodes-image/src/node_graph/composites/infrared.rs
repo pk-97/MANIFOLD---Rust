@@ -7,7 +7,7 @@
 use manifold_node_engine::param_binding::composite_handle::CompositeHandle;
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 use manifold_node_engine::graph::Graph;
-use crate::node_graph::primitives::{Brightness, ColorRamp};
+use crate::node_graph::primitives::color::{Brightness, ColorRamp};
 use manifold_node_engine::validation::GraphError;
 
 pub const INFRARED_TYPE_ID: &str = "composite.infrared";

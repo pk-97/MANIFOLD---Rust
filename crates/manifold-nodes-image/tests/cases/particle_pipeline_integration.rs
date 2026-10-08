@@ -24,10 +24,7 @@
 //! authorise — if anything in the macro / port-type / validation
 //! chain regresses, this test catches it.
 
-use manifold_renderer::node_graph::primitives::{
-    ArrayFeedback, EulerStepParticles, ResolveAccumulator, SampleTextureAtParticles,
-    ScatterParticles, SeedParticles, WrapParticlesTorus,
-};
+use crate::node_graph::primitives::{array_feedback::ArrayFeedback, euler_step_particles::EulerStepParticles, resolve_accumulator::ResolveAccumulator, sample_texture_at_particles::SampleTextureAtParticles, scatter_particles::ScatterParticles, seed_particles::SeedParticles, wrap_particles_torus::WrapParticlesTorus};
 use manifold_node_engine::{graph::Graph, scene::boundary_nodes::Source};
 
 #[test]

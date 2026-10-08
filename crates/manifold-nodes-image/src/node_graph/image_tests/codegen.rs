@@ -25,7 +25,7 @@ use manifold_node_engine::testkit::codegen_support::*;
 #[test]
 fn fused_texture_region_carries_and_dedups_wgsl_includes() {
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use {crate::node_graph::primitives::CocFromDepth, manifold_node_engine::primitives::gain::Gain};
+    use {crate::node_graph::primitives::coc_from_depth::CocFromDepth, manifold_node_engine::primitives::gain::Gain};
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![
@@ -106,7 +106,7 @@ fn fused_texture_region_carries_and_dedups_wgsl_includes() {
 #[test]
 fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use {manifold_node_engine::primitives::gain::Gain, crate::node_graph::primitives::GaussianBlur};
+    use {manifold_node_engine::primitives::gain::Gain, crate::node_graph::primitives::separable_gaussian::GaussianBlur};
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![
@@ -183,7 +183,7 @@ fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
 fn fused_gather_binds_sampler_and_passes_texture() {
     use manifold_node_engine::freeze::classify::InputAccess;
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use crate::node_graph::primitives::{Invert, Sharpen};
+    use crate::node_graph::primitives::{invert::Invert, sharpen::Sharpen};
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![
@@ -248,7 +248,7 @@ fn fused_gather_binds_sampler_and_passes_texture() {
 #[test]
 fn fused_fanout_emits_two_dst_bindings() {
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use {crate::node_graph::primitives::Contrast, manifold_node_engine::primitives::gain::Gain, crate::node_graph::primitives::Invert};
+    use {crate::node_graph::primitives::contrast::Contrast, manifold_node_engine::primitives::gain::Gain, crate::node_graph::primitives::invert::Invert};
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![

@@ -1,7 +1,7 @@
 use manifold_node_engine::validation::validate;
 use manifold_node_engine::persistence::*;
 use manifold_node_engine::{graph::Graph, parameters::ParamValue, scene::boundary_nodes::Source, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::SOURCE_TYPE_ID, scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID, exec::execution_plan::compile};
-use crate::node_graph::primitives::{self, Blur, Threshold};
+use {crate::node_graph::primitives::self, manifold_nodes_image::node_graph::primitives::filter::Blur, manifold_nodes_image::node_graph::primitives::filter::Threshold};
 use std::collections::BTreeMap;
 fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
     fn expect_err(result: Result<Graph, LoadError>) -> LoadError {

@@ -6,7 +6,7 @@ use ahash::AHashMap;
     use manifold_node_engine::exec::execution_plan::compile;
 
     use manifold_node_engine::ports::PortType;
-    use {crate::node_graph::primitives::ArrayFeedback, crate::node_graph::primitives::ContainerBounds3D, crate::node_graph::primitives::GenerateCubeMesh, crate::node_graph::primitives::ResolveAccumulator, crate::node_graph::primitives::ScatterParticles, crate::node_graph::primitives::SceneObjectNode, crate::node_graph::primitives::SeedParticles, manifold_node_engine::primitives::value::Value, crate::node_graph::primitives::WaveShearMesh};
+    use {manifold_nodes_image::node_graph::primitives::array_feedback::ArrayFeedback, manifold_nodes_image::node_graph::primitives::container_bounds_3d::ContainerBounds3D, crate::node_graph::primitives::GenerateCubeMesh, manifold_nodes_image::node_graph::primitives::resolve_accumulator::ResolveAccumulator, manifold_nodes_image::node_graph::primitives::scatter_particles::ScatterParticles, crate::node_graph::primitives::SceneObjectNode, manifold_nodes_image::node_graph::primitives::seed_particles::SeedParticles, manifold_node_engine::primitives::value::Value, crate::node_graph::primitives::WaveShearMesh};
     use manifold_node_engine::mesh::MeshVertex;
 
 
