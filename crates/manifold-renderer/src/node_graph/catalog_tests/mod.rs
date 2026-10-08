@@ -140,3 +140,5 @@ mod generator_renderer_tests;
 mod generator_renderer_warmup_tests;
 
 mod gltf_upgrade;
+
+mod loop_upgrade;
