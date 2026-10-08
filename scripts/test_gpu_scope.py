@@ -56,6 +56,19 @@ def fixture_workspace(repo):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_path_attr_filter_finds_testkit_visible_mount(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            mount = repo / R / "node_graph" / "mod.rs"
+            mount.parent.mkdir(parents=True)
+            mount.write_text(
+                'manifold_core::testkit_visible! {\n'
+                '    #[path = "tests/wrapped.rs"] mod wrapped;\n'
+                '}\n'
+            )
+            path = R + "node_graph/tests/wrapped.rs"
+            self.assertEqual(g.path_attr_filters(path, repo), ["node_graph::wrapped::"])
+
     def test_p2_catalog_contracts_follow_leaf_sources(self):
         cases = {
             "crates/manifold-compositor/src/layer_compositor.rs": ["layer_compositor"],

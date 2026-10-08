@@ -101,7 +101,6 @@ def slow_tests(times=None):
                   key=lambda t: -t[1])
 
 
-PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
 _CPU_PLAN_UNSET = object()
 
 
@@ -319,9 +318,12 @@ def path_attr_filters(path, repo):
         text = (Path(repo) / root / "/".join(dirs) / "mod.rs").read_text()
     except OSError:
         text = ""
-    for file_name, module in PATH_ATTR_MOD.findall(text):
-        if file_name == parts[-1]:
-            return ["::".join(dirs + [module]) + "::"]
+    from crate_move_replay import module_items
+    for start, end, head, scope in module_items(text):
+        declaration = re.fullmatch(r'(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;', text[head:end])
+        attrs = re.findall(r'#\[path\s*=\s*"tests/([^"\n]+)"\]', text[start:head])
+        if declaration and attrs and attrs[-1] == parts[-1]:
+            return ["::".join((*dirs, *scope, declaration[1])) + "::"]
     if path.startswith(PRESET_RUNTIME_DIR):
         return ["runtime::"]
     return None
@@ -397,7 +399,8 @@ def changed_test_filters(path, repo, base, patch=None):
     source = Path(repo) / path
     if source.suffix != ".rs" or not source.exists():
         return set()
-    text = source.read_text()
+    from crate_move_replay import production_text
+    text = production_text(source.read_text())
     if "#[test]" not in text:
         return set()
     diff = None if patch is not None else subprocess.run(["git", "-C", str(repo), "diff", "--no-ext-diff",

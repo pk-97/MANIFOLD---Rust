@@ -16,9 +16,6 @@ from gate_policy import godfile_paths, integration_rows, PREFIX_ROWS, is_inert_p
 from gate_policy import CATALOG_PATHS, CATALOG_PACKAGE
 from gate_workspace import Workspace
 
-PATH_MOD = re.compile(r'#\[path\s*=\s*"([^"]+)"\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;')
-
-
 def module_parts(relative):
     parts = list(relative.with_suffix("").parts)
     if parts[-1] in {"lib", "main", "mod"}:
@@ -113,9 +110,15 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
                 manifest[kind] = [{"name": t["name"], "path": Path(t["src_path"]).relative_to(crate).as_posix()}
                                   for t in workspace.targets(package, kind)]
             aliases = {}
+            from crate_move_replay import module_items
             for source in (crate / "src").rglob("*.rs"):
-                for target, name in PATH_MOD.findall(source.read_text()):
-                    aliases[(source.parent / target).resolve()] = (source.resolve(), name)
+                text = source.read_text()
+                for start, end, head, _scope in module_items(text):
+                    declaration = re.fullmatch(r'(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;',
+                                                text[head:end])
+                    attrs = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', text[start:head])
+                    if declaration and attrs:
+                        aliases[(source.parent / attrs[-1]).resolve()] = (source.resolve(), declaration[1])
             cache[crate] = manifest, aliases
         manifest, aliases = cache[crate]
         package = manifest["package"]["name"]
@@ -139,9 +142,10 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
             else:
                 # Shared test code (tests/support/): no binary of its own, so
                 # every top-level test that declares or #[path]s the directory.
+                from crate_move_replay import production_text
                 uses = re.compile(rf'\bmod\s+{re.escape(parts[3])}\b|"{re.escape(parts[3])}/')
                 binaries.update(test.stem for test in (crate / "tests").glob("*.rs")
-                                if uses.search(test.read_text()))
+                                if uses.search(production_text(test.read_text())))
         elif parts[2] == "src":
             source, root = (repo / path).resolve(), (crate / "src").resolve()
             binary_filter = ""

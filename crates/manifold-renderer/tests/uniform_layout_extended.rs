@@ -2,6 +2,7 @@
 //! Complements the existing scalar buffer proof; no GPU is needed.
 use manifold_renderer as _;
 mod support {
+    pub mod rust_items;
     pub mod custom_abi_cases;
     pub mod source_roots;
     pub mod texture_abi_cases;

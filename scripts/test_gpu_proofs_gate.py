@@ -4,6 +4,7 @@
 import contextlib
 import io
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -228,6 +229,95 @@ class GpuProofsGateTests(unittest.TestCase):
         code, text = self.summary(timings, 300)
         self.assertEqual(code, 0)
         self.assertIn("GPU-PROOFS GATE: PASS", text)
+
+    def test_failed_rerun_roundtrips_duplicate_target_owners(self):
+        class DuplicateTargetWorkspace:
+            packages = {
+                "manifold-renderer": {"features": ["gpu-proofs"]},
+                "manifold-nodes-scene": {"features": ["gpu-proofs"]},
+            }
+
+            def feature_packages(self, feature):
+                self.assert_feature = feature
+                return list(self.packages)
+
+            def targets(self, package, kind=None):
+                rows = [{"name": "gpu_proofs", "kind": ["test"],
+                         "src_path": f"crates/{package}/tests/gpu_proofs.rs"},
+                        {"name": package, "kind": ["lib"],
+                         "src_path": f"crates/{package}/src/lib.rs"}]
+                return [row for row in rows if kind is None or kind in row["kind"]]
+
+            def binary_owner(self, target):
+                raise AssertionError(f"bare target owner lookup: {target}")
+
+        name = "rt_dynamic_current_frame::rt_dynamic_history_reset_and_resume"
+        output = (f"failures:\n    {name}\n\n"
+                  "test result: FAILED. 0 passed; 1 failed;\n"
+                  f"failures:\n    {name}\n\n"
+                  "test result: FAILED. 0 passed; 1 failed;\n")
+        timings = [
+            gate.timing_entry("manifold-renderer", "gpu_proofs", name,
+                              1.0, "FAILED", True),
+            gate.timing_entry("manifold-nodes-scene", "gpu_proofs", name,
+                              1.0, "FAILED", True),
+        ]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = gate.print_summary(output, 1, timings,
+                                      manifest_path=Path("/tmp/work tree/Cargo.toml"))
+        self.assertNotEqual(code, 0)
+        commands = [line.removeprefix("rerun: ") for line in out.getvalue().splitlines()
+                    if line.startswith("rerun: ")]
+        self.assertEqual(len(commands), 2)
+        expected = ["manifold-renderer", "manifold-nodes-scene"]
+        for command, package in zip(commands, expected):
+            argv = shlex.split(command)
+            self.assertEqual(argv[argv.index("--manifest-path") + 1],
+                             "/tmp/work tree/Cargo.toml")
+            self.assertEqual(argv[argv.index("--package") + 1], package)
+            self.assertEqual(argv[argv.index("--test") + 1], "gpu_proofs")
+            self.assertEqual(argv[argv.index("--filter") + 1], name)
+            normalized = gate.normalize_runs(DuplicateTargetWorkspace(), [{
+                "package": argv[argv.index("--package") + 1],
+                "targets": [argv[argv.index("--test") + 1]],
+                "lib": False,
+                "full": False,
+            }])
+            self.assertEqual(normalized[0]["package"], package)
+            self.assertEqual(normalized[0]["target"], "gpu_proofs")
+
+    def test_failed_library_rerun_selects_package_without_test_target(self):
+        name = "lib_only::broken"
+        timings = [gate.timing_entry("manifold-ui-paint", "lib", name,
+                                     1.0, "FAILED", True)]
+        commands, unresolved = gate.failure_rerun_commands(
+            [name], timings, Path("/tmp/work tree/Cargo.toml"))
+        self.assertEqual(unresolved, [])
+        argv = shlex.split(commands[0])
+        self.assertEqual(argv[argv.index("--package") + 1], "manifold-ui-paint")
+        self.assertNotIn("--test", argv)
+        normalized = gate.normalize_runs(self.Workspace(), [{
+            "package": "manifold-ui-paint",
+            "targets": [],
+            "lib": True,
+            "full": False,
+        }])
+        self.assertEqual(normalized[0]["target"], "lib")
+
+    def test_unidentified_failure_reports_missing_rerun_identity(self):
+        name = "missing::identity"
+        output = f"failures:\n    {name}\n\n" \
+                 "test result: FAILED. 0 passed; 1 failed;\n"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = gate.print_summary(output, 1, [],
+                                      manifest_path=Path("/tmp/Cargo.toml"))
+        self.assertNotEqual(code, 0)
+        self.assertIn(
+            f"rerun unavailable: {name} (failed test has no package/target identity)",
+            out.getvalue(),
+        )
 
     def test_no_budget_never_fails_on_time(self):
         code, _ = self.summary([("a", 9999.0, "b", True)], None)

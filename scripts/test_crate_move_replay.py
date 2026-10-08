@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -13,6 +14,59 @@ import crate_move_replay as replay
 
 
 class ReplayTests(unittest.TestCase):
+    def test_module_readers_see_both_testkit_visible_arms(self):
+        source = (
+            'manifold_core::testkit_visible! { mod plain; }\n'
+            'testkit_visible! {\n'
+            '    testkit { mod test_only; }\n'
+            '    production { mod production_only; }\n'
+            '}\n'
+        )
+        names = [re.search(r'\bmod\s+(\w+)', source[head:end])[1]
+                 for _start, end, head, scope in replay.module_items(source)
+                 if not scope]
+        self.assertEqual(names, ['plain', 'production_only'])
+
+    def test_production_expansion_preserves_lines_and_discards_nested_test_arm(self):
+        source = (
+            'testkit_visible ! {\n'
+            '    testkit { testkit_visible! { mod nested_test; } }\n'
+            '    production { manifold_core :: testkit_visible ! { mod kept; } }\n'
+            '}\n'
+        )
+        expanded = replay.production_text(source)
+        self.assertEqual(expanded.count("\n"), source.count("\n"))
+        self.assertNotIn("nested_test", expanded)
+        self.assertIn("kept", expanded)
+        self.assertEqual([re.search(r'\bmod\s+(\w+)', source[head:end])[1]
+                          for _start, end, head, scope in replay.module_items(source)
+                          if not scope], ['kept'])
+
+    def test_macro_reader_keeps_plain_struct_named_production_and_other_delimiters(self):
+        source = (
+            'testkit_visible! { struct production { value: u8 } }\n'
+            'testkit_visible ! ( ignored )\n'
+            'manifold_core :: testkit_visible ! [ ignored ]\n'
+        )
+        expanded = replay.production_text(source)
+        self.assertIn('struct production', expanded)
+        self.assertEqual(len(replay._testkit_calls(source)), 3)
+
+    def test_wrapped_module_mount_mutation_fails_closed(self):
+        source = 'testkit_visible! {\n    testkit { mod old; }\n    production { mod old; }\n}\n'
+        with self.assertRaisesRegex(ValueError, 'separate reviewed fix'):
+            replay.mount_items(source, 'old')
+
+    def test_path_modules_see_path_mount_inside_testkit_visible(self):
+        sources = {
+            'crates/a/src/lib.rs': 'testkit_visible! { #[path = "child.rs"] mod child; }\n',
+            'crates/a/src/child.rs': 'pub const VALUE: u8 = 1;\n',
+        }
+        self.assertEqual(
+            replay.path_modules(sources, {}, sources.__contains__),
+            {'crates/a/src/child.rs': 'a::child'},
+        )
+
     def test_shared_map_derivation_is_rooted_and_scoped(self):
         moves = {'crates/a/src/foo.rs': 'crates/b/src/bar.rs'}
         mapping = replay.mappings(moves, [], {})

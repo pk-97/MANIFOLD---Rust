@@ -605,6 +605,46 @@ def measurement_command(finding: dict, manifest_path: Path) -> str:
     return shlex.join(command)
 
 
+def failure_rerun_commands(failed_tests: list[str], timings: list,
+                           manifest_path: Path | None = None) -> tuple[list[str], list[str]]:
+    """Build owner-qualified reruns from the identities observed by Cargo.
+
+    A proof target name is not a package key: more than one gpu-proofs package
+    may expose a target such as ``gpu_proofs``.  The normalized timing rows
+    retain the package/target pair from the run that produced each failure, so
+    use that identity instead of asking Cargo to resolve a bare target again.
+    """
+    candidates = []
+    for entry in timings:
+        package, target, test, _seconds, status, _budgeted = timing_fields(entry)
+        if (test in failed_tests and status == "FAILED" and package
+                and target and target != "unknown"):
+            candidates.append((test, package, target))
+
+    commands = []
+    unresolved = []
+    used = set()
+    gate = Path(__file__).resolve()
+    manifest = ["--manifest-path", str(manifest_path)] if manifest_path else []
+    for name in failed_tests:
+        match = next(((index, candidate) for index, candidate in enumerate(candidates)
+                      if index not in used and candidate[0] == name), None)
+        if match is None:
+            # A failure normally has a timing row.  Keep the report honest if
+            # Cargo omitted its result line: do not print a rerun that would
+            # fall back to ambiguous target ownership.
+            unresolved.append(name)
+            continue
+        index, (_test, package, target) = match
+        used.add(index)
+        command = [str(gate), *manifest, "--package", package]
+        if target != "lib":
+            command.extend(["--test", target])
+        command.extend(["--filter", name])
+        commands.append(shlex.join(command))
+    return commands, unresolved
+
+
 def remember_times(timings: list, exit_code: int, hung: list) -> None:
     """Learn only from a completed passing invocation, never a failure or hang."""
     if exit_code or hung or not timings:
@@ -654,10 +694,11 @@ def print_summary(
         for name in failed_tests:
             print(f"  - {name}")
         # One focused run per failure, queued and recorded like the gate.
-        gate = Path(__file__).resolve()
-        manifest = ["--manifest-path", str(manifest_path)] if manifest_path else []
-        for name in failed_tests:
-            print(f"rerun: {gate} {' '.join(manifest)} --filter {name}".replace("  ", " "))
+        reruns, unresolved = failure_rerun_commands(failed_tests, timings, manifest_path)
+        for command in reruns:
+            print(f"rerun: {command}")
+        for name in unresolved:
+            print(f"rerun unavailable: {name} (failed test has no package/target identity)")
     else:
         print("\nFailed tests: none")
 

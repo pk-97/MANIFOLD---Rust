@@ -106,14 +106,16 @@ def path_modules(sources, moves, exists):
     modules = {}
     rows=[]
     for parent, text in sorted(sources.items()):
-        masked=code_mask(text)
-        offsets,scopes=inline_modules(text)
-        for m in re.finditer(r'#\[path\s*=\s*"([^"]+)"\]\s*(?:#\[[^\n]+\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;',text):
-            if masked[m.start()] != '#': continue
-            child=os.path.normpath(str(PurePosixPath(parent).parent/m[1]))
+        masked = code_mask(text)
+        offsets, scopes = inline_modules(text)
+        for start, end, head, scope in module_items(text):
+            declaration = re.fullmatch(VIS + r'mod (' + IDENT + r')\s*;', text[head:end])
+            attrs = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', text[start:head])
+            if not declaration or not attrs:
+                continue
+            child=os.path.normpath(str(PurePosixPath(parent).parent/attrs[-1]))
             if exists(child):
-                inline=scopes[bisect.bisect_right(offsets,m.start())-1]
-                rows.append((parent,child,inline+(m[2],)))
+                rows.append((parent,child,scope+(declaration[1],)))
         for m in re.finditer(r'include!\("([^"]+\.rs)"\)',text):
             if masked[m.start()] != 'i': continue
             child=os.path.normpath(str(PurePosixPath(parent).parent/m[1]))
@@ -303,6 +305,90 @@ def code_mask(text):
     return ''.join(chars)
 
 
+def _testkit_calls(text):
+    """Return testkit_visible! calls and the selected production arm span."""
+    masked = code_mask(text)
+    call = re.compile(
+        r'(?<![\w$])(?:\$crate|[A-Za-z_]\w*)(?:\s*::\s*[A-Za-z_]\w*)*'
+        r'\s*::\s*testkit_visible\s*!\s*(?P<open>[({[])|'
+        r'(?<![\w$])testkit_visible\s*!\s*(?P<bare_open>[({[])')
+    calls = []
+
+    def matching(opening):
+        pairs = {'(': ')', '[': ']', '{': '}'}
+        closing = pairs[masked[opening]]
+        depth = 0
+        for index in range(opening, len(masked)):
+            if masked[index] == masked[opening]:
+                depth += 1
+            elif masked[index] == closing:
+                depth -= 1
+                if depth == 0:
+                    return index
+        raise ValueError('unclosed testkit_visible! invocation')
+
+    for match in call.finditer(masked):
+        opening = match.start('open') if match.group('open') else match.start('bare_open')
+        closing = matching(opening)
+        body_start, body_end = opening + 1, closing
+        def skip_space(index):
+            while index < body_end and masked[index].isspace():
+                index += 1
+            return index
+
+        def arm(name, index):
+            found = re.match(rf'{name}\b\s*\{{', masked[index:body_end])
+            if not found:
+                return None
+            arm_open = index + found.group(0).rfind('{')
+            arm_close = matching(arm_open)
+            return arm_close + 1, (arm_open + 1, arm_close)
+
+        index = skip_space(body_start)
+        first = arm('testkit', index)
+        if first is None:
+            selected, dual = (body_start, body_end), False
+        else:
+            index, _testkit = first
+            second = arm('production', skip_space(index))
+            if second is None or skip_space(second[0]) != body_end:
+                raise ValueError('malformed testkit_visible! dual arm')
+            selected, dual = second[1], True
+        calls.append((match.start(), closing + 1, *selected, dual))
+    return calls
+
+
+def production_text(text):
+    """Replace testkit_visible! calls with their production item, preserving offsets."""
+    result = list(text)
+    calls = _testkit_calls(text)
+    active = []
+    for call in calls:
+        start, end, selected_start, selected_end, _dual = call
+        discarded = any(other_start <= start and end <= other_end
+                        and not (other_selected_start <= start and end <= other_selected_end)
+                        for other_start, other_end, other_selected_start, other_selected_end, _other_dual in calls
+                        if (other_start, other_end) != (start, end))
+        if not discarded:
+            active.append(call)
+    for start, end, selected_start, selected_end, _dual in sorted(active):
+        selected = text[selected_start:selected_end]
+        result[start:end] = ['\n' if char == '\n' else ' ' for char in text[start:end]]
+        result[selected_start:selected_end] = selected
+    return ''.join(result)
+
+
+def _testkit_outer_span(text, start, end):
+    """Return the smallest enclosing testkit_visible! span for an item, if any."""
+    containing = [(call_end - call_start, call_start, call_end)
+                 for call_start, call_end, selected_start, selected_end, _dual in _testkit_calls(text)
+                 if selected_start <= start and end <= selected_end]
+    if not containing:
+        return None
+    _, call_start, call_end = min(containing)
+    return call_start, call_end
+
+
 def code_sub(pattern, replacement, text):
     masked = code_mask(text)
     return re.sub(pattern, lambda m: replacement(m) if masked[m.start()] == text[m.start()] else m[0], text)
@@ -417,8 +503,8 @@ VIS = r'(?:pub(?:\((?:crate|super|in ' + IDENT + r'(?:::' + IDENT + r')*)\))? +)
 
 
 def module_items(text):
-    """Locate module-level items; never descend into functions, macros or impls."""
-    masked = code_mask(text)
+    """Locate module-level items; expand testkit_visible! but keep other macros opaque."""
+    masked = code_mask(production_text(text))
     tokens = list(re.finditer(IDENT + r'|[^\s]', masked))
     result = []
     def scan(pos, scope):
@@ -484,6 +570,8 @@ def mount_items(text, name):
         if not re.match(VIS + r'mod ' + re.escape(name) + r'\b', head): continue
         if not re.fullmatch(VIS + r'mod ' + re.escape(name) + ';', head):
             raise ValueError(name + ': inline or unsupported module mount')
+        if _testkit_outer_span(text, start, end):
+            raise ValueError(name + ': testkit_visible! module mounts require a separate reviewed fix')
         attrs = text[start:header]
         if re.search(r'\bpath\b', code_mask(attrs)):
             raise ValueError(name + ': path module mounts are forbidden')
@@ -566,7 +654,8 @@ def add_mounts(dest, additions):
             raise ValueError(parent + ': cannot append mount after unterminated line')
         # Insert after complete items, before any trailing outer attributes.
         # Prepending would put crate-level inner attributes after the new item.
-        ends = [end for _, end, _, scope in module_items(text) if not scope]
+        ends = [(_testkit_outer_span(text, start, end) or (start, end))[1]
+                for start, end, _, scope in module_items(text) if not scope]
         at = max(ends, default=0)
         if at:
             newline = text.find('\n', at)
