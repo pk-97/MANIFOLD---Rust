@@ -105,7 +105,7 @@ truth_kind = "kick_onset_csv"
 instrument_filter = "kick"
 label_tolerance_sec = 0.035
 n_labels = 17
-notes = "CAVEAT (audio_labels/README.md): stems are unwarped (native 128bpm) while mix is tempo-warped (13.241s); mix_time_s was linearly scaled x0.8828 and snapped to the nearest mix onset. Re-exporting stems warped would remove the caveat."
+notes = "Repaired 2026-10-09: mix reconstructed at unity gain from the unchanged 44100 Hz stems (661501 frames). Label columns now share stem time. See audio_labels/bad_guy_128bpm.repair.json for hashes. Old mix scores/calibration are invalid for this revision; perceptual onset-label audit remains pending (BUG-qtd)."
 
 [[fixture]]
 id = "feel_the_vibration_174bpm"

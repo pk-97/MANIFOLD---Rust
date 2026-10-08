@@ -6,6 +6,13 @@ tracker, presence, transients) must pass through before touching the live path.
 Design context: [AUDIO_OBJECT_TRACKING_DESIGN.md](AUDIO_OBJECT_TRACKING_DESIGN.md).
 Written so a session with NO prior context can run, read, and judge results.
 
+**2026-10-09 audit note:** the historical scores and claims below have not been
+revalidated against current code. `bad_guy` now has a mix reconstructed from
+its unchanged stems and matching label timebases; its previous scores and
+per-track calibration are stale. See `tests/fixtures/audio_labels/README.md`
+and BUG-qtd. Audit onset definitions and raw delivery latency before using
+this pack to judge detector improvements.
+
 ## 1. Running it
 
 ```

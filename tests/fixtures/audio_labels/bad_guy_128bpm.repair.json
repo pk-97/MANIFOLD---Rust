@@ -1,0 +1,56 @@
+{
+  "backup": "mix.wav",
+  "mix": {
+    "channels": 2,
+    "frames": 661501,
+    "name": "mix.wav",
+    "output_sha256": "351ad2f07dc5778690b8f04c0af12c1acc8f83fdb3c253fc988e26a433cff7a8",
+    "peak": 1.0,
+    "sample_rate": 44100,
+    "sample_width": 3,
+    "source_sha256": "f8f422e4a8f6bd6e3339e4147e2d1f282fc67efbc2f56982cbffc80f3b2d3bdb"
+  },
+  "report": "provenance.json",
+  "schema": 1,
+  "source_mix": {
+    "channels": 2,
+    "frames": 635587,
+    "name": "mix.wav",
+    "sample_rate": 48000,
+    "sample_width": 3
+  },
+  "stems": [
+    {
+      "channels": 2,
+      "frames": 661501,
+      "name": "bass.wav",
+      "sample_rate": 44100,
+      "sample_width": 2,
+      "sha256": "40b011be4f20aeb2f10b00268cde062ecd224ee8b03f0256192f67777a8d10e5"
+    },
+    {
+      "channels": 2,
+      "frames": 661501,
+      "name": "drums.wav",
+      "sample_rate": 44100,
+      "sample_width": 2,
+      "sha256": "a49757285e1b2e94ae92bd5bbcecf50c3f3fe914114a561c05a62ec02dba6dae"
+    },
+    {
+      "channels": 2,
+      "frames": 661501,
+      "name": "others.wav",
+      "sample_rate": 44100,
+      "sample_width": 2,
+      "sha256": "dbf504ffcb702c38143ed80574594ba0504d8ea502a0d3ec4c9b831259b416e1"
+    },
+    {
+      "channels": 2,
+      "frames": 661501,
+      "name": "vocals.wav",
+      "sample_rate": 44100,
+      "sample_width": 2,
+      "sha256": "f7469ece996e493764a4af013ea4107cb65825dbd0ce6e8d060cd48934d1db15"
+    }
+  ]
+}
