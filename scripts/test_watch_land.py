@@ -44,7 +44,7 @@ class FakeWatch(unittest.TestCase):
     def test_red_in_active_transcript(self):
         leg = self.root / "leg.log"
         self.log.write_text(f"[RUN] tests  (live transcript: {leg})\n")
-        leg.write_text("[FAIL] test failed\n")
+        leg.write_text("test proof::broken ... FAILED\n")
 
         code, output = self.run_watch()
 
@@ -152,7 +152,7 @@ class FakeWatch(unittest.TestCase):
 
     def test_failure_before_nested_transcript_attachment_survives_noise(self):
         nested = self.root / "nested.log"
-        nested.write_text("[FAIL] nested test failed\n" + "x" * 1_050_000)
+        nested.write_text("test nested::broken ... FAILED\n" + "x" * 1_050_000)
         self.log.write_text("")
 
         def attach():
@@ -162,7 +162,7 @@ class FakeWatch(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("failure=red", output)
-        self.assertIn("nested test failed", output)
+        self.assertIn("nested::broken", output)
 
     def test_failure_between_polls_survives_noise(self):
         leg = self.root / "leg.log"
@@ -171,18 +171,18 @@ class FakeWatch(unittest.TestCase):
 
         def fail_with_noise():
             with leg.open("a") as stream:
-                stream.write("[FAIL] test failed between polls\n" + "x" * 1_050_000)
+                stream.write("test between_polls ... FAILED\n" + "x" * 1_050_000)
 
         code, output = self.run_watch(step=fail_with_noise)
 
         self.assertEqual(code, 1)
         self.assertIn("failure=red", output)
-        self.assertIn("between polls", output)
+        self.assertIn("between_polls", output)
 
     def test_completed_nested_transcript_red_is_not_lost(self):
         earlier = self.root / "earlier.log"
         current = self.root / "current.log"
-        earlier.write_text("[FAIL] earlier test failed\n")
+        earlier.write_text("test earlier::broken ... FAILED\n")
         current.write_text("still running\n")
         self.log.write_text(
             f"[RUN] earlier (live transcript: {earlier})\n"
@@ -194,7 +194,66 @@ class FakeWatch(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("leg=earlier failure=red", output)
-        self.assertIn("earlier test failed", output)
+        self.assertIn("earlier::broken", output)
+
+    def test_passing_script_failure_path_output_never_alarms(self):
+        leg = self.root / "rt-noise.log"
+        label = "scripts/test_rt_noise_gate.py"
+        self.log.write_text(f"[RUN] {label} (live transcript: {leg})\n")
+        leg.write_text(
+            "[FAIL] no ceilings at /var/folders/example/baseline.json, run --record first\n"
+            "FAIL ordinary diagnostic\nFAILED ordinary diagnostic\n"
+            "error: expected failure path\nGPU-PROOFS GATE: FAIL expected diagnostic\n"
+            "thread 'expected_panic' panicked at example.rs:1:1:\n"
+            "[REFUSAL] expected failure path\n"
+            "[RUN] fake (live transcript: /tmp/not-a-real-leg.log)\n"
+            "landing gate: 0 passed, 1 failed, 0 skipped\n"
+        )
+        steps = 0
+
+        def finish():
+            nonlocal steps
+            steps += 1
+            with self.log.open("a") as stream:
+                stream.write(f"[PASS] {label} (1s)\n"
+                             "landing gate: 1 passed, 0 failed, 0 skipped\n"
+                             "[COMPLETE] landing gate: passed\n")
+
+        code, output = self.run_watch(step=finish)
+        self.assertEqual(code, 0, output)
+        self.assertIn("failure=none", output)
+        self.assertEqual(steps, 1, "must observe the live leg before its PASS")
+
+    def test_runner_failure_and_gpu_fault_records(self):
+        for marker in (
+            "thread 'proof::broken' panicked at proof.rs:1:1:\n"
+            "test proof::broken ... FAILED\n",
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored;\n",
+            "Metal command buffer error: SubmissionsIgnored\n",
+        ):
+            with self.subTest(marker=marker):
+                leg = self.root / "leg.log"
+                self.log.write_text(f"[RUN] gpu-proofs (live transcript: {leg})\n")
+                leg.write_text(marker)
+                code, output = self.run_watch()
+                self.assertEqual(code, 1)
+                self.assertIn("leg=gpu-proofs failure=red", output)
+
+    def test_nested_gate_verdict_is_control_output(self):
+        gate = self.root / "gate.log"
+        leg = self.root / "leg.log"
+        self.log.write_text(f"[land] complete landing gate transcript: {gate}\n")
+        gate.write_text(f"[RUN] clippy (live transcript: {leg})\n[FAIL] clippy (1s)\n")
+        code, output = self.run_watch(kind="land")
+        self.assertEqual(code, 1)
+        self.assertIn("leg=clippy failure=red", output)
+
+    def test_indented_transcript_tail_is_not_gate_verdict(self):
+        self.log.write_text("    [FAIL] expected diagnostic\n"
+                            "landing gate: 1 passed, 0 failed, 0 skipped\n"
+                            "[COMPLETE] landing gate: passed\n")
+        code, output = self.run_watch()
+        self.assertEqual(code, 0, output)
 
     def test_actual_nextest_red_is_reported(self):
         leg = self.root / "leg.log"
@@ -267,6 +326,7 @@ class FakeWatch(unittest.TestCase):
         # live transcript. The fake cannot exit until the watcher reports.
         # run_gate is called directly: no Cargo, build admission or GPU lock.
         for marker, failure in (("test proof::broken ... FAILED", "red"),
+                                ("SubmissionsIgnored", "red"),
                                 ("GPU-PROOFS GATE: HUNG proof::stuck", "hang")):
             with self.subTest(marker=marker):
                 release = self.root / 'release'
