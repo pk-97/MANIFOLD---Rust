@@ -35,3 +35,5 @@ mod rt_tl_b_transmission;
 mod rt_tl_c_sun_tint;
 mod scene_viewport_navigate;
 mod scene_viewport_session;
+
+use manifold_nodes_scene as _;

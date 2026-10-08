@@ -4,6 +4,7 @@
 //! load migration now own those structural checks; this file keeps the real
 //! import, frame capture, selection, and graph preparation behavior covered.
 
+use manifold_renderer as _;
 use std::path::Path;
 use std::collections::BTreeSet;
 

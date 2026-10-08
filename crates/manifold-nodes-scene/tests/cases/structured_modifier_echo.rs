@@ -4,7 +4,7 @@
 //! renderer's `test_device` lock and the crate's GPU-only test configuration.
 
 use manifold_node_engine::freeze::codegen::standalone_for_spec;
-use crate::node_graph::primitives::analytic_echo_instances::AnalyticEchoInstances;
+use manifold_nodes_scene::node_graph::primitives::analytic_echo_instances::AnalyticEchoInstances;
 
 #[test]
 fn structured_modifier_echo_schema_and_standalone_index_contract() {

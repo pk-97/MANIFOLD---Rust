@@ -12,8 +12,8 @@ Instrument frame: these extensions are the difference between "store-page previe
 
 Re-derivation commands, run before any phase:
 ```
-rg -n 'clearcoat|specular_factor|ior|transmission' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs | head -40
-rg -n 'transmission|sheen|iridescence|volume|anisotrop|dispersion' crates/manifold-renderer/src/node_graph/gltf_load.rs
+rg -n 'clearcoat|specular_factor|ior|transmission' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs | head -40
+rg -n 'transmission|sheen|iridescence|volume|anisotrop|dispersion' crates/manifold-nodes-scene/src/node_graph/gltf_load.rs
 python3 - <<'EOF'  # current xfail families
 import re; t=open('docs/GLB_CONFORMANCE_STATUS.md').read()
 print(re.findall(r'\*\*Gap:\*\* unsupported material extension.*?(?=\*\*Gap|\Z)', t, re.S)[0][:2000])

@@ -372,9 +372,9 @@ def shader_index(repo, workspace):
     return resolve
 
 
-def proof_module_prefix(path, repo):
+def proof_module_prefix(path, repo, root=None):
     """Honor explicit catalog-proof mounts before deriving a path prefix."""
-    root = Path(repo) / PROOFS_DIR / 'main.rs'
+    root = Path(root) if root is not None else Path(repo) / PROOFS_DIR / 'main.rs'
     if root.is_file():
         from crate_move_replay import module_items
         text = root.read_text()
@@ -383,7 +383,7 @@ def proof_module_prefix(path, repo):
             attrs = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', text[start:head])
             if declaration and attrs and root.parent.joinpath(*scope, attrs[-1]).resolve() == (Path(repo) / path).resolve():
                 return '::'.join((*scope, declaration[1])) + '::'
-    parts = list(Path(path[len(PROOFS_DIR):]).with_suffix('').parts)
+    parts = list((Path(repo) / path).resolve().relative_to(root.parent.resolve()).with_suffix('').parts)
     return '::'.join(parts[:-1] if parts[-1] == 'mod' else parts) + '::'
 
 
@@ -503,6 +503,23 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
             prefix = proof_module_prefix(path, repo)
             plan.filters.add(prefix.split("::")[0] + "::")
             continue
+        # A moved proof target keeps its module scope under its Cargo owner.
+        if owner and path.endswith(".rs"):
+            proof_targets = [
+                target for target in workspace.targets(owner, "test")
+                if "gpu-proofs" in target.get("required-features", [])
+                and (Path(repo) / path).resolve().is_relative_to(Path(target["src_path"]).resolve().parent)
+                and Path(target["src_path"]).name == "main.rs"
+            ]
+            if proof_targets:
+                for target in proof_targets:
+                    root = Path(target["src_path"])
+                    if (Path(repo) / path).resolve() == root.resolve():
+                        plan.required_binaries.add((owner, target["name"]))
+                    else:
+                        prefix = proof_module_prefix(path, repo, root)
+                        plan.filters.add(prefix.split("::")[0] + "::")
+                continue
         if path.startswith(CPU_FLIP_FIXTURES_DIR):
             plan.filters.update(CPU_FLIP_REFERENCE_FILTERS)
             continue

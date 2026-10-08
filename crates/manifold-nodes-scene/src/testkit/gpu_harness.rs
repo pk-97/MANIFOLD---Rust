@@ -114,3 +114,17 @@ pub fn read_rt_channel(
     }
     out
 }
+
+pub fn readback_rgba_f32(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> Vec<f32> {
+    use half::f16;
+    let bytes_per_row = texture.width * 8; // Rgba16Float = 8 bytes/px
+    let total_bytes = u64::from(texture.height * bytes_per_row);
+    let buf = device.create_buffer_shared(total_bytes);
+    let mut enc = device.create_encoder("rt-t2b-readback");
+    enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
+    enc.commit_and_wait_completed();
+    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
+    let f16s: &[f16] =
+        unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (texture.width * texture.height * 4) as usize) };
+    f16s.iter().map(|v| v.to_f32()).collect()
+}

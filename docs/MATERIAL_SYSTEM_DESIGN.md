@@ -190,8 +190,8 @@ Each atom ships in its own file: `crates/manifold-renderer/src/node_graph/primit
 
 ### Affected renderers (v1 scope)
 
-- [`render_3d_mesh`](../crates/manifold-renderer/src/node_graph/primitives/render_3d_mesh.rs)
-- [`render_instanced_3d_mesh`](../crates/manifold-renderer/src/node_graph/primitives/render_instanced_3d_mesh.rs)
+- [`render_3d_mesh`](../crates/manifold-nodes-scene/src/node_graph/primitives/render_3d_mesh.rs)
+- [`render_instanced_3d_mesh`](../crates/manifold-nodes-scene/src/node_graph/primitives/render_instanced_3d_mesh.rs)
 
 `render_lines` is out of scope — it's pure colour-along-curve rendering with no surface to shade.
 
@@ -268,7 +268,7 @@ Each material kind has its own fragment shader file:
 
 All four share the same vertex shader (the existing one in `render_3d_mesh.wgsl` / `render_instanced_3d_mesh.wgsl`). The renderer's `create_render_pipeline_depth` call picks the right fragment entry point per kind.
 
-PBR's shader includes the existing [`pbr_brdf.wgsl`](../crates/manifold-renderer/src/node_graph/primitives/shaders/pbr_brdf.wgsl) helper that cook_torrance + envmap_sample atoms already share — that code stays reusable; it now lives inside the material's fragment shader instead of being composed via separate atoms.
+PBR's shader includes the existing [`pbr_brdf.wgsl`](../crates/manifold-nodes-scene/src/node_graph/primitives/shaders/pbr_brdf.wgsl) helper that cook_torrance + envmap_sample atoms already share — that code stays reusable; it now lives inside the material's fragment shader instead of being composed via separate atoms.
 
 ---
 

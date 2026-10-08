@@ -5,6 +5,7 @@
 //! routing only; the frozen cube fixture is structural evidence, while the
 //! mushroom import is the production photoscan source used for frame capture.
 
+use manifold_renderer as _;
 use std::collections::BTreeMap;
 use std::path::Path;
 

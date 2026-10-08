@@ -11,7 +11,7 @@
 //!   3. `cut_plus_one_matches_cold_start_within_epsilon` — the SAME numeric
 //!      oracle shape as P2's cut-reset gate: a scaler with warmed-up
 //!      history from scene A, cut to scene B via
-//!      `crate::node_graph::temporal_reset::TemporalResetDetector` (the
+//!      `manifold_nodes_scene::node_graph::temporal_reset::TemporalResetDetector` (the
 //!      SHARED reset-detection path — RT-D2), must produce output
 //!      indistinguishable from a COLD-START scaler seeing scene B for the
 //!      first time. Proves no ghost of scene A survives the reset.
@@ -19,7 +19,7 @@
 use half::f16;
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::metalfx_temporal_upscaler::MetalFxTemporalUpscaler;
+use manifold_nodes_scene::metalfx_temporal_upscaler::MetalFxTemporalUpscaler;
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_node_engine::exec::temporal_reset::TemporalResetDetector;
 

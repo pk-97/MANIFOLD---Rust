@@ -48,6 +48,7 @@ gpu = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = '''
     package(manifold-gpu)
+  | (binary_id(manifold-nodes-scene) & test(/^node_graph::gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node$/))
   | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
   | (binary_id(manifold-renderer) & test(/^node_graph::(gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
   | (binary_id(manifold-node-engine) & test(/^(exec::execution::tests::aliased_output_assertion_fires_on_silent_primitive|load::graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan))$/))
@@ -66,6 +67,7 @@ test-group = "gpu"
 [[profile.ci.overrides]]
 filter = '''
     package(manifold-gpu)
+  | (binary_id(manifold-nodes-scene) & test(/^node_graph::gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node$/))
   | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
   | (binary_id(manifold-renderer) & test(/^node_graph::(gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
   | (binary_id(manifold-node-engine) & test(/^(exec::execution::tests::aliased_output_assertion_fires_on_silent_primitive|load::graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan))$/))

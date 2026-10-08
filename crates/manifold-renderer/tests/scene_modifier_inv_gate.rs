@@ -4,6 +4,7 @@
 //! These tests retain the meaningful gates: canonical insertion, expansion,
 //! bypass state, shared binding identities, and complete inverse edits.
 
+use manifold_renderer as _;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::scene_modifier_edit::{delete_scene_modifier, insert_scene_modifier};

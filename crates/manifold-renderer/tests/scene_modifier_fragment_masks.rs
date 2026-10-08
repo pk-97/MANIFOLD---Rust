@@ -1,5 +1,6 @@
 //! Load-time repair for the stock fragment mask sampling regression.
 
+use manifold_renderer as _;
 use std::path::Path;
 
 use manifold_core::effect_graph_def::{

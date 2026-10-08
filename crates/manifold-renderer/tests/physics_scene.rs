@@ -6,6 +6,7 @@
 //! paired with the shared world, and the load-time exposure migration remains
 //! complete and idempotent.
 
+use manifold_renderer as _;
 use std::collections::{BTreeMap, BTreeSet};
 
 use manifold_core::effect_graph_def::{

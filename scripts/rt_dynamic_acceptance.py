@@ -798,7 +798,7 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
 
     reference_project = Path(reference_project)
     held_out_project = Path(held_out_project)
-    checked_in_reference = repo / "crates/manifold-renderer/tests/fixtures/scene-modifiers/rt_dynamic_reference.json"
+    checked_in_reference = repo / "crates/manifold-nodes-scene/tests/fixtures/scene-modifiers/rt_dynamic_reference.json"
     if not checked_in_reference.is_file():
         tests.append(blocked_entry(
             "perf: reference fixture",

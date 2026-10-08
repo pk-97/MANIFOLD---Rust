@@ -30,7 +30,7 @@ it is potentially not all that correct" — its lessons are prior evidence, not 
 | UI drawable acquire | `crates/manifold-gpu/src/metal/surface.rs:192` (`allowsNextDrawableTimeout`), `:224` (`next_drawable` → `Option`); skip-on-None at `crates/manifold-app/src/frame/present.rs:721` | Never blocks forever, but can stall the main thread up to the ~1s timeout when the pool starves. |
 | Monolithic frame encoders | `crates/manifold-app/src/content_pipeline.rs:2039` ("Generators", commit :2192/:2195), `:2214` ("Compositor", commit :3042/:3045) | Two command buffers per frame hold all generator + compositor work. This is the chunking target. |
 | Compositor parallel path | `crates/manifold-renderer/src/layer_compositor.rs:2306` (`composite_parallel`, per-layer command buffers + GpuEvent, chosen when ≥2 active layers and not `force_serial`) | Already chunks the compositor for multi-layer frames. A single heavy layer — the RT case — falls to `composite_serial`, one buffer. Chunking must reach *inside* the layer's work. |
-| RT scene node dispatches | `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` (8890 lines; mask / lighting / translucent-trace / IBL / denoise dispatches, all one encoder) | The 10fps wall for a single RT layer lives here: several large dispatches in one node, one buffer. Per-layer checkpoints alone would not split it. |
+| RT scene node dispatches | `crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs` (8890 lines; mask / lighting / translucent-trace / IBL / denoise dispatches, all one encoder) | The 10fps wall for a single RT layer lives here: several large dispatches in one node, one buffer. Per-layer checkpoints alone would not split it. |
 | Generator encode loop | `crates/manifold-app/src/content_pipeline.rs:2073` (`gen_renderer.render_all(&mut gpu_gen, …)`) | All layers' generators encode into the one "Generators" buffer via the `GpuEncoder` wrapper (`crates/manifold-node-engine/src/gpu/gpu_encoder.rs:7`). |
 | Command drain under load | `crates/manifold-app/src/content_thread.rs:478` (`wait_for_surface_draining_commands`), main drain :371–431 | Commands are already processed promptly while the GPU is behind. Latency is in *publish*, not apply. |
 | Snapshot publish | `crates/manifold-app/src/content_thread.rs:1112` (`data_version` check), build :1241, `state_tx.send` :1403 — all inside `tick_frame` (:589) | Publish is welded to rendering. `last_data_version` field already exists (:80). |
@@ -158,7 +158,7 @@ Checkpoint call sites (re-derive at execution; the count is the gate):
   Re-derive: `rg -n 'fn render_all' crates/manifold-renderer/src/generator_renderer.rs`.
 - `render_scene.rs` — between the heavy dispatch groups: mask / lighting / translucent-trace /
   IBL convolution / denoise / upscale. Re-derive:
-  `rg -n 'dispatch_compute|draw_instanced_depth' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`.
+  `rg -n 'dispatch_compute|draw_instanced_depth' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs`.
   Precondition: the D4a shared-buffer audit of this file comes first.
 - `composite_serial` (`layer_compositor.rs:1726`) — between `generate_layers`, `fold_groups`,
   `blend_layers`. `composite_parallel` needs nothing (already per-layer buffers).

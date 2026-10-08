@@ -1,3 +1,4 @@
+use manifold_renderer as _;
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue,
 };

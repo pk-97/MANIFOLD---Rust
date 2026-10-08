@@ -19,6 +19,7 @@
 //!
 //! Run: `cargo run --release -p manifold-renderer --bin freeze-profile`
 
+use manifold_renderer as _;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::{Beats, Seconds};

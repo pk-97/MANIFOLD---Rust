@@ -784,7 +784,7 @@ fn merges_a_real_asset_and_writes_merged_def_for_graph_tool() {
     assert_eq!(target_report.object_count, 2, "azalea has 2 materials with geometry");
 
     let box_summary =
-        gltf_load::gltf_import_summary(&box_path).expect("parse Box.glb summary");
+        gltf_load::testkit::gltf_import_summary(&box_path).expect("parse Box.glb summary");
     let plan = merge_import_into_graph(&target_def, &box_summary, &box_path)
         .expect("merge Box.glb into the azalea scene");
     assert_eq!(plan.new_objects_count, 3, "2 azalea objects + 1 Box object");
@@ -3572,7 +3572,7 @@ fn bug221_pivot_spins_in_place_after_fix_but_not_before() {
         eprintln!("bug221_pivot_spins_in_place_after_fix_but_not_before: fixture not found at {}, skipping", path.display());
         return;
     }
-    let summary = gltf_load::gltf_import_summary(&path).expect("parse EmissiveStrengthTest for offset scan");
+    let summary = gltf_load::testkit::gltf_import_summary(&path).expect("parse EmissiveStrengthTest for offset scan");
     let center = [
         (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
         (summary.bbox_min[1] + summary.bbox_max[1]) * 0.5,

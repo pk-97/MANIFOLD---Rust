@@ -18,104 +18,66 @@
 //! effect impls were gone. Nothing runs through a legacy path anymore, so
 //! there is nothing left to be "at parity" with.)
 
-mod harness;
 mod generator_provider;
 mod scene_modifier_legacy;
 
 mod alpha_contract;
 mod node_error_status;
 mod bug237_light_camera_commit_render_proof;
-mod camera_conformance;
 mod cinematic_scene_tail;
 mod film_grain_decorrelation;
 mod fragment_storage;
 mod gbuffer_depth;
 mod gbuffer_velocity;
 mod motion_blur_visibility;
-mod render_scene_exposure;
-mod render_scene_fog;
-mod render_scene_glass;
 mod render_scene_pbr_fidelity;
 mod render_scene_subsurface;
-mod render_scene_punctual_fidelity;
-mod render_scene_uv1_preservation;
 #[path = "catalog/render_scene_material_upgrade.rs"]
 mod render_scene_material_upgrade;
 mod render_legacy_parity;
-mod render_scene_ibl;
-mod render_scene_instances;
-mod render_scene_lights;
 mod render_scene_map_set;
 mod physics_solids;
 mod physics_boxes;
 mod water_basin;
 mod physics_takes;
 mod fluid_array_growth;
-mod render_scene_object_visibility;
 mod render_scene_ao_mask;
-mod render_scene_pcss;
 mod render_scene_shadow_cache;
-mod render_scene_shadows;
 mod rt_object_motion_shadow;
-mod rt_p1_region_probe;
-mod rt_p1_shadow;
 mod rt_p2_soft_ao_temporal;
-mod rt_p3_emissive_gi;
 mod rt_p3_emissive_texture;
-mod rt_p4_metalfx_temporal;
 mod rt_t1b_vertex_normals;
-mod rt_t2a_alpha_mask;
-mod rt_bug17r3_lightless_gi;
 #[path = "catalog/rt_bug318_import_toggle.rs"]
 mod rt_bug318_import_toggle;
 #[path = "catalog/rt_bug326_fix_gate.rs"]
 mod rt_bug326_fix_gate;
-mod rt_bug88m_blend_specular_gate;
 #[path = "catalog/rt_bugmajv_kernel_toggle.rs"]
 mod rt_bugmajv_kernel_toggle;
-mod rt_edc_enclosure;
-mod rt_emissive_direct;
 mod rt_emissive_instancing;
 mod rt_emissive_light_table;
-mod rt_furnace_oracle;
 mod rt_firefly_clamp;
 mod rt_atrous_post;
 mod rt_gesture_response;
-mod rt_instancing;
 mod rt_dynamic_geometry;
 mod rt_dynamic_current_frame;
 mod rt_dynamic_refit;
 mod rt_dynamic_catalog;
-#[cfg(feature = "rt-perf-proofs")]
-mod rt_dynamic_perf;
 #[cfg(feature = "fluid-perf-proofs")]
 mod fluid_surface_perf;
 #[cfg(feature = "water-race-probes")]
 mod gpu_flip_frame_perf;
 #[cfg(feature = "matter-perf-proofs")]
 mod matter_solver_perf;
-mod rt_dynamic_fusion;
 mod rt_dynamic_shading;
 #[path = "catalog/rt_normal_tangent_mirror.rs"]
 mod rt_normal_tangent_mirror;
-mod rt_multi_caster_shadow;
-mod rt_6caster_shadow;
-mod rt_object_cast_shadows;
-mod rt_r1_reflection;
 mod rt_r2_accumulation;
 mod rt_r2_clamp;
 #[path = "catalog/rt_r3_heldout_gltf.rs"]
 mod rt_r3_heldout_gltf;
-mod rt_r3_textured_roughness;
-mod rt_t2b_temporal_wiring;
-mod rt_t2c_shadow_temporal_stability;
 mod rt_t38_multibounce;
-mod rt_tl_b_transmission;
-mod rt_tl_c_sun_tint;
 mod rt_w0_gbuffer;
 mod scene_object_migration_round_trip;
-mod scene_viewport_navigate;
-mod scene_viewport_session;
 mod matter_cost_probe;
 mod matter_look;
 mod matter_scene;

@@ -13,7 +13,7 @@ use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistr
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 const RT_WARMUP_FRAMES: i64 = 16;
 const RADIUS: i32 = 5;

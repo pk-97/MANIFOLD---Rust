@@ -17,19 +17,25 @@ const UI_PAINT_DEPS: &[&str] = &[
 // Each later split phase adds its owning crate and allowed workspace edges.
 const LAYERS: &[Layer] = &[
     Layer {
-        package: "manifold-nodes-image",
-        normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu", "manifold-native", "manifold-node-engine", "manifold-physics"],
-        dev: &["manifold-node-engine", "manifold-nodes-image"],
+        package: "manifold-nodes-scene",
+        normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu", "manifold-node-engine"],
+        dev: &["manifold-node-engine", "manifold-nodes-scene"],
     },
     Layer {
         package: "manifold-renderer",
-        normal_and_build: &["manifold-core", "manifold-fluids", "manifold-foundation", "manifold-gpu", "manifold-native", "manifold-node-engine", "manifold-nodes-image", "manifold-physics", "manifold-playback"],
-        dev: &["manifold-editing", "manifold-gpu", "manifold-io", "manifold-node-engine", "manifold-nodes-image", "manifold-ui", "manifold-ui-paint"],
+        normal_and_build: &["manifold-core", "manifold-fluids", "manifold-foundation", "manifold-gpu", "manifold-native", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-physics", "manifold-playback"],
+        dev: &["manifold-editing", "manifold-gpu", "manifold-io", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-ui", "manifold-ui-paint"],
     },
     Layer {
         package: "manifold-app",
-        normal_and_build: &["manifold-audio", "manifold-core", "manifold-editing", "manifold-gpu", "manifold-io", "manifold-led", "manifold-media", "manifold-node-engine", "manifold-nodes-image", "manifold-playback", "manifold-profiler", "manifold-recording", "manifold-renderer", "manifold-spectral", "manifold-ui", "manifold-ui-paint"],
+        normal_and_build: &["manifold-audio", "manifold-core", "manifold-editing", "manifold-gpu", "manifold-io", "manifold-led", "manifold-media", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-playback", "manifold-profiler", "manifold-recording", "manifold-renderer", "manifold-spectral", "manifold-ui", "manifold-ui-paint"],
         dev: &[],
+    },
+
+    Layer {
+        package: "manifold-nodes-image",
+        normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu", "manifold-native", "manifold-node-engine", "manifold-physics"],
+        dev: &["manifold-node-engine", "manifold-nodes-image"],
     },
 
     Layer {
@@ -83,6 +89,10 @@ fn workspace_dependencies_obey_layering() {
     for source in ["manifold-renderer", "manifold-app"] {
         assert!(normal_and_build.contains(&(source, "manifold-nodes-image")),
                 "missing leaf dependency: {source} -> manifold-nodes-image");
+    }
+    for source in ["manifold-renderer", "manifold-app"] {
+        assert!(normal_and_build.contains(&(source, "manifold-nodes-scene")),
+                "missing leaf dependency: {source} -> manifold-nodes-scene");
     }
     for layer in LAYERS {
         assert!(packages.contains_key(layer.package), "missing crate: {}", layer.package);

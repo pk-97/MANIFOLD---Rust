@@ -22,6 +22,7 @@
 //! rebuild needed. This is the same set the runtime preset loader scans
 //! as its dev stock root.
 
+use manifold_renderer as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;

@@ -111,8 +111,8 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Mesh vertex solid clamp | constrain mu to solid root on open side; sequential epsilon bounds 1e-10 | present at b75c12b29; missing contact coverage and credit | retained exact rule; oblique-wall and thin-plate proofs | ported | `crates/manifold-fluids/native/flip_engine/polygonizer3d.cpp:467`; `crates/manifold-node-engine/src/water/primitives/shaders/volume_surface_mesh_body.wgsl:54` |
 | Anisotropy / centre smoothing / detached shrink | sphere / 0 / 1 | sphere / 0 / 1 | sphere / 0 / 1 | matched | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:418`; `crates/manifold-node-engine/src/water/primitives/gpu_flip_preset.rs:519` |
 | Field smoothing / Fill Pits | 0 / 0 (engine has neither) | 0 / 0 (engine has neither) | 0 / 0 (engine has neither) | matched | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:305`; `crates/manifold-node-engine/src/water/primitives/gpu_flip_preset.rs:519` |
-| Mesh smoothing value | 0.5 (engine default) | 0.5 | 0.5 | matched | `crates/manifold-renderer/tests/fixtures/cpu-flip/WaterDamBreak.json:652`; `crates/manifold-renderer/src/node_graph/primitives/surface_mesh_normals.rs:125` |
-| Mesh smoothing iterations | 2 | 2 | 2 | matched | `crates/manifold-renderer/tests/fixtures/cpu-flip/WaterDamBreak.json:656`; `crates/manifold-renderer/src/node_graph/primitives/smooth_surface_mesh.rs:33` |
+| Mesh smoothing value | 0.5 (engine default) | 0.5 | 0.5 | matched | `crates/manifold-renderer/tests/fixtures/cpu-flip/WaterDamBreak.json:652`; `crates/manifold-nodes-scene/src/node_graph/primitives/surface_mesh_normals.rs:125` |
+| Mesh smoothing iterations | 2 | 2 | 2 | matched | `crates/manifold-renderer/tests/fixtures/cpu-flip/WaterDamBreak.json:656`; `crates/manifold-nodes-scene/src/node_graph/primitives/smooth_surface_mesh.rs:33` |
 | Whitewater enabled / types | on; foam, bubbles, spray; dust off | on; foam, bubbles, spray; dust off | on; foam, bubbles, spray; dust off | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:461`; `crates/manifold-node-engine/src/water/primitives/whitewater_step.rs:142` |
 | Whitewater capacity | 100000 preset override | 100000 preset override | 100000 preset override | matched | `crates/manifold-renderer/tests/fixtures/cpu-flip/WaterDamBreak.json:664`; `crates/manifold-node-engine/src/water/primitives/whitewater_step.rs:52` |
 | Wavecrest rate | 175 | 175 | 175 | matched | `crates/manifold-renderer/tests/fixtures/cpu-flip/WaterDamBreak.json:668`; `crates/manifold-node-engine/src/water/primitives/emission_count.rs:20` |
@@ -266,7 +266,7 @@ Paths abbreviated after first use: `R/` = `crates/manifold-renderer/src/node_gra
 | Marching cubes / isosurface | `rg -n -i 'marching|isosurface|polygoniz' crates/manifold-renderer/src crates/manifold-gpu/src` | None. |
 | Texture3D sizing | `R/effect_node.rs:1773` (`texture_3d_output_dims`), `R/graph_loader.rs:1830` | Load-time only, from params or input dims. No CPU-to-3D-texture upload in `manifold-gpu` (`device.rs:600` and `encoder.rs:2374` are 2D). |
 | CPU-mapped ring reuse | `crates/manifold-gpu/src/metal/frame_fence.rs:59` (`is_completed`), `crates/manifold-ui-paint/src/clip_thumb_gpu.rs:258` | Exists for UI rings. Content-thread exposure unverified (P2 entry). |
-| Bounded GPU timing proof | `crates/manifold-renderer/tests/gpu_proofs/rt_dynamic_perf.rs:31-33`, `crates/manifold-renderer/Cargo.toml:161` (`rt-perf-proofs`) | Exists. The surface budget proof copies it. |
+| Bounded GPU timing proof | `crates/manifold-nodes-scene/tests/gpu_proofs/rt_dynamic_perf.rs:31-33`, `crates/manifold-renderer/Cargo.toml:161` (`rt-perf-proofs`) | Exists. The surface budget proof copies it. |
 | Headless capture | `crates/manifold-renderer/examples/fluid_capture.rs` | Exists. Produces the L2 artifacts. |
 | Add Fluid authoring | `crates/manifold-editing/src/commands/graph/scene/fluid.rs:40` (`AddSceneFluidCommand`), `:450` (fluid `vertices` → object) | Exists. P7 changes what it wires. |
 | Live-only rules | `R/fluid.rs:856-861` (roles and fields reject Record/Playback), `:829-830` (coupling) | Exists. GPU-surface graphs follow the same pattern (D12). |
@@ -977,7 +977,7 @@ solid. Decisions made while building:
   A zero lattice dimension is invalid input, not an empty-frame sentinel, and
   consumers keep their checks. Initialization does not advance simulation time.
 
-- **Entry state:** P3 merged. Anchors: `rg -n 'BarrieredReduction' crates/manifold-nodes-image/src/node_graph/primitives/spawn_from_mesh.rs`, `rg -n 'atomic_outputs' crates/manifold-nodes-image/src/node_graph/primitives/scatter_particles_3d.rs`, `rg -n 'input_access' crates/manifold-renderer/src/node_graph/primitives/triangulate_grid.rs`.
+- **Entry state:** P3 merged. Anchors: `rg -n 'BarrieredReduction' crates/manifold-nodes-image/src/node_graph/primitives/spawn_from_mesh.rs`, `rg -n 'atomic_outputs' crates/manifold-nodes-image/src/node_graph/primitives/scatter_particles_3d.rs`, `rg -n 'input_access' crates/manifold-nodes-scene/src/node_graph/primitives/triangulate_grid.rs`.
 - **Read-back:** D8, D14, D15, D17, D18; section 4.1; the Yu & Turk 2010 sections on anisotropy and centre smoothing.
 - **Deliverables:** `sort_particles_into_cells`, `running_total` (its scan module shared with the sort), `shape_particle_blobs`, `particle_volume`. Value tests against CPU f64 references: permutation and contiguous ranges; scans at section 4.1's sizes; blob shapes for a line of particles (stretched along the line), a uniform cloud (isotropic), an isolated particle (radius scaled by `isolated_scale`), a pair at 2.5 r (in between); volume sums on a random fixture within 1e-4 relative; the solid clamp against a half-space solid.
 - **Gate:** value tests and the GPU filter green; clippy clean.
@@ -1108,7 +1108,7 @@ phase** (below).
   first 30 frames are excluded because cold start spikes under load (34 ms at frame 8,
   load 18–32, on a landing seat; steady-state max 8 ms). At the defaults: max 6.75 ms,
   mean 1.04 ms.
-- **Deletion gate.** `rg -n 'fn mesh_vertex_count' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` and `rg -U 'pub struct DepthMsaaDraw[^}]*vertex_count' crates/manifold-gpu/src/metal/encoder.rs` both find nothing.
+- **Deletion gate.** `rg -n 'fn mesh_vertex_count' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs` and `rg -U 'pub struct DepthMsaaDraw[^}]*vertex_count' crates/manifold-gpu/src/metal/encoder.rs` both find nothing.
 - **Live instances.** An instanced raster draw (outside Points mode) also draws
   indirectly: its instance word is one past the last instance that is not all
   zero (`shaders/live_instances.wgsl`), so a compacted array's tail of holes is

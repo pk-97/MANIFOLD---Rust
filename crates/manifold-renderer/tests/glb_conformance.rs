@@ -24,6 +24,7 @@
 
 #![cfg(feature = "gpu-proofs")]
 
+use manifold_renderer as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

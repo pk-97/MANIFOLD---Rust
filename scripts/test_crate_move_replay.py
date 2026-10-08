@@ -259,10 +259,10 @@ class ReplayTests(unittest.TestCase):
                  '    native_source_identity::emit_source_identity(\n'
                  '        &root, &["src/gltf.rs"], "FAMILY",\n'
                  '    )\n    .expect("family");\n}\n')
-        self.original['crates/manifold-renderer/build.rs'] = ('100644', build.encode())
+        self.original['crates/manifold-nodes-scene/build.rs'] = ('100644', build.encode())
         self.base = self.commit(self.original)
         config = json.loads((self.plan/'plan.json').read_text())
-        config['split_identity'] = {'renderer_build':'crates/manifold-renderer/build.rs',
+        config['split_identity'] = {'renderer_build':'crates/manifold-nodes-scene/build.rs',
                                     'integration_key':'INTEGRATION', 'family_source':'src/gltf.rs'}
         (self.plan/'plan.json').write_text(json.dumps(config))
         self.rejects_replay()

@@ -1,5 +1,6 @@
 //! Structural and CPU preparation coverage for the stock force scene modifiers.
 
+use manifold_renderer as _;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::scene_modifier_edit::insert_scene_modifier;

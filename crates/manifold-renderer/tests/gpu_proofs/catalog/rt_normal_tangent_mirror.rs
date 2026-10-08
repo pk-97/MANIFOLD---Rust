@@ -31,7 +31,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 const W: u32 = 512;
 const H: u32 = 512;

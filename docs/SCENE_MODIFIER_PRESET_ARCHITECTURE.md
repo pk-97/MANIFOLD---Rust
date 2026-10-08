@@ -22,7 +22,7 @@ Base audit: `28c8486f0`. Re-derive anchors at implementation; source takes prior
 | Modifier registry | `crates/manifold-renderer/src/node_graph/scene_modifier.rs:32`, `:162` | Rust function pointers, fixed trace strings, Loop/Fog submissions |
 | Singleton discovery | `scene_modifier.rs:238`; `scene_vm.rs:547` | Presence inferred from kind trace, not an instance stack |
 | Undoable graph surgery | `crates/manifold-editing/src/commands/graph/scene_modifier.rs:90`, `:419` | Current apply/remove snapshot and refresh precedent |
-| Object boundary | `crates/manifold-renderer/src/node_graph/primitives/scene_object.rs:39` | Vertices/transform/material/maps/instances → Object; no Object chaining |
+| Object boundary | `crates/manifold-nodes-scene/src/node_graph/primitives/scene_object.rs:39` | Vertices/transform/material/maps/instances → Object; no Object chaining |
 | Existing parameter surface | `crates/manifold-ui/src/param_surface.rs:1` | One manifest-backed row model for scene/effect/generator cards |
 | Compile pipeline | `crates/manifold-node-engine/src/load/graph_loader.rs`; `freeze/install.rs` | Existing group flattening, binding retargeting, GPU fusion and install |
 

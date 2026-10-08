@@ -14,7 +14,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 pub(super) fn modifier_combo_scene() -> manifold_core::effect_graph_def::EffectGraphDef {
     use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};

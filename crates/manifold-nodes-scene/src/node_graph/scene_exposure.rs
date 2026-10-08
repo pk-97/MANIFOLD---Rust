@@ -92,6 +92,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
     metadata_for_node_type_with_registry(&SCENE_EXPOSURE_REGISTRY, type_id, None)
 }
 
+manifold_core::testkit_visible! {
 /// Convert one registry node's descriptors to scene metadata. Proofs may pass
 /// an explicit dial list for a retired solver whose product controls are no
 /// longer exposed by `manifold-core`.
@@ -169,6 +170,7 @@ pub(crate) fn metadata_for_node_type_with_registry(
             }
         })
         .collect()
+}
 }
 
 /// Explicit Water-look exposure metadata, never part of load-time vocabulary.

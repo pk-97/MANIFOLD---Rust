@@ -32,7 +32,7 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 const ORBIT: f32 = 0.7;
 const TILT: f32 = 0.95;

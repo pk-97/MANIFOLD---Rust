@@ -4,6 +4,7 @@
 //! canonical preparation, and the mock runtime carry a clip edge through the
 //! authored trigger gate and beat envelope.
 
+use manifold_renderer as _;
 use std::path::Path;
 use std::sync::Mutex;
 

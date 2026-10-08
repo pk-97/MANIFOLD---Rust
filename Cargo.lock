@@ -2514,6 +2514,7 @@ dependencies = [
  "manifold-foundation",
  "manifold-gpu",
  "manifold-node-engine",
+ "manifold-nodes-scene",
  "naga",
  "png",
  "serde",

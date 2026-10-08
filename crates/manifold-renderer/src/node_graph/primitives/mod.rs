@@ -8,10 +8,6 @@
 
 
 
-#[cfg(feature = "gpu-proofs")]
-pub use render_scene::rt_proof::{RtProbeObject, RtProbeScene};
-#[cfg(feature = "gpu-proofs")]
-pub use render_scene::blend_snapshot_proof;
 // Standalone staged encoder; the step keeps its existing pressure path.
 #[cfg(test)]
 mod surface_mesh_freeze_tests;
@@ -21,8 +17,6 @@ mod surface_mesh_freeze_tests;
 
 
 
-pub use atmosphere::AtmosphereNode;
-pub use render_mode::RenderModeNode;
 
 
 
@@ -30,9 +24,6 @@ pub use render_mode::RenderModeNode;
 
 
 
-pub use array_replicate_polyline_rings::{
-    ArrayReplicatePolylineRings, REPLICATE_MAX_RINGS,
-};
 
 
 
@@ -51,38 +42,19 @@ pub use array_replicate_polyline_rings::{
 
 
 
-pub use bake_equirect_envmap::BakeEquirectEnvmap;
 
 
 
 
 
-pub use pack_curve_xy::PackCurveXy;
 
 
 
 
-pub use copy_positions::CopyPositions;
-pub use wave_shear_mesh::WaveShearMesh;
-pub use transform_mesh_patches::TransformMeshPatches;
-pub use ordered_recon_mesh::OrderedReconMesh;
-pub use mesh_cut_map::{CutMeshBands, CutMeshCells};
-pub use remap_mesh_cut::RemapMeshCut;
-pub use remap_cut_weights::RemapCutWeights;
-pub use morph_mesh::MorphMesh;
-pub use normal_wave_mesh::NormalWaveMesh;
-pub use mesh_spatial_mask::MeshSpatialMask;
-pub use mesh_stagger_envelope::MeshStaggerEnvelope;
-pub use analytic_echo_instances::AnalyticEchoInstances;
 
-pub use consecutive_edges::{CONSECUTIVE_EDGES_MAX_CAPACITY, ConsecutiveEdges};
 
 
-pub use cylinder_wrap_field::CylinderWrapField;
 
-pub use digital_plants_render::DigitalPlantsRender;
-pub use displace_mesh::DisplaceMesh;
-pub use displace_copies::DisplaceCopies;
 
 
 
@@ -95,7 +67,6 @@ pub use displace_copies::DisplaceCopies;
 
 
 
-pub use fbm_per_instance::FbmPerInstance;
 
 
 
@@ -117,96 +88,51 @@ pub use fbm_per_instance::FbmPerInstance;
 
 
 
-pub use edges_from_grid_uv::EdgesFromGridUv;
-pub use edges_from_mesh::EdgesFromMesh;
-pub use edges_from_hypercube::EdgesFromHypercube;
 
-pub use fold_mesh::FoldMesh;
-pub use generate_cube_mesh::{CUBE_VERTEX_COUNT, GenerateCubeMesh};
-pub use generate_grid_mesh::GenerateGridMesh;
-pub use sample_triangle_grid::{SampleTriangleGrid, SAMPLE_TRIANGLE_GRID_CAPACITY};
-pub use render_mesh_diagram::RenderMeshDiagram;
-pub use generate_grid_uv::{
-    GRID_UV_DEFAULT_SIZE, GRID_UV_MAX_SIZE, GenerateGridUv,
-};
-pub use generate_instance_transforms::{
-    GenerateInstanceTransforms, INSTANCE_LAYOUTS,
-};
 
-pub use glitch_jitter::GlitchJitter;
-pub use gltf_animation_source::GltfAnimationSource;
-pub use gltf_mesh_source::GltfMeshSource;
-pub use gltf_skeleton_pose::GltfSkeletonPose;
-pub use gltf_skinned_mesh_source::GltfSkinnedMeshSource;
-pub use gltf_texture_source::GltfTextureSource;
 
 
 
 
 
-pub use hdri_source::HdriSource;
 
 
-pub use instance_position_jitter::InstancePositionJitter;
-pub use instance_rotation_jitter::InstanceRotationJitter;
 
 
 
 
 
 
-pub use ocean_spectrum::OceanSpectrum;
-pub use ocean_displace::OceanDisplace;
-pub use projected_grid::ProjectedGrid;
-pub use cut_out_box::CutOutBox;
-pub use camera_sky::CameraSky;
 
-pub use sea_horizon_env::SeaHorizonEnv;
 
-pub use hypercube_vertices::HypercubeVertices;
 
 
 
-pub use lerp_instance_fields::LerpInstanceFields;
 
 
 
 
-pub use light::LightNode;
 
-pub use loop_camera::{LOOP_CAMERA_AXIS_LABELS, LoopCamera};
 
 
 
 
 
-pub use particles_to_copies::ParticlesToCopies;
 
-pub use melt_mesh::MeltMesh;
-pub use unlit_material::UnlitMaterial;
-pub use pbr_material::PbrMaterial;
-pub use cel_material::CelMaterial;
 
 
 
 
-pub use nested_cubes_geometry::{NESTED_CUBES_INSTANCE_COUNT, NestedCubesGeometry};
-pub use noise_displace::NoiseDisplace;
 
 
 
 
 
-pub use plane_mesh::{PLANE_VERTEX_COUNT, GeneratePlaneMesh};
 
 
 
-pub use polytope_edges::PolytopeEdges;
-pub use polytope_vertices::PolytopeVertices;
 
 
-pub use project_3d::{PROJECT_3D_MODES, Project3D};
-pub use project_4d::Project4D;
 
 
 
@@ -215,23 +141,12 @@ pub use project_4d::Project4D;
 
 
 
-pub use reflect_array::ReflectArray;
 
-pub use render_3d_mesh::Render3DMesh;
-pub use render_instanced_3d_mesh::RenderInstanced3DMesh;
-pub use render_scene::RenderScene;
-#[cfg(feature = "fluid-perf-proofs")]
-pub use render_scene::water_perf;
-pub use render_scene::{arm_rt_capture, disarm_rt_capture, take_rt_captures, RtCaptureSlot};
 
-pub use render_lines::RenderLines;
-pub use ripple_mesh::RippleMesh;
 
 
 
 
-pub use rotate_3d::Rotate3D;
-pub use rotate_4d::Rotate4D;
 
 
 
@@ -240,7 +155,6 @@ pub use rotate_4d::Rotate4D;
 
 
 
-pub use scatter_on_mesh::ScatterOnMesh;
 
 
 
@@ -249,13 +163,7 @@ pub use scatter_on_mesh::ScatterOnMesh;
 
 
 
-pub use simplex_per_instance::SimplexPerInstance;
-pub use slice_mesh::SliceMesh;
 
-pub use camera_orbit::{CameraOrbit, DEFAULT_FAR, DEFAULT_NEAR};
-pub use free_camera::FreeCamera;
-pub use look_at_camera::LookAtCamera;
-pub use camera_lens::CameraLens;
 
 
 
@@ -269,21 +177,101 @@ pub use camera_lens::CameraLens;
 
 
 
-pub use torus_wrap_field::TorusWrapField;
-pub use triangulate_grid::TriangulateGrid;
 
 
 
-pub use transform_3d::Transform3D;
-pub use transform_shake::TransformShake;
-pub use scene_array::SceneArray;
-pub use scene_object::SceneObjectNode;
-pub use shatter_mesh::ShatterMesh;
 
 
 
 
-pub use voxelize_mesh::VoxelizeMesh;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

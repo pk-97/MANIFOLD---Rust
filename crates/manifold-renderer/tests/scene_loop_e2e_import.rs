@@ -13,6 +13,7 @@
 //! the retirement; until it lands, INV-3 gates on the deterministic minimal
 //! graph (`scene_loop_wrap_parity.rs`) and this file gates structure only.
 
+use manifold_renderer as _;
 use std::path::Path;
 
 use manifold_core::effect_graph_def::SerializedParamValue;

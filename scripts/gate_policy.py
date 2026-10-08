@@ -12,6 +12,7 @@ GPU_DEFAULT_CPU_ONLY = {
 }
 NEXTTEST_GPU_FILTER = '''
     package(manifold-gpu)
+  | (binary_id(manifold-nodes-scene) & test(/^node_graph::gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node$/))
   | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
   | (binary_id(manifold-renderer) & test(/^node_graph::(gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
   | (binary_id(manifold-node-engine) & test(/^(exec::execution::tests::aliased_output_assertion_fires_on_silent_primitive|load::graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan))$/))
@@ -28,7 +29,8 @@ NEXTTEST_GPU_FILTER = '''
 GPU_BACKEND_ROOT = 'crates/manifold-gpu/'
 OTHER_SHADER_ROOTS = ('crates/manifold-led/', 'crates/manifold-recording/', 'crates/manifold-spectral/')
 CATALOG_PACKAGE = 'manifold-renderer'
-CATALOG_PATHS = ('crates/manifold-nodes-image/src/node_graph/primitives/',
+CATALOG_PATHS = ('crates/manifold-nodes-scene/src/node_graph/primitives/',
+                 'crates/manifold-nodes-image/src/node_graph/primitives/',
                  'crates/manifold-renderer/src/node_graph/primitives/',
                  'crates/manifold-node-engine/src/primitives/',
                  'crates/manifold-node-engine/src/water/primitives/',
@@ -207,6 +209,11 @@ NARROW_ROWS = [
 
 # Explicit rows: (path substrings, (filters, reporter-only skips)).
 EXPLICIT_ROWS = [
+    # The readback helper now serves scene and retained catalog proofs.
+    (("crates/manifold-nodes-scene/src/testkit/gpu_harness.rs",),
+     (["rt_t2b_temporal_wiring::", "rt_bug318_import_toggle::",
+       "rt_bugmajv_kernel_toggle::"], [])),
+
     # Blob bounds controls the sparse reach and dense particle field together.
     ((RENDERER_SRC + "node_graph/primitives/blob_bounds.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/blob_bounds.wgsl"),
@@ -219,8 +226,8 @@ EXPLICIT_ROWS = [
       ENGINE_SRC + "water/primitives/shaders/redistance_lattice"),
      (["fluid_fill_pits"], [])),
     (("crates/manifold-gpu/src/metal/raytrace.rs",
-      RENDERER_SRC + "node_graph/primitives/render_scene.rs",
-      RENDERER_SRC + "node_graph/primitives/shaders/render_scene.wgsl",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/shaders/render_scene.wgsl",
       PROOFS_DIR + "rt_"),
      (["rt_"], [])),
     ((ENGINE_SRC + "freeze/",), (["freeze::"], [])),
@@ -271,8 +278,8 @@ EXPLICIT_ROWS = [
     ((ENGINE_SRC + "water/primitives/count_surface_edges",
       ENGINE_SRC + "water/primitives/volume_surface_mesh",
       ENGINE_SRC + "water/primitives/relax_surface_mesh",
-      RENDERER_SRC + "node_graph/primitives/smooth_surface_mesh",
-      RENDERER_SRC + "node_graph/primitives/surface_mesh_normals",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/smooth_surface_mesh",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/surface_mesh_normals",
       ENGINE_SRC + "water/primitives/surface_mesh_parity",
       RENDERER_SRC + "node_graph/primitives/surface_mesh_freeze_tests",
       ENGINE_SRC + "water/primitives/shaders/count_surface_edges",
@@ -280,7 +287,7 @@ EXPLICIT_ROWS = [
       ENGINE_SRC + "water/primitives/shaders/volume_surface_mesh",
       ENGINE_SRC + "water/primitives/shaders/relax_surface_mesh",
       ENGINE_SRC + "water/primitives/shaders/surface_mesh_",
-      RENDERER_SRC + "node_graph/primitives/shaders/surface_mesh_",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/shaders/surface_mesh_",
       PROOFS_DIR + "liquid_indexed.rs"),
      (["count_surface_edges::gpu_tests::", "volume_surface_mesh::gpu_tests::", "surface_mesh_normals::gpu_tests::", "surface_mesh_freeze_tests::gpu_tests::", "fluid_indexed_", "liquid_indexed::"], [])),
     # Graph runtime.
@@ -306,15 +313,15 @@ BROAD_PATHS = (
     RENDERER_SRC + "node_graph/primitives/mod.rs",
     RENDERER_SRC + "node_graph/mod.rs",
     RENDERER_SRC + "lib.rs",
-    PROOFS_DIR + "harness.rs",
+    "crates/manifold-nodes-scene/src/testkit/gpu_harness.rs",
     PROOFS_DIR + "main.rs",
 )
 
 GLTF_PATHS = (
     "crates/manifold-renderer/tests/glb_conformance.rs",
     "tests/fixtures/gltf/",
-    RENDERER_SRC + "node_graph/gltf_",
-    RENDERER_SRC + "node_graph/primitives/gltf_",
+    "crates/manifold-nodes-scene/src/node_graph/gltf_",
+    "crates/manifold-nodes-scene/src/node_graph/primitives/gltf_",
 )
 
 DOC_SUFFIXES = (".md", ".txt")
@@ -438,4 +445,10 @@ PREFIX_ROWS = [
 PREFIX_ROWS += [
     ('crates/manifold-nodes-image/src/node_graph/primitives/', '.rs', "manifold-renderer", [], ['uniform_layout_proof', 'uniform_layout_extended']),
     ('crates/manifold-nodes-image/src/', '.wgsl', "manifold-renderer", [], ['uniform_layout_extended', 'wgsl_validation']),
+]
+
+# manifold-nodes-scene owns these source trees; ABI and WGSL contracts stay catalog-side.
+PREFIX_ROWS += [
+    ('crates/manifold-nodes-scene/src/node_graph/primitives/', '.rs', "manifold-renderer", [], ['uniform_layout_proof', 'uniform_layout_extended']),
+    ('crates/manifold-nodes-scene/src/', '.wgsl', "manifold-renderer", [], ['uniform_layout_extended', 'wgsl_validation']),
 ]

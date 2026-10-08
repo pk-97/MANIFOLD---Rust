@@ -25,7 +25,7 @@ use manifold_nodes_scene::node_graph::primitives::render_scene::rt_proof::{RtPro
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 const EXPECTED_STOCK_IDS: &[&str] = &[
     "ElasticSculpture",

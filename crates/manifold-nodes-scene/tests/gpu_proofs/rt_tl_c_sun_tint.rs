@@ -45,7 +45,7 @@ use manifold_gpu::raytrace::{
 };
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 // Reuse the TL-B geometry helpers.
 

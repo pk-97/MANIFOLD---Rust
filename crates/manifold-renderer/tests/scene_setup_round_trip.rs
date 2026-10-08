@@ -8,6 +8,7 @@
 //! the edited value — proving both persistence and that the panel's
 //! `SceneVm` re-derivation isn't silently stale after a reload.
 
+use manifold_renderer as _;
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{

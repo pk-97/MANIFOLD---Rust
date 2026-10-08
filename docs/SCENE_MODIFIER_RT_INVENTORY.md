@@ -17,7 +17,7 @@ Authority: [design](SCENE_MODIFIER_RT_DESIGN.md), [acceptance](SCENE_MODIFIER_RT
 | `ShadowRayParams` / `FireflyClampParams` | `params.rs:93`, `:754`; `shadow_rays.msl` | Replace CPU emissive scalars with resident GPU stats buffer; update all kernel/debug callers. |
 | CPU emissive maintenance | `emissive.rs:147` (`build_emissive_table`), `:392` (`refit_emissive_table`) | GPU current-geometry preparation; delete cached local CPU triangles and mapped vertex/index reads. |
 | `GpuEncoder::raw_cmd_buf` | `crates/manifold-gpu/src/metal/encoder.rs:205` | Existing encoder handoff for ordered descriptor/AS/emission work; no new queue/thread. |
-| `rt_accel_maintenance` / flags | `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:2788`, `:5270` | Revision-driven selective updates before current-frame flags; remove settle/readiness gating. |
+| `rt_accel_maintenance` / flags | `crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs:2788`, `:5270` | Revision-driven selective updates before current-frame flags; remove settle/readiness gating. |
 | Appearance RT rejection | same file `:1977`; raster `shaders/render_scene.wgsl:889` | Replace rejection with tested candidate-hit coverage/brightness (§5.2). |
 | `EffectGraphDefExt::into_graph` | `node_graph/persistence.rs:454`, `:468`, `:569` | Append prepared-rules argument; raw definitions pass empty map. |
 | `instantiate_def` / `NodeInstantiation` | `node_graph/graph_loader.rs:689`, `:160`, stable-ID resolution `:913` | Append rules argument, install through numeric `id_map` after source/params; handle names are not stable IDs. |
@@ -45,7 +45,7 @@ There are 13 JSON recipes: 9 available and 4 hidden (`jq -s '[.[] | .presetMetad
 | VortexFragments (true) | `transform_mesh_patches`, `mesh_spatial_mask`, `morph_mesh` (550, 620, 688) | patch is expanded to cut-map/remap layout |
 | WavesEchoes (false) | `normal_wave_mesh`, `mesh_spatial_mask`, `morph_mesh`, `analytic_echo_instances` (627, 681, 749, 921) | mesh stream fixed; instance output is source × 8 capacity |
 
-Direct primitive evidence: `normal_wave_mesh` is MeshVertex→MeshVertex, pointwise, same input capacity and one dispatch/write per input (`crates/manifold-renderer/src/node_graph/primitives/normal_wave_mesh.rs:38-95,97-155`; shader gathers the three current triangle corners and returns one element at `shaders/normal_wave_mesh_body.wgsl:45-101`). `wave_shear_mesh` has the same contract (`wave_shear_mesh.rs:37-96,98-165`; body `wave_shear_mesh_body.wgsl:14-41`). `morph_mesh` is corresponding-by-index and writes one output, but capacity is `min(in, b)` (`morph_mesh.rs:39-110`; body `morph_mesh_body.wgsl:15-78`). `mesh_spatial_mask` and `mesh_stagger_envelope` produce same-capacity `Array<f32>` weights, not geometry (`mesh_spatial_mask.rs:43-120,122-225`; `mesh_stagger_envelope.rs:39-102,104-180`). `transform_mesh_patches` and `ordered_recon_mesh` are direct one-per-index MeshVertex transforms with equal-capacity guards (`transform_mesh_patches.rs:38-113,115-190`; `ordered_recon_mesh.rs:47-119,121-185`), but their stock scene-modifier preparation is the fragment path below.
+Direct primitive evidence: `normal_wave_mesh` is MeshVertex→MeshVertex, pointwise, same input capacity and one dispatch/write per input (`crates/manifold-nodes-scene/src/node_graph/primitives/normal_wave_mesh.rs:38-95,97-155`; shader gathers the three current triangle corners and returns one element at `shaders/normal_wave_mesh_body.wgsl:45-101`). `wave_shear_mesh` has the same contract (`wave_shear_mesh.rs:37-96,98-165`; body `wave_shear_mesh_body.wgsl:14-41`). `morph_mesh` is corresponding-by-index and writes one output, but capacity is `min(in, b)` (`morph_mesh.rs:39-110`; body `morph_mesh_body.wgsl:15-78`). `mesh_spatial_mask` and `mesh_stagger_envelope` produce same-capacity `Array<f32>` weights, not geometry (`mesh_spatial_mask.rs:43-120,122-225`; `mesh_stagger_envelope.rs:39-102,104-180`). `transform_mesh_patches` and `ordered_recon_mesh` are direct one-per-index MeshVertex transforms with equal-capacity guards (`transform_mesh_patches.rs:38-113,115-190`; `ordered_recon_mesh.rs:47-119,121-185`), but their stock scene-modifier preparation is the fragment path below.
 
 Fragment expansion is the layout-changing seam. `fragment_cuts.rs:105-110` identifies only `node.ordered_recon_mesh` and `node.transform_mesh_patches` as fragment cutters; `362-420` selects `cut_mesh_bands`/`cut_mesh_cells` and wires the reference; `439-467` emits two `node.remap_mesh_cut` nodes; `470-601` remaps morph/unary/weights and wires the final map to every `node.scene_object` topology input (`line 600`). Cut maps carry barycentric/source-triangle provenance and have extra capacity (`mesh_cut.rs:1-20,93-97,300-399,546-625`); remap output capacity follows the map (`remap_mesh_cut.rs:11-35`, shared execution `mesh_cut_remap.rs:8-81`).
 
@@ -214,39 +214,39 @@ PYCOUNT
 
 * `crates/manifold-gpu/src/metal/raytrace/accel.rs:555`
 * `crates/manifold-gpu/src/metal/raytrace/tracer.rs:152,1238,1239`
-* `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:3027`
+* `crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs:3027`
 * `crates/manifold-renderer/tests/gpu_proofs/rt_emissive_instancing.rs:224`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_instancing.rs:241`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_p1_shadow.rs:144,421`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_r3_textured_roughness.rs:194`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_t2a_alpha_mask.rs:148`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_t2c_shadow_temporal_stability.rs:196`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_tl_b_transmission.rs:125`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_tl_c_sun_tint.rs:127`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_instancing.rs:241`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_p1_shadow.rs:144,421`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_r3_textured_roughness.rs:194`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_t2a_alpha_mask.rs:148`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_t2c_shadow_temporal_stability.rs:196`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_tl_b_transmission.rs:125`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_tl_c_sun_tint.rs:127`
 
 ### `refit_accel`
 
 * `crates/manifold-gpu/src/metal/raytrace/accel.rs:777`
 * `crates/manifold-gpu/src/metal/raytrace/tracer.rs:162,1242,1243`
-* `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:3063`
+* `crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs:3063`
 
 ### `dispatch_shadow_rays`
 
 * `crates/manifold-gpu/src/metal/raytrace/tracer.rs:187,1251`
-* `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:3480,3515`
+* `crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs:3480,3515`
 * `crates/manifold-renderer/tests/gpu_proofs/rt_emissive_instancing.rs:314`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_instancing.rs:353`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_p1_shadow.rs:272,537`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_r3_textured_roughness.rs:311`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_t2a_alpha_mask.rs:258`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_t2c_shadow_temporal_stability.rs:288`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_tl_b_transmission.rs:262`
-* `crates/manifold-renderer/tests/gpu_proofs/rt_tl_c_sun_tint.rs:247`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_instancing.rs:353`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_p1_shadow.rs:272,537`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_r3_textured_roughness.rs:311`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_t2a_alpha_mask.rs:258`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_t2c_shadow_temporal_stability.rs:288`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_tl_b_transmission.rs:262`
+* `crates/manifold-nodes-scene/tests/gpu_proofs/rt_tl_c_sun_tint.rs:247`
 
 ### `firefly_clamp`
 
 * `crates/manifold-gpu/src/metal/raytrace/tracer.rs:298,1653`
-* `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:4953`
+* `crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs:4953`
 
 ### `instantiate_def`
 
@@ -255,7 +255,7 @@ PYCOUNT
 * `crates/manifold-node-engine/src/freeze/space.rs:52`
 * `crates/manifold-node-engine/src/load/graph_loader.rs:689,1719,1728,1756,1799,1872,1918,1949,1982,2568,2612`
 * `crates/manifold-node-engine/src/persistence.rs:576`
-* `crates/manifold-renderer/src/node_graph/relight.rs:696`
+* `crates/manifold-nodes-scene/src/node_graph/relight.rs:696`
 * `crates/manifold-renderer/src/node_graph/catalog_tests/runtime_bound_param_survives_rebuild.rs:109`
 
 ### `into_graph`
@@ -266,7 +266,7 @@ PYCOUNT
 * `crates/manifold-node-engine/src/freeze/install.rs:3093,3168`
 * `crates/manifold-renderer/src/node_graph/catalog_tests/audio_visual.rs:20`
 * `crates/manifold-renderer/src/engine_contract_tests/freeze_proof.rs:395,490,498,510,638,639,762,783,869,912,992,1045,1109,1180,1189,1487,1495,1545,1553,1643,1659,1750,1772,1839,1855,1891,2060,2067,2504,2523,2613,2736,2832,4696,4704,4758,4766,4826,4834,4896,4909`
-* `crates/manifold-renderer/src/node_graph/gltf_import/tests.rs:2985,3022,3207,3265,3339,3805`
+* `crates/manifold-nodes-scene/src/node_graph/gltf_import/tests.rs:2985,3022,3207,3265,3339,3805`
 * `crates/manifold-node-engine/src/persistence.rs:468,569,907,960,1017,1057,1110,1171,1208,1273,1306,1340,1361,1380,1395,1470,1509`
 * `crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_tests.rs:214,288,378,398,632`
 * `crates/manifold-node-engine/src/load/expand/compiler.rs:406`
@@ -291,7 +291,7 @@ PYCOUNT
 * `crates/manifold-renderer/src/node_graph/bundled_presets.rs:448,518,615,795,987`
 * `crates/manifold-node-engine/src/load/chain_spec.rs:83`
 * `crates/manifold-renderer/src/engine_contract_tests/freeze_proof.rs:1330`
-* `crates/manifold-renderer/src/node_graph/relight.rs:686`
+* `crates/manifold-nodes-scene/src/node_graph/relight.rs:686`
 * `crates/manifold-node-engine/src/runtime/core.rs:615,879,897`
 * `crates/manifold-renderer/tests/card_binding_shadow_corpus.rs:40,161`
 
@@ -333,10 +333,10 @@ Whole-workspace lexical census, using the same script above with the following a
 * `crates/manifold-app/src/viewport_p6_demo.rs:136,162,188`
 * `crates/manifold-app/src/window_input.rs:1009,1110`
 * `crates/manifold-renderer/src/node_graph/gltf_import/card_precedence_tests.rs:75`
-* `crates/manifold-renderer/src/node_graph/gltf_import/tests.rs:64,385,447,746,988,1001,1581,2181,2246,2807,2903,3212,3270,3543,3598,3832`
+* `crates/manifold-nodes-scene/src/node_graph/gltf_import/tests.rs:64,385,447,746,988,1001,1581,2181,2246,2807,2903,3212,3270,3543,3598,3832`
 * `crates/manifold-node-engine/src/load/loaded_preset_view.rs:230`
 * `crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_tests.rs:264`
-* `crates/manifold-renderer/src/node_graph/scene_vm.rs:482,1231,1237,1250,1279,1283,1322,1357,1375,1401,1468,1508,1542,1577,1614,1645,1683,1719,1737,1738,1754,1787,1803,1823,1842,1862,1898,1929,1980,2002,2100,2141`
+* `crates/manifold-nodes-scene/src/node_graph/scene_vm.rs:482,1231,1237,1250,1279,1283,1322,1357,1375,1401,1468,1508,1542,1577,1614,1645,1683,1719,1737,1738,1754,1787,1803,1823,1842,1862,1898,1929,1980,2002,2100,2141`
 * `crates/manifold-node-engine/src/snapshot/scene_modifier_tests.rs:16,26`
 * `crates/manifold-node-engine/src/snapshot.rs:530,1054,1274,1326,1393,1428`
 * `crates/manifold-node-engine/src/runtime/build.rs:250,266,671`
@@ -376,8 +376,8 @@ Whole-workspace lexical census, using the same script above with the following a
 * `crates/manifold-node-engine/src/load/loaded_preset_view.rs:144`
 * `crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_tests.rs:152,261,281,375,610`
 * `crates/manifold-node-engine/src/load/expand/compiler.rs:135,140`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_legacy_migration/sources.rs:621,622`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_legacy_migration.rs:38`
+* `crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/sources.rs:621,622`
+* `crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration.rs:38`
 * `crates/manifold-node-engine/src/runtime/modifier_runtime.rs:79`
 * `crates/manifold-renderer/src/node_graph/catalog_tests/runtime_modifier_events.rs:183,396`
 * `crates/manifold-renderer/tests/fragment_cut_scene.rs:33,142,206,259,267`

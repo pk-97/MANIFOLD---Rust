@@ -20,7 +20,7 @@ anchors carry re-derivation commands.
 
 | Piece | Where | State |
 |---|---|---|
-| Shadow maps re-render fully every frame, no dirty check | `render_scene.rs` ~2647–2708 (`shadow_caster_draws` rebuild + per-caster `draw_instanced_depth_only_batch`, encoder label `"node.render_scene shadow"`) — re-derive: `rg -n '"node.render_scene shadow"' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` | **waste (~4% measured — D1b; the headline moved to IBL)** |
+| Shadow maps re-render fully every frame, no dirty check | `render_scene.rs` ~2647–2708 (`shadow_caster_draws` rebuild + per-caster `draw_instanced_depth_only_batch`, encoder label `"node.render_scene shadow"`) — re-derive: `rg -n '"node.render_scene shadow"' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs` | **waste (~4% measured — D1b; the headline moved to IBL)** |
 | `shadow_view_proj()` is a pure function of the light alone | `node_graph/light.rs:333` | exists — static light ⇒ bit-identical map every frame |
 | Importer wires shadows on, 4096² | `node_graph/gltf_import.rs:765` (`cast_shadows`=1.0), `:778` (`shadow_resolution`=4096.0) | exists |
 | IBL re-convolves every frame envmap is wired | `run_ibl_convolution`, `render_scene.rs:1428`; its own doc comment (~1410–1427) states `bake_equirect_envmap.run()` rewrites its output in place every frame, so an identity-based skip would go stale — the exact hazard D5/D6 below resolve with a generation signal instead | **the headline waste (~41% measured — D1b), with a documented staleness trap** |
@@ -320,7 +320,7 @@ profiled runs show the `node.render_scene` row's `shadow` pass at <0.1 ms and <1
 measured ~4%); unprofiled perf-soak before/after on the AMG @4K is still run and recorded in the
 commit message as direction sanity, NOT a pass/fail threshold; negative: `rg -n 'Arc<(Mutex|RwLock)' crates/manifold-renderer/src/node_graph/`
 unchanged (I6); the cache key function provably includes the rebuild epoch
-(`rg -n 'epoch' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`).
+(`rg -n 'epoch' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs`).
 Demo: before/after unprofiled JSON + the three mutation tests green — L2. Forbidden moves:
 serving a cached map on ANY key-component mismatch (never serve a stale shadow map — I1 verbatim);
 skipping the epoch/rebuild-invalidation term; content-hashing vertex buffers (D6 rejected);
@@ -351,7 +351,7 @@ Gate — positive: gpu-proofs animated-envmap parity (the I2 test): change an en
 bit-identity across frames (I4 extension); unprofiled perf-soak before/after on the AMG @4K
 recorded, delta consistent with P0's measured IBL share — ~41% of render_scene GPU time (D1b), a
 multi-ms delta well above run noise (±30% tolerance stands); profiled sanity: `… ibl prefilter` /
-`… ibl irradiance` rows <2% on steady frames; negative: `rg -n 'go stale' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`
+`… ibl irradiance` rows <2% on steady frames; negative: `rg -n 'go stale' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs`
 → the old warning text is gone/rewritten.
 Demo: before/after JSON + the animated-envmap test green — L2. Forbidden moves: gating
 consumption before the producer stops in-place rewrites (D7's load-bearing order — within the
@@ -446,7 +446,7 @@ Gate — positive: output unchanged — the existing render_scene gpu-proofs sui
 readback bit-identity check before/after on the AMG frame 1; perf: perf-soak CPU encode wall time
 (the stats JSON reports it) on BrainStem AND the AMG, before/after in the commit message —
 BrainStem is the sensitive fixture (24 objects; if P0 measured the CPU side as material, this is
-where it shows); negative: `rg -n 'format!' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`
+where it shows); negative: `rg -n 'format!' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs`
 → remaining hits are rebuild-time or error paths only (annotate the gate output with the
 classification); `rg -n 'iter\(\)\s*\.find' crates/manifold-node-engine/src/bindings.rs`
 → the hot lookup no longer routes through it (either an indexed accessor beside it, or the scan

@@ -1592,6 +1592,7 @@ pub(crate) fn convert_spec_gloss(
     }
 }
 
+manifold_core::testkit_visible! {
 /// `node.gltf_mesh_source`'s `material_index` param sentinel selecting
 /// [`GltfMeshSelector::DefaultMaterial`] — distinct from the param's own
 /// "unset" default (`-1`, which falls through to the `mesh_index`/
@@ -1599,6 +1600,7 @@ pub(crate) fn convert_spec_gloss(
 /// indices are always `>= 0`, so `-2` never collides with a genuine
 /// selection. GLB_XFAIL_BURNDOWN_DESIGN.md D4 (BUG-171).
 pub(crate) const DEFAULT_MATERIAL_MESH_PARAM: i32 = -2;
+}
 
 /// [`GltfImportSummary::materials`]' reserved sentinel for the synthetic
 /// glTF-default-material entry (D4) — pinned by
@@ -1655,7 +1657,9 @@ pub(crate) fn fold_uv_transform(offset: [f32; 2], rotation: f32, scale: [f32; 2]
     ]
 }
 
+manifold_core::testkit_visible! {
 pub(crate) const IDENTITY_UV_TRANSFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+}
 
 use manifold_node_engine::scene::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION;
 

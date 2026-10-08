@@ -13,6 +13,7 @@
 //! jitter_amount is a live param carrying the same proof burden: the graph
 //! builder's param writes reach the renderer.
 
+use manifold_renderer as _;
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{

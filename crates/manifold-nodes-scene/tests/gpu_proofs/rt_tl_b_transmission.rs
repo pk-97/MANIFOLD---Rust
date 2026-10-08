@@ -44,7 +44,7 @@ use manifold_gpu::raytrace::{
 };
 use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 /// Flat (non-indexed) vertex layout: 12-byte position + 8-byte UV, no
 /// padding — `packed_float3`/`packed_float2` mandatory (P0 section 5.1 kernel

@@ -23,7 +23,7 @@ single-read save" (P3, intentionally NOT in this design — see Deferred).
 | Video clip path fields | `crates/manifold-core/src/video.rs:11` `file_path`, :13 `relative_file_path` | Covered. |
 | Layer video folder | `crates/manifold-core/src/layer.rs:142,144` | Covered. |
 | Audio clip path | `crates/manifold-core/src/clip.rs:20` `audio_file_path` | **Uncovered.** No relative form exists. |
-| GLB model path | string param `"model_file"` on gltf-import nodes (`crates/manifold-renderer/src/node_graph/gltf_import/mod.rs:65`) | **Uncovered.** Lives in clip `string_params`, invisible to the io layer. |
+| GLB model path | string param `"model_file"` on gltf-import nodes (`crates/manifold-nodes-scene/src/node_graph/gltf_import/mod.rs:65`) | **Uncovered.** Lives in clip `string_params`, invisible to the io layer. |
 | HDRI path | string param `"hdri_file"` (gltf_import/mod.rs:70) | **Uncovered.** Same. |
 | Legacy/other path params | e.g. `"path"` in `assets/generator-presets/Skin.json:62` (a GLB fixture path) | **Uncovered.** Proves path params are not enumerable by a fixed id list — new presets add them freely. |
 | String param defs | `crates/manifold-core/src/preset_definition_registry.rs:45` (`StringParamDef`) | Has `use_dropdown` flag as the flag-precedent (D5). |

@@ -4,6 +4,7 @@
 //! tests. These checks exercise the real bundled recipe, host insertion,
 //! compiler preparation, and serialized value preservation.
 
+use manifold_renderer as _;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;

@@ -13,7 +13,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 const W: u32 = manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH;
 const H: u32 = manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT;
@@ -98,7 +98,7 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
     for f in 0..4 {
         frame(&mut runtime, h, &target.texture, f, &manifest);
     }
-    let before = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
+    let before = manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
     assert!(
         magenta_fraction(&before) < 0.5,
         "scene must render sanely BEFORE the toggle (magenta fraction {})",
@@ -148,7 +148,7 @@ fn live_rt_toggle_on_imported_glb_scene_never_magenta_clears() {
     for f in 12..18 {
         frame(&mut runtime, h, &target.texture, f, &manifest);
     }
-    let after = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
+    let after = manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
     let frac = magenta_fraction(&after);
     assert!(
         frac < 0.5,
@@ -229,7 +229,7 @@ fn live_temporal_upscale_off_from_reduced_import_scene_stays_finite() {
         .expect("temporal_upscale exists");
     frame(&mut runtime, h, &target.texture, 4, &manifest);
 
-    let px = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
+    let px = manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
     assert!(px.iter().all(|v| v.is_finite()), "reduced→native toggle produced non-finite output");
     assert!(
         magenta_fraction(&px) < 0.5,
@@ -280,7 +280,7 @@ fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
     for f in 0..4 {
         frame(&mut runtime, h, &target.texture, f, &empty);
     }
-    let before = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
+    let before = manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
     assert!(
         magenta_fraction(&before) < 0.5,
         "apricot must render sanely BEFORE the toggle (magenta fraction {})",
@@ -304,7 +304,7 @@ fn live_rt_toggle_on_apricot_static_buffers_never_magenta_clears() {
     for f in 4..10 {
         frame(&mut runtime, h, &target.texture, f, &empty);
     }
-    let after = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, &target.texture);
+    let after = manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, &target.texture);
     let frac = magenta_fraction(&after);
     assert!(
         frac < 0.5,

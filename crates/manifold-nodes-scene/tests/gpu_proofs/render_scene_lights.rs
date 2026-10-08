@@ -25,7 +25,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 /// Build a render_scene generator graph: a flat grid plane lit by
 /// `light_specs.len()` sun lights, each `(r, g, b, intensity)`. Lights all

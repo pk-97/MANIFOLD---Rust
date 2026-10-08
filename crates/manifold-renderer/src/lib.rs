@@ -63,3 +63,5 @@ mod load;
 mod runtime;
 
 use manifold_nodes_image as _;
+
+use manifold_nodes_scene as _;

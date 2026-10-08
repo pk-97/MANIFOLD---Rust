@@ -17,6 +17,7 @@
 //! a deliberately non-phase-locked camera (orbit_camera vs loop_camera at
 //! the same beat), then green against the real loop_camera.
 
+use manifold_renderer as _;
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{

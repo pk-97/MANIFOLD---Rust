@@ -26,6 +26,7 @@ def fixture_workspace(repo):
     repo = repo.resolve()
     packages = []
     rows = {
+        "manifold-nodes-scene": ("crates/manifold-nodes-scene", True, ["gpu_proofs"]),
         "manifold-nodes-image": ("crates/manifold-nodes-image", True, []),
         "manifold-renderer": ("crates/manifold-renderer", True, ["gpu_proofs", "glb_conformance"]),
         "manifold-node-engine": ("crates/manifold-node-engine", True, []),
@@ -36,7 +37,7 @@ def fixture_workspace(repo):
         targets = [{"name": name, "kind": ["lib"], "src_path": str(repo / root / "src/lib.rs"),
                     "required-features": []}]
         targets.extend({"name": target, "kind": ["test"],
-                        "src_path": str(repo / root / "tests" / f"{target}.rs"),
+                        "src_path": str(repo / root / "tests" / ("gpu_proofs/main.rs" if target == "gpu_proofs" else f"{target}.rs")),
                         "required-features": ["gpu-proofs"]}
                        for target in tests)
         packages.append({
@@ -54,6 +55,30 @@ def fixture_workspace(repo):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_moved_shared_harness_keeps_broad_and_readback_consumers(self):
+        selected = plan(["crates/manifold-nodes-scene/src/testkit/gpu_harness.rs"])
+        self.assertFalse(selected.unmapped)
+        self.assertTrue(set(g.BROAD_FILTERS).issubset(selected.filters))
+        self.assertTrue({"rt_t2b_temporal_wiring::", "rt_bug318_import_toggle::",
+                         "rt_bugmajv_kernel_toggle::"}.issubset(selected.filters))
+        self.assertTrue(selected.broad)
+
+
+    def test_moved_proof_uses_metadata_owner_and_module_scope(self):
+        path = "crates/manifold-nodes-scene/tests/gpu_proofs/rt_t2b_temporal_wiring.rs"
+        selected = plan([path])
+        self.assertFalse(selected.unmapped)
+        self.assertIn("rt_t2b_temporal_wiring::", selected.filters)
+        run = next(row for row in selected.runs()
+                   if row["package"] == "manifold-nodes-scene" and row["target"] == "gpu_proofs")
+        self.assertIn("rt_t2b_temporal_wiring::", run["filters"])
+
+    def test_moved_proof_root_selects_its_metadata_target(self):
+        selected = plan(["crates/manifold-nodes-scene/tests/gpu_proofs/main.rs"])
+        self.assertFalse(selected.unmapped)
+        self.assertIn(("manifold-nodes-scene", "gpu_proofs"), selected.required_binaries)
+
+
     def test_image_legacy_heightfield_shader_routes_to_owning_primitive(self):
         selected = plan(["crates/manifold-nodes-image/src/node_graph/primitives/shaders/heightfield_shadow.wgsl"])
         self.assertIn("node_graph::primitives::heightfield_shadow::", selected.filters)
@@ -512,7 +537,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_glb_sweep_time_never_skips_or_reports_the_sweep(self):
         self.with_times({"glb_conformance_sweep": 930.0, "a::slow": 61.0})
-        p = plan([R + "node_graph/gltf_import/mod.rs"])
+        p = plan(["crates/manifold-nodes-scene/src/node_graph/gltf_import/mod.rs"])
         self.assertTrue(p.glb)
         self.assertNotIn("glb_conformance_sweep", p.final_skips())
         self.assertNotIn("glb_conformance_sweep", p.describe())
@@ -649,7 +674,7 @@ class ScopeTests(unittest.TestCase):
         self.assertTrue(all(name.startswith("rt_bug318_import_toggle::") for name in selected))
 
     def test_harness_is_broad(self):
-        p = plan([g.PROOFS_DIR + "harness.rs"])
+        p = plan(["crates/manifold-nodes-scene/src/testkit/gpu_harness.rs"])
         self.assertTrue(set(g.BROAD_FILTERS) <= p.filters)
 
     def test_glb_runs_only_for_gltf_paths(self):
@@ -657,7 +682,7 @@ class ScopeTests(unittest.TestCase):
         self.assertFalse(plan(["crates/manifold-gpu/src/metal/device.rs"]).glb)
         for path in ["crates/manifold-renderer/tests/glb_conformance.rs",
                      "tests/fixtures/gltf/khronos/manifest.json",
-                     R + "node_graph/gltf_import/mod.rs"]:
+                     "crates/manifold-nodes-scene/src/node_graph/gltf_import/mod.rs"]:
             p = plan([path])
             self.assertTrue(p.glb, path)
             runs = p.runs()

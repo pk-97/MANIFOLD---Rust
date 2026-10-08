@@ -1,4 +1,5 @@
 //! Real import/serialization fixture for the clean-cut scene verification.
+use manifold_renderer as _;
 use std::path::{Path, PathBuf};
 
 use manifold_core::effect_graph_def::EffectGraphDef;

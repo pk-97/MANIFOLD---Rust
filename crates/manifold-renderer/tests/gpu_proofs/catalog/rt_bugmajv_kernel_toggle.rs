@@ -50,7 +50,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 const W: u32 = manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH;
 const H: u32 = manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT;
@@ -184,7 +184,7 @@ fn render_until_lit(
         settled += 1;
         // Settle a few frames past the flip, then check every 5th.
         if f >= start_frame + 4 && (f - start_frame) % 5 == 4 {
-            px = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, target);
+            px = manifold_nodes_scene::testkit::gpu_harness::readback_rgba_f32(&h.device, target);
             frac = non_black_fraction(&px);
             if frac >= LIT_FRACTION_THRESHOLD {
                 eprintln!(

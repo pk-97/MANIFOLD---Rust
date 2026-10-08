@@ -34,7 +34,7 @@ use manifold_gpu::{
 };
 use manifold_node_engine::mesh::InstanceTransform;
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 /// `pos` (12 bytes) + `normal` (12 bytes) interleaved vertex — the RT
 /// normal fetch reads `normal_offset = 12` within this stride-24 record.

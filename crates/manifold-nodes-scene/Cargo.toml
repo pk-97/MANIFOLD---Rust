@@ -25,6 +25,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
 
 [dev-dependencies]
+manifold-nodes-scene = { path = ".", features = ["testkit"] }
 glam = "0.29.3"
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
 
@@ -42,7 +43,7 @@ required-features = ["gpu-proofs"]
 
 [features]
 testkit = ["manifold-node-engine/testkit"]
-gpu-proofs = ["manifold-node-engine/gpu-proofs", "manifold-node-engine/testkit"]
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-node-engine/testkit"]
 rt-perf-proofs = ["gpu-proofs"]
 
 [lints]

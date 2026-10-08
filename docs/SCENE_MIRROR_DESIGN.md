@@ -21,9 +21,9 @@ Instruction to every phase: **extend, don't redesign.**
 | Generic apply/remove commands (plan-driven, per-kind-free) | `crates/manifold-editing/src/commands/graph/scene_modifier.rs:200` (repoints), `:224` (splices) | SHIPPED. Fog proved a kind ships with zero framework change |
 | Kind #2 template (gate bypass, whitelist rows, trace) | `crates/manifold-renderer/src/node_graph/scene_modifier.rs:809` `scene_modifier_fog` | SHIPPED — the mirror kind copies this shape |
 | Instance transform type (pos+uniform scale, XYZ Euler, 32 B) | `crates/manifold-node-engine/src/mesh.rs:96` `InstanceTransform` | SHIPPED. `rot_pad.w` is documented padding — always 0 today |
-| Loop instance atom (capacity≠count lesson, zero-mask surplus) | `crates/manifold-renderer/src/node_graph/primitives/scene_array.rs:1` | SHIPPED on freeze codegen path; BUG-757c (scene-loop-copies-param-inert) fixed the size-by-capacity rule the mirror copies |
+| Loop instance atom (capacity≠count lesson, zero-mask surplus) | `crates/manifold-nodes-scene/src/node_graph/primitives/scene_array.rs:1` | SHIPPED on freeze codegen path; BUG-757c (scene-loop-copies-param-inert) fixed the size-by-capacity rule the mirror copies |
 | Group splice (interface input + top-level wire per object group) | `crates/manifold-core/src/scene_modifier.rs:31` `GroupSplice`; apply at editing `:224` | SHIPPED — **with the gap P0 closes: wire-add is skipped when the interface input already exists** (editing `:233-235`), so a second kind cannot re-wire an already-spliced port |
-| Whole-buffer instance draw | `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:4909` (D11: `instance_count = buffer_size / 32`) | SHIPPED — surplus slots must self-mask (zero scale), the atom's job |
+| Whole-buffer instance draw | `crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs:4909` (D11: `instance_count = buffer_size / 32`) | SHIPPED — surplus slots must self-mask (zero scale), the atom's job |
 | Raster cull mode | zero `cull`/`frontFace` hits in `crates/manifold-gpu` (verified `rg -n "cull|front_face|FrontFace"`) | **No culling anywhere** — mirrored (winding-flipped) triangles draw without pipeline change |
 | RT path instancing | `render_scene.rs` RT accel (RT_INSTANCING_DESIGN.md D1) — one TLAS slot per live instance, mirror marker folded GPU-side | RESOLVED 2026-09-05 — RT_INSTANCING_DESIGN.md (rt-instancing-wave, BUG-mmkr (rt-instancing-wave)); D7 below |
 | Mesh vertex shader Euler application | ⚠ VERIFY-AT-IMPL: read the scene mesh vertex WGSL for the exact `rot_pad` application order before deriving the conjugated-angle formulas — `mesh_common.rs:92` documents "XYZ order" but the shader's multiplication order is the authority |
@@ -48,7 +48,7 @@ Section 2.5 audit statement (DECOMPOSING_GENERATORS.md): the reflection family w
 ### 3.1 The atom
 
 ```rust
-// crates/manifold-renderer/src/node_graph/primitives/reflect_array.rs
+// crates/manifold-nodes-scene/src/node_graph/primitives/reflect_array.rs
 crate::primitive! {
     name: ReflectArray,
     type_id: "node.reflect_array",
@@ -121,7 +121,7 @@ The mirror cannot see scene_array's `count` param (separate nodes, separate unif
 - **Entry:** P0 merged. Re-verify: no-cull anchor (section 1), scene_array capacity pattern (`scene_array.rs:13-21`), Euler-order ⚠ anchor — READ the scene mesh vertex WGSL FIRST, derive the conjugated-angle closed form against it, restate the formula in a comment + test.
 - **Read-back:** D3, D4, D5, section 3.1–3.3; forbidden: touching the RT path, per-draw uniforms, or any producer other than the new atom writing markers; no new `Arc<Mutex>`; no `create_compute_pipeline(include_str!)` runtime kernel — freeze codegen only.
 - **Deliverables:** `reflect_array.rs` (primitive + `wgsl_body` + gpu_tests INV-MR1/2/3/4/5); vertex-shader marker flip (one conditional); freeze/fusion proofs (standalone AND fused, per ADDING_PRIMITIVES); Euler derivation test (all 6 axes, nonzero offset, CPU expected).
-- **Gate (positive):** `scripts/gpu_proofs_gate.py` green (touched primitive kernel — mandatory); value-level proofs vs CPU-computed expected. **Gate (negative):** `rg -n "rot_pad\[3\]" crates/manifold-renderer/src/node_graph/primitives/` — zero hits outside `reflect_array.rs`; `rg -n "create_compute_pipeline" crates/manifold-renderer/src/node_graph/primitives/reflect_array.rs` — zero hits.
+- **Gate (positive):** `scripts/gpu_proofs_gate.py` green (touched primitive kernel — mandatory); value-level proofs vs CPU-computed expected. **Gate (negative):** `rg -n "rot_pad\[3\]" crates/manifold-renderer/src/node_graph/primitives/` — zero hits outside `reflect_array.rs`; `rg -n "create_compute_pipeline" crates/manifold-nodes-scene/src/node_graph/primitives/reflect_array.rs` — zero hits.
 - **Demo:** headless render of a lit sphere + floor-plane mirror to PNG (artifact for the record only; acceptance is the computed region-mean luminance probe — mirrored hemisphere lit. No agent judges an image; Peter looks live in the app).
 
 ### P2 — `scene_mirror` kind

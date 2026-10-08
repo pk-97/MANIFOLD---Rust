@@ -22,7 +22,7 @@ the estimate (a fixed N-sample pattern is not convergence). Green therefore
 requires BOTH:
 1. Stability — the frame-to-frame ceilings below.
 2. Correctness — the RT furnace oracle
-   (`crates/manifold-renderer/tests/gpu_proofs/rt_furnace_oracle.rs`, run via
+   (`crates/manifold-nodes-scene/tests/gpu_proofs/rt_furnace_oracle.rs`, run via
    `cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs
    -- rt_furnace`): a flat albedo-1 surface under a closed-form uniform
    environment must read back the field radiance on the TRACED path (RT on)
@@ -264,7 +264,7 @@ def build_binary(repo):
 def run_furnace_oracle(repo, timeout=1800):
     """The correctness leg: run the RT furnace oracle and report pass/fail.
 
-    The oracle is `crates/manifold-renderer/tests/gpu_proofs/rt_furnace_oracle.rs`
+    The oracle is `crates/manifold-nodes-scene/tests/gpu_proofs/rt_furnace_oracle.rs`
     — I-ED4's brightness + corner legs, I-ED1's ambient linearity, and the
     ED-B sun-disc firefly fixture. It is a gpu-proofs test, run the same way
     `scripts/gpu_proofs_gate.py` runs GPU tests (cargo test, never nextest —

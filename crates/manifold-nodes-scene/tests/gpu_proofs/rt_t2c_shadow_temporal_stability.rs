@@ -52,7 +52,7 @@ use manifold_gpu::{
     GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 /// Flat (non-indexed) 12-byte position + 8-byte UV, stride 20 — the
 /// `packed_float3`/`packed_float2` layout `fetch_uv` reads.
