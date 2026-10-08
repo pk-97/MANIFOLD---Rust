@@ -697,7 +697,8 @@ def run_queued(command, label=None, **kwargs):
                           'per-test hang allowances or reviewed heavy-test timing; '
                           'use gpu_proofs_gate.py', flush=True)
                 else:
-                    passed.save(code, seconds)
+                    if passed.save(code, seconds) is False:
+                        return 2
             return code
         finally:
             for sig, handler in previous.items():

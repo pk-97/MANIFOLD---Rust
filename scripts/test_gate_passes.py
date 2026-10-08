@@ -115,6 +115,97 @@ class CacheTests(unittest.TestCase):
         # run_gate appends package, target and budgeted after the test lists.
         return sorted({call.args[-4] for call in calls})
 
+    def test_bad_receipt_is_cache_miss_and_fresh_execution_passes(self):
+        for unreadable in (False, True):
+            with self.subTest(unreadable=unreadable), cache.session():
+                original = self.clippy('a')
+                original.directory.mkdir(parents=True, exist_ok=True)
+                original.path.write_text('{broken json')
+                real_read = Path.read_text
+
+                def read(path, *args, **kwargs):
+                    if unreadable and path == original.path:
+                        raise PermissionError('receipt unreadable')
+                    return real_read(path, *args, **kwargs)
+
+                with patch.object(Path, 'read_text', read):
+                    planned = self.clippy('a')
+                self.assertEqual(planned.key, original.key)
+                self.assertIsNone(planned.record)
+                with patch.object(landing, 'run_cmd', return_value=(0, '', '', 0.01)) as run:
+                    result = landing.run_check('clippy/a', ['cargo', 'clippy', '-p', 'a'],
+                                               self.repo, 30, passed=planned)
+                self.assertEqual(result[0], 0)
+                run.assert_called_once()
+                self.assertIsNotNone(self.clippy('a').record)
+
+    def test_failed_receipt_write_still_validates_ignored_inputs_at_verdict(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        with cache.session(), patch.object(landing, 'MAIN_CHECKOUT', self.repo), \
+                patch.object(landing, 'GATED_HEAD') as head:
+            head.get.return_value = None
+            landing.RAN_EVERY_CHECK.set(True)
+            planned = self.clippy('a')
+            with patch.object(cache.os, 'replace', side_effect=PermissionError('cache unavailable')), \
+                    patch.object(landing, 'run_cmd', return_value=(0, '', '', 0.01)):
+                result = landing.run_check('clippy/a', ['cargo', 'clippy', '-p', 'a'],
+                                           self.repo, 30, passed=planned)
+            self.assertEqual(result[0], 0)
+            self.assertIn(planned, cache.accepted_passes())
+            self.assertFalse(planned.path.exists())
+            self.write('tests/fixtures/ignored.bin', 'after')
+            self.assertEqual(landing.finish(self.repo, 'origin/main',
+                                            [('PASS', 'clippy/a', 0, [])]), 1)
+            self.assertFalse(landing.RAN_EVERY_CHECK.get())
+            self.assertIn('inputs changed before verdict publication', self.output.getvalue())
+
+    def test_proof_input_change_is_a_nonwaivable_gate_refusal(self):
+        landing.RAN_EVERY_CHECK.set(True)
+        with patch.object(landing, 'run_cmd', return_value=(
+                2, 'GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)', '', 0.01)):
+            result = landing.run_check('gpu-proofs', ['python3', 'scripts/gpu_proofs_gate.py'],
+                                       self.repo, 30)
+        self.assertEqual(result[0], 2)
+        self.assertFalse(landing.RAN_EVERY_CHECK.get())
+
+    def test_failed_execution_with_changed_inputs_is_a_gate_refusal(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        with cache.session():
+            planned = self.clippy('a')
+
+            def fail(*args, **kwargs):
+                self.write('tests/fixtures/ignored.bin', 'after')
+                return 1, '', 'test failure', 0.01
+
+            landing.RAN_EVERY_CHECK.set(True)
+            with patch.object(landing, 'run_cmd', side_effect=fail):
+                result = landing.run_check('clippy/a', ['cargo', 'clippy', '-p', 'a'],
+                                           self.repo, 30, passed=planned)
+            self.assertEqual(result[0], 1)
+            self.assertFalse(landing.RAN_EVERY_CHECK.get())
+            self.assertIn(planned, cache.accepted_passes())
+
+    def test_publication_input_change_refuses_even_if_content_is_restored(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        real_dump = json.dump
+
+        def mutate(*args, **kwargs):
+            real_dump(*args, **kwargs)
+            self.write('tests/fixtures/ignored.bin', 'after')
+
+        with cache.session():
+            planned = self.clippy('a')
+            landing.RAN_EVERY_CHECK.set(True)
+            with patch.object(cache.json, 'dump', side_effect=mutate), \
+                    patch.object(landing, 'run_cmd', return_value=(0, '', '', 0.01)):
+                result = landing.run_check('clippy/a', ['cargo', 'clippy', '-p', 'a'],
+                                           self.repo, 30, passed=planned)
+            self.assertEqual(result[0], 1)
+            self.assertFalse(landing.RAN_EVERY_CHECK.get())
+            self.assertFalse(planned.path.exists())
+            self.write('tests/fixtures/ignored.bin', 'before')
+            self.assertEqual(cache.changed_passes(cache.accepted_passes()), ['clippy/a'])
+
     def test_ignored_fixture_change_between_planning_and_reuse_refuses(self):
         self.write('tests/fixtures/ignored.bin', 'before')
         self.clippy('a').save(0)
@@ -183,6 +274,22 @@ class CacheTests(unittest.TestCase):
             self.write('tests/fixtures/ignored.bin', 'after')
             self.assertEqual(len(cache.changed_passes(passes)), 10)
             self.assertEqual(selected.call_count, calls * 2)
+
+    def test_tracked_root_scan_shared_only_within_each_boundary(self):
+        self.write('tests/tracked.txt', 'root included in tooling scope')
+        self.commit('track fixture root')
+        with patch.object(cache, 'git', wraps=cache.git) as git:
+            with cache.snapshot():
+                passes = [cache.command_pass(self.repo, 'tool', ['python3', 'check.py'])
+                          for _ in range(3)]
+            scans = lambda: sum(call.args[1:] == ('ls-files', '-z')
+                                for call in git.call_args_list)
+            self.assertEqual(scans(), 1)
+            self.assertEqual(cache.changed_passes(passes), [])
+            self.assertEqual(scans(), 2)
+            self.write('tests/fixtures/ignored.bin', 'changed after execution')
+            self.assertEqual(len(cache.changed_passes(passes)), 3)
+            self.assertEqual(scans(), 3)
 
     def test_changed_crate_invalidates_only_its_dependency_closure(self):
         for name in ('a', 'b', 'manifold-renderer'):

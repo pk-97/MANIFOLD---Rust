@@ -280,7 +280,8 @@ def run_check(label, cmd, cwd, timeout, passed=None):
     result = run_cmd(cmd, cwd, timeout, live_log=live)
     exit_, out, err, seconds = result
     if exit_ == -1 or any(marker in out + err for marker in (
-            'GPU-PROOFS GATE: HUNG', 'GPU-PROOFS TIMING: FAIL')):
+            'GPU-PROOFS GATE: HUNG', 'GPU-PROOFS TIMING: FAIL',
+            'GPU-PROOFS GATE: FAIL (inputs changed')):
         # Keep collecting runtime reds, but missing coverage cannot be waived
         # through the named-red landing path.
         RAN_EVERY_CHECK.set(False)
@@ -294,12 +295,11 @@ def run_check(label, cmd, cwd, timeout, passed=None):
             err += '\ndocs index was stale — commit the regenerated index'
             result = exit_, out, err, seconds
     if passed:
-        if passed.key and gate_passes.changed_passes([passed]):
+        if passed.save(exit_, seconds) is False:
             RAN_EVERY_CHECK.set(False)
             exit_ = 1
-            err += '\ninputs changed during execution; rerun the gate'
+            err += '\ninputs changed during receipt publication; rerun the gate'
             result = exit_, out, err, seconds
-        passed.save(exit_, seconds)
     if exit_ and label != "gpu-proofs":
         # Rewritten as stdout then stderr, the layout every landing log has.
         # GPU proofs retain their transcript on both success and failure below.

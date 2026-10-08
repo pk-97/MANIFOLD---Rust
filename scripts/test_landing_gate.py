@@ -913,16 +913,116 @@ class DiffScopeTests(unittest.TestCase):
             with self.subTest(before=before):
                 self.assertFalse(self.check_diff(before, after, suffix))
 
+    def test_plain_spans_stop_at_every_lexer_state_transition(self):
+        for source, expected in [
+            ('prefix // hidden\nnext', ['prefix ', 'next']),
+            ('prefix r#"// literal"# suffix', ['prefix r#"// literal"# suffix']),
+            ('prefix br"/* literal */" suffix', ['prefix br"/* literal */" suffix']),
+            ('prefix cr##"// literal"## suffix', ['prefix cr##"// literal"## suffix']),
+            ("prefix 'a' suffix", ["prefix 'a' suffix"]),
+            ('prefix "/* literal */" suffix', ['prefix "/* literal */" suffix']),
+        ]:
+            with self.subTest(source=source):
+                self.assertEqual(diff_scope.code_lines(source, '.rs'), expected)
+
     def test_changed_lines_drive_path_exclusion(self):
         path = "crates/manifold-renderer/src/node_graph/primitives/blur.rs"
+        old_oid, new_oid = "a" * 40, "b" * 40
+        raw = (f":100644 100644 {old_oid} {new_oid} M\0{path}\0\0"
+               f"diff --git a/{path} b/{path}\n@@ -1 +1 @@\n-// old\n+// new\n")
+
         def git(repo, *args):
-            if "--name-only" in args:
-                return path + "\0"
-            if args[0] == "diff":
-                return "@@ -1 +1 @@\n-// old\n+// new\n"
-            return "// old\nfn f() {}\n" if args[1].startswith("base:") else "// new\nfn f() {}\n"
-        with patch.object(diff_scope, "git", side_effect=git):
+            self.assertEqual(args[0], "diff")
+            return raw
+
+        with patch.object(diff_scope, "git", side_effect=git), \
+                patch.object(diff_scope, "_cat_file_batch",
+                             return_value={old_oid: "// old\nfn f() {}\n",
+                                            new_oid: "// new\nfn f() {}\n"}):
             self.assertEqual(diff_scope.effective_paths(Path.cwd(), "base"), ([], [path]))
+
+    def test_raw_patch_batch_handles_nul_safe_paths_statuses_and_modes(self):
+        comment_path = "src/odd name\t.rs"
+        code_path = "src/line\nbreak.rs"
+        mode_path = "src/mode.rs"
+        deleted_path = "src/deleted.rs"
+        docs_path = "README.md"
+        zero = "0" * 40
+        objects = {
+            "a" * 40: "// old\nfn f() {}\n",
+            "b" * 40: "// new\nfn f() {}\n",
+            "c" * 40: "fn old() {}\n",
+            "d" * 40: "fn new() {}\n",
+            "e" * 40: "// mode old\n",
+            "f" * 40: "// mode new\n",
+            "1" * 40: "// deleted\n",
+            "2" * 40: "docs old\n",
+            "3" * 40: "docs new\n",
+        }
+
+        def raw_record(old_mode, new_mode, old_oid, new_oid, status, path):
+            return f":{old_mode} {new_mode} {old_oid} {new_oid} {status}\0{path}\0"
+
+        records = "".join([
+            raw_record("100644", "100644", "a" * 40, "b" * 40, "M", comment_path),
+            raw_record("100644", "100644", "c" * 40, "d" * 40, "M", code_path),
+            raw_record("100644", "100755", "e" * 40, "f" * 40, "M", mode_path),
+            raw_record("100644", "000000", "1" * 40, zero, "D", deleted_path),
+            raw_record("100644", "100644", "2" * 40, "3" * 40, "M", docs_path),
+        ])
+        patches = "".join([
+            f"diff --git a/{comment_path} b/{comment_path}\n@@ -1 +1 @@\n-// old\n+// new\n",
+            f"diff --git a/{code_path} b/{code_path}\n@@ -1 +1 @@\n-fn old() {{}}\n+fn new() {{}}\n",
+            f"diff --git a/{mode_path} b/{mode_path}\nold mode 100644\nnew mode 100755\n",
+            f"diff --git a/{deleted_path} b/{deleted_path}\n@@ -1 +0,0 @@\n-// deleted\n",
+            f"diff --git a/{docs_path} b/{docs_path}\n@@ -1 +1 @@\n-docs old\n+docs new\n",
+        ])
+        calls = []
+
+        def git(repo, *args):
+            calls.append(args)
+            return records + "\0" + patches
+
+        def cat_file_batch(repo, object_ids):
+            self.assertEqual(object_ids, [
+                "a" * 40, "b" * 40, "c" * 40, "d" * 40,
+                "e" * 40, "f" * 40, "1" * 40,
+            ])
+            return {object_id: objects[object_id] for object_id in object_ids}
+
+        with patch.object(diff_scope, "git", side_effect=git), \
+                patch.object(diff_scope, "_cat_file_batch", side_effect=cat_file_batch):
+            active, ignored = diff_scope.effective_paths(Path.cwd(), "base")
+
+        self.assertEqual(active, [code_path, mode_path])
+        self.assertEqual(ignored, [comment_path, deleted_path, docs_path])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "diff")
+        self.assertIn("--raw", calls[0])
+        self.assertIn("--abbrev=40", calls[0])
+        self.assertIn("--patch", calls[0])
+        self.assertIn("-z", calls[0])
+        self.assertNotIn("--name-only", calls[0])
+
+    def test_worktree_head_reads_after_side_from_filesystem(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path = "src/comment.rs"
+            target = root / path
+            target.parent.mkdir(parents=True)
+            target.write_text("// new\nfn f() {}\n")
+            old_oid = "a" * 40
+            zero = "0" * 40
+            raw = (f":100644 100755 {old_oid} {zero} M\0{path}\0\0"
+                   f"diff --git a/{path} b/{path}\nold mode 100644\nnew mode 100755\n"
+                   f"@@ -1 +1 @@\n-// old\n+// new\n")
+            with patch.object(diff_scope, "git", return_value=raw), \
+                    patch.object(diff_scope, "_cat_file_batch",
+                                  return_value={old_oid: "// old\nfn f() {}\n"}):
+                self.assertEqual(
+                    diff_scope.effective_paths(root, "base", head=None),
+                    ([path], []),
+                )
 
     def test_sibling_alias_and_integration_mapping(self):
         with tempfile.TemporaryDirectory() as d:

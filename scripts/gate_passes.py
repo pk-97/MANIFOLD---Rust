@@ -33,10 +33,17 @@ class Snapshot:
         self.entries = {}
         self.roots = {}
         self.workspaces = {}
+        self.tracked = {}
+
+    def tracked_roots(self, repo):
+        if repo not in self.tracked:
+            self.tracked[repo] = {p.split('/')[0] for p in
+                                  git(repo, 'ls-files', '-z').split('\0') if p}
+        return self.tracked[repo]
 
     def selected(self, repo, paths):
         if repo not in self.entries:
-            roots = {p.split('/')[0] for p in git(repo, 'ls-files', '-z').split('\0') if p}
+            roots = set(self.tracked_roots(repo))
             roots.update(p.split('/')[0] for p in paths)
             self.entries[repo] = selected_entries(repo, sorted(roots))
             self.roots[repo] = roots
@@ -239,8 +246,8 @@ def command_spec(repo, label, cmd):
                 'Cargo.toml', 'Cargo.lock', '.cargo', '.config'], normalized, label == 'flow-gate'
     # Tooling and ratchet checks can inspect any tracked source. Whole-tree
     # scope is deliberately conservative; never guess a test's imports.
-    roots = [p.split('/', 1)[0] for p in git(repo, 'ls-files', '-z').split('\0') if p]
-    return sorted(set(roots)), cmd, False
+    roots = (SNAPSHOT.get() or Snapshot()).tracked_roots(repo)
+    return sorted(roots), cmd, False
 
 
 class Pass:
@@ -248,6 +255,8 @@ class Pass:
         self.repo, self.label, self.spec = Path(repo).resolve(), label, spec
         self.key = self.record = None
         self.reason = None
+        self.inputs_changed = False
+        self.path = self.directory = None
         try:
             current = SESSION.get()
             token = SNAPSHOT.set(SNAPSHOT.get() or (current['planning'] if current else Snapshot()))
@@ -255,19 +264,27 @@ class Pass:
                 self.key = self.fingerprint()
             finally:
                 SNAPSHOT.reset(token)
-            common = git(self.repo, 'rev-parse', '--git-common-dir')
-            self.directory = (self.repo / common).resolve() / 'gate-passes-v1'
-            self.path = self.directory / (self.key + '.json')
-            if self.path.exists():
-                record = json.loads(self.path.read_text())
-                if (isinstance(record, dict) and record.get('schema') == SCHEMA and record.get('key') == self.key
-                        and record.get('pass') is True and isinstance(record.get('seconds'), (int, float))
-                        and record['seconds'] >= 0 and record.get('commit') and record.get('time')):
-                    self.record = record
         except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
             self.key = None
             self.reason = str(error)
             print(f'[NO REUSE] {label}: {error}', flush=True)
+            return
+        # Receipt storage is optional; failure here cannot invalidate inputs.
+        try:
+            common = git(self.repo, 'rev-parse', '--git-common-dir')
+            self.directory = (self.repo / common).resolve() / 'gate-passes-v1'
+            self.path = self.directory / (self.key + '.json')
+            record = json.loads(self.path.read_text())
+            if (isinstance(record, dict) and record.get('schema') == SCHEMA and record.get('key') == self.key
+                    and record.get('pass') is True and isinstance(record.get('seconds'), (int, float))
+                    and record['seconds'] >= 0 and record.get('commit') and record.get('time')):
+                self.record = record
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
+            self.record = None
+            self.reason = str(error)
+            print(f'[NO REUSE] {label}: cannot load receipt: {error}', flush=True)
 
     def fingerprint(self):
         paths, identity, cargo = self.spec()
@@ -281,7 +298,7 @@ class Pass:
                        'host': host_inputs(self.repo, cargo)})
 
     def unchanged(self):
-        if not self.key:
+        if not self.key or self.inputs_changed:
             return False
         try:
             return self.fingerprint() == self.key
@@ -301,14 +318,25 @@ class Pass:
         return False
 
     def save(self, code, seconds=0):
+        """Return False only for unstable inputs, independently of cache writes."""
         if not self.key:
             return
+        # Executed legs remain verdict inputs even when execution or storage
+        # fails; neither failure may hide a later ignored-input mutation.
+        self.accepted()
+        changed = bool(changed_passes([self]))
+        if changed:
+            self.inputs_changed = True
+            print(f'[NO REUSE] {self.label}: inputs changed during execution', flush=True)
+        temporary = None
         try:
             if code:
-                self.path.unlink(missing_ok=True)
-                return
-            if changed_passes([self]):
-                print(f'[NO REUSE] {self.label}: inputs changed during execution', flush=True)
+                if self.path is not None:
+                    self.path.unlink(missing_ok=True)
+                return False if changed else None
+            if changed:
+                return False
+            if self.directory is None:
                 return
             self.directory.mkdir(parents=True, exist_ok=True)
             record = {'schema': SCHEMA, 'key': self.key, 'pass': True,
@@ -319,13 +347,18 @@ class Pass:
                 json.dump(record, stream)
             # Recheck immediately before publication, after preparing the record.
             if changed_passes([self]):
-                os.unlink(temporary)
+                self.inputs_changed = True
                 print(f'[NO REUSE] {self.label}: inputs changed before publication', flush=True)
-                return
+                return False
             os.replace(temporary, self.path)
-            self.accepted()
         except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
             print(f'[NO REUSE] {self.label}: cannot record pass: {error}', flush=True)
+            if changed:
+                return False
+        finally:
+            if temporary is not None:
+                with contextlib.suppress(OSError):
+                    os.unlink(temporary)
 
 
 def command_pass(repo, label, cmd):

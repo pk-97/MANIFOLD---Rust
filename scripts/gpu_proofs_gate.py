@@ -1028,7 +1028,9 @@ def _main() -> int:
         if passed:
             # Budget warnings do not invalidate functional passes. Real
             # failures and hangs can never acquire a reusable pass.
-            passed.save(code or verdict, seconds)
+            if passed.save(code or verdict, seconds) is False:
+                print('GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)')
+                return 2
     return verdict
 
 
