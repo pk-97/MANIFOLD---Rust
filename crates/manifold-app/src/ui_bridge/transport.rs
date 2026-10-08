@@ -54,12 +54,7 @@ pub(super) fn dispatch_transport(
                 let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(
                     old_points, bpm,
                 );
-                {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                }
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             DispatchResult::handled()
         }

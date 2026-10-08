@@ -28,6 +28,14 @@ pub struct TempoMap {
 }
 
 impl TempoMap {
+    /// Compare the beat/time mapping, ignoring recording provenance.
+    pub fn same_timing_as(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.points, &other.points)
+            || (self.points.len() == other.points.len()
+                && self.points.iter().zip(other.points.iter())
+                    .all(|(a, b)| a.beat == b.beat && a.bpm == b.bpm))
+    }
+
     pub fn ensure_sorted(&mut self) {
         if !self.is_sorted {
             if self.points.len() > 1 {
@@ -202,6 +210,16 @@ impl<'a> SourceClock<'a> {
         Self { tempo_map, fallback_bpm, project_recorded_bpm }
     }
 
+    /// Source position beneath a timeline beat, including the clip's trim.
+    pub fn source_position(&self, clip: &crate::clip::TimelineClip, beat: Beats) -> Seconds {
+        clip.in_point + self.source_seconds(clip, clip.start_beat, beat)
+    }
+
+    /// Timeline position of a source-file time (the inverse of source_position).
+    pub fn beat_at_source(&self, clip: &crate::clip::TimelineClip, source: Seconds) -> Beats {
+        clip.start_beat + self.beats_for_source(clip, clip.start_beat, source - clip.in_point)
+    }
+
     /// Media seconds `clip` advances while the timeline moves `from` → `to`.
     pub fn source_seconds(&self, clip: &crate::clip::TimelineClip, from: Beats, to: Beats) -> Seconds {
         let recorded_bpm = clip.resolve_recorded_bpm(self.project_recorded_bpm);
@@ -219,6 +237,11 @@ impl<'a> SourceClock<'a> {
         if recorded_bpm > 0.0 {
             return Beats(seconds.0 * f64::from(recorded_bpm) / 60.0);
         }
+        self.beats_for_unwarped_source(from, seconds)
+    }
+
+    /// Native-speed source span, including tempo changes inside the interval.
+    pub fn beats_for_unwarped_source(&self, from: Beats, seconds: Seconds) -> Beats {
         let start = TempoMapConverter::beat_to_seconds_immut(self.tempo_map, from, self.fallback_bpm);
         TempoMapConverter::seconds_to_beat_immut(self.tempo_map, start + seconds, self.fallback_bpm) - from
     }

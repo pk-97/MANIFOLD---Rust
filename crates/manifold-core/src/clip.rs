@@ -76,6 +76,17 @@ pub struct TimelineClip {
     // ── Metadata ──
     #[serde(default)]
     pub recorded_bpm: f32,
+    /// Whether an audio clip's source tempo is currently used for warping.
+    /// `None` preserves legacy projects, where a positive recorded BPM implied
+    /// warp enabled. An explicit `false` remembers the source BPM while
+    /// disabling warp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_warp_enabled: Option<bool>,
+    /// Whether analysis may replace the source BPM (detected or assumed).
+    /// Manual edits and legacy known BPMs are protected.
+    /// Kept out of JSON when false so old projects retain their shape.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub audio_bpm_automatic: bool,
     #[serde(default)]
     pub is_locked: bool,
     #[serde(default)]
@@ -214,20 +225,39 @@ impl TimelineClip {
         self.in_point = v.max(Seconds::ZERO);
     }
 
-    /// Resolved recorded BPM: clamped to 20-300 if > 0, else 0.
-    /// Unity TimelineClip.cs lines 122-123.
-    pub fn recorded_bpm_resolved(&self) -> f32 {
-        if self.recorded_bpm > 0.0 {
+    /// The finite, clamped source BPM, independent of whether audio warp is
+    /// enabled. A non-positive, NaN, or infinite value means unknown.
+    pub fn source_bpm_resolved(&self) -> f32 {
+        if self.recorded_bpm.is_finite() && self.recorded_bpm > 0.0 {
             self.recorded_bpm.clamp(20.0, 300.0)
         } else {
             0.0
         }
     }
 
+    /// Whether audio source warping is enabled, resolving the legacy `None`
+    /// state from whether a source BPM is known.
+    pub fn is_audio_warp_enabled(&self) -> bool {
+        self.is_audio()
+            && self.audio_warp_enabled.unwrap_or(self.source_bpm_resolved() > 0.0)
+            && self.source_bpm_resolved() > 0.0
+    }
+
+    /// Resolved recorded BPM: clamped to 20-300 if > 0, else 0. Audio clips
+    /// with explicit Warp off return zero while retaining their source BPM.
+    /// Unity TimelineClip.cs lines 122-123.
+    pub fn recorded_bpm_resolved(&self) -> f32 {
+        if self.is_audio() && !self.is_audio_warp_enabled() {
+            0.0
+        } else {
+            self.source_bpm_resolved()
+        }
+    }
+
     /// The tempo playback warps this clip's media to, 0 = unwarped. Clips
     /// without their own recorded tempo fall back to the project's recorded
     /// tempo, a legacy path for live recordings made before each clip was
-    /// stamped. Audio never falls back: its 0 means "Auto, no warp".
+    /// stamped. Audio never falls back: unresolved warp tempo means native speed.
     /// `project_recorded_bpm` is `RecordingProvenance::project_bpm()`.
     pub fn resolve_recorded_bpm(&self, project_recorded_bpm: Option<crate::units::Bpm>) -> f32 {
         let own = self.recorded_bpm_resolved();
@@ -254,7 +284,7 @@ impl TimelineClip {
 
     /// Set recorded BPM with clamping. Unity TimelineClip.cs lines 126-133.
     pub fn set_recorded_bpm(&mut self, v: f32) {
-        if v <= 0.0 {
+        if !v.is_finite() || v <= 0.0 {
             self.recorded_bpm = 0.0;
         } else {
             self.recorded_bpm = v.clamp(20.0, 300.0);
@@ -373,6 +403,8 @@ impl Default for TimelineClip {
             in_point: Seconds::ZERO,
             source_duration: Seconds::ZERO,
             recorded_bpm: 0.0,
+            audio_warp_enabled: None,
+            audio_bpm_automatic: false,
             is_locked: false,
             is_muted: false,
             color_override: None,
@@ -400,6 +432,9 @@ impl Default for TimelineClip {
 
 fn default_one() -> f32 {
     1.0
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 fn default_one_beat() -> Beats {
     Beats::ONE
@@ -527,6 +562,44 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(clip.recorded_bpm_resolved(), 120.0);
+    }
+
+    #[test]
+    fn audio_warp_off_retains_source_bpm_and_resolves_zero_warp_tempo() {
+        let clip = TimelineClip {
+            audio_file_path: "song.wav".into(),
+            recorded_bpm: 128.0,
+            audio_warp_enabled: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(clip.source_bpm_resolved(), 128.0);
+        assert!(!clip.is_audio_warp_enabled());
+        assert_eq!(clip.recorded_bpm_resolved(), 0.0);
+    }
+
+    #[test]
+    fn audio_warp_state_serialization_preserves_legacy_and_explicit_off() {
+        let legacy: TimelineClip = serde_json::from_str(
+            r#"{"audioFilePath":"song.wav","recordedBpm":128.0}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.audio_warp_enabled, None);
+        assert!(legacy.is_audio_warp_enabled());
+        assert!(!legacy.audio_bpm_automatic);
+
+        let explicit_off = TimelineClip {
+            audio_file_path: "song.wav".into(),
+            recorded_bpm: 128.0,
+            audio_warp_enabled: Some(false),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&explicit_off).unwrap();
+        assert!(json.contains("\"audioWarpEnabled\":false"));
+        assert!(!json.contains("audioBpmAutomatic"));
+        let roundtrip: TimelineClip = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip.audio_warp_enabled, Some(false));
+        assert_eq!(roundtrip.source_bpm_resolved(), 128.0);
+        assert_eq!(roundtrip.recorded_bpm_resolved(), 0.0);
     }
 
     #[test]

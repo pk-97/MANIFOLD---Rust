@@ -778,6 +778,13 @@ impl ContentThread {
 
     /// Handle a single command. Returns true if Shutdown.
     pub(crate) fn handle_command(&mut self, cmd: ContentCommand) -> bool {
+        let tempo_before = if matches!(&cmd,
+            ContentCommand::Execute(_) | ContentCommand::ExecuteOnContent(_)
+            | ContentCommand::ExecuteSelecting(..) | ContentCommand::ExecuteBatch(..)
+            | ContentCommand::Undo | ContentCommand::Redo | ContentCommand::ResetBpm
+        ) {
+            self.engine.project().map(|p| (p.tempo_map.clone(), p.settings.bpm))
+        } else { None };
         let (cmd, pending_selection) = match cmd {
             ContentCommand::ExecuteSelecting(command, request) => {
                 let pending = self.engine.project().map(|project| request.capture(project));
@@ -2185,6 +2192,9 @@ impl ContentThread {
                 }
                 self.profiler = None;
             }
+        }
+        if let Some((map, bpm)) = tempo_before {
+            self.engine.reconcile_tempo_edit(&map, bpm);
         }
         self.commit_automation_recording(false);
         false

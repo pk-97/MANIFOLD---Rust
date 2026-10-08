@@ -707,13 +707,13 @@ pub fn push_state(
                     .unwrap_or_else(|| "Audio".to_string());
                 chrome.sync_name(tree, &file_name);
                 chrome.sync_source_name(tree, &file_name);
-                // Warp on ⇔ a recorded BPM is set; off (0) plays at native speed.
-                chrome.sync_warp_enabled(tree, clip.recorded_bpm > 0.0);
-                // Clip BPM drives warp; "Auto" (0) means play at native speed.
+                // Warp state is independent of remembered source tempo.
+                chrome.sync_warp_enabled(tree, clip.is_audio_warp_enabled());
+                // Source BPM remains visible while Warp is off.
                 if clip.recorded_bpm > 0.0 {
                     chrome.sync_bpm(tree, &format!("{:.1}", clip.recorded_bpm));
                 } else {
-                    chrome.sync_bpm(tree, "Auto");
+                    chrome.sync_bpm(tree, "Unknown");
                 }
                 // Detection status + progress (what the pipeline is doing).
                 let progress = if content_state.percussion_progress < 0.0 {
