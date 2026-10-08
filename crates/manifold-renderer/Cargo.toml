@@ -163,6 +163,7 @@ path = "tests/glb_conformance.rs"
 required-features = ["gpu-proofs"]
 
 [features]
+testkit = []
 # GPU-proof tests: slow, flaky, and need a real Metal device with synchronous
 # readback. Off by default so the workspace test sweep stays fast and
 # deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,

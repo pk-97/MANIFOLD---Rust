@@ -467,6 +467,22 @@ pub(crate) fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     ]
 }
 
+// Data shared by catalog proofs is public only in testkit builds. Keeping
+// one declaration per type prevents the production and proof layouts drifting.
+#[cfg(any(test, feature = "testkit"))]
+macro_rules! testkit_visible {
+    ($(#[$attribute:meta])* $kind:ident $name:ident $($body:tt)*) => {
+        $(#[$attribute])* pub $kind $name $($body)*
+    };
+}
+#[cfg(not(any(test, feature = "testkit")))]
+macro_rules! testkit_visible {
+    ($(#[$attribute:meta])* $kind:ident $name:ident $($body:tt)*) => {
+        $(#[$attribute])* pub(crate) $kind $name $($body)*
+    };
+}
+
+testkit_visible! {
 /// BUG-5uqg: `KHR_lights_punctual` light subcategory, mirroring
 /// `gltf::khr_lights_punctual::Kind` but without its borrow (so it can be
 /// carried on [`GltfPunctualLight`] past the parsed `Document`'s lifetime).
@@ -475,7 +491,7 @@ pub(crate) fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 /// attenuation, so a Spot import is a lossy (but visually-closer-than-omitting)
 /// approximation; see that module's conversion doc for the reasoning.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum GltfLightKind {
+enum GltfLightKind {
     Directional,
     Point,
     Spot {
@@ -485,7 +501,9 @@ pub(crate) enum GltfLightKind {
         outer_cone_angle: f32,
     },
 }
+}
 
+testkit_visible! {
 /// One `KHR_lights_punctual` light, resolved to its owning node's world
 /// transform. `color`/`intensity`/`range` are the RAW spec values (linear
 /// RGB; lux for `Directional`, candela for `Point`/`Spot`; range in metres,
@@ -493,7 +511,7 @@ pub(crate) enum GltfLightKind {
 /// `intensity` into `node.light`'s unitless scale at import time, not here,
 /// so a parse-only test can assert the raw spec numbers unchanged.
 #[derive(Debug, Clone)]
-pub(crate) struct GltfPunctualLight {
+struct GltfPunctualLight {
     pub name: Option<String>,
     pub kind: GltfLightKind,
     pub color: [f32; 3],
@@ -508,6 +526,7 @@ pub(crate) struct GltfPunctualLight {
     /// `normalize(transform(-Z) - transform(0))` gets the same answer
     /// without a separate rotation-only matrix path.
     pub world_forward: [f32; 3],
+}
 }
 
 /// Recursively collect every node in `document` carrying a
@@ -1077,6 +1096,7 @@ pub(crate) fn load_gltf_texture(
     Ok((width, height, rgba))
 }
 
+testkit_visible! {
 /// GLB_XFAIL_BURNDOWN_DESIGN.md D3 (BUG-164): glTF `wrapS`/`wrapT`, decoupled
 /// from `manifold_gpu` (this module is content-thread parse code, no GPU
 /// dependency) — `gltf_import.rs` translates these into `node.pbr_material`'s
@@ -1084,32 +1104,37 @@ pub(crate) fn load_gltf_texture(
 /// `manifold_gpu::GpuAddressMode`. Default `Repeat` matches both glTF's own
 /// implicit no-sampler default and `WrappingMode`'s crate-level default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum GltfWrapMode {
+enum GltfWrapMode {
     #[default]
     Repeat,
     ClampToEdge,
     MirrorRepeat,
 }
+}
 
+testkit_visible! {
 /// glTF `magFilter`/`minFilter` components, retaining both the base filter
 /// and the optional mip filter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum GltfFilterMode {
+enum GltfFilterMode {
     #[default]
     Linear,
     Nearest,
 }
+}
 
+testkit_visible! {
 /// GLB_XFAIL_BURNDOWN_DESIGN.md D3: one map family's sampler settings.
 /// Default reproduces glTF's implicit no-sampler default (Repeat/Repeat/
 /// Linear/Linear) — byte-identical to the pre-D3 hardcoded REPEAT sampler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct GltfSamplerInfo {
+struct GltfSamplerInfo {
     pub wrap_u: GltfWrapMode,
     pub wrap_v: GltfWrapMode,
     pub mag_filter: GltfFilterMode,
     pub min_filter: GltfFilterMode,
     pub mip_filter: Option<GltfFilterMode>,
+}
 }
 
 impl Default for GltfSamplerInfo {
@@ -1217,6 +1242,7 @@ fn extension_map_info(
     }
 }
 
+testkit_visible! {
 /// One distinct glTF material that has geometry, plus everything the
 /// importer needs to build its `render_scene` object: the PBR factors,
 /// the base-color texture index (into `document.textures()`), the alpha
@@ -1225,7 +1251,7 @@ fn extension_map_info(
 // Stage 1 output — consumed by `gltf_import::assemble_import_graph`, which
 // the `manifold-app` file-drop handler calls in production.
 #[derive(Debug, Clone)]
-pub(crate) struct GltfMaterialInfo {
+struct GltfMaterialInfo {
     pub material_index: u32,
     pub name: Option<String>,
     pub base_color_factor: [f32; 4],
@@ -1544,6 +1570,7 @@ pub(crate) struct GltfMaterialInfo {
     /// net world placement is unchanged — see `build_object_group`.
     pub own_center: [f32; 3],
 }
+}
 
 /// Result of converting one `KHR_materials_pbrSpecularGlossiness` material's
 /// scalar factors to MANIFOLD's metal-rough vocabulary
@@ -1669,6 +1696,7 @@ pub(crate) fn parse_uv_transform_json(v: &serde_json::Value) -> ([f32; 6], bool)
     (fold_uv_transform(offset, rotation, scale), tex_coord_override)
 }
 
+testkit_visible! {
 /// What the importer needs to know about a glb up front: the distinct
 /// materials that actually carry geometry (each becomes one
 /// `render_scene` object), the world-space bounding box (for the default
@@ -1676,7 +1704,7 @@ pub(crate) fn parse_uv_transform_json(v: &serde_json::Value) -> ([f32; 6], bool)
 /// default-material (unassigned) geometry so the importer can report what
 /// it did and didn't handle.
 #[derive(Debug, Clone)]
-pub(crate) struct GltfImportSummary {
+struct GltfImportSummary {
     pub materials: Vec<GltfMaterialInfo>,
     pub bbox_min: [f32; 3],
     pub bbox_max: [f32; 3],
@@ -1741,13 +1769,15 @@ pub(crate) struct GltfImportSummary {
     /// resolution instead of resampling to the 1024² v1 default.
     pub texture_dims: Vec<(u32, u32)>,
 }
+}
 
+testkit_visible! {
 /// One embedded glTF camera resolved to world-space pose, ready for
 /// `node.free_camera`'s pos/yaw/pitch/roll param surface. Perspective
 /// projection only (BUG-d2qz scope) — `parse_cameras` reports and skips
 /// orthographic cameras rather than guessing an equivalent.
 #[derive(Debug, Clone)]
-pub(crate) struct GltfCameraInfo {
+struct GltfCameraInfo {
     /// The glTF camera's own `name`, falling back to its owning node's
     /// `name`, falling back to `None` (caller numbers it).
     pub name: Option<String>,
@@ -1761,6 +1791,7 @@ pub(crate) struct GltfCameraInfo {
     pub fov_y: f32,
     pub near: f32,
     pub far: f32,
+}
 }
 
 /// glTF sampler interpolation mode, as encoded in the runtime track
@@ -1785,6 +1816,7 @@ impl GltfInterp {
 
 }
 
+testkit_visible! {
 /// One keyframe track (glTF `translation`/`scale` channel), any of the
 /// three glTF sampler interpolation modes — GLTF_ANIMATION_DESIGN.md A1,
 /// extended by IMPORT_ANYTHING_WAVE_DESIGN.md W2. `times` are seconds,
@@ -1794,27 +1826,31 @@ impl GltfInterp {
 /// per-keyframe in-tangent/out-tangent triple, needed for the Hermite
 /// sampler in `gltf_anim_shared.rs`.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub(crate) struct Vec3Track {
+struct Vec3Track {
     pub times: Vec<f32>,
     pub values: Vec<[f32; 3]>,
     pub mode: GltfInterp,
     pub in_tangents: Vec<[f32; 3]>,
     pub out_tangents: Vec<[f32; 3]>,
 }
+}
 
+testkit_visible! {
 /// One quaternion (`[x, y, z, w]`) keyframe track (glTF `rotation`
 /// channel), any interpolation mode. LINEAR/STEP sampling slerps/holds; see
 /// [`Vec3Track`] for the CUBICSPLINE tangent convention.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub(crate) struct QuatTrack {
+struct QuatTrack {
     pub times: Vec<f32>,
     pub values: Vec<[f32; 4]>,
     pub mode: GltfInterp,
     pub in_tangents: Vec<[f32; 4]>,
     pub out_tangents: Vec<[f32; 4]>,
 }
+}
 
 
+testkit_visible! {
 /// One LINEAR-sampled morph-target-weights keyframe track (glTF `weights`
 /// channel target path) — GLTF_ANIMATION_DESIGN.md A3. glTF interleaves
 /// every target's weight into one flat output accessor per keyframe
@@ -1823,16 +1859,18 @@ pub(crate) struct QuatTrack {
 /// `target_count`), the same "one row per keyframe" shape [`Vec3Track`]
 /// uses for translation/scale, just N-wide instead of 3-wide.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct WeightsTrack {
+struct WeightsTrack {
     pub times: Vec<f32>,
     pub values: Vec<Vec<f32>>,
 }
+}
 
+testkit_visible! {
 /// One glTF node's animated TRS channels within a single animation clip.
 /// Any of the three may be absent (that channel isn't animated on this
 /// node in this clip) — never fabricated.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct GltfNodeAnimation {
+struct GltfNodeAnimation {
     pub node_index: usize,
     pub translation: Option<Vec3Track>,
     pub rotation: Option<QuatTrack>,
@@ -1846,14 +1884,16 @@ pub(crate) struct GltfNodeAnimation {
     /// this up directly by the contributing node's index.
     pub weights: Option<WeightsTrack>,
 }
+}
 
+testkit_visible! {
 /// One `document.animations()` entry (a glTF "clip"), parsed into its
 /// per-node TRS tracks. glTF's `animations[]` is a list (`Fox` ships
 /// three) — A1 always resolves against entry `[0]` (multi-clip selection
 /// is D4, deferred to A4); later entries are still parsed (so the smoke
 /// test can see them) but not wired.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct GltfAnimationInfo {
+struct GltfAnimationInfo {
     pub name: Option<String>,
     pub nodes: Vec<GltfNodeAnimation>,
     /// One line per channel this parse saw but didn't turn into a track:
@@ -1863,7 +1903,9 @@ pub(crate) struct GltfAnimationInfo {
     /// `target.node` — see BUG_BACKLOG.md). Never silent.
     pub skipped_channels: Vec<String>,
 }
+}
 
+testkit_visible! {
 /// One object's (= one material's) RESOLVED animation — the merge of
 /// whichever ancestor-chain node carries each TRS channel. See
 /// [`resolve_object_animation`] for why a chain walk is necessary:
@@ -1871,7 +1913,7 @@ pub(crate) struct GltfAnimationInfo {
 /// translation onto an ANCESTOR node and rotation onto the mesh's own
 /// node, so "the node that owns this material's mesh" is not enough.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GltfObjectAnimation {
+struct GltfObjectAnimation {
     /// Clip duration in SECONDS (glTF's own unit) — the last keyframe
     /// time across whichever channels are present. Never converted to
     /// beats here (D3: seconds→beats happens at RUNTIME, live against the
@@ -1896,6 +1938,7 @@ pub(crate) struct GltfObjectAnimation {
     pub translation_node: Option<usize>,
     pub rotation_node: Option<usize>,
     pub scale_node: Option<usize>,
+}
 }
 
 /// Parse every `document.animations()` entry into its per-node TRS
@@ -2135,6 +2178,7 @@ fn resolve_object_animation(
 
 // ─── GLTF_ANIMATION_DESIGN.md A2 — skinning (D2) ───────────────────────
 
+testkit_visible! {
 /// One glTF `skins[]` entry's PARSE-TIME-STATIC topology — which node is
 /// which joint (palette index = position in `joint_node_indices`, the
 /// same order JOINTS_0 accessor values index into), each joint's parent
@@ -2143,7 +2187,7 @@ fn resolve_object_animation(
 /// `node.gltf_skeleton_pose` from `GltfObjectSkin`'s bind-pose + Table
 /// tracks — this struct carries only what parsing can fix once.
 #[derive(Debug, Clone)]
-pub(crate) struct GltfSkinInfo {
+struct GltfSkinInfo {
     pub joint_node_indices: Vec<usize>,
     /// Index (into THIS skin's own joint list) of each joint's parent, or
     /// `-1` when the joint's real scene-graph parent is not itself a
@@ -2164,6 +2208,7 @@ pub(crate) struct GltfSkinInfo {
     // are DELETED — deduped into `GltfAnimSet::node_bind_trs` (P1, indexed
     // by whole-scene node index rather than duplicated per-skin), which
     // `gltf_skeleton_pose::sample_joint_local` now reads exclusively.
+}
 }
 
 /// Every node's parent, indexed by node index (`None` = root). Built once
@@ -2318,20 +2363,23 @@ pub(crate) fn parse_skins(document: &gltf::Document, buffers: &[gltf::buffer::Da
         .collect()
 }
 
+testkit_visible! {
 /// This render object's (= one material's) resolved skin topology —
 /// `GltfSkinInfo` plus which skin index it came from (for report
 /// messages). `gltf_import.rs` reads this to build `node.gltf_skeleton_pose`'s
 /// Table params; per-vertex JOINTS_0/WEIGHTS_0 live separately, read at
 /// RUNTIME by `node.gltf_skinned_mesh_source` from the same file.
 #[derive(Debug, Clone)]
-pub(crate) struct GltfObjectSkin {
+struct GltfObjectSkin {
     pub skin_index: u32,
     pub info: GltfSkinInfo,
+}
 }
 
 // ─── GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3) — rigid multi-node via the
 // node-slot palette ──────────────────────────────────────────────────
 
+testkit_visible! {
 /// This render object's (= one material's) resolved node-slot topology —
 /// the sorted scene-node indices contributing its geometry, slot order =
 /// list order (slot `i` = `slot_nodes[i]`). Set when EITHER (a) more than
@@ -2356,8 +2404,9 @@ pub(crate) struct GltfObjectSkin {
 /// `node.gltf_skeleton_pose` in node-slot mode (`skin_index == -2`) instead
 /// of skin mode.
 #[derive(Debug, Clone)]
-pub(crate) struct GltfObjectRigidMultiNode {
+struct GltfObjectRigidMultiNode {
     pub slot_nodes: Vec<u32>,
+}
 }
 
 /// Every scene-node index (ascending) whose mesh has at least one
@@ -2390,6 +2439,7 @@ pub(crate) fn find_material_contributing_nodes(
 
 // ─── GLTF_ANIMATION_DESIGN.md A3 — morph targets ───────────────────────
 
+testkit_visible! {
 /// This render object's (= one material's) resolved morph-target topology
 /// — how many targets, which node's `weights` animation channel (if any)
 /// drives them, and the static per-target fallback weight for a target
@@ -2401,7 +2451,7 @@ pub(crate) fn find_material_contributing_nodes(
 /// JOINTS_0/WEIGHTS_0 live outside `GltfObjectSkin` too — vertex-scale
 /// data is never baked into import-time Tables).
 #[derive(Debug, Clone)]
-pub(crate) struct GltfObjectMorph {
+struct GltfObjectMorph {
     /// The sole contributing node's index — `node_anims_clip0.get(&this)`
     /// is where an animated `weights` channel for this object would live.
     pub mesh_node_index: usize,
@@ -2413,6 +2463,7 @@ pub(crate) struct GltfObjectMorph {
     /// doesn't animate — mirrors `GltfSkinInfo::joint_bind_translation`'s
     /// "unanimated joint gets its bind-pose static row" convention.
     pub static_weights: Vec<f32>,
+}
 }
 
 /// (vertices, per-vertex joint indices as f32, per-vertex weights) — the
@@ -5917,5 +5968,12 @@ mod tests {
         // Non-identity node transform (translation ~[0.117, 0.124, 0.001]):
         // world_pos must actually carry it, not fall back to the origin.
         assert!(point.world_pos[0].abs() > 1e-3 || point.world_pos[1].abs() > 1e-3);
+    }
+}
+
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit {
+    pub fn gltf_import_summary(path: &std::path::Path) -> Result<super::GltfImportSummary, String> {
+        super::gltf_import_summary(path)
     }
 }

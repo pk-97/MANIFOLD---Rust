@@ -15,8 +15,6 @@ use super::{
     MaterialBindingUpdate, MaterialGraphUpgrade, MaterialUpgradeCache, upgrade_material_graph,
 };
 
-#[cfg(test)]
-mod project_tests;
 
 /// Summary returned to the project loader.  Notices are user-facing but
 /// non-fatal; a missing source asset must never make the project disappear.
@@ -237,4 +235,14 @@ fn has_active_owner(instance: &PresetInstance, id: &str) -> bool {
 
 fn nearly_equal(a: f32, b: f32) -> bool {
     (a - b).abs() <= 1e-5_f32.max(1e-5 * a.abs().max(b.abs()))
+}
+
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit {
+    pub fn apply_binding_updates(
+        instance: &mut manifold_core::effects::PresetInstance,
+        updates: &[super::super::MaterialBindingUpdate],
+    ) {
+        super::apply_binding_updates(instance, updates);
+    }
 }

@@ -112,3 +112,31 @@ mod particle_frame_blend_tests;
 mod face_grid_scene_tests;
 #[cfg(feature = "gpu-proofs")]
 mod particle_publication_gpu_tests;
+
+mod seed_particles_from_texture;
+
+#[cfg(feature = "gpu-proofs")]
+mod bokeh_gather;
+
+mod relight;
+
+mod scene_vm;
+
+mod scene_exposure;
+
+mod fluid_objects;
+
+mod gltf_animation_source;
+
+mod gltf_upgrade_project;
+
+#[cfg(feature = "gpu-proofs")]
+mod copy_positions;
+
+#[cfg(feature = "gpu-proofs")]
+mod generator_renderer_tests;
+
+#[cfg(feature = "gpu-proofs")]
+mod generator_renderer_warmup_tests;
+
+mod gltf_upgrade;

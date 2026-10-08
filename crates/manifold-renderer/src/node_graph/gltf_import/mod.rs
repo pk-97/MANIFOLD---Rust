@@ -44,7 +44,10 @@ mod merge;
 mod object_group;
 mod report;
 mod scene;
+#[cfg(not(any(test, feature = "testkit")))]
 mod upgrade;
+#[cfg(any(test, feature = "testkit"))]
+pub mod upgrade;
 
 mod scene_scale;
 #[cfg(test)]
@@ -95,3 +98,6 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
 }
 
 mod migration;
+
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit;

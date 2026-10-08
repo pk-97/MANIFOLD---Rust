@@ -1,3 +1,4 @@
+use super::testkit::{full_material, write_synthetic_multimaterial_glb};
 use super::*;
 use super::assembly::*;
 use super::merge::*;
@@ -1239,92 +1240,6 @@ fn scene_lens_params_have_consumers() {
     }
 }
 
-/// A synthetic [`GltfMaterialInfo`] carrying every texture kind F-P4
-/// wires, with independent test-controlled fields for the three
-/// report-only features (clearcoat/transmission/BLEND). Defaults mirror
-/// a "fully-mapped, nothing extra" material — callers override only
-/// what a specific test cares about (Rust has no field-update syntax
-/// across `..` for `pub(crate)` structs outside the defining module, so
-/// this is a plain builder-by-closure, not `..Default::default()`).
-pub(super) fn full_material(material_index: u32, name: &str, verts: u32) -> super::gltf_load::GltfMaterialInfo {
-    use super::gltf_load::GltfMaterialInfo;
-    GltfMaterialInfo {
-        material_index,
-        name: Some(name.to_string()),
-        base_color_factor: [0.8, 0.8, 0.8, 1.0],
-        metallic: 1.0,
-        roughness: 0.4,
-        emissive: [1.0, 0.5, 0.2],
-        alpha_mask: false,
-        alpha_cutoff: 0.5,
-        base_color_texture: Some(0),
-        normal_texture: Some(1),
-        normal_scale: 1.0,
-        mr_texture: Some(2),
-        occlusion_texture: Some(3),
-        occlusion_strength: 1.0,
-        emissive_texture: Some(4),
-        emissive_strength: 2.5,
-        ior: 1.5,
-        specular_factor: 1.0,
-        legacy_specular_factor: None,
-        specular_color_factor: [1.0, 1.0, 1.0],
-        specular_texture: None,
-        specular_color_texture: None,
-        base_color_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
-        normal_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
-        mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
-        occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
-        emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
-        core_tex_coords: [0; 5],
-        mr_texture_is_gloss_alpha: false,
-        transmission_factor: 0.0,
-        transmission_texture: None,
-        diffuse_transmission_factor: 0.0,
-        diffuse_transmission_color: [1.0, 1.0, 1.0],
-        diffuse_transmission_texture: None,
-        diffuse_transmission_color_texture: None,
-        clearcoat_factor: 0.0,
-        clearcoat_roughness_factor: 0.0,
-        clearcoat_normal_scale: 1.0,
-        clearcoat_texture: None,
-        clearcoat_roughness_texture: None,
-        clearcoat_normal_texture: None,
-        sheen_color_factor: [0.0, 0.0, 0.0],
-        sheen_roughness_factor: 0.0,
-        sheen_color_texture: None,
-        sheen_roughness_texture: None,
-        iridescence_factor: 0.0,
-        iridescence_ior: 1.3,
-        iridescence_thickness_minimum: 100.0,
-        iridescence_thickness_maximum: 400.0,
-        iridescence_texture: None,
-        iridescence_thickness_texture: None,
-        anisotropy_strength: 0.0,
-        anisotropy_rotation: 0.0,
-        anisotropy_texture: None,
-        dispersion: 0.0,
-        volume_thickness_factor: 0.0,
-        volume_attenuation_distance: manifold_node_engine::scene::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
-        volume_attenuation_color: [1.0, 1.0, 1.0],
-        volume_thickness_texture: None,
-        was_blend: false,
-        vertex_color_varies: false,
-        unlit: false,
-        vertex_count: verts,
-        base_color_sampler: super::gltf_load::GltfSamplerInfo::default(),
-        normal_sampler: super::gltf_load::GltfSamplerInfo::default(),
-        mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
-        occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
-        emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
-        extension_maps: [manifold_node_engine::scene::material::MaterialMapInfo::default(); 14],
-        animations: Vec::new(),
-        skin: None,
-        morph: None,
-        rigid_multi_node: None,
-        own_center: [0.0, 0.0, 0.0],
-    }
-}
 
 /// BUG-194/BUG-195: `build_import_graph` stamps `source_vertex_count`
 /// (exactly `GltfMaterialInfo::vertex_count`) and `source_bbox_radius`

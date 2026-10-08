@@ -70,7 +70,10 @@ mod colorize;
 mod compressor_envelope;
 mod consecutive_edges;
 mod contrast;
+#[cfg(not(any(test, feature = "testkit")))]
 mod copy_positions;
+#[cfg(any(test, feature = "testkit"))]
+pub mod copy_positions;
 mod convolution_2d_9tap;
 mod cycle_table_row;
 mod cylinder_wrap_field;
@@ -87,7 +90,10 @@ mod displace_mesh;
 mod distance_to_point;
 mod dither;
 mod dither_pattern;
+#[cfg(not(any(test, feature = "testkit")))]
 mod displace_copies;
+#[cfg(any(test, feature = "testkit"))]
+pub mod displace_copies;
 mod downsample;
 mod resize_limit;
 mod draw_connections;
@@ -138,7 +144,10 @@ mod plane_mesh;
 mod generate_range;
 mod glitch_jitter;
 pub(crate) mod gltf_anim_shared;
+#[cfg(not(any(test, feature = "testkit")))]
 mod gltf_animation_source;
+#[cfg(any(test, feature = "testkit"))]
+pub mod gltf_animation_source;
 pub(crate) mod gltf_mesh_source;
 mod gltf_morph_deltas_source;
 mod gltf_morph_weights;
@@ -163,7 +172,10 @@ mod inject_burst;
 mod euler_step_particles;
 mod sample_texture_at_particles;
 mod wrap_particles_torus;
+#[cfg(not(any(test, feature = "testkit")))]
 mod wave_field_3d;
+#[cfg(any(test, feature = "testkit"))]
+pub mod wave_field_3d;
 mod inverse_fft_2d;
 pub(crate) mod ocean_spectrum;
 pub(crate) mod ocean_displace;
@@ -177,7 +189,10 @@ mod lambert_directional;
 mod length_vec2;
 mod lerp_instance_fields;
 mod levels;
+#[cfg(not(any(test, feature = "testkit")))]
 mod lfo;
+#[cfg(any(test, feature = "testkit"))]
+pub mod lfo;
 pub(crate) mod layer_source;
 mod lic_integrate;
 mod light;

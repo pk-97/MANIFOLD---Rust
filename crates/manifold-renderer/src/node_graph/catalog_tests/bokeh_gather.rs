@@ -20,7 +20,7 @@ use manifold_node_engine::gpu::render_target::RenderTarget;
 use crate::tonemap::{TonemapMode, TonemapSettings};
 use manifold_core::{BlendMode, LayerId, LayerType};
 
-use crate::node_graph::primitives::{BokehGather, bokeh_gather::BokehSettings};
+use crate::node_graph::primitives::bokeh_gather::{BokehGather, BokehSettings};
 
 const APERTURE_CIRCLE: u32 = 0;
 const APERTURE_HEXAGON: u32 = 1;

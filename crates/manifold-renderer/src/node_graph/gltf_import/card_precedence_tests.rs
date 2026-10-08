@@ -20,7 +20,7 @@
 use crate::node_graph::gltf_load::GltfImportSummary;
 
 use super::scene::build_import_graph;
-use super::tests::full_material;
+use super::testkit::full_material;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::PresetRuntime;
 
