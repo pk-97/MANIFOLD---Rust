@@ -11,7 +11,7 @@ mod support {
 // `region_types.rs` is a wire boundary rather than a generated GPU uniform.
 // Include the production declarations so this integration proof checks the
 // compiler's actual repr(C) layout instead of reproducing the structs here.
-#[path = "../src/node_graph/primitives/region_types.rs"]
+#[path = "../../manifold-nodes-image/src/node_graph/primitives/region_types.rs"]
 mod region_wire_abi;
 
 const BLOB_V2_UNIFORM_MIRRORS: &[(&str, &str)] = &[
@@ -41,7 +41,7 @@ mod blob_v2 {
 
     #[test]
     fn blob_v2_uniform_mirrors_match_generated_or_custom_layout() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-nodes-image/src/node_graph/primitives");
         let registry = PrimitiveRegistry::with_builtin();
         let mut failures = Vec::new();
         for &(source, rust_struct) in BLOB_V2_UNIFORM_MIRRORS {
@@ -213,7 +213,7 @@ mod custom {
     }
     #[test]
     fn custom_gpu_uniforms_match_their_actual_shader_declarations() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-nodes-image/src/node_graph/primitives");
         let mut failures = Vec::new();
         for case in custom_abi_cases::CASES {
             let result = (|| {

@@ -123,6 +123,10 @@ fn is_partial(path: &std::path::Path) -> bool {
 #[test]
 fn all_wgsl_shaders_validate() {
     let mut files = find_wgsl_files(&shader_dir());
+    let leaf_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../manifold-nodes-image/src");
+    assert!(leaf_shaders.is_dir(), "manifold-nodes-image shader directory must exist");
+    files.extend(find_wgsl_files(&leaf_shaders));
     let shared_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../manifold-node-engine/src/gpu/shaders");
     assert!(shared_shaders.is_dir(), "engine shared shader directory must exist");

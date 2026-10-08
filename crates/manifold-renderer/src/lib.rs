@@ -63,3 +63,5 @@ mod load;
 #[cfg(test)]
 #[path = "engine_contract_tests/runtime.rs"]
 mod runtime;
+
+use manifold_nodes_image as _;

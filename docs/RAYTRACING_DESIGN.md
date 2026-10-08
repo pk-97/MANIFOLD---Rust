@@ -14,7 +14,7 @@ Companions: `REALTIME_3D_DESIGN.md` (the scene system RT extends), `MANIFOLD_GPU
 |---|---|---|
 | MetalFX Spatial upscaler | `crates/manifold-gpu/src/metal/metalfx.rs` | SHIPPED — ML spatial upscale, Lanczos fallback. *Temporal* variant (motion-vector-fed, the denoiser-adjacent one) NOT integrated. |
 | Soft shadows (PCSS penumbra) | REALTIME_3D_DESIGN.md section status "SHIPPED @ `feat/pcss-penumbra` 2026-07-12" | The raster baseline RT shadows must beat. |
-| GTAO | `crates/manifold-renderer/src/node_graph/primitives/ssao_gtao.rs` | The raster AO RT AO replaces. |
+| GTAO | `crates/manifold-nodes-image/src/node_graph/primitives/ssao_gtao.rs` | The raster AO RT AO replaces. |
 | PBR material model | `crates/manifold-core` material types per MATERIAL_SYSTEM_DESIGN.md (M1–M6 SHIPPED); glTF/Khronos import via `crates/manifold-renderer/src/node_graph/gltf_import/mod.rs` | Metallic-roughness + emissive already deserialized and typed — RT consumes this as-is. **No new material system in v1** (Peter agrees; node-based material editor is a future direction — graphs *drive* material params first, *define* materials later). |
 | Hybrid RT direction | RENDERING_INFRA_V2_DESIGN.md section 9 (Hybrid ray tracing (post-release) — GRADUATED 2026-07-21 → `RAYTRACING_DESIGN.md`) | Direction + backend seam decided in principle; this doc is its graduation. Its rejections stand (no real-time path tracing; emissive-as-real-GI in raster rejected). |
 | HDR pipeline + tonemapping | CINEMATIC_POST_DESIGN.md (SHIPPED) | Peter: HDR path "already sorted". RT plugs into existing linear-HDR → grade chain. |

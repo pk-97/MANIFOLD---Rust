@@ -21,7 +21,7 @@ mod mesh_spatial_mask;
 mod sample_mesh_triangles;
 mod mesh_stagger_envelope;
 mod analytic_echo_instances;
-pub use bokeh_gather::BokehGather;
+
 mod bake_equirect_envmap;
 mod pack_curve_xy;
 mod consecutive_edges;
@@ -30,7 +30,7 @@ mod copy_positions;
 #[cfg(any(test, feature = "testkit"))]
 pub mod copy_positions;
 mod cylinder_wrap_field;
-pub use detect_regions::{RegionPerfSamples, start_region_perf_samples, take_region_perf_samples};
+
 mod digital_plants_render;
 mod displace_mesh;
 #[cfg(not(any(test, feature = "testkit")))]
@@ -139,52 +139,50 @@ mod voxelize_mesh;
 // Crate-visible so the snapshot builder can key the `(WGSL)` header marker on
 // the canonical `TYPE_ID` rather than a duplicated string literal.
 
-pub use abs_texture::AbsTexture;
-pub use audio_waveform::{AudioSpectrum, AudioWaveform};
-pub use affine_transform::AffineTransform;
+
+
+
 pub use atmosphere::AtmosphereNode;
 pub use render_mode::RenderModeNode;
-pub use anti_clump_particles::AntiClumpParticles;
-pub use apply_radial_burst_to_particles::ApplyRadialBurstToParticles;
-pub use array_connect_nearest::ArrayConnectNearest;
-pub use array_diffuse_particles::ArrayDiffuseParticles;
-pub use array_filter_detections::ArrayFilterDetections;
-pub use array_feedback::ArrayFeedback;
-pub use array_math::{ARRAY_MATH_OPS, ArrayMath};
+
+
+
+
+
+
+
 pub use array_replicate_polyline_rings::{
     ArrayReplicatePolylineRings, REPLICATE_MAX_RINGS,
 };
-pub use array_unpack_vec2::ArrayUnpackVec2;
-pub use beat_gate::{BEAT_GATE_RATE_LABELS, BeatGate};
-pub use beat_ramp::BeatRamp;
-pub use blob_detect_ffi::BlobDetectFfi;
-pub use detect_regions::DetectRegions;
-pub use track_regions::TrackRegions;
-pub use mask_extrema::MaskExtrema;
-pub use region_mask::RegionMask;
-pub use rgb_distance::RgbDistance;
-pub use blob_overlay_render::BlobOverlayRender;
-pub use block_displace_field::BlockDisplaceField;
-pub use block_sample::BlockSample;
-pub use box_mask::BoxMask;
-pub use blinn_specular::BlinnSpecular;
-pub use blur_3d_separable::{BLUR_3D_AXES, BLUR_3D_MODES, Blur3DSeparable};
-pub use chroma_key::{CHROMA_KEY_MODES, ChromaKey};
-pub use checkerboard::Checkerboard;
-pub use chromatic_displace::ChromaticDisplace;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 pub use bake_equirect_envmap::BakeEquirectEnvmap;
-pub use basic_shape::{BASIC_SHAPE_SHAPES, BasicShape};
-pub use clamp_texture::ClampTexture;
-pub use coc_from_depth::CocFromDepth;
-pub use mirror_axis::MirrorAxis;
-pub use pack_channels::PackChannels;
+
+
+
+
+
 pub use pack_curve_xy::PackCurveXy;
-pub use color::{
-    BRIGHTNESS_TYPE_ID, Brightness, CHANNEL_MIX_TYPE_ID, COLOR_RAMP_TYPE_ID, ChannelMix, ColorRamp,
-};
-pub use color_sample::ColorSample;
-pub use colorize::Colorize;
-pub use contrast::Contrast;
+
+
+
+
 pub use copy_positions::CopyPositions;
 pub use wave_shear_mesh::WaveShearMesh;
 pub use transform_mesh_patches::TransformMeshPatches;
@@ -197,56 +195,53 @@ pub use normal_wave_mesh::NormalWaveMesh;
 pub use mesh_spatial_mask::MeshSpatialMask;
 pub use mesh_stagger_envelope::MeshStaggerEnvelope;
 pub use analytic_echo_instances::AnalyticEchoInstances;
-pub use compressor_envelope::{COMPRESSOR_ENVELOPE_TYPE_ID, CompressorEnvelope};
+
 pub use consecutive_edges::{CONSECUTIVE_EDGES_MAX_CAPACITY, ConsecutiveEdges};
-pub use convolution_2d_9tap::Convolution2D9Tap;
-pub use cycle_table_row::CycleTableRow;
+
+
 pub use cylinder_wrap_field::CylinderWrapField;
-pub use depth_estimate_midas::DepthEstimateMidas;
+
 pub use digital_plants_render::DigitalPlantsRender;
 pub use displace_mesh::DisplaceMesh;
 pub use displace_copies::DisplaceCopies;
-pub use draw_connections::DrawConnections;
-pub use draw_dots::DrawDots;
-pub use draw_gauge::DrawGauge;
-pub use draw_markers::DrawMarkers;
-pub use draw_scanlines::DrawScanlines;
-pub use draw_ticks::DrawTicks;
-pub use distance_to_point::DistanceToPoint;
-pub use dither::Dither;
-pub use dither_pattern::DitherPattern;
-pub use edge_detect::EdgeDetect;
-pub use envelope_decay::{ENVELOPE_DECAY_TYPE_ID, EnvelopeDecay};
-pub use envelope_follower_ar::{ENVELOPE_FOLLOWER_AR_TYPE_ID, EnvelopeFollowerAr};
+
+
+
+
+
+
+
+
+
+
+
+
 pub use fbm_per_instance::FbmPerInstance;
-pub use field_combine::FieldCombine;
-pub use vector_fields::{
-    AddVectorFields, MultiplyVectorFields, RadialVectorField, ScaleVectorField,
-    UniformVectorField, VortexVectorField,
-};
-pub use film_grain::FilmGrain;
-pub use filter::{BLUR_MODES, BLUR_TYPE_ID, Blur, THRESHOLD_TYPE_ID, Threshold};
-pub use flash::{FLASH_MODES, Flash};
-pub use flow_field_noise::FlowFieldNoise;
-pub use fract_texture::FractTexture;
-pub use fresnel_rim::FresnelRim;
-pub use frequency_ratio::{FREQUENCY_RATIO_TABLE, FrequencyRatio};
-pub use gradient_central_diff_3d::GradientCentralDiff3D;
-pub use curl_slope_force_3d::CurlSlopeForce3D;
-pub use sample_texture_3d_at_particles::SampleTexture3DAtParticles;
-pub use simplex_noise_force_3d_at_particles::SimplexNoiseForce3DAtParticles;
-pub use diffuse_force_3d_at_particles::DiffuseForce3DAtParticles;
-pub use container_repel_force_3d::{CONTAINER_3D_MODES, ContainerRepelForce3D};
-pub use euler_step_particles_3d::EulerStepParticles3D;
-pub use container_bounds_3d::ContainerBounds3D;
-pub use flatten_to_camera_plane::FlattenToCameraPlane;
-pub use apply_radial_burst_3d_to_particles::ApplyRadialBurst3DToParticles;
-pub use scatter_particles_camera::{SCATTER_CAMERA_MODES, ScatterParticlesCamera};
-pub use gaussian_blur_variable_width::{BLUR_VARIABLE_AXES, GaussianBlurVariableWidth};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 pub use edges_from_grid_uv::EdgesFromGridUv;
 pub use edges_from_mesh::EdgesFromMesh;
 pub use edges_from_hypercube::EdgesFromHypercube;
-pub use ellipse_mask::EllipseMask;
+
 pub use fold_mesh::FoldMesh;
 pub use generate_cube_mesh::{CUBE_VERTEX_COUNT, GenerateCubeMesh};
 pub use generate_grid_mesh::GenerateGridMesh;
@@ -258,168 +253,166 @@ pub use generate_grid_uv::{
 pub use generate_instance_transforms::{
     GenerateInstanceTransforms, INSTANCE_LAYOUTS,
 };
-pub use generate_range::GenerateRange;
+
 pub use glitch_jitter::GlitchJitter;
 pub use gltf_animation_source::GltfAnimationSource;
 pub use gltf_mesh_source::GltfMeshSource;
 pub use gltf_skeleton_pose::GltfSkeletonPose;
 pub use gltf_skinned_mesh_source::GltfSkinnedMeshSource;
 pub use gltf_texture_source::GltfTextureSource;
-pub use pack_vec4::PackVec4;
-pub use gradient_central_diff::{GRADIENT_CHANNELS, GradientCentralDiff};
-pub use gradient_ramp::GradientRamp;
-pub use grid_uv_field::GridUvField;
-pub use hash_field_by_seed::{HASH_FIELD_MODES, HashFieldBySeed};
+
+
+
+
+
 pub use hdri_source::HdriSource;
-pub use heightmap_to_normal::HeightmapToNormal;
-pub use image_folder::ImageFolder;
+
+
 pub use instance_position_jitter::InstancePositionJitter;
 pub use instance_rotation_jitter::InstanceRotationJitter;
-pub use inject_burst::{INJECT_BURST_TYPE_ID, InjectBurst};
-pub use euler_step_particles::EulerStepParticles;
-pub use sample_texture_at_particles::SampleTextureAtParticles;
-pub use wrap_particles_torus::WrapParticlesTorus;
-pub use wave_field_3d::WaveField3d;
-pub use inverse_fft_2d::InverseFft2d;
+
+
+
+
+
+
 pub use ocean_spectrum::OceanSpectrum;
 pub use ocean_displace::OceanDisplace;
 pub use projected_grid::ProjectedGrid;
 pub use cut_out_box::CutOutBox;
 pub use camera_sky::CameraSky;
-pub use over::Over;
+
 pub use sea_horizon_env::SeaHorizonEnv;
-pub use hue_saturation::HueSaturation;
+
 pub use hypercube_vertices::HypercubeVertices;
-pub use invert::Invert;
-pub use lambert_directional::LambertDirectional;
-pub use length_vec2::LengthVec2;
+
+
+
 pub use lerp_instance_fields::LerpInstanceFields;
-pub use levels::Levels;
-pub use lfo::{LFO_RATE_LABELS, LFO_SHAPES, Lfo};
-pub use layer_source::LayerSource;
-pub use lic_integrate::LicIntegrate;
+
+
+
+
 pub use light::LightNode;
-pub use linear_gradient::LinearGradient;
+
 pub use loop_camera::{LOOP_CAMERA_AXIS_LABELS, LoopCamera};
-pub use luminance::Luminance;
-pub use magnitude_db::MagnitudeDb;
-pub use lut1d::ColorLut;
-pub use math::{MATH_OPS, Math};
-pub use matcap_two_tone::MatcapTwoTone;
+
+
+
+
+
 pub use particles_to_copies::ParticlesToCopies;
-pub use zero_array::ZeroArray;
+
 pub use melt_mesh::MeltMesh;
 pub use unlit_material::UnlitMaterial;
 pub use pbr_material::PbrMaterial;
 pub use cel_material::CelMaterial;
-pub use multi_blend::MultiBlend;
-pub use mux_array::MuxArray;
-pub use mux_scalar::MuxScalar;
-pub use neighbor_smooth::NeighborSmooth;
+
+
+
+
 pub use nested_cubes_geometry::{NESTED_CUBES_INSTANCE_COUNT, NestedCubesGeometry};
 pub use noise_displace::NoiseDisplace;
-pub use normalize_vec2::NormalizeVec2;
-pub use one_euro_filter::OneEuroFilter;
-pub use optical_flow_estimate::OpticalFlowEstimate;
-pub use resize_limit::ResizeLimit;
-pub use peak::Peak;
+
+
+
+
+
 pub use plane_mesh::{PLANE_VERTEX_COUNT, GeneratePlaneMesh};
-pub use noise::Noise;
-pub use person_segment::PersonSegment;
-pub use polar_field::PolarField;
+
+
+
 pub use polytope_edges::PolytopeEdges;
 pub use polytope_vertices::PolytopeVertices;
-pub use posterize::Posterize;
-pub use power_texture::PowerTexture;
+
+
 pub use project_3d::{PROJECT_3D_MODES, Project3D};
 pub use project_4d::Project4D;
-pub use mirror_fold_uv::{MIRROR_FOLD_MODES, MirrorFoldUv};
-pub use note_rates::{NOTE_RATE_LABELS, NOTE_RATE_VALUES};
-pub use radial_burst_force_field::RadialBurstForceField;
-pub use radial_fold_uv::RadialFoldUv;
-pub use radial_offset_field::RadialOffsetField;
-pub use uv_strip_clamp::{UV_STRIP_CLAMP_MODES, UvStripClamp};
-pub use reinhard_tone_map::ReinhardToneMap;
-pub use remap::{REMAP_WRAP_MODES, Remap};
+
+
+
+
+
+
+
+
 pub use reflect_array::ReflectArray;
-pub use remove_drift_3d::RemoveDrift3D;
+
 pub use render_3d_mesh::Render3DMesh;
 pub use render_instanced_3d_mesh::RenderInstanced3DMesh;
 pub use render_scene::RenderScene;
 #[cfg(feature = "fluid-perf-proofs")]
 pub use render_scene::water_perf;
 pub use render_scene::{arm_rt_capture, disarm_rt_capture, take_rt_captures, RtCaptureSlot};
-pub use render_filled_rects::RenderFilledRects;
+
 pub use render_lines::RenderLines;
 pub use ripple_mesh::RippleMesh;
-pub use render_text::RenderText;
-pub use render_value_overlay::RenderValueOverlay;
-pub use resolve_3d_accumulator::Resolve3DAccumulator;
-pub use resolve_accumulator::ResolveAccumulator;
+
+
+
+
 pub use rotate_3d::Rotate3D;
 pub use rotate_4d::Rotate4D;
-pub use rotate_vec2_by_angle::RotateVec2ByAngle;
-pub use clip_trigger_cycle::ClipTriggerCycleNode;
-pub use sample_and_hold::{SAMPLE_AND_HOLD_TYPE_ID, SampleAndHold};
-pub use sample_volume_2d::SampleVolume2D;
-pub use saturation::Saturation;
-pub use scalar_array_accumulator::ScalarArrayAccumulator;
-pub use scale_offset_texture::ScaleOffsetTexture;
-pub use scanline_jitter_field::ScanlineJitterField;
+
+
+
+
+
+
+
+
 pub use scatter_on_mesh::ScatterOnMesh;
-pub use scatter_particles::ScatterParticles;
-pub use scatter_particles_3d::ScatterParticles3D;
-pub use seed_particles_from_texture::SeedParticlesFromTexture;
-pub use seed_particles::SeedParticles;
-pub use separable_gaussian::{
-    GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,
-};
-pub use sharpen::Sharpen;
-pub use simplex_field_2d::{SIMPLEX_FIELD_OUTPUT_CHANNELS, SimplexField2D};
-pub use simplex_noise_force_at_particles::SimplexNoiseForceAtParticles;
+
+
+
+
+
+
+
+
 pub use simplex_per_instance::SimplexPerInstance;
 pub use slice_mesh::SliceMesh;
-pub use affine_scalar::AffineScalar;
+
 pub use camera_orbit::{CameraOrbit, DEFAULT_FAR, DEFAULT_NEAR};
 pub use free_camera::FreeCamera;
 pub use look_at_camera::LookAtCamera;
 pub use camera_lens::CameraLens;
-pub use canvas_area_scale::CanvasAreaScale;
-pub use centered_uv::CenteredUv;
-pub use rotate_2d::Rotate2D;
-pub use sin_term::SinTerm;
-pub use slope_displace::SlopeDisplace;
-pub use texture_sum_5::TextureSum5;
-pub use trig_texture::{TRIG_MODES, TrigTexture};
-pub use smoothing::{SMOOTHING_TYPE_ID, Smoothing};
-pub use smoothstep_texture::SmoothstepTexture;
-pub use temporal::{FEEDBACK_TYPE_ID, Feedback};
-pub use texture_advect::{TEXTURE_ADVECT_BOUNDARIES, TextureAdvect};
-pub use texture_dimensions::TextureDimensions;
-pub use tone_map::{TONE_MAP_CURVES, TONE_MAP_MODES, ToneMap};
+
+
+
+
+
+
+
+
+
+
+
+
+
 pub use torus_wrap_field::TorusWrapField;
 pub use triangulate_grid::TriangulateGrid;
-pub use trigger_ease_to::{TRIGGER_EASE_TO_TYPE_ID, TriggerEaseTo};
-pub use track_persist::TrackPersist;
-pub use trigger_gate::TriggerGate;
+
+
+
 pub use transform_3d::Transform3D;
 pub use transform_shake::TransformShake;
 pub use scene_array::SceneArray;
 pub use scene_object::SceneObjectNode;
 pub use shatter_mesh::ShatterMesh;
-pub use uv_displace_by_flow::UvDisplaceByFlow;
-pub use uv_field::UvField;
-pub use vignette::{VIGNETTE_SHAPES, Vignette};
-pub use voronoi_2d::Voronoi2D;
+
+
+
+
 pub use voxelize_mesh::VoxelizeMesh;
-pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
-pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
+
+
 
 #[cfg(test)]
 mod tests {
     use manifold_node_engine::primitives::mix::Mix;
 use manifold_node_engine::validation::validate;
-use super::*;
+use manifold_nodes_image::node_graph::primitives::filter::{Blur, Threshold};
     use std::collections::HashSet;
 
     use manifold_core::{Beats, Seconds};
@@ -737,5 +730,5 @@ use super::*;
 
 mod platonic_mesh;
 
-pub use interpolate_particle_frames::InterpolateParticleFrames;
-pub use mix_arrays::MixArrays;
+
+

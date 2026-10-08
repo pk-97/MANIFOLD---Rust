@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 /// Keep these paths explicit: a crate move must update the proof rather than
 /// silently shrinking its walk.
 pub const PRIMITIVE_SOURCE_ROOTS: &[&str] = &[
+    "../manifold-nodes-image/src/node_graph/primitives",
     "src/node_graph/primitives",
     "../manifold-node-engine/src/primitives",
     "../manifold-node-engine/src/water/primitives",
@@ -13,6 +14,7 @@ pub const PRIMITIVE_SOURCE_ROOTS: &[&str] = &[
 /// must be named here explicitly; the guard below discovers shader
 /// subdirectories beneath these roots.
 pub const WGSL_SRC_ROOTS: &[&str] = &[
+    "../manifold-nodes-image/src",
     "../manifold-led/src",
     "../manifold-node-engine/src",
     "../manifold-recording/src",

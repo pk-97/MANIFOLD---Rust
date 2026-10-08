@@ -2489,6 +2489,7 @@ dependencies = [
  "manifold-gpu",
  "manifold-native",
  "manifold-node-engine",
+ "manifold-nodes-image",
  "manifold-physics",
  "naga",
  "serde_json",

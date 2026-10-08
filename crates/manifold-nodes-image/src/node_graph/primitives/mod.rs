@@ -1,7 +1,7 @@
 mod abs_texture;
 mod glyph_atlas;
 mod render_glyph_grid;
-pub(crate) mod terminal_analysis;
+pub mod terminal_analysis;
 mod terminal_detail;
 mod terminal_reaction;
 mod terminal_stream;
@@ -13,17 +13,23 @@ mod apply_radial_burst_to_particles;
 mod array_connect_nearest;
 mod array_diffuse_particles;
 mod array_filter_detections;
+#[cfg(not(any(test, feature = "testkit")))]
 mod array_feedback;
+#[cfg(any(test, feature = "testkit"))]
+pub mod array_feedback;
 mod array_math;
 mod array_unpack_vec2;
-mod beat_gate;
+pub(crate) mod beat_gate;
 mod beat_ramp;
 mod bilateral_blur;
 mod blob_detect_ffi;
+#[cfg(not(any(test, feature = "testkit")))]
 mod blob_overlay_render;
+#[cfg(any(test, feature = "testkit"))]
+pub mod blob_overlay_render;
 mod block_displace_field;
 mod block_sample;
-pub(crate) mod bokeh_gather;
+pub mod bokeh_gather;
 mod box_mask;
 mod blur_3d_separable;
 mod blinn_specular;
@@ -37,16 +43,25 @@ mod pack_channels;
 mod clip_trigger_cycle;
 mod clip_trigger_index;
 mod coc_dilate;
+#[cfg(not(any(test, feature = "testkit")))]
 mod coc_from_depth;
-mod color;
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) mod coc_from_depth;
+pub mod color;
 mod color_sample;
 mod colorize;
 mod compressor_envelope;
+#[cfg(not(any(test, feature = "testkit")))]
 mod contrast;
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) mod contrast;
 mod convolution_2d_9tap;
+#[cfg(not(any(test, feature = "testkit")))]
 mod cycle_table_row;
+#[cfg(any(test, feature = "testkit"))]
+pub mod cycle_table_row;
 mod depth_estimate_midas;
-mod detect_regions;
+pub mod detect_regions;
 mod region_types;
 mod track_regions;
 mod mask_extrema;
@@ -57,12 +72,27 @@ mod dither;
 mod dither_pattern;
 mod downsample;
 mod resize_limit;
+#[cfg(not(any(test, feature = "testkit")))]
 mod draw_connections;
+#[cfg(any(test, feature = "testkit"))]
+pub mod draw_connections;
+#[cfg(not(any(test, feature = "testkit")))]
 mod draw_dots;
+#[cfg(any(test, feature = "testkit"))]
+pub mod draw_dots;
+#[cfg(not(any(test, feature = "testkit")))]
 mod draw_gauge;
+#[cfg(any(test, feature = "testkit"))]
+pub mod draw_gauge;
+#[cfg(not(any(test, feature = "testkit")))]
 mod draw_markers;
+#[cfg(any(test, feature = "testkit"))]
+pub mod draw_markers;
 mod draw_scanlines;
+#[cfg(not(any(test, feature = "testkit")))]
 mod draw_ticks;
+#[cfg(any(test, feature = "testkit"))]
+pub mod draw_ticks;
 mod edge_detect;
 mod envelope_decay;
 mod envelope_beats;
@@ -70,9 +100,12 @@ mod envelope_follower_ar;
 mod field_combine;
 mod vector_fields;
 mod film_grain;
-mod filter;
+pub mod filter;
 mod flash;
+#[cfg(not(any(test, feature = "testkit")))]
 mod flow_field_noise;
+#[cfg(any(test, feature = "testkit"))]
+pub mod flow_field_noise;
 mod fract_texture;
 mod fresnel_rim;
 mod frequency_ratio;
@@ -83,7 +116,10 @@ mod simplex_noise_force_3d_at_particles;
 mod diffuse_force_3d_at_particles;
 mod container_repel_force_3d;
 mod euler_step_particles_3d;
+#[cfg(not(any(test, feature = "testkit")))]
 mod container_bounds_3d;
+#[cfg(any(test, feature = "testkit"))]
+pub mod container_bounds_3d;
 mod flatten_to_camera_plane;
 mod apply_radial_burst_3d_to_particles;
 mod scatter_particles_camera;
@@ -101,16 +137,28 @@ mod heightmap_to_normal;
 mod hue_saturation;
 mod image_folder;
 mod inject_burst;
+#[cfg(not(any(test, feature = "testkit")))]
 mod euler_step_particles;
+#[cfg(any(test, feature = "testkit"))]
+pub mod euler_step_particles;
+#[cfg(not(any(test, feature = "testkit")))]
 mod sample_texture_at_particles;
+#[cfg(any(test, feature = "testkit"))]
+pub mod sample_texture_at_particles;
+#[cfg(not(any(test, feature = "testkit")))]
 mod wrap_particles_torus;
+#[cfg(any(test, feature = "testkit"))]
+pub mod wrap_particles_torus;
 #[cfg(not(any(test, feature = "testkit")))]
 mod wave_field_3d;
 #[cfg(any(test, feature = "testkit"))]
 pub mod wave_field_3d;
 mod inverse_fft_2d;
 mod over;
+#[cfg(not(any(test, feature = "testkit")))]
 mod invert;
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) mod invert;
 mod lambert_directional;
 mod length_vec2;
 mod levels;
@@ -118,7 +166,7 @@ mod levels;
 mod lfo;
 #[cfg(any(test, feature = "testkit"))]
 pub mod lfo;
-pub(crate) mod layer_source;
+pub mod layer_source;
 mod lic_integrate;
 mod lightning_bolt;
 mod linear_gradient;
@@ -126,13 +174,16 @@ mod luminance;
 mod magnitude_db;
 mod lut1d;
 mod matcap_two_tone;
-mod math;
+pub(crate) mod math;
 mod zero_array;
 pub mod multi_blend;
 mod motion_blur;
 mod mux_array;
 mod mux_scalar;
+#[cfg(not(any(test, feature = "testkit")))]
 mod neighbor_smooth;
+#[cfg(any(test, feature = "testkit"))]
+pub mod neighbor_smooth;
 mod normalize_vec2;
 mod one_euro_filter;
 mod optical_flow_estimate;
@@ -143,7 +194,7 @@ mod polar_field;
 mod posterize;
 mod power_texture;
 mod mirror_fold_uv;
-mod note_rates;
+pub mod note_rates;
 mod radial_burst_force_field;
 mod radial_fold_uv;
 mod radial_offset_field;
@@ -152,10 +203,16 @@ mod reinhard_tone_map;
 mod remap;
 mod remove_drift_3d;
 mod render_filled_rects;
+#[cfg(not(any(test, feature = "testkit")))]
 mod render_text;
+#[cfg(any(test, feature = "testkit"))]
+pub mod render_text;
 mod render_value_overlay;
 mod resolve_3d_accumulator;
+#[cfg(not(any(test, feature = "testkit")))]
 mod resolve_accumulator;
+#[cfg(any(test, feature = "testkit"))]
+pub mod resolve_accumulator;
 mod rotate_vec2_by_angle;
 mod sample_and_hold;
 mod sample_volume_2d;
@@ -163,13 +220,22 @@ mod saturation;
 mod scalar_array_accumulator;
 mod scale_offset_texture;
 mod scanline_jitter_field;
+#[cfg(not(any(test, feature = "testkit")))]
 mod scatter_particles;
+#[cfg(any(test, feature = "testkit"))]
+pub mod scatter_particles;
 mod scatter_particles_3d;
-mod seed_particles_from_texture;
+pub mod seed_particles_from_texture;
+#[cfg(not(any(test, feature = "testkit")))]
 mod seed_particles;
-mod separable_gaussian;
+#[cfg(any(test, feature = "testkit"))]
+pub mod seed_particles;
+pub mod separable_gaussian;
 mod set_alpha;
+#[cfg(not(any(test, feature = "testkit")))]
 mod sharpen;
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) mod sharpen;
 mod ssao_gtao;
 mod simplex_field_2d;
 mod simplex_noise_force_at_particles;
@@ -185,20 +251,26 @@ mod trig_texture;
 mod smoothing;
 mod smoothstep_texture;
 mod track_persist;
-mod temporal;
+pub mod temporal;
 mod texture_advect;
 mod texture_dimensions;
 mod tone_map;
 mod trigger_ease_to;
 mod trigger_gate;
 mod transform_components;
+#[cfg(not(any(test, feature = "testkit")))]
 pub(crate) mod divide_by_value;
+#[cfg(any(test, feature = "testkit"))]
+pub mod divide_by_value;
 mod uv_displace_by_flow;
 mod uv_field;
 mod compose_vec3;
 mod vignette;
 mod voronoi_2d;
 pub mod watercolor;
-mod wet_dry_mix;
+pub mod wet_dry_mix;
+#[cfg(not(any(test, feature = "testkit")))]
 mod interpolate_particle_frames;
+#[cfg(any(test, feature = "testkit"))]
+pub mod interpolate_particle_frames;
 mod mix_arrays;

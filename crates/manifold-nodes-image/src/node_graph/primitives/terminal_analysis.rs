@@ -19,7 +19,7 @@ pub(super) const DETAIL_COUNT: usize = DETAIL_COLS * DETAIL_ROWS;
 const READBACK_COUNT: usize = SAMPLE_COUNT + DETAIL_COUNT;
 const READBACK_BYTES: u64 = (READBACK_COUNT * std::mem::size_of::<[f32; 4]>()) as u64;
 
-pub(crate) fn prewarm_pipeline(device: &GpuDevice) {
+pub fn prewarm_pipeline(device: &GpuDevice) {
     // This CPU readback bridge is outside the pure-GPU atom codegen sweep.
     device.create_compute_pipeline(SHADER, "cs_main", PIPELINE_LABEL);
 }

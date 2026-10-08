@@ -23,6 +23,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 tiff = "0.9"
 
 [dev-dependencies]
+manifold-nodes-image = { path = ".", features = ["testkit"] }
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -34,10 +35,6 @@ core-foundation = "0.9"
 name = "main"
 path = "tests/main.rs"
 
-[[test]]
-name = "gpu_proofs"
-path = "tests/gpu_proofs/main.rs"
-required-features = ["gpu-proofs"]
 
 [features]
 testkit = ["manifold-node-engine/testkit"]

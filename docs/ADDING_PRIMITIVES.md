@@ -68,9 +68,9 @@ around it from merging. A chain of them costs N GPU dispatches where a fused run
 frames, i.e. a broken show. This is hot-path discipline at the instrument level, not an
 optimization nicety.
 
-The codegen authoring shape (reference: [`contrast.rs`](../crates/manifold-renderer/src/node_graph/primitives/contrast.rs)
+The codegen authoring shape (reference: [`contrast.rs`](../crates/manifold-nodes-image/src/node_graph/primitives/contrast.rs)
 texture-domain, [`displace_mesh.rs`](../crates/manifold-renderer/src/node_graph/primitives/displace_mesh.rs)
-buffer + texture, [`neighbor_smooth.rs`](../crates/manifold-renderer/src/node_graph/primitives/neighbor_smooth.rs)
+buffer + texture, [`neighbor_smooth.rs`](../crates/manifold-nodes-image/src/node_graph/primitives/neighbor_smooth.rs)
 buffer gather):
 
 1. **Author a `wgsl_body` fragment**, not a whole kernel. `shaders/<name>_body.wgsl`

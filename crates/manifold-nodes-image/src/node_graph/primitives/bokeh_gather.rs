@@ -41,6 +41,7 @@ struct BokehCompositeUniforms {
     _pad1: f32,
 }
 
+manifold_core::testkit_visible! {
 #[derive(Clone, Copy)]
 pub(crate) struct BokehSettings {
     pub radius: f32,
@@ -48,6 +49,7 @@ pub(crate) struct BokehSettings {
     pub quality: u32,
     /// Filter premultiplied scene RGB and alpha together for the compositor.
     pub blur_alpha: bool,
+}
 }
 
 // Cache the whole geometric pyramid so radius modulation, including values
@@ -251,6 +253,7 @@ impl BokehGather {
     }
 
     // Shared production encoding seam for the node and image/performance proofs.
+manifold_core::testkit_visible! {
     pub(crate) fn encode(
         &mut self,
         gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
@@ -503,6 +506,7 @@ impl BokehGather {
         );
     }
 }
+}
 impl Primitive for BokehGather {
     fn skip_passthrough(
         &self,
@@ -598,5 +602,5 @@ mod tests {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

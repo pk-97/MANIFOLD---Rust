@@ -977,7 +977,7 @@ solid. Decisions made while building:
   A zero lattice dimension is invalid input, not an empty-frame sentinel, and
   consumers keep their checks. Initialization does not advance simulation time.
 
-- **Entry state:** P3 merged. Anchors: `rg -n 'BarrieredReduction' crates/manifold-renderer/src/node_graph/primitives/spawn_from_mesh.rs`, `rg -n 'atomic_outputs' crates/manifold-renderer/src/node_graph/primitives/scatter_particles_3d.rs`, `rg -n 'input_access' crates/manifold-renderer/src/node_graph/primitives/triangulate_grid.rs`.
+- **Entry state:** P3 merged. Anchors: `rg -n 'BarrieredReduction' crates/manifold-nodes-image/src/node_graph/primitives/spawn_from_mesh.rs`, `rg -n 'atomic_outputs' crates/manifold-nodes-image/src/node_graph/primitives/scatter_particles_3d.rs`, `rg -n 'input_access' crates/manifold-renderer/src/node_graph/primitives/triangulate_grid.rs`.
 - **Read-back:** D8, D14, D15, D17, D18; section 4.1; the Yu & Turk 2010 sections on anisotropy and centre smoothing.
 - **Deliverables:** `sort_particles_into_cells`, `running_total` (its scan module shared with the sort), `shape_particle_blobs`, `particle_volume`. Value tests against CPU f64 references: permutation and contiguous ranges; scans at section 4.1's sizes; blob shapes for a line of particles (stretched along the line), a uniform cloud (isotropic), an isolated particle (radius scaled by `isolated_scale`), a pair at 2.5 r (in between); volume sums on a random fixture within 1e-4 relative; the solid clamp against a half-space solid.
 - **Gate:** value tests and the GPU filter green; clippy clean.

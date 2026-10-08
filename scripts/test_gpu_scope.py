@@ -26,6 +26,7 @@ def fixture_workspace(repo):
     repo = repo.resolve()
     packages = []
     rows = {
+        "manifold-nodes-image": ("crates/manifold-nodes-image", True, []),
         "manifold-renderer": ("crates/manifold-renderer", True, ["gpu_proofs", "glb_conformance"]),
         "manifold-node-engine": ("crates/manifold-node-engine", True, []),
         "manifold-ui-paint": ("crates/manifold-ui-paint", True, []),
@@ -53,6 +54,11 @@ def fixture_workspace(repo):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_image_legacy_heightfield_shader_routes_to_owning_primitive(self):
+        selected = plan(["crates/manifold-nodes-image/src/node_graph/primitives/shaders/heightfield_shadow.wgsl"])
+        self.assertIn("node_graph::primitives::heightfield_shadow::", selected.filters)
+
+
     def folded_glb_workspace(self, repo, module='glb_conformance'):
         workspace = fixture_workspace(repo)
         renderer = workspace.packages['manifold-renderer']

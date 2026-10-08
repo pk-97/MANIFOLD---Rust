@@ -5,6 +5,7 @@ import re
 
 SHARED_ASSETS = ['crates/manifold-foundation/assets/fonts']
 GPU_DEFAULT_CPU_ONLY = {
+    "manifold-nodes-image": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     'manifold-ui-paint': 'GPU test modules require gpu-proofs; default tests do not open devices',
     'manifold-editing': 'GPU graph construction is gated by gpu-proofs',
     'manifold-spectral': 'spectrogram device tests require gpu-proofs',
@@ -27,7 +28,8 @@ NEXTTEST_GPU_FILTER = '''
 GPU_BACKEND_ROOT = 'crates/manifold-gpu/'
 OTHER_SHADER_ROOTS = ('crates/manifold-led/', 'crates/manifold-recording/', 'crates/manifold-spectral/')
 CATALOG_PACKAGE = 'manifold-renderer'
-CATALOG_PATHS = ('crates/manifold-renderer/src/node_graph/primitives/',
+CATALOG_PATHS = ('crates/manifold-nodes-image/src/node_graph/primitives/',
+                 'crates/manifold-renderer/src/node_graph/primitives/',
                  'crates/manifold-node-engine/src/primitives/',
                  'crates/manifold-node-engine/src/water/primitives/',
                  'crates/manifold-renderer/src/node_graph/catalog_gen.rs',
@@ -160,17 +162,17 @@ NARROW_ROWS = [
     ((ENGINE_SRC + "water/primitives/particle_identity",
       ENGINE_SRC + "water/primitives/particle_publication",
       RENDERER_SRC + "node_graph/primitives/particle_frame_blend_tests",
-      RENDERER_SRC + "node_graph/primitives/interpolate_particle_frames",
+      "crates/manifold-nodes-image/src/node_graph/primitives/interpolate_particle_frames",
       ENGINE_SRC + "water/primitives/push_out_of_solid",
-      RENDERER_SRC + "node_graph/primitives/mix_arrays",
+      "crates/manifold-nodes-image/src/node_graph/primitives/mix_arrays",
       ENGINE_SRC + "water/primitives/liquid_frame",
       ENGINE_SRC + "water/liquid/frame_ring",
       ENGINE_SRC + "water/liquid/frame_history",
       ENGINE_SRC + "water/primitives/shaders/particle_identity",
       ENGINE_SRC + "water/primitives/shaders/particle_publication",
-      RENDERER_SRC + "node_graph/primitives/shaders/interpolate_particle_frames",
+      "crates/manifold-nodes-image/src/node_graph/primitives/shaders/interpolate_particle_frames",
       ENGINE_SRC + "water/primitives/shaders/push_out_of_solid",
-      RENDERER_SRC + "node_graph/primitives/shaders/mix_arrays",
+      "crates/manifold-nodes-image/src/node_graph/primitives/shaders/mix_arrays",
       ENGINE_SRC + "water/primitives/shaders/liquid_frame_faces.wgsl"),
      (["particle_publication_gpu_tests::", "particle_frame_blend_tests::gpu_tests::",
        "interpolate_particle_frames::gpu_tests::", "push_out_of_solid::gpu_tests::",
@@ -229,10 +231,10 @@ EXPLICIT_ROWS = [
       ENGINE_SRC + "exec/execution/substep_region.rs",
       ENGINE_SRC + "water/primitives/matter_",
       RENDERER_SRC + "node_graph/primitives/grid_to_matter",
-      RENDERER_SRC + "node_graph/primitives/zero_array",
+      "crates/manifold-nodes-image/src/node_graph/primitives/zero_array",
       ENGINE_SRC + "water/primitives/shaders/matter_",
       ENGINE_SRC + "water/primitives/shaders/grid_to_matter",
-      RENDERER_SRC + "node_graph/primitives/shaders/zero_array",
+      "crates/manifold-nodes-image/src/node_graph/primitives/shaders/zero_array",
       PROOFS_DIR + "matter_",
       PROOFS_DIR + "substeps"),
      (["matter_", "substeps_"], REPORTER_SKIPS)),
@@ -322,6 +324,10 @@ DOC_SUFFIXES = (".md", ".txt")
 # in preset_runtime's tests, so its row names both modules.
 PRESET_RUNTIME_DIR = ENGINE_SRC + "runtime/"
 LIB_PROOF_ROWS = {
+    # Retained legacy shader; the owning primitive holds its proof coverage.
+    "crates/manifold-nodes-image/src/node_graph/primitives/shaders/heightfield_shadow.wgsl": [
+        "node_graph::primitives::heightfield_shadow::",
+    ],
     ENGINE_SRC + "runtime/layer_skin.rs": ["runtime::layer_skin::", "runtime::layer_skin_tests::"],
     # The whitewater step's proofs (across frames, the pool passes, the
     # handoff, the golden fingerprints that prove its output unchanged) live
@@ -426,4 +432,10 @@ PREFIX_ROWS = [
      [], ["uniform_layout_extended", "wgsl_validation"]),
     # wgsl_validation parses every shader in the crate.
     ("crates/manifold-renderer/src/", ".wgsl", "manifold-renderer", [], ["wgsl_validation"]),
+]
+
+# manifold-nodes-image owns these source trees; ABI and WGSL contracts stay catalog-side.
+PREFIX_ROWS += [
+    ('crates/manifold-nodes-image/src/node_graph/primitives/', '.rs', "manifold-renderer", [], ['uniform_layout_proof', 'uniform_layout_extended']),
+    ('crates/manifold-nodes-image/src/', '.wgsl', "manifold-renderer", [], ['uniform_layout_extended', 'wgsl_validation']),
 ]
