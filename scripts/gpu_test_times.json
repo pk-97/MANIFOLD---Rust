@@ -26,6 +26,7 @@
     "manifold-renderer/lib/node_graph::catalog_tests::validate::bundled_preset_card_warning_counts": 66.5,
     "manifold-renderer/lib/water::primitives::gpu_flip_scene_tests::gpu_flip_density_projection_settled_column_depth_and_density": 62.6,
     "manifold-renderer/gpu_proofs/liquid_conformance::liquid_live_frames_never_wait": 62.1,
+    "manifold-renderer/lib/water::primitives::whitewater_step::fused_tests::gpu::whitewater_fused_dust_matches_reference": 60.8,
     "manifold-renderer/lib/node_graph::catalog_tests::validate::every_bundled_preset_validates_clean": 60.2,
     "manifold-renderer/lib/node_graph::catalog_tests::face_grid_scene_tests::face_grid_demo_gpu_flip_and_matter_side_by_side": 53.1,
     "manifold-renderer/lib/node_graph::catalog_tests::whitewater_scene::whitewater_emission_against_engine_150": 42.2,
