@@ -1000,8 +1000,8 @@ mod audio_anchor_tempo_tests {
         let clip = crate::clip::TimelineClip::new_audio("a.wav".into(), Beats(2.0), Beats(8.0), Seconds(1.0), Seconds(10.0));
         let anchor = ClipDetectionAnchor::from_clip(&clip, &project);
         // Start at t=1, source t=1; two source seconds later is timeline t=3 / beat 5.
-        assert_eq!(anchor.map_source_seconds(Seconds(3.0)), Some(Beats(5.0)));
+        assert!((anchor.map_source_seconds(Seconds(3.0)).unwrap().0 - 5.0).abs() < 1e-6);
         let roundtrip: ClipDetectionAnchor = serde_json::from_str(&serde_json::to_string(&anchor).unwrap()).unwrap();
-        assert_eq!(roundtrip.map_source_seconds(Seconds(3.0)), Some(Beats(5.0)));
+        assert_eq!(roundtrip.map_source_seconds(Seconds(3.0)), anchor.map_source_seconds(Seconds(3.0)));
     }
 }

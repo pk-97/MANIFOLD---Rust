@@ -579,10 +579,15 @@ mod tests {
 
     #[test]
     fn audio_warp_state_serialization_preserves_legacy_and_explicit_off() {
-        let legacy: TimelineClip = serde_json::from_str(
-            r#"{"audioFilePath":"song.wav","recordedBpm":128.0}"#,
-        )
-        .unwrap();
+        let mut legacy_json = serde_json::to_value(TimelineClip {
+            audio_file_path: "song.wav".into(),
+            recorded_bpm: 128.0,
+            ..Default::default()
+        }).unwrap();
+        let fields = legacy_json.as_object_mut().unwrap();
+        fields.remove("audioWarpEnabled");
+        fields.remove("audioBpmAutomatic");
+        let legacy: TimelineClip = serde_json::from_value(legacy_json).unwrap();
         assert_eq!(legacy.audio_warp_enabled, None);
         assert!(legacy.is_audio_warp_enabled());
         assert!(!legacy.audio_bpm_automatic);
