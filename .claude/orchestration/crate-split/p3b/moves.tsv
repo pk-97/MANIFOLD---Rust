@@ -1,0 +1,5 @@
+crates/manifold-renderer/tests/ableton_picker_scroll_proof.rs	crates/manifold-ui-paint/tests/contracts/ableton_picker_scroll_proof.rs
+crates/manifold-renderer/tests/automation_stroke.rs	crates/manifold-ui-paint/tests/contracts/automation_stroke.rs
+crates/manifold-renderer/tests/dropdown_clip_proof.rs	crates/manifold-ui-paint/tests/contracts/dropdown_clip_proof.rs
+crates/manifold-renderer/tests/text_clip_to_node_bounds.rs	crates/manifold-ui-paint/tests/contracts/text_clip_to_node_bounds.rs
+crates/manifold-renderer/tests/ui_cell_arc_repro.rs	crates/manifold-ui-paint/tests/contracts/ui_cell_arc_repro.rs
