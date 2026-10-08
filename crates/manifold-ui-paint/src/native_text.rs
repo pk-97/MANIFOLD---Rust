@@ -1012,6 +1012,17 @@ impl NativeTextRenderer {
         }
     }
 
+    /// The installed-font family of each queued text command, in queue
+    /// order (`None` = the UI font) — for proofs that a node's font reached
+    /// the renderer.
+    #[cfg(test)]
+    pub(crate) fn queued_families(&self) -> Vec<Option<&str>> {
+        self.commands
+            .iter()
+            .map(|c| c.family.map(|id| self.families[id as usize].as_str()))
+            .collect()
+    }
+
     /// Queue a text draw in an installed font, by family name — used where
     /// the text should look like the font it names (the font picker).
     #[allow(clippy::too_many_arguments)]

@@ -2375,6 +2375,31 @@ fn intersect_rects(a: Rect, b: Rect) -> Rect {
 mod tests {
     use super::*;
 
+    /// A node with `font_family` queues its text in that installed font
+    /// (the font picker's rows); a plain node stays on the UI font.
+    #[test]
+    fn node_font_family_reaches_the_text_renderer() {
+        let device = manifold_gpu::testkit::test_device();
+        let mut ui = UIRenderer::new(&device, GpuTextureFormat::Rgba8Unorm);
+        let mut tree = UITree::new();
+        let region = tree.begin_region(
+            Rect::new(0.0, 0.0, 400.0, 100.0),
+            manifold_ui::ZTier::Overlay,
+            "font-proof",
+            UIFlags::empty(),
+        );
+        let start = tree.count();
+        let style = UIStyle { text_color: Color32::WHITE, ..UIStyle::default() };
+        let georgia = tree.add_label(None, 0.0, 0.0, 200.0, 24.0, "Georgia", style);
+        tree.set_font_family(georgia, "Georgia");
+        tree.add_label(None, 0.0, 30.0, 200.0, 24.0, "Plain", style);
+        tree.end_region(region, start);
+
+        ui.begin_frame();
+        ui.render_tree(&tree, None);
+        assert_eq!(ui.text_renderer.queued_families(), vec![Some("Georgia"), None]);
+    }
+
     /// Decode-cache proof (PRESET_LIBRARY_DESIGN P6, D7): `register_image` is
     /// idempotent — the SAME `TextureHandle` uploads a GPU texture only on
     /// its first call, reporting `false` (no-op) on every subsequent one, so
