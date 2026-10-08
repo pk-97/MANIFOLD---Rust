@@ -3,6 +3,7 @@ name = "manifold-ui-paint"
 version = "0.1.0"
 edition = "2024"
 publish = false
+autotests = false
 
 [features]
 gpu-proofs = ["manifold-gpu/gpu-proofs"]
@@ -25,3 +26,7 @@ half = "2"
 
 [lints]
 workspace = true
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
