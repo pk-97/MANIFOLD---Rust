@@ -10,7 +10,8 @@ The JUDGMENT stays with the lead: the review, the named-red call (pass
 --named-red BUG-id --reason "..."), the design-doc status edits. This
 script is the fixed git+gate sequence only — every step exits on failure
 with the step named, and push happens only after a green gate (or an
-explicit named red over a gate that ran every check).
+explicit named red over a gate that ran every check). --named-red requests
+the complete gate run; ordinary landings stop before expensive legs on cheap reds.
 
 Usage:
   scripts/land_branch.py <branch> --worktree <path> --message '<merge msg>' \
@@ -28,14 +29,20 @@ from datetime import datetime, timezone
 import time
 from pathlib import Path
 
-from landing_gate import CHECKS_RED
+from gate_cancellation import Cancelled, cancellation_signals
+from landing_gate import (CHECKS_RED, record_incomplete,
+                          run_cmd, landing_log_path, stop_child)
 
 MAIN = Path("/Users/peterkiemann/MANIFOLD - Rust")
 
 
 def step(name, cmd, cwd, check=True):
     print(f"[land] {name}: {' '.join(cmd)}", flush=True)
-    r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
+    live = landing_log_path(cwd, 'land-' + name.replace(' ', '-').replace('/', '-'))
+    print(f"[RUN] land/{name} (live transcript: {live})", flush=True)
+    code, out, err, _ = run_cmd(cmd, cwd, timeout=3600, live_log=live)
+    r = subprocess.CompletedProcess(cmd, code, out, err)
+    print(f"[{'PASS' if code == 0 else 'FAIL'}] land/{name}", flush=True)
     if r.returncode != 0 and check:
         print(f"[land] FAILED at {name}:\n{r.stdout}\n{r.stderr}", file=sys.stderr)
         sys.exit(1)
@@ -46,15 +53,24 @@ def run_landing_gate(cmd, cwd, log_path):
     """Expose check progress immediately and preserve the complete gate log."""
     print(f"[land] landing_gate: {' '.join(cmd)}", flush=True)
     print(f"[land] complete landing gate transcript: {log_path}", flush=True)
-    with log_path.open("w") as log, subprocess.Popen(
-        cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1,
-    ) as proc:
-        for line in proc.stdout:
-            log.write(line)
+    with log_path.open("w") as log:
+        proc = subprocess.Popen(
+            cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, start_new_session=True)
+        proc._requires_cleanup = True
+        try:
+            for line in proc.stdout:
+                log.write(line)
+                log.flush()
+                print(line, end="", flush=True)
+            return proc.wait()
+        except BaseException:
+            stop_child(proc, graceful=True)
+            log.write("[INCOMPLETE] landing gate: parent cancelled; children stopped\n")
             log.flush()
-            print(line, end="", flush=True)
-    return proc.wait()
+            raise
+        finally:
+            proc.stdout.close()
 
 
 def merge_gated_tree(branch, worktree, message, gate_cmd, gate_log, gated_commit):
@@ -91,6 +107,15 @@ def merge_gated_tree(branch, worktree, message, gate_cmd, gate_log, gated_commit
 
 
 def main():
+    try:
+        with cancellation_signals():
+            return _main()
+    except Cancelled as error:
+        repo = Path(sys.argv[sys.argv.index('--worktree') + 1]) if '--worktree' in sys.argv else Path.cwd()
+        return record_incomplete(repo, error)
+
+
+def _main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("branch")
     p.add_argument("--worktree", required=True)
@@ -111,9 +136,11 @@ def main():
     step("fetch", ["git", "fetch", "origin", "main"], MAIN)
     step("merge origin/main into branch", ["git", "merge", "origin/main", "--no-edit"], wt)
 
-    # The gate collects every red by default; a named-red override needs
-    # exactly that (every mandatory check's result), so no flag is added.
+    # A reviewed named red needs every leg's result, including when the known
+    # red is cheap. Completion is still enforced by CHECKS_RED below.
     gate_cmd = [sys.executable, "-u", "scripts/landing_gate.py", "--repo", str(wt.resolve())]
+    if a.named_red:
+        gate_cmd.append("--keep-going")
     if a.skip_gpu:
         gate_cmd += ["--skip-gpu", a.skip_gpu]
     log_dir = wt / "target" / "landing-logs"
@@ -154,8 +181,8 @@ def main():
                               "--", ".beads/issues.jsonl"], MAIN)
         step("push beads", ["git", "push", "origin", "main"], MAIN)
 
-    anc = subprocess.run(["git", "merge-base", "--is-ancestor", a.branch, "origin/main"],
-                         cwd=str(MAIN)).returncode == 0
+    anc = step("verify landed ancestry", ["git", "merge-base", "--is-ancestor", a.branch, "origin/main"],
+               MAIN, check=False).returncode == 0
     if anc:
         if wt.resolve().parent == (MAIN / ".claude/worktrees").resolve():
             step("release landed slot", [sys.executable, str(MAIN / "scripts/agent-worktree.py"),
@@ -175,4 +202,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -60,6 +60,12 @@ def tooling_checks(repo, paths):
         "scripts/test_dev.py": {"scripts/dev.py", "scripts/TOOLS.md", "scripts/test_dev.py"} | {
             p for p in paths if p.startswith("scripts/") and p.endswith((".py", ".sh"))},
     }
+    for name in ('watch_land', 'trunk_health', 'fleet_health'):
+        tooling[f'scripts/test_{name}.py'] = {f'scripts/{name}.py', f'scripts/test_{name}.py'}
+    tooling['scripts/test_feature_matrix.py'] = {'scripts/feature_matrix.py',
+                                                'scripts/test_feature_matrix.py', 'scripts/gpu_queue.py'}
+    for test in ('scripts/test_landing_gate.py', 'scripts/test_gpu_proofs_gate.py'):
+        tooling[test].add('scripts/gate_cancellation.py')
     shared = {'scripts/gate_workspace.py', 'scripts/gate_policy.py'}
     for test in ('scripts/test_gpu_scope.py', 'scripts/test_gate_passes.py',
                  'scripts/test_gpu_proofs_gate.py', 'scripts/test_landing_gate.py'):

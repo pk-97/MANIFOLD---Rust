@@ -294,7 +294,8 @@ class Pass:
                        'implementation': {
                            name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
                            for name in ('gate_passes.py', 'landing_gate.py', 'gpu_proofs_gate.py',
-                                        'gpu_queue.py', 'gpu_scope.py', 'cpu_scope.py', 'diff_scope.py')},
+                                        'gpu_queue.py', 'gpu_scope.py', 'cpu_scope.py', 'diff_scope.py',
+                                        'gate_cancellation.py')},
                        'host': host_inputs(self.repo, cargo)})
 
     def unchanged(self):
