@@ -468,7 +468,7 @@ pub fn graft_preset_metadata_from_bundle(
 /// `render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache`
 /// and `gltf_texture_source::gpu_tests::prewarm_pipeline_populates_the_shared_compute_cache`.
 /// Run deliberately: `cargo test -p manifold-nodes --features gpu-proofs
-/// generators::registry::gpu_tests`.
+/// registry::gpu_tests`.
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;

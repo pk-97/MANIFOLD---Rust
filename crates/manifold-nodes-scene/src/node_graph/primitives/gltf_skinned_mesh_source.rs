@@ -373,7 +373,7 @@ mod tests {
 }
 
 /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate. Run deliberately:
-/// `cargo test -p manifold-nodes --features gpu-proofs
+/// `cargo test -p manifold-nodes-scene --features gpu-proofs
 /// node_graph::primitives::gltf_skinned_mesh_source::gpu_tests`.
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {

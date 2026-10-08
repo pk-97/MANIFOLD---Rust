@@ -222,7 +222,7 @@ mod tests {
 /// keyed by the node id `is_trigger_latch` flagged. Needs a real GpuEncoder
 /// (`execute_frame_with_state`'s signature, even for this CPU-only
 /// primitive) — gated behind `gpu-proofs` like `smoothing.rs`'s equivalent
-/// StateStore harness; run via `cargo test -p manifold-nodes --features
+/// StateStore harness; run via `cargo test -p manifold-nodes-image --features
 /// gpu-proofs sample_and_hold::`, never nextest.
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod trigger_latch_release_tests {

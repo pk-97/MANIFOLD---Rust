@@ -9644,7 +9644,7 @@ mod tests;
 #[doc = "BUG-037 — GPU-backed proof `prewarm_pipelines` actually populates the"]
 #[doc = "device's shared render-pipeline cache, so a later `pipeline_for` call (on"]
 #[doc = "any layer, any project) is a cache hit instead of a lazy first-draw"]
-#[doc = "compile. Run deliberately: `cargo test -p manifold-nodes --features"]
+#[doc = "compile. Run deliberately: `cargo test -p manifold-nodes-scene --features"]
 #[doc = "gpu-proofs node_graph::primitives::render_scene::gpu_tests`."]
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
