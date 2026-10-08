@@ -92,6 +92,7 @@ core-foundation = "0.9"
 sha2 = "0.10"
 
 [dev-dependencies]
+manifold-gpu = { path = "../manifold-gpu", features = ["testkit"] }
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
 manifold-ui = { path = "../manifold-ui" }
 manifold-ui-paint = { path = "../manifold-ui-paint" }

@@ -235,7 +235,7 @@ fn region_mean_rgb(rgba: &[u8], region: [f64; 4]) -> (f64, f64, f64) {
 /// "every background texture decode is still mid-flight"), reimplemented
 /// here rather than shelling out to the bin so a test failure carries a Rust
 /// backtrace, not a subprocess exit code.
-fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) -> Result<Vec<u8>, String> {
+fn render_asset(device: &Arc<GpuDevice>, path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) -> Result<Vec<u8>, String> {
     let (def, _report) = assemble_import_graph(path)?;
 
     let mut params: Vec<Param> = def
@@ -255,13 +255,12 @@ fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) ->
     }
     let manifest = ParamManifest::from_params(params);
 
-    let device = Arc::new(GpuDevice::new_queued("glb_conformance"));
     let registry = PrimitiveRegistry::with_builtin();
     let format = GpuTextureFormat::Rgba16Float;
     let mut runtime = PresetRuntime::from_def_with_device(
         def,
         &registry,
-        Arc::clone(&device),
+        Arc::clone(device),
         WIDTH,
         HEIGHT,
         format,
@@ -269,7 +268,7 @@ fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) ->
     )
     .map_err(|e| format!("build failed: {e:?}"))?;
 
-    let target = RenderTarget::new(&device, WIDTH, HEIGHT, format, "conformance-target");
+    let target = RenderTarget::new(device, WIDTH, HEIGHT, format, "conformance-target");
 
     const DT: f32 = 1.0 / 60.0;
     const STABLE_STREAK: u32 = 3;
@@ -309,12 +308,12 @@ fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) ->
         };
         let mut enc = device.create_encoder("conformance-frame");
         {
-            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            let mut gpu = RendererGpuEncoder::new(&mut enc, device);
             runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
         }
         enc.commit_and_wait_completed();
 
-        let raw = readback_raw_halves(&device, &target.texture, WIDTH, HEIGHT);
+        let raw = readback_raw_halves(device, &target.texture, WIDTH, HEIGHT);
         let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
         prev_raw = Some(raw);
         stable_count = if byte_stable && !runtime.io_pending() { stable_count + 1 } else { 0 };
@@ -331,7 +330,7 @@ fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) ->
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         if stable_count >= STABLE_STREAK {
-            let rgba = readback_tonemapped_rgba8(&device, &target.texture, WIDTH, HEIGHT);
+            let rgba = readback_tonemapped_rgba8(device, &target.texture, WIDTH, HEIGHT);
             last_fraction = non_black_fraction(&rgba);
             if last_fraction > non_black_floor {
                 if let Ok(directory) = std::env::var("GLTF_CONFORMANCE_CAPTURE_DIR") {
@@ -419,10 +418,10 @@ fn check_golden(rgba: &[u8], rel_file: &str, mean_abs_tol: f64) -> Result<(), St
 /// convergence heuristic never mistakes "genuinely dim" for "still loading"
 /// (see `render_import.rs`'s `--non-black-floor` doc comment for why this
 /// must never be a single global constant).
-fn run_check(asset: &str, path: &Path, check: &CheckSpec, assert: bool) -> Result<(), String> {
+fn run_check(device: &Arc<GpuDevice>, asset: &str, path: &Path, check: &CheckSpec, assert: bool) -> Result<(), String> {
     match check {
         CheckSpec::NonBlackFractionMin { value } => {
-            let rgba = render_asset(path, &[], 0.02)?;
+            let rgba = render_asset(device, path, &[], 0.02)?;
             let frac = non_black_fraction(&rgba);
             println!("  {asset}: non_black_fraction = {frac:.4} (floor {value})");
             if !assert || frac > *value {
@@ -433,6 +432,7 @@ fn run_check(asset: &str, path: &Path, check: &CheckSpec, assert: bool) -> Resul
         }
         CheckSpec::LightsOffNonblackMin { value } => {
             let rgba = render_asset(
+                device,
                 path,
                 &[("sun_int", 0.0), ("env_intensity", 0.0), ("scene_ambient", 0.0)],
                 value / 2.0,
@@ -446,12 +446,12 @@ fn run_check(asset: &str, path: &Path, check: &CheckSpec, assert: bool) -> Resul
             }
         }
         CheckSpec::Golden { file, mean_abs_tol } => {
-            let rgba = render_asset(path, &[], 0.02)?;
+            let rgba = render_asset(device, path, &[], 0.02)?;
             let result = check_golden(&rgba, file, *mean_abs_tol);
             if assert { result } else { Ok(()) }
         }
         CheckSpec::RegionMeanLuminanceBelow { region, reference_region, value } => {
-            let rgba = render_asset(path, &[], 0.02)?;
+            let rgba = render_asset(device, path, &[], 0.02)?;
             let region_mean = region_mean_luminance(&rgba, *region);
             let reference_mean = region_mean_luminance(&rgba, *reference_region);
             println!(
@@ -470,7 +470,7 @@ fn run_check(asset: &str, path: &Path, check: &CheckSpec, assert: bool) -> Resul
             }
         }
         CheckSpec::RegionGreenMinusRedAbove { region, value } => {
-            let rgba = render_asset(path, &[], 0.02)?;
+            let rgba = render_asset(device, path, &[], 0.02)?;
             let (r, g, _b) = region_mean_rgb(&rgba, *region);
             let diff = g - r;
             println!("  {asset}: region mean G-R = {diff:.2} (floor {value})");
@@ -481,7 +481,7 @@ fn run_check(asset: &str, path: &Path, check: &CheckSpec, assert: bool) -> Resul
             }
         }
         CheckSpec::RegionMaxLuminanceAbove { region, reference_region, value } => {
-            let rgba = render_asset(path, &[], 0.02)?;
+            let rgba = render_asset(device, path, &[], 0.02)?;
             let region_max = region_max_luminance(&rgba, *region);
             let reference_max = region_max_luminance(&rgba, *reference_region);
             println!(
@@ -500,7 +500,7 @@ fn run_check(asset: &str, path: &Path, check: &CheckSpec, assert: bool) -> Resul
             }
         }
         CheckSpec::RegionStdDevAbove { region, reference_region, value } => {
-            let rgba = render_asset(path, &[], 0.02)?;
+            let rgba = render_asset(device, path, &[], 0.02)?;
             let region_std = region_stddev_luminance(&rgba, *region);
             let reference_std = region_stddev_luminance(&rgba, *reference_region);
             println!(
@@ -541,6 +541,11 @@ fn glb_conformance_sweep() {
         assert!(entries.iter().any(|entry| entry.asset == *asset), "unknown conformance asset: {asset}");
     }
 
+    // Every graph and render remains fresh; only device pipelines are shared.
+    let serial = manifold_gpu::testkit::test_device();
+    let device = serial.arc();
+    manifold_gpu::testkit::load_disk_shader_caches(&device);
+
     let mut failures: Vec<String> = Vec::new();
     let mut expect_pass_checked = 0usize;
     let mut xfail_count = 0usize;
@@ -558,7 +563,7 @@ fn glb_conformance_sweep() {
             if have_fixture {
                 println!("XFAIL {} ({reason}) — running checks informationally, not asserted:", entry.asset);
                 for check in &entry.checks {
-                    if let Err(e) = run_check(&entry.asset, &asset_path, check, false) {
+                    if let Err(e) = run_check(&device, &entry.asset, &asset_path, check, false) {
                         println!("  (xfail, no assertion) {e}");
                     }
                 }
@@ -592,7 +597,7 @@ fn glb_conformance_sweep() {
         println!("RUNNING {} (expect_pass):", entry.asset);
         expect_pass_checked += 1;
         for check in &entry.checks {
-            if let Err(e) = run_check(&entry.asset, &asset_path, check, true) {
+            if let Err(e) = run_check(&device, &entry.asset, &asset_path, check, true) {
                 failures.push(format!("{}: {e}", entry.asset));
             }
         }

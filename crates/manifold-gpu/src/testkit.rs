@@ -16,16 +16,19 @@
 /// [`TestDevice`] guard for each test's lifetime so GPU work runs one test at a
 /// time. Reentrant: a single test may call [`test_device`] more than once on its
 /// own thread without deadlocking.
+#[cfg(feature = "gpu-proofs")]
 static GPU_TEST_LOCK: parking_lot::ReentrantMutex<()> = parking_lot::ReentrantMutex::new(());
 
 /// RAII handle returned by [`test_device`]. Derefs to the shared
 /// [`crate::GpuDevice`] (so call sites use it exactly like the old
 /// `Arc<GpuDevice>`) and holds [`GPU_TEST_LOCK`] until it drops at end of test.
+#[cfg(feature = "gpu-proofs")]
 pub struct TestDevice {
     device: std::sync::Arc<crate::GpuDevice>,
     _lock: parking_lot::ReentrantMutexGuard<'static, ()>,
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl std::ops::Deref for TestDevice {
     type Target = crate::GpuDevice;
     fn deref(&self) -> &Self::Target {
@@ -33,6 +36,7 @@ impl std::ops::Deref for TestDevice {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 impl TestDevice {
     /// A cheap `Arc` clone of the shared device, for constructors that now
     /// take ownership of an `Arc<GpuDevice>`.
@@ -41,6 +45,7 @@ impl TestDevice {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 pub fn test_device() -> TestDevice {
     use std::sync::{Arc, OnceLock};
     static SHARED: OnceLock<Arc<crate::GpuDevice>> = OnceLock::new();
@@ -55,3 +60,11 @@ pub fn test_device() -> TestDevice {
     TestDevice { device, _lock }
 }
 
+/// Reuse app shader disk caches without populating live pipeline caches.
+pub fn load_disk_shader_caches(device: &crate::GpuDevice) {
+    let cache = std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME"))
+        .join("Library/Caches/com.latentspace.manifold");
+    std::fs::create_dir_all(&cache).expect("shader cache directory");
+    device.load_pipeline_archive(&cache.join("pipeline_cache.metallib"));
+    device.load_msl_cache(&cache.join("msl_cache"));
+}
