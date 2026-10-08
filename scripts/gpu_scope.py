@@ -38,7 +38,7 @@ from gate_policy import (
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
-    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS,
+    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, is_inert_plan_path,
 )
 from gate_workspace import Workspace
 
@@ -107,6 +107,8 @@ _CPU_PLAN_UNSET = object()
 
 def is_gpu_path(path, workspace=None):
     """Paths that trigger the GPU-proofs leg (mirrors the context-nudge triggers)."""
+    if is_inert_plan_path(path):
+        return False
     if workspace:
         owner = workspace.owner(path)
         if (owner and 'gpu-proofs' in workspace.packages[owner]['features']
@@ -434,6 +436,7 @@ def changed_test_filters(path, repo, base, patch=None):
 def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace=None,
                    cpu_plan=_CPU_PLAN_UNSET):
     """Map touched `paths` to a Plan. Never returns an implicit 'everything'."""
+    paths = [path for path in paths if not is_inert_plan_path(path)]
     workspace = workspace or Workspace(repo)
     if shader_users is None:
         shader_users = shader_index(repo, workspace) if any(p.endswith('.wgsl') for p in paths) else lambda p: []

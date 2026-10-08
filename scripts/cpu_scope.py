@@ -12,7 +12,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from gate_policy import godfile_paths, integration_rows, PREFIX_ROWS
+from gate_policy import godfile_paths, integration_rows, PREFIX_ROWS, is_inert_plan_path
 from gate_policy import CATALOG_PATHS, CATALOG_PACKAGE
 from gate_workspace import Workspace
 
@@ -76,7 +76,7 @@ def gpu_proofs_only(source):
 def plan_for_paths(paths, repo, workspace=None, base=None):
     repo, plan, cache = Path(repo).resolve(), Plan(), {}
     workspace = workspace or Workspace(repo)
-    paths = sorted(set(paths))
+    paths = sorted(path for path in set(paths) if not is_inert_plan_path(path))
     if hasattr(workspace, 'ownership_errors') and ((repo / 'Cargo.toml').is_file() or base):
         ownership = workspace.ownership_errors(paths, base)
         if ownership:

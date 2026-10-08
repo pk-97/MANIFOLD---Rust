@@ -3,6 +3,12 @@
 from pathlib import Path
 import re
 
+def is_inert_plan_path(path):
+    """Committed crate-move plans are replay data, never live build inputs."""
+    root = ".claude/orchestration/crate-split"
+    return path == root or path.startswith(root + "/")
+
+
 SHARED_ASSETS = ['crates/manifold-foundation/assets/fonts']
 GPU_DEFAULT_CPU_ONLY = {
     "manifold-nodes-scene": "Device proofs require gpu-proofs; ungated imported-graph validation lives in the catalog",
