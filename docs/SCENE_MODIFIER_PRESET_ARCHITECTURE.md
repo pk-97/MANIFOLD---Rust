@@ -24,7 +24,7 @@ Base audit: `28c8486f0`. Re-derive anchors at implementation; source takes prior
 | Undoable graph surgery | `crates/manifold-editing/src/commands/graph/scene_modifier.rs:90`, `:419` | Current apply/remove snapshot and refresh precedent |
 | Object boundary | `crates/manifold-renderer/src/node_graph/primitives/scene_object.rs:39` | Vertices/transform/material/maps/instances → Object; no Object chaining |
 | Existing parameter surface | `crates/manifold-ui/src/param_surface.rs:1` | One manifest-backed row model for scene/effect/generator cards |
-| Compile pipeline | `crates/manifold-renderer/src/node_graph/graph_loader.rs`; `freeze/install.rs` | Existing group flattening, binding retargeting, GPU fusion and install |
+| Compile pipeline | `crates/manifold-node-engine/src/load/graph_loader.rs`; `freeze/install.rs` | Existing group flattening, binding retargeting, GPU fusion and install |
 
 ## 2. Decisions
 

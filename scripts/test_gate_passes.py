@@ -40,7 +40,9 @@ class CacheTests(unittest.TestCase):
         self.write('.gitignore', 'target/\n.claude/orchestration/\ntests/fixtures/ignored.bin\n')
         self.write('scripts/ui-flows/manifest.json', '{"path_triggers": {}}')
         for name, deps in [('base', ''), ('a', '[dependencies]\nbase = {path="../base"}\n'),
-                           ('b', ''), ('manifold-renderer', '[dependencies]\nbase = {path="../base"}\n'),
+                           ('b', ''), ('manifold-renderer', '[dependencies]\nbase = {path="../base"}\n'
+                            'manifold-node-engine = {path="../manifold-node-engine"}\n'),
+                           ('manifold-node-engine', '[dependencies]\nbase = {path="../base"}\n'),
                            ('manifold-ui-paint', '[dependencies]\na = {path="../a"}\n')]:
             self.write(f'crates/{name}/Cargo.toml', f'[package]\nname = "{name}"\nversion = "0.1.0"\n{deps}')
             self.write(f'crates/{name}/src/lib.rs', 'pub fn original() {}\n')
@@ -159,18 +161,22 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(tree, self.git('rev-parse', 'HEAD^{tree}'))
 
     def test_queue_and_gate_share_exact_proof_key(self):
-        run = self.run_spec()
-        command = proofs.cargo_test_cmd(self.repo / 'Cargo.toml', run['targets'], lib=run['lib'])
-        command += ['--', '--test-threads=1', *run['filters']]
-        command += [a for skip in run['skips'] for a in ('--skip', skip)]
-        before = cache.queued_proof(command, self.repo)
-        self.assertIsNotNone(before)
-        before.save(0, 2)
-        after = cache.proof_pass(self.repo, run)
-        self.assertEqual(before.key, after.key)
-        self.assertTrue(after.reused())
-        for extra in ('--ignored', '--exact', '--list'):
-            self.assertIsNone(cache.queued_proof(command + [extra], self.repo))
+        for run in gpu_scope.plan_for_paths(
+                ['crates/manifold-renderer/src/node_graph/primitives/invert.rs'], self.repo).runs():
+            with self.subTest(package=run.get('package', 'manifold-renderer')):
+                command = proofs.cargo_test_cmd(
+                    self.repo / 'Cargo.toml', run['targets'], lib=run['lib'],
+                    package=run.get('package', 'manifold-renderer'))
+                command += ['--', '--test-threads=1', *run['filters']]
+                command += [a for skip in run['skips'] for a in ('--skip', skip)]
+                before = cache.queued_proof(command, self.repo)
+                self.assertIsNotNone(before)
+                before.save(0, 2)
+                after = cache.proof_pass(self.repo, run)
+                self.assertEqual(before.key, after.key)
+                self.assertTrue(after.reused())
+                for extra in ('--ignored', '--exact', '--list'):
+                    self.assertIsNone(cache.queued_proof(command + [extra], self.repo))
 
     def test_proof_package_identity_and_dependency_closure(self):
         renderer = dict(self.run_spec(), targets=[], lib=True, filters=['shared::test'])
@@ -223,7 +229,7 @@ class CacheTests(unittest.TestCase):
                 patch.object(proofs, 'run_gate', return_value=(0, '')) as executed, \
                 patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
             self.assertEqual(proofs.main(), 0)
-            self.assertEqual(executed.call_count, 1)
+            self.assertEqual(executed.call_count, 2)
             self.assertTrue(cache.proof_pass(self.repo, run).reused())
         self.assertEqual(self.run_landing()[3], 0)
         # A changed source gets its pass from the queue entry point instead.
@@ -247,6 +253,52 @@ class CacheTests(unittest.TestCase):
             code, seconds = saved.call_args.args
         passed.save(code, seconds)
         self.assertTrue(cache.proof_pass(self.repo, run).reused())
+
+    def test_two_package_standalone_reuse_and_input_invalidation(self):
+        path = 'crates/manifold-renderer/src/node_graph/primitives/invert.rs'
+        runs = gpu_scope.plan_for_paths([path], self.repo).runs()
+        argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
+                '--path', path]
+        packages = ['manifold-renderer', 'manifold-node-engine']
+        with patch.object(sys, 'argv', argv), \
+                patch.object(proofs, 'build_tests', return_value=0) as build, \
+                patch.object(proofs, 'run_gate', return_value=(0, '')) as executed, \
+                patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()) as hold:
+            self.assertEqual(proofs.main(), 0)
+            self.assertEqual([call.args[-1] for call in executed.call_args_list], packages)
+            passes = [cache.proof_pass(self.repo, run) for run in runs]
+            self.assertTrue(all(p.record for p in passes))
+            self.assertNotEqual(passes[0].path, passes[1].path)
+            self.assertEqual(len(list(passes[0].directory.glob('*.json'))), 2)
+            for mock in (build, executed, hold):
+                mock.reset_mock()
+            self.assertEqual(proofs.main(), 0)
+            for mock in (build, executed, hold):
+                mock.assert_not_called()
+            code, calls, _, proof_runs = self.run_landing()
+            self.assertEqual((code, proof_runs), (0, 0))
+            self.assertFalse(any('scripts/gpu_proofs_gate.py' in cmd for cmd in calls))
+            self.assertEqual(self.run_landing(), (0, [], 0, 0))
+
+            # Renderer-only edits keep the engine pass. Engine edits also
+            # invalidate renderer, which depends on the engine in production.
+            for changed, expected in [(path, packages[:1]),
+                                      ('crates/manifold-node-engine/src/lib.rs', packages)]:
+                with self.subTest(changed=changed):
+                    self.write(changed, 'pub fn revised() {}\n')
+                    stale = [run.get('package', 'manifold-renderer') for run in runs
+                             if not cache.proof_pass(self.repo, run).record]
+                    self.assertEqual(stale, expected)
+                    self.assertEqual(proofs.main(), 0)
+                    self.assertEqual([call.args[-1] for call in executed.call_args_list], expected)
+                    built = build.call_args.args[1]
+                    self.assertEqual([r.get('package', 'manifold-renderer') for r in built], expected)
+                    hold.assert_called_once()
+                    for mock in (build, executed, hold):
+                        mock.reset_mock()
+                    self.assertEqual(proofs.main(), 0)
+                    for mock in (build, executed, hold):
+                        mock.assert_not_called()
 
     def test_moved_main_rechecks_only_changed_inputs_before_commit(self):
         passed = cache.proof_pass(self.repo, self.run_spec())
@@ -314,7 +366,7 @@ class CacheTests(unittest.TestCase):
                 patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
             self.assertEqual(proofs.main(), 0)
             self.assertEqual(proofs.main(), 0)
-            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_count, 2)
         self.assertEqual(cache.proof_pass(self.repo, self.run_spec()).record['seconds'], 400)
         with patch.object(sys, 'argv', argv[:3] + ['--all']), \
                 patch.object(proofs, 'build_tests', return_value=0) as build, \
@@ -322,9 +374,9 @@ class CacheTests(unittest.TestCase):
                 patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
             self.assertEqual(proofs.main(), 0)
             self.assertEqual(build.call_count, 1)
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_count, 3)
             self.assertEqual([call.args[-1] for call in run.call_args_list],
-                             ['manifold-renderer', 'manifold-ui-paint'])
+                             ['manifold-renderer', 'manifold-node-engine', 'manifold-ui-paint'])
 
     def run_landing(self, failed=None, keep_going=True):
         calls = []

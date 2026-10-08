@@ -88,7 +88,7 @@ It is the part you touch on stage. Its remaining headroom is *affordance detail*
 (the param-mapping editor, section 5), not structure. Leave the model alone.
 
 ### 3b. The node palette (authoring discovery) — the weak link
-**Current:** [`node_graph/palette.rs`](../crates/manifold-renderer/src/node_graph/palette.rs)
+**Current:** [`node_graph/palette.rs`](../crates/manifold-node-engine/src/palette.rs)
 groups by `PaletteCategory` — two buckets, Atom / Driver. The panel
 ([`graph_palette.rs`](../crates/manifold-ui/src/panels/graph_palette.rs)) is a
 200px flat list of `+ Label` rows. No search, no descriptions, no categories.

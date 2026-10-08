@@ -20,7 +20,7 @@ bans ok
 cargo test -p manifold-renderer --features gpu-proofs --lib
 test result: ok. 1786 passed; 0 failed; 23 ignored; 0 measured; 0 filtered out; finished in 35.41s
 
-rg -n '"mesh_\{' crates/manifold-renderer/src/node_graph/gltf_import.rs
+rg -n '"mesh_\{' crates/manifold-renderer/src/node_graph/gltf_import/mod.rs
 729:        let mesh_node_id = format!("mesh_{k}");   (an internal node-id string, not a
                                                         render_scene wire port — confirmed
                                                         by reading the surrounding code)

@@ -49,7 +49,7 @@ D1–D11 remain cited; this doc revises the instance model), `docs/RT_INSTANCING
 | Load migrations | `scene_modifier.rs:766-896` | `migrate_pre_switch_scene_loops`, `migrate_loop_exposure_rows` — the per-layer load loop precedent the corridor migration extends. |
 | Wrap-parity gates | `crates/manifold-renderer/tests/scene_loop_wrap_parity.rs` | INV-3 pixel gates: exact seam (beat 0 vs 8, diff == 0), near-seam bounded (phase 0.99999, ≤8 px / ≤48 delta), bars-change continuity. **The near-seam gate today needs far=22 clipping** (`:283-303`) because the finite array's far-edge hole otherwise confounds the measurement — the corridor removes that crutch. |
 | RT instancing | `docs/RT_INSTANCING_DESIGN.md` D1/D9/INV-RTI4/5 | Instance buffers GPU-resident; `instance_count = buffer_size/32` (CAPACITY, not live count — `render_scene.rs:4909-4919`); capacity rides the topo key (rebuild), values ride refit; INV-RTI4: static instance buffers trigger no descriptor dispatch/refit beyond the transform-driven cadence. |
-| Camera struct | `crates/manifold-renderer/src/node_graph/camera.rs:83-101` | Carries `pos`, `near`, `far` — enough to derive the window from a wired camera. |
+| Camera struct | `crates/manifold-node-engine/src/scene/camera.rs:83-101` | Carries `pos`, `near`, `far` — enough to derive the window from a wired camera. |
 | Camera-input codegen atom | `crates/manifold-renderer/src/node_graph/primitives/project_3d.rs:65-127` | Precedent: `fusion_kind: Pointwise` + `wgsl_body` atom with an optional `camera: Camera` input resolved CPU-side into uniforms (`cam_pos`/`cam_right`/`cam_up`/`cam_fwd`/`cam_near`/`use_camera`). The corridor atom copies this seam shape exactly. |
 
 ### 1.2 Section 2.5 audit statement (DECOMPOSING_GENERATORS.md)

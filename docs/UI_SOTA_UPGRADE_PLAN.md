@@ -80,7 +80,7 @@ enforced, complete. They do **not** guarantee the *look* is best-in-class; that'
 
 | | |
 |---|---|
-| **Current** | 5 near-identical neutral borders: `RACK_BORDER` 56 · `CARD_BORDER` 46 · `CARD_BORDER_C32` 55 · `DROPDOWN_BORDER` 58 · `GEN_CARD_BORDER_C32` 58 (purple-tinted). **No shadow primitive** in [ui_renderer.rs](../crates/manifold-renderer/src/ui_renderer.rs). |
+| **Current** | 5 near-identical neutral borders: `RACK_BORDER` 56 · `CARD_BORDER` 46 · `CARD_BORDER_C32` 55 · `DROPDOWN_BORDER` 58 · `GEN_CARD_BORDER_C32` 58 (purple-tinted). **No shadow primitive** in [ui_renderer.rs](../crates/manifold-ui-paint/src/ui_renderer.rs). |
 | **Changes** | (a) Collapse the 5 → **one `BORDER` hairline token** (gen-card purple tint folds into section 15's PURPLE). (b) **Value-step depth** via the existing `BG_0..BG_3` ramp — card header a step brighter than body, header column lifts over lanes (no new primitive). (c) Add **one soft drop-shadow** to the GPU rect pipeline (`RectCommand` + fragment SDF outer-term), for **floating elements only** (dropdown, browser_popup, mod drawer). One step, not a Material ramp. |
 | **Files** | `color.rs` (BORDER token); `ui_renderer.rs` (shadow param + fragment); floating call sites opt in. |
 | **Verify** | Harness PNG of a dropdown/drawer (shadow present, subtle); tree unaffected. |
@@ -144,13 +144,13 @@ calls it yet, so zero visual change. Verified headless (`gradient_demo`). Benefi
 **5b — Clips → GPU. ✅ DONE.** Clips render entirely on the GPU now: rounded SDF body,
 the waveform painted INSIDE the body as a per-clip texture, and the timeline overlays as GPU rects. The
 per-layer CPU clip bitmap is gone end to end.
-- **Bodies:** [`clip_draw.rs`](../crates/manifold-renderer/src/clip_draw.rs) — `emit_clips` (lift
+- **Bodies:** [`clip_draw.rs`](../crates/manifold-ui-paint/src/clip_draw.rs) — `emit_clips` (lift
   shadow on select → rounded gradient body → border, two-phase so a selected clip's shadow sits under
   every neighbour) and `emit_clip_names` (overlay text, luminance-picked contrast, scissor-clipped;
   ellipsis is a Phase-6 polish — currently a hard cut). Styling lives in design tokens (`CLIP_RADIUS`,
   `CLIP_GRADIENT_LIGHTEN`, `CLIP_SHADOW*`, `CLIP_BORDER_*`, `CLIP_LABEL_*`) so the look is one-line
   tunable in the Phase-6 eye pass.
-- **In-clip waveform:** [`clip_content_gpu.rs`](../crates/manifold-renderer/src/clip_content_gpu.rs) —
+- **In-clip waveform:** [`clip_content_gpu.rs`](../crates/manifold-ui-paint/src/clip_content_gpu.rs) —
   a per-`ClipId` texture pool. Each visible audio clip's waveform is rasterised into its own texture by
   the *unchanged* `waveform_painter::draw_waveform` (same spectral colour / MIP / Ableton trim-warp
   source-window math), uploaded, and drawn as a quad spanning the full clip width inside the body. The
@@ -233,7 +233,7 @@ emphasis weight, shadow weight, spacing rhythm, badge glyphs. **Done = Peter sig
 Peter + Fable review of the popup/menu surface (dropdowns, context menus, the effect browser modal,
 the Ableton macro picker, settings). Landed in the "professional pass" — `crates/manifold-ui/src/color.rs`,
 `panels/dropdown.rs`, `panels/browser_popup.rs`, `panels/ableton_picker.rs`, `panels/settings_popup.rs`,
-`panels/popup_shell.rs`, `crates/manifold-app/src/ui_frame.rs`, `crates/manifold-renderer/src/clip_draw.rs`.
+`panels/popup_shell.rs`, `crates/manifold-app/src/ui_frame.rs`, `crates/manifold-ui-paint/src/clip_draw.rs`.
 
 - **No shadows UI-wide, for now** (`color::SHADOWS_ENABLED = false`). On MANIFOLD's near-black stage
   palette a dark drop-shadow doesn't read as elevation, it reads as a smudge under the panel. Gated at

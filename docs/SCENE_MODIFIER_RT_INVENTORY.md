@@ -81,8 +81,8 @@ done
 
 # all primitive/recipe/fusion anchors
 rg -n 'type_id: "node\.(normal_wave_mesh|wave_shear_mesh|transform_mesh_patches|ordered_recon_mesh|morph_mesh|mesh_spatial_mask|mesh_stagger_envelope|analytic_echo_instances|scene_array)"|"typeId": "node\.(normal_wave_mesh|wave_shear_mesh|transform_mesh_patches|ordered_recon_mesh|morph_mesh|mesh_spatial_mask|mesh_stagger_envelope|analytic_echo_instances|scene_array)"' crates/manifold-renderer/src crates/manifold-renderer/assets/scene-modifier-presets
-rg -n 'is_fragment|is_mesh_unary|is_weight_source|remap_mesh_cut|topology|MeshTopologyHistory' crates/manifold-renderer/src/node_graph/scene_modifier_expand crates/manifold-renderer/src/node_graph/{scene_object.rs,primitives/scene_object.rs,primitives/render_scene.rs}
-rg -n 'FusedGeneratorView|FusedDef|fused_generator_def_for|fuse_generator_def|fused_effect_view_for|SegmentView|LoadedPresetView|expected_spaces|node_retarget|fused_retarget' crates/manifold-renderer/src/node_graph/freeze/install.rs crates/manifold-renderer/src/{generators,preset_runtime,node_graph}/ -g '*.rs'
+rg -n 'is_fragment|is_mesh_unary|is_weight_source|remap_mesh_cut|topology|MeshTopologyHistory' crates/manifold-node-engine/src/load/expand crates/manifold-node-engine/src/scene/scene_object.rs crates/manifold-renderer/src/node_graph/primitives/{scene_object.rs,render_scene.rs}
+rg -n 'FusedGeneratorView|FusedDef|fused_generator_def_for|fuse_generator_def|fused_effect_view_for|SegmentView|LoadedPresetView|expected_spaces|node_retarget|fused_retarget' crates/manifold-node-engine/src/freeze/install.rs crates/manifold-node-engine/src/ crates/manifold-renderer/src/{generators,node_graph}/ -g '*.rs'
 ```
 
 ## Repository-wide MeshVertex output census
@@ -159,7 +159,7 @@ Cancellation is polled nonblocking in the frame loop (`content_export.rs:583-628
 `EffectNodeContext::error` (`node_graph/effect_node.rs:430–455`) only logs; current export completion detects GPU faults/timeouts, not render diagnostics. Design §5.4 adds a separate status value through existing renderer `gpu_encoder::GpuEncoder` wrappers, merged into `ContentPipeline` before export. Audit all wrapper constructors/early returns with:
 
 ```sh
-rg -n 'GpuEncoder::(new|with_pool)|commit_and_continue|fn render_content|fn export_one_frame|fn render_all' crates/manifold-renderer/src/gpu_encoder.rs crates/manifold-renderer/src/layer_compositor.rs crates/manifold-renderer/src/generator_renderer.rs crates/manifold-app/src/content_pipeline.rs crates/manifold-app/src/content_export.rs
+rg -n 'GpuEncoder::(new|with_pool)|commit_and_continue|fn render_content|fn export_one_frame|fn render_all' crates/manifold-node-engine/src/gpu/gpu_encoder.rs crates/manifold-renderer/src/layer_compositor.rs crates/manifold-renderer/src/generator_renderer.rs crates/manifold-app/src/content_pipeline.rs crates/manifold-app/src/content_export.rs
 ```
 
 No function signature change is required in the compositor/generator render APIs; status travels through their existing mutable wrapper. Wrapper constructors default to Complete; nested wrappers must explicitly merge back. Do not substitute the global hardware fault counter for a per-frame scene error.
@@ -250,72 +250,72 @@ PYCOUNT
 
 ### `instantiate_def`
 
-* `crates/manifold-renderer/src/node_graph/chain_spec.rs:107`
-* `crates/manifold-renderer/src/node_graph/freeze/proof.rs:4032,4111`
-* `crates/manifold-renderer/src/node_graph/freeze/space.rs:52`
-* `crates/manifold-renderer/src/node_graph/graph_loader.rs:689,1719,1728,1756,1799,1872,1918,1949,1982,2568,2612`
-* `crates/manifold-renderer/src/node_graph/persistence.rs:576`
+* `crates/manifold-node-engine/src/load/chain_spec.rs:107`
+* `crates/manifold-renderer/src/engine_contract_tests/freeze_proof.rs:4032,4111`
+* `crates/manifold-node-engine/src/freeze/space.rs:52`
+* `crates/manifold-node-engine/src/load/graph_loader.rs:689,1719,1728,1756,1799,1872,1918,1949,1982,2568,2612`
+* `crates/manifold-node-engine/src/persistence.rs:576`
 * `crates/manifold-renderer/src/node_graph/relight.rs:696`
-* `crates/manifold-renderer/src/preset_runtime/tests/bound_param_survives_rebuild.rs:109`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/runtime_bound_param_survives_rebuild.rs:109`
 
 ### `into_graph`
 
 * `crates/manifold-app/src/ui_snapshot/render.rs:807`
 * `crates/manifold-renderer/src/bin/freeze_profile.rs:166,283,354,412,982,1102,1275`
 * `crates/manifold-renderer/src/node_graph/bundled_presets.rs:274,302`
-* `crates/manifold-renderer/src/node_graph/freeze/install.rs:3093,3168`
-* `crates/manifold-renderer/src/node_graph/freeze/proof/audio_visual.rs:20`
-* `crates/manifold-renderer/src/node_graph/freeze/proof.rs:395,490,498,510,638,639,762,783,869,912,992,1045,1109,1180,1189,1487,1495,1545,1553,1643,1659,1750,1772,1839,1855,1891,2060,2067,2504,2523,2613,2736,2832,4696,4704,4758,4766,4826,4834,4896,4909`
+* `crates/manifold-node-engine/src/freeze/install.rs:3093,3168`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/audio_visual.rs:20`
+* `crates/manifold-renderer/src/engine_contract_tests/freeze_proof.rs:395,490,498,510,638,639,762,783,869,912,992,1045,1109,1180,1189,1487,1495,1545,1553,1643,1659,1750,1772,1839,1855,1891,2060,2067,2504,2523,2613,2736,2832,4696,4704,4758,4766,4826,4834,4896,4909`
 * `crates/manifold-renderer/src/node_graph/gltf_import/tests.rs:2985,3022,3207,3265,3339,3805`
-* `crates/manifold-renderer/src/node_graph/persistence.rs:468,569,907,960,1017,1057,1110,1171,1208,1273,1306,1340,1361,1380,1395,1470,1509`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_expand/compiler/tests.rs:214,288,378,398,632`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_expand/compiler.rs:406`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_expand/control_state.rs:269`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_expand/event_state.rs:428`
-* `crates/manifold-renderer/src/node_graph/snapshot.rs:542`
-* `crates/manifold-renderer/src/node_graph/validate.rs:262,828`
-* `crates/manifold-renderer/src/preset_runtime/build.rs:409`
-* `crates/manifold-renderer/src/preset_runtime/tests/amount_zero_passthrough.rs:117`
-* `crates/manifold-renderer/src/preset_runtime/tests/bool_convert_heal.rs:38`
+* `crates/manifold-node-engine/src/persistence.rs:468,569,907,960,1017,1057,1110,1171,1208,1273,1306,1340,1361,1380,1395,1470,1509`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_tests.rs:214,288,378,398,632`
+* `crates/manifold-node-engine/src/load/expand/compiler.rs:406`
+* `crates/manifold-node-engine/src/load/expand/control_state.rs:269`
+* `crates/manifold-node-engine/src/load/expand/event_state.rs:428`
+* `crates/manifold-node-engine/src/snapshot.rs:542`
+* `crates/manifold-node-engine/src/validate.rs:262,828`
+* `crates/manifold-node-engine/src/runtime/build.rs:409`
+* `crates/manifold-renderer/src/engine_contract_tests/runtime_amount_zero_passthrough_tests.rs:117`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/runtime_bool_convert_heal.rs:38`
 * `crates/manifold-renderer/src/preset_thumbnail.rs:471`
 * `crates/manifold-renderer/tests/fragment_cut_scene.rs:143,210,272`
 * `crates/manifold-renderer/tests/gpu_proofs/film_grain_decorrelation.rs:116`
 
 ### `from_render_def`
 
-* `crates/manifold-renderer/src/preset_runtime/build.rs:277`
-* `crates/manifold-renderer/src/preset_runtime/modifier_runtime.rs:116`
+* `crates/manifold-node-engine/src/runtime/build.rs:277`
+* `crates/manifold-node-engine/src/runtime/modifier_runtime.rs:116`
 
 ### `splice_def_into_chain`
 
 * `crates/manifold-renderer/src/node_graph/bundled_presets.rs:448,518,615,795,987`
-* `crates/manifold-renderer/src/node_graph/chain_spec.rs:83`
-* `crates/manifold-renderer/src/node_graph/freeze/proof.rs:1330`
+* `crates/manifold-node-engine/src/load/chain_spec.rs:83`
+* `crates/manifold-renderer/src/engine_contract_tests/freeze_proof.rs:1330`
 * `crates/manifold-renderer/src/node_graph/relight.rs:686`
-* `crates/manifold-renderer/src/preset_runtime/core.rs:615,879,897`
+* `crates/manifold-node-engine/src/runtime/core.rs:615,879,897`
 * `crates/manifold-renderer/tests/card_binding_shadow_corpus.rs:40,161`
 
 ### `fused_generator_def_for`
 
 * `crates/manifold-renderer/src/bin/freeze_profile.rs:1234`
-* `crates/manifold-renderer/src/node_graph/freeze/install.rs:416,1172,3082`
+* `crates/manifold-node-engine/src/freeze/install.rs:416,1172,3082`
 * `crates/manifold-renderer/tests/gpu_proofs/motion_blur_visibility.rs:243,244`
 
 ### `fused_generator_def_by_id`
 
-* `crates/manifold-renderer/src/node_graph/freeze/install.rs:1169`
-* `crates/manifold-renderer/src/node_graph/freeze/proof.rs:2203,2245`
+* `crates/manifold-node-engine/src/freeze/install.rs:1169`
+* `crates/manifold-renderer/src/engine_contract_tests/freeze_proof.rs:2203,2245`
 
 ### `fuse_generator_def`
 
-* `crates/manifold-renderer/src/node_graph/freeze/install.rs:1179,3145`
-* `crates/manifold-renderer/src/node_graph/freeze/markers.rs:421`
-* `crates/manifold-renderer/src/node_graph/freeze/proof/audio_visual.rs:138,236`
-* `crates/manifold-renderer/src/node_graph/freeze/proof.rs:2326,2429,2986,3058,3159,3327,3684,3757,3850,3962,4185,4291,4350,4417,4520`
+* `crates/manifold-node-engine/src/freeze/install.rs:1179,3145`
+* `crates/manifold-node-engine/src/freeze/markers.rs:421`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/audio_visual.rs:138,236`
+* `crates/manifold-renderer/src/engine_contract_tests/freeze_proof.rs:2326,2429,2986,3058,3159,3327,3684,3757,3850,3962,4185,4291,4350,4417,4520`
 
 ### `fuse_generator_def_masked`
 
-* `crates/manifold-renderer/src/node_graph/freeze/install.rs:1183,1188`
+* `crates/manifold-node-engine/src/freeze/install.rs:1183,1188`
 
 ## Canonical and prepared entrypoint census
 
@@ -334,14 +334,14 @@ Whole-workspace lexical census, using the same script above with the following a
 * `crates/manifold-app/src/window_input.rs:1009,1110`
 * `crates/manifold-renderer/src/node_graph/gltf_import/card_precedence_tests.rs:75`
 * `crates/manifold-renderer/src/node_graph/gltf_import/tests.rs:64,385,447,746,988,1001,1581,2181,2246,2807,2903,3212,3270,3543,3598,3832`
-* `crates/manifold-renderer/src/node_graph/loaded_preset_view.rs:230`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_expand/compiler/tests.rs:264`
+* `crates/manifold-node-engine/src/load/loaded_preset_view.rs:230`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_tests.rs:264`
 * `crates/manifold-renderer/src/node_graph/scene_vm.rs:482,1231,1237,1250,1279,1283,1322,1357,1375,1401,1468,1508,1542,1577,1614,1645,1683,1719,1737,1738,1754,1787,1803,1823,1842,1862,1898,1929,1980,2002,2100,2141`
-* `crates/manifold-renderer/src/node_graph/snapshot/scene_modifier_tests.rs:16,26`
-* `crates/manifold-renderer/src/node_graph/snapshot.rs:530,1054,1274,1326,1393,1428`
-* `crates/manifold-renderer/src/preset_runtime/build.rs:250,266,671`
-* `crates/manifold-renderer/src/preset_runtime/tests/bool_convert_heal.rs:53`
-* `crates/manifold-renderer/src/preset_runtime/tests/generator_runtime.rs:389,667,814`
+* `crates/manifold-node-engine/src/snapshot/scene_modifier_tests.rs:16,26`
+* `crates/manifold-node-engine/src/snapshot.rs:530,1054,1274,1326,1393,1428`
+* `crates/manifold-node-engine/src/runtime/build.rs:250,266,671`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/runtime_bool_convert_heal.rs:53`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/runtime_generator_runtime.rs:389,667,814`
 * `crates/manifold-renderer/tests/card_binding_shadow_corpus.rs:71`
 * `crates/manifold-renderer/tests/mosh_presets.rs:182`
 * `crates/manifold-renderer/tests/photoscan_modifier_plans.rs:83,106`
@@ -353,33 +353,33 @@ Whole-workspace lexical census, using the same script above with the following a
 ### `from_def_for_render` — 1 declarations, 10 call lines
 
 * `crates/manifold-renderer/src/generators/registry.rs:268`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_expand/compiler/parameter_guard_tests.rs:126,285`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_expand/compiler/tests.rs:153`
-* `crates/manifold-renderer/src/preset_runtime/build.rs:271`
-* `crates/manifold-renderer/src/preset_runtime/modifier_runtime.rs:51`
-* `crates/manifold-renderer/src/preset_runtime/tests/math_view.rs:45,123,414`
-* `crates/manifold-renderer/src/preset_runtime/tests/modifier_events.rs:187,400`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_parameter_guard_tests.rs:126,285`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_tests.rs:153`
+* `crates/manifold-node-engine/src/runtime/build.rs:271`
+* `crates/manifold-node-engine/src/runtime/modifier_runtime.rs:51`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/runtime_math_view.rs:45,123,414`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/runtime_modifier_events.rs:187,400`
 
 ### `from_def_for_render_view` — 1 declarations, 6 call lines
 
-* `crates/manifold-renderer/src/preset_runtime/math_view.rs:117,124`
-* `crates/manifold-renderer/src/preset_runtime/modifier_runtime.rs:59,61,66`
-* `crates/manifold-renderer/src/preset_runtime/tests/math_view.rs:36,112`
+* `crates/manifold-node-engine/src/runtime/math_view.rs:117,124`
+* `crates/manifold-node-engine/src/runtime/modifier_runtime.rs:59,61,66`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/runtime_math_view.rs:36,112`
 
 ### `prepare_scene_modifiers` — 1 declarations, 41 call lines
 
 * `crates/manifold-app/src/scene_modifier_journey/periodic.rs:63`
 * `crates/manifold-app/src/scene_modifier_journey.rs:231`
 * `crates/manifold-renderer/src/bin/check_presets.rs:254`
-* `crates/manifold-renderer/src/node_graph/freeze/fusion_report.rs:78`
-* `crates/manifold-renderer/src/node_graph/graph_loader.rs:712`
-* `crates/manifold-renderer/src/node_graph/loaded_preset_view.rs:144`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_expand/compiler/tests.rs:152,261,281,375,610`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_expand/compiler.rs:135,140`
+* `crates/manifold-node-engine/src/freeze/fusion_report.rs:78`
+* `crates/manifold-node-engine/src/load/graph_loader.rs:712`
+* `crates/manifold-node-engine/src/load/loaded_preset_view.rs:144`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_tests.rs:152,261,281,375,610`
+* `crates/manifold-node-engine/src/load/expand/compiler.rs:135,140`
 * `crates/manifold-renderer/src/node_graph/scene_modifier_legacy_migration/sources.rs:621,622`
 * `crates/manifold-renderer/src/node_graph/scene_modifier_legacy_migration.rs:38`
-* `crates/manifold-renderer/src/preset_runtime/modifier_runtime.rs:79`
-* `crates/manifold-renderer/src/preset_runtime/tests/modifier_events.rs:183,396`
+* `crates/manifold-node-engine/src/runtime/modifier_runtime.rs:79`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/runtime_modifier_events.rs:183,396`
 * `crates/manifold-renderer/tests/fragment_cut_scene.rs:33,142,206,259,267`
 * `crates/manifold-renderer/tests/photoscan_modifier_plans.rs:75,103`
 * `crates/manifold-renderer/tests/scene_loop_e2e_import.rs:45`
@@ -390,9 +390,9 @@ Whole-workspace lexical census, using the same script above with the following a
 
 ### `prepare_scene_modifier_math_view` — 1 declarations, 5 call lines
 
-* `crates/manifold-renderer/src/node_graph/scene_modifier_expand/compiler/tests.rs:762,840,881,889`
-* `crates/manifold-renderer/src/node_graph/scene_modifier_expand/compiler.rs:148`
-* `crates/manifold-renderer/src/preset_runtime/modifier_runtime.rs:78`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_tests.rs:762,840,881,889`
+* `crates/manifold-node-engine/src/load/expand/compiler.rs:148`
+* `crates/manifold-node-engine/src/runtime/modifier_runtime.rs:78`
 
 ## Required deletion and preservation checks
 

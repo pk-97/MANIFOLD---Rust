@@ -32,7 +32,7 @@ Phase 4 as originally written (wrap each remaining effect in a `LegacyPostProces
 MANIFOLD currently has **two parallel runtimes** for effect work:
 
 1. **Linear chain runtime** ([`EffectChain::apply_chain`](../crates/manifold-renderer/src/effect_chain.rs)) — hand-rolled imperative loop with ping-pong buffers, group wet/dry blending, `should_skip` checks. Used by every layer / master / clip effect chain today.
-2. **Graph runtime** ([`Executor`](../crates/manifold-renderer/src/node_graph/execution.rs) + [`MetalBackend`](../crates/manifold-renderer/src/node_graph/metal_backend.rs)) — topological execution of an `ExecutionPlan` over a `Backend` trait. Used by graph-backed effects (`Mirror`, `SoftFocus`) which run a sub-graph *inside* their `apply()` call, nested within the chain runtime.
+2. **Graph runtime** ([`Executor`](../crates/manifold-node-engine/src/exec/execution.rs) + [`MetalBackend`](../crates/manifold-node-engine/src/exec/metal_backend.rs)) — topological execution of an `ExecutionPlan` over a `Backend` trait. Used by graph-backed effects (`Mirror`, `SoftFocus`) which run a sub-graph *inside* their `apply()` call, nested within the chain runtime.
 
 The chain runtime cannot host:
 
@@ -129,11 +129,11 @@ These are precondition commits to manifold-gpu, not part of the unification arc 
 
 The graph runtime infrastructure is **substantially built**:
 
-- [`Graph`](../crates/manifold-renderer/src/node_graph/graph.rs) — node + wire container, ~300 LOC.
-- [`compile`](../crates/manifold-renderer/src/node_graph/execution_plan.rs) — validate + topological sort + resource lifetime analysis. Pure data, no GPU. Already cacheable. ~400 LOC.
-- [`Executor`](../crates/manifold-renderer/src/node_graph/execution.rs) — per-frame iteration over plan steps with slot acquire/release. Already uses pre-allocated scratch buffers (CLAUDE.md compliant). ~440 LOC.
-- [`Backend` trait](../crates/manifold-renderer/src/node_graph/backend.rs) — platform-agnostic abstraction over slot allocation. `MetalBackend` is one impl; a `VulkanBackend` would slot in cleanly.
-- [`MetalBackend`](../crates/manifold-renderer/src/node_graph/metal_backend.rs) — slot recycling identical to chain's ping-pong. Pre-binding via `pre_bind_texture_2d` solves first-effect-input optimization. ~285 LOC.
+- [`Graph`](../crates/manifold-node-engine/src/graph.rs) — node + wire container, ~300 LOC.
+- [`compile`](../crates/manifold-node-engine/src/exec/execution_plan.rs) — validate + topological sort + resource lifetime analysis. Pure data, no GPU. Already cacheable. ~400 LOC.
+- [`Executor`](../crates/manifold-node-engine/src/exec/execution.rs) — per-frame iteration over plan steps with slot acquire/release. Already uses pre-allocated scratch buffers (CLAUDE.md compliant). ~440 LOC.
+- [`Backend` trait](../crates/manifold-node-engine/src/exec/backend.rs) — platform-agnostic abstraction over slot allocation. `MetalBackend` is one impl; a `VulkanBackend` would slot in cleanly.
+- [`MetalBackend`](../crates/manifold-node-engine/src/exec/metal_backend.rs) — slot recycling identical to chain's ping-pong. Pre-binding via `pre_bind_texture_2d` solves first-effect-input optimization. ~285 LOC.
 - [`LegacyPostProcessNode`](../crates/manifold-renderer/src/node_graph/legacy_adapter.rs) — wraps any `Box<dyn PostProcessEffect>` as an `EffectNode`. 1-input/1-output. Synthesizes `ParamDef` list from `EffectMetadata`. ~335 LOC.
 - 9 primitives: `Source`, `FinalOutput`, `Mix`, `UVTransform`, `Blur`, `Threshold` (stub), `MipChain` (stub), `Sample` (stub), `Blend` (stub). ~600 LOC across `primitives/`.
 - 5 composite presets: `Mirror`, `Bloom`, `Halation`, `Infrared`, `SoftFocus`. ~400 LOC across `composites/`.

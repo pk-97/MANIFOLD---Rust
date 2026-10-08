@@ -1080,12 +1080,12 @@ The timeline is the most-played surface and it tells you almost nothing:
 
 ### 24.2 Why the clips look flat — the rendering path
 Clips are **CPU-painted into per-layer pixel buffers and blitted as flat quads**:
-`bitmap_painter` → [`layer_bitmap_gpu::upload_layer`](../crates/manifold-renderer/src/layer_bitmap_gpu.rs#L165)
+`bitmap_painter` → [`layer_bitmap_gpu::upload_layer`](../crates/manifold-ui-paint/src/layer_bitmap_gpu.rs#L165)
 (`Rgba8UnormSrgb`) → `render_layers` draws them as textured quads. That path has **no rounded
 corners, no gradient, no shadow, no image blit — by construction.**
 
 Meanwhile the **GPU UITree path already has the hard primitive**:
-[`draw_rounded_rect`](../crates/manifold-renderer/src/ui_renderer.rs#L418) is an SDF rounded-rect
+[`draw_rounded_rect`](../crates/manifold-ui-paint/src/ui_renderer.rs#L418) is an SDF rounded-rect
 with AA, scissor-depth layers, and CoreText text. The inspector/chrome use it; the clips don't.
 **That gap is the whole reason the timeline looks flat.** What the GPU path is *missing* for the
 full look: a **gradient fill** (no `gradient` in `ui_renderer.rs` today) and the **one soft shadow**

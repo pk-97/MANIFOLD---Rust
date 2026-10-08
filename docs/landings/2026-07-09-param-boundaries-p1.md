@@ -7,7 +7,7 @@
 ## What shipped
 Load-time param resolution is now correct **by construction** instead of by ordering discipline. `PresetInstance` stashes its raw V1.4 wire map (`pending_wire`); the loader deserializes, installs the embedded-preset overlay, then calls `Project::reconcile_param_manifests()` to rebuild every instance's manifest against the completed registry. The 2026-07-06 defensive machinery that guarded the old fragile ordering is deleted:
 - `EmbeddedPresetsPrePass` + the JSON pre-scan (`crates/manifold-io/src/loader.rs`)
-- The rollback API — `ProjectPresetsSnapshot`, `project_presets_snapshot()`, `restore_project_presets()` (`crates/manifold-renderer/src/preset_loader.rs`) + its 3 call sites (`project_io.rs`, `app_lifecycle.rs` ×2) + the `overlay_snapshot_restores_after_a_candidate_install` test.
+- The rollback API — `ProjectPresetsSnapshot`, `project_presets_snapshot()`, `restore_project_presets()` (`crates/manifold-node-engine/src/load/preset_loader.rs`) + its 3 call sites (`project_io.rs`, `app_lifecycle.rs` ×2) + the `overlay_snapshot_restores_after_a_candidate_install` test.
 
 `reconcile_manifest()` keeps the stash parked (does **not** clear `pending_wire`) when the template still isn't resolvable — the keep-don't-drop retry that preserves BUG-036-class values for a later reconcile once the registry gains the definition.
 

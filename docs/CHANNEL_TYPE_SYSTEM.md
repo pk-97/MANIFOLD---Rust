@@ -154,7 +154,7 @@ The Channel type system is designed forward-compatible with the planned WGSL fus
 
 ### 4.1 Concrete types
 
-All types live in `crates/manifold-renderer/src/node_graph/ports.rs` alongside the existing port types.
+All types live in `crates/manifold-node-engine/src/ports.rs` alongside the existing port types.
 
 ```rust
 /// A channel's name. Interned at compile time via const FNV-1a hash of the
@@ -342,7 +342,7 @@ No third "required-set" mode (where the producer must have at least the channels
 
 ### 5.2 The compatibility predicate
 
-Replaces the current `port_types_compatible` function at [validation.rs:264](crates/manifold-renderer/src/node_graph/validation.rs#L264):
+Replaces the current `port_types_compatible` function at [validation.rs:264](crates/manifold-node-engine/src/validation.rs#L264):
 
 ```text
 fn port_types_compatible(from: PortType, to: PortType) -> bool:
@@ -651,7 +651,7 @@ The registry is the enforcement mechanism. The doc describes the registry.
 
 ### 7.2 The registry shape
 
-`crates/manifold-renderer/src/node_graph/channel_names.rs` (new file):
+`crates/manifold-node-engine/src/channel_names.rs` (new file):
 
 ```rust
 //! Canonical channel-name registry. Every primitive that produces or
@@ -809,7 +809,7 @@ The pad fields (`_pad`, `_pad2`) would naively become channels too — they're W
 
 **v1.5 (shipped 2026-05-28): explicit `// @channel_skip` marker.** The naga struct walk's `struct_members_to_specs` helper honours a pre-naga preprocessor pass that extracts `// @channel_skip` markers from the WGSL source and builds a per-struct skip set. A field tagged with the marker on its preceding line is dropped from the emitted Channels signature; every other named field becomes a channel. The original `_pad[0-9]*` name-prefix heuristic that briefly shipped during Phase 4a (commit `40af5d37`) was retired in Phase 4b.7 — no core-dev shader exercised it (every `_pad*` field across the five wgsl_compute presets lives in a *uniform* struct, which keeps its separate `parse_uniform` `_pad*` filter), and the heuristic's failure mode (a non-padding field named `padding` silently lost from the wire) is exactly what the explicit marker eliminates.
 
-The preprocessor lives in [primitives/wgsl_compute.rs](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs) as a pure function, `extract_channel_skip(source: &str) -> AHashMap<String, AHashSet<String>>`. The introspector calls it once per `reparse` and threads the resulting skip map through `element_to_array_type` → `struct_members_to_specs`. Naga itself never sees the marker (it's a `//` line comment, dropped by naga's lexer) but also never has to — the skip decision happens at signature-build time, not at parse time.
+The preprocessor lives in [primitives/wgsl_compute.rs](../crates/manifold-node-engine/src/primitives/wgsl_compute.rs) as a pure function, `extract_channel_skip(source: &str) -> AHashMap<String, AHashSet<String>>`. The introspector calls it once per `reparse` and threads the resulting skip map through `element_to_array_type` → `struct_members_to_specs`. Naga itself never sees the marker (it's a `//` line comment, dropped by naga's lexer) but also never has to — the skip decision happens at signature-build time, not at parse time.
 
 Marker conventions (every one covered by a unit test in `wgsl_compute::tests`):
 
@@ -837,7 +837,7 @@ Preset migration: every preset currently using a cast atom (BlackHole inserts 2 
 
 ### 8.4 Reparse semantics
 
-`wgsl_compute` reparses its port list when the user edits the shader source ([wgsl_compute.rs:766](crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L766)). Under Channels, the reparse rebuilds the typed Channels signatures from the new struct fields. Implications:
+`wgsl_compute` reparses its port list when the user edits the shader source ([wgsl_compute.rs:766](crates/manifold-node-engine/src/primitives/wgsl_compute.rs#L766)). Under Channels, the reparse rebuilds the typed Channels signatures from the new struct fields. Implications:
 
 - The wire type carried by a wgsl_compute node's ports is *not* compile-time-static (it changes when the source changes). All other primitives have static port types.
 - A previously-valid wire may become invalid after a reparse if the user renames a struct field, removes one, or changes a field's type. The validator surfaces this as a new `ChannelMismatch` error on the downstream wire. The editor should react by visually marking the now-invalid wire; the runtime executor refuses to run the affected node until the user fixes the type.
@@ -863,7 +863,7 @@ The three legacy variants (`wgsl_compute_0in_1tex`, `wgsl_compute_1tex_1tex`, `w
 
 ### 9.1 Validator unit tests
 
-In `crates/manifold-renderer/src/node_graph/validation.rs`. Build synthetic graphs and assert connect / reject:
+In `crates/manifold-node-engine/src/validation.rs`. Build synthetic graphs and assert connect / reject:
 
 - **Exact match — equal signatures connect.** Two ports both declaring `Channels[x: F32, y: F32]` wire cleanly.
 - **Exact match — different channel count rejects.** `Channels[x, y]` → `Channels[x, y, z]` errors with `ChannelMismatch::DifferentCount`.
@@ -877,7 +877,7 @@ Run via `cargo test -p manifold-renderer --lib node_graph::validation::tests::`.
 
 ### 9.2 Layout calculator tests
 
-In `crates/manifold-renderer/src/node_graph/ports.rs` or a sibling module:
+In `crates/manifold-node-engine/src/ports.rs` or a sibling module:
 
 - Std430 layout for each shipping `_SPECS` constant matches the corresponding existing `#[repr(C)]` struct's `size_of::<T>()`.
 - Per-channel byte offsets match the existing struct's field offsets (using `core::mem::offset_of!` where available).
@@ -886,7 +886,7 @@ In `crates/manifold-renderer/src/node_graph/ports.rs` or a sibling module:
 
 ### 9.3 Macro expansion tests
 
-In `crates/manifold-renderer/src/node_graph/primitive.rs`'s test module:
+In `crates/manifold-node-engine/src/primitive.rs`'s test module:
 
 - Macro syntax `Channels[x: F32, y: F32]` produces an `ArrayType` with the expected specs.
 - Default match mode is Exact.
@@ -1111,7 +1111,7 @@ If the measurement shows non-negligible cost, the calculator can be promoted to 
 
 ### 11.6 Snapshot / serialization back-compat
 
-**Risk:** the editor snapshot ([snapshot.rs:188](crates/manifold-renderer/src/node_graph/snapshot.rs#L188)) maps `PortType::Array(_)` to a coarse enum variant. Adding channel-name info to the snapshot is a serialization extension; older snapshots (cached graph editor state) might not know about the new field.
+**Risk:** the editor snapshot ([snapshot.rs:188](crates/manifold-node-engine/src/snapshot.rs#L188)) maps `PortType::Array(_)` to a coarse enum variant. Adding channel-name info to the snapshot is a serialization extension; older snapshots (cached graph editor state) might not know about the new field.
 
 **Mitigation:** the snapshot is not persisted — it's runtime-only editor state. Adding a field is a non-breaking change. The runtime / editor restart picks up the new field; no migration concern for saved data.
 
@@ -1641,16 +1641,16 @@ The section 16 anti-pattern list also stays clean: no runtime-resolved slot coun
 ## Appendix A — File checklist for Phase 1 implementation
 
 Files added:
-- `crates/manifold-renderer/src/node_graph/channel_names.rs` — `well_known_channels!` macro, generated `well_known::*` constants, debug-name lookup. The collision test is emitted by the same macro into this module's test mod — no separate test file.
+- `crates/manifold-node-engine/src/channel_names.rs` — `well_known_channels!` macro, generated `well_known::*` constants, debug-name lookup. The collision test is emitted by the same macro into this module's test mod — no separate test file.
 
 Files modified:
-- `crates/manifold-renderer/src/node_graph/ports.rs` — types reshape, `ItemKind` retained alongside (deletion in Phase 4), new types added.
-- `crates/manifold-renderer/src/node_graph/validation.rs` — `channels_compatible` predicate, `ChannelMismatch` error variant, updated error display. Also adds `PERMISSIVE_PRIMITIVE_ALLOWLIST: &[PrimitiveTypeId]` const (see section 11.4).
+- `crates/manifold-node-engine/src/ports.rs` — types reshape, `ItemKind` retained alongside (deletion in Phase 4), new types added.
+- `crates/manifold-node-engine/src/validation.rs` — `channels_compatible` predicate, `ChannelMismatch` error variant, updated error display. Also adds `PERMISSIVE_PRIMITIVE_ALLOWLIST: &[PrimitiveTypeId]` const (see section 11.4).
 - `crates/manifold-renderer/src/node_graph/mod.rs` — re-export new types and `well_known`.
 
 Tests added:
-- `crates/manifold-renderer/src/node_graph/ports.rs` — std430 layout calculator unit tests.
-- `crates/manifold-renderer/src/node_graph/validation.rs` — Channels compatibility unit tests; also a test enumerating every primitive with a Permissive port and asserting its `TYPE_ID` ∈ `PERMISSIVE_PRIMITIVE_ALLOWLIST`.
+- `crates/manifold-node-engine/src/ports.rs` — std430 layout calculator unit tests.
+- `crates/manifold-node-engine/src/validation.rs` — Channels compatibility unit tests; also a test enumerating every primitive with a Permissive port and asserting its `TYPE_ID` ∈ `PERMISSIVE_PRIMITIVE_ALLOWLIST`.
 - `channel_names.rs` test mod — the macro-generated collision check.
 
 Compile-time assertions:
@@ -1665,10 +1665,10 @@ Before starting Phase 0 implementation (and by extension Phase 1, since the same
 - [ ] Read this document end-to-end.
 - [ ] Read [BUFFER_PORT_PLAN.md](BUFFER_PORT_PLAN.md) to understand the existing Array port system this migration reshapes.
 - [ ] Read [GRAPH_COMPILER.md](GRAPH_COMPILER.md) to understand the fusion-compatibility constraints in section 16. Especially relevant if extending section 4 (type contract) or section 5 (validator semantics).
-- [ ] Read [crates/manifold-renderer/src/node_graph/ports.rs](../crates/manifold-renderer/src/node_graph/ports.rs) — the current `PortType` / `ArrayType` / `ItemKind` shapes.
-- [ ] Read [crates/manifold-renderer/src/node_graph/validation.rs:264](../crates/manifold-renderer/src/node_graph/validation.rs#L264) — the current `port_types_compatible` predicate.
-- [ ] Read `crates/manifold-renderer/src/generators/mesh_common.rs` and `compute_common.rs` — the typed-array struct definitions and `KnownItem` impls this migration touches. Phase 0's smoke test starts from `EdgePair` here.
-- [ ] Read [crates/manifold-renderer/src/node_graph/primitive.rs:671](../crates/manifold-renderer/src/node_graph/primitive.rs#L671) — the `__primitive_port_type!` macro arm Phase 2 extends. (Not required for Phase 0 — that phase bypasses the macro and constructs `ArrayType` directly — but worth glancing at to understand what Phase 2 will add.)
+- [ ] Read [crates/manifold-node-engine/src/ports.rs](../crates/manifold-node-engine/src/ports.rs) — the current `PortType` / `ArrayType` / `ItemKind` shapes.
+- [ ] Read [crates/manifold-node-engine/src/validation.rs:264](../crates/manifold-node-engine/src/validation.rs#L264) — the current `port_types_compatible` predicate.
+- [ ] Read `crates/manifold-node-engine/src/mesh.rs` and `compute_common.rs` — the typed-array struct definitions and `KnownItem` impls this migration touches. Phase 0's smoke test starts from `EdgePair` here.
+- [ ] Read [crates/manifold-node-engine/src/primitive.rs:671](../crates/manifold-node-engine/src/primitive.rs#L671) — the `__primitive_port_type!` macro arm Phase 2 extends. (Not required for Phase 0 — that phase bypasses the macro and constructs `ArrayType` directly — but worth glancing at to understand what Phase 2 will add.)
 - [ ] Confirm understanding of std430 alignment rules: vec3 = 16-byte align with 12-byte size + 4-byte tail pad, vec4 = 16-byte align, vec2 = 8-byte align, scalars = 4-byte align.
 - [ ] Confirm understanding of the `bytemuck::Pod` constraint: all fields visible / no private padding (which is why the existing structs have `pub _pad0` etc.).
 - [ ] Confirm focused test discipline per [feedback_prefer_focused_tests.md](../.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/memory/feedback_prefer_focused_tests.md) — workspace tests run once in Phase 5, not per-chat.

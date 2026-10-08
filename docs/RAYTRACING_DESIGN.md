@@ -15,7 +15,7 @@ Companions: `REALTIME_3D_DESIGN.md` (the scene system RT extends), `MANIFOLD_GPU
 | MetalFX Spatial upscaler | `crates/manifold-gpu/src/metal/metalfx.rs` | SHIPPED — ML spatial upscale, Lanczos fallback. *Temporal* variant (motion-vector-fed, the denoiser-adjacent one) NOT integrated. |
 | Soft shadows (PCSS penumbra) | REALTIME_3D_DESIGN.md section status "SHIPPED @ `feat/pcss-penumbra` 2026-07-12" | The raster baseline RT shadows must beat. |
 | GTAO | `crates/manifold-renderer/src/node_graph/primitives/ssao_gtao.rs` | The raster AO RT AO replaces. |
-| PBR material model | `crates/manifold-core` material types per MATERIAL_SYSTEM_DESIGN.md (M1–M6 SHIPPED); glTF/Khronos import via `crates/manifold-renderer/src/node_graph/gltf_import.rs` | Metallic-roughness + emissive already deserialized and typed — RT consumes this as-is. **No new material system in v1** (Peter agrees; node-based material editor is a future direction — graphs *drive* material params first, *define* materials later). |
+| PBR material model | `crates/manifold-core` material types per MATERIAL_SYSTEM_DESIGN.md (M1–M6 SHIPPED); glTF/Khronos import via `crates/manifold-renderer/src/node_graph/gltf_import/mod.rs` | Metallic-roughness + emissive already deserialized and typed — RT consumes this as-is. **No new material system in v1** (Peter agrees; node-based material editor is a future direction — graphs *drive* material params first, *define* materials later). |
 | Hybrid RT direction | RENDERING_INFRA_V2_DESIGN.md section 9 (Hybrid ray tracing (post-release) — GRADUATED 2026-07-21 → `RAYTRACING_DESIGN.md`) | Direction + backend seam decided in principle; this doc is its graduation. Its rejections stand (no real-time path tracing; emissive-as-real-GI in raster rejected). |
 | HDR pipeline + tonemapping | CINEMATIC_POST_DESIGN.md (SHIPPED) | Peter: HDR path "already sorted". RT plugs into existing linear-HDR → grade chain. |
 | Hardware | M4 Max 36GB — Metal ray queries + `MTLAccelerationStructure` (hardware RT since M3). Frame interpolation requires Metal 4 / macOS Tahoe (min-OS decision, section 5 D8). |
@@ -1293,7 +1293,7 @@ The item's real content, restated against today's code:
 
 | Piece | Where | State |
 |---|---|---|
-| Light types | `crates/manifold-renderer/src/node_graph/light.rs:43-52` (`LightMode`) | **Sun and Point only. No spot light exists** (negative `rg` for `Spot` in `light.rs`). Both modes carry `cast_shadows`, `shadow_softness` (PCF tiers + `Contact { light_size }` PCSS), `shadow_resolution`. |
+| Light types | `crates/manifold-node-engine/src/scene/light.rs:43-52` (`LightMode`) | **Sun and Point only. No spot light exists** (negative `rg` for `Spot` in `light.rs`). Both modes carry `cast_shadows`, `shadow_softness` (PCF tiers + `Contact { light_size }` PCSS), `shadow_resolution`. |
 | Light count cap | `render_scene.rs:146` (`LIGHT_SLIDER_MAX = 64`), module doc `:14-16` | Uncapped structurally — runtime-sized `@binding(8)` storage buffer; slider soft bound 64, `setBytes` hard ceiling 127. |
 | Real light census | Peter's `~/Downloads/*.manifold`, counted `node.light` occurrences per project 2026-08-02 | Typical 1–10 light nodes; max 20 (`SceneLadders`). **A few dozen is the observed ceiling; the median show scene is single digits.** |
 | Shadow-map path | `render_scene.rs:159` (`MAX_SHADOW_CASTING_LIGHTS = 4`), `:3089-3130` | First 4 `cast_shadows` lights in slot order, one depth-only prepass each; lights past the cap illuminate unshadowed (slot −1 → `shadow_factor` 1.0, `render_scene.wgsl:636`). |

@@ -152,7 +152,7 @@ restore around where the group sat. One-step undoable. `group` then `ungroup` is
 ## 5. Architecture — three additive layers
 
 ### 5.1 Data — snapshot carries the nesting
-`crates/manifold-renderer/src/node_graph/snapshot.rs`:
+`crates/manifold-node-engine/src/snapshot.rs`:
 - `NodeSnapshot` gains `group: Option<Box<GroupSnapshot>>`.
 - New `GroupSnapshot { interface: InterfaceSnapshot, nodes: Vec<NodeSnapshot>, wires: Vec<WireSnapshot> }`
   (recursive — nested groups fall out).
@@ -337,7 +337,7 @@ around it.
 - `crates/manifold-core/src/group_edit.rs` *(new)* — `infer_interface`, `group_selection`, `ungroup`,
   `GroupEditError`, the full unit suite.
 - `crates/manifold-core/src/lib.rs` — `pub mod group_edit;`.
-- `crates/manifold-renderer/src/node_graph/snapshot.rs` — `GroupSnapshot`/`InterfaceSnapshot`,
+- `crates/manifold-node-engine/src/snapshot.rs` — `GroupSnapshot`/`InterfaceSnapshot`,
   `NodeSnapshot.group`, `from_def` recursion + boundary-port synthesis.
 - `crates/manifold-editing/src/commands/graph.rs` — `scope_path` on existing commands;
   `GroupNodesCommand`, `UngroupNodeCommand`, `RenameGroupCommand`, `AddInterfacePortCommand`,

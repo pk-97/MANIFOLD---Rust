@@ -31,7 +31,7 @@ it is potentially not all that correct" — its lessons are prior evidence, not 
 | Monolithic frame encoders | `crates/manifold-app/src/content_pipeline.rs:2039` ("Generators", commit :2192/:2195), `:2214` ("Compositor", commit :3042/:3045) | Two command buffers per frame hold all generator + compositor work. This is the chunking target. |
 | Compositor parallel path | `crates/manifold-renderer/src/layer_compositor.rs:2306` (`composite_parallel`, per-layer command buffers + GpuEvent, chosen when ≥2 active layers and not `force_serial`) | Already chunks the compositor for multi-layer frames. A single heavy layer — the RT case — falls to `composite_serial`, one buffer. Chunking must reach *inside* the layer's work. |
 | RT scene node dispatches | `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` (8890 lines; mask / lighting / translucent-trace / IBL / denoise dispatches, all one encoder) | The 10fps wall for a single RT layer lives here: several large dispatches in one node, one buffer. Per-layer checkpoints alone would not split it. |
-| Generator encode loop | `crates/manifold-app/src/content_pipeline.rs:2073` (`gen_renderer.render_all(&mut gpu_gen, …)`) | All layers' generators encode into the one "Generators" buffer via the `GpuEncoder` wrapper (`crates/manifold-renderer/src/gpu_encoder.rs:7`). |
+| Generator encode loop | `crates/manifold-app/src/content_pipeline.rs:2073` (`gen_renderer.render_all(&mut gpu_gen, …)`) | All layers' generators encode into the one "Generators" buffer via the `GpuEncoder` wrapper (`crates/manifold-node-engine/src/gpu/gpu_encoder.rs:7`). |
 | Command drain under load | `crates/manifold-app/src/content_thread.rs:478` (`wait_for_surface_draining_commands`), main drain :371–431 | Commands are already processed promptly while the GPU is behind. Latency is in *publish*, not apply. |
 | Snapshot publish | `crates/manifold-app/src/content_thread.rs:1112` (`data_version` check), build :1241, `state_tx.send` :1403 — all inside `tick_frame` (:589) | Publish is welded to rendering. `last_data_version` field already exists (:80). |
 | Rendering-paused mode | `crates/manifold-app/src/content_thread.rs:85` (`rendering_paused`), skip at :449–453 | While paused, mutations never publish — the ready-made test harness for I3. |
@@ -141,7 +141,7 @@ impl GpuEncoder { // crates/manifold-gpu/src/metal/encoder.rs
 Renderer wrapper (committed):
 
 ```rust
-impl GpuEncoder<'_> { // crates/manifold-renderer/src/gpu_encoder.rs
+impl GpuEncoder<'_> { // crates/manifold-node-engine/src/gpu/gpu_encoder.rs
     /// Split the underlying submission if the pipeline has chunking enabled
     /// this frame (D5: skipped under dispatch profiling). No-op otherwise.
     pub fn checkpoint(&mut self);
@@ -189,7 +189,7 @@ build both, verify after).
   `rendering_paused = true`, send a mutating `ContentCommand`, assert a `ContentState` with the
   bumped `data_version` arrives on the receiver within 500ms.
 - **I4 — No new shared state, no new threads/channels.** Enforcement: negative gate —
-  `rg 'Arc<Mutex|Arc<RwLock' crates/manifold-app/src/content_thread.rs crates/manifold-renderer/src/gpu_encoder.rs crates/manifold-gpu/src/metal/encoder.rs`
+  `rg 'Arc<Mutex|Arc<RwLock' crates/manifold-app/src/content_thread.rs crates/manifold-node-engine/src/gpu/gpu_encoder.rs crates/manifold-gpu/src/metal/encoder.rs`
   shows only pre-existing hits (diff against main at landing).
 - **I5 — No CPU mutation of GPU-readable shared memory after its consuming dispatch is encoded
   on a chunked path (D4a).** Enforcement: the P2 audit deliverable — a written inventory of

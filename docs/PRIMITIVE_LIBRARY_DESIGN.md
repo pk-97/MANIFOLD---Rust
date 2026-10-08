@@ -1053,7 +1053,7 @@ These needs survive the deletion of the effect Rust files only if we either:
 
 **(b) Keep a minimal `PluginPrewarm` inventory** — a new `inventory::collect!`-able struct `{ id: EffectTypeId, prewarm: fn(&GpuDevice) }` that the renderer runs at startup. Only the three plugin-using effects submit one. The rest of the EffectFactory pattern dies.
 
-I lean (b). Cleaner separation: plugin warmup is its own concern, doesn't pollute the primitive's `run()` with init-time-only code. The inventory list is tiny (3 entries) and explicit. A new `crates/manifold-renderer/src/plugin_prewarm.rs` or similar lives alongside the primitive registry; `LayerCompositor::new()` iterates the prewarm submissions during construction.
+I lean (b). Cleaner separation: plugin warmup is its own concern, doesn't pollute the primitive's `run()` with init-time-only code. The inventory list is tiny (3 entries) and explicit. A new `crates/manifold-node-engine/src/runtime/plugin_prewarm.rs` or similar lives alongside the primitive registry; `LayerCompositor::new()` iterates the prewarm submissions during construction.
 
 ### 11.6 Editor snapshot — does it still need `EffectFactory`?
 

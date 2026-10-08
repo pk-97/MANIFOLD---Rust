@@ -39,7 +39,7 @@ Every row below was verified by running code this same day, not recalled.
 
 | Piece | Where | State |
 |---|---|---|
-| Production import path | `assemble_import_graph` — `crates/manifold-renderer/src/node_graph/gltf_import.rs:333` | Works; builds group-per-material graph, wires all five PBR map ports, softbox+fill env (F-P7), sun, camera, post nodes |
+| Production import path | `assemble_import_graph` — `crates/manifold-renderer/src/node_graph/gltf_import/mod.rs:333` | Works; builds group-per-material graph, wires all five PBR map ports, softbox+fill env (F-P7), sun, camera, post nodes |
 | Full PBR map set + split-sum IBL + mips + fill | IMPORT_FIDELITY F-P1–F-P7, all landed at `44b921cf` | SHIPPED; value-level gpu proofs green |
 | **Object cap — renderer side** | `OBJECT_SLIDER_MAX = 64` at `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:97`; `objects.clamp(1, OBJECT_SLIDER_MAX)` at `render_scene.rs:546` | The renderer itself refuses >64 objects, despite its own purpose string saying "no fixed cap on object count" |
 | **Object cap — importer side** | `gltf_import.rs:378` (largest-by-vertex-count-first triage), `ImportReport.dropped_over_cap` (`gltf_import.rs:63`) | Materials beyond 64 are **dropped from the graph entirely** — geometry ceases to exist. Proven consequence: the AMG GT3 (78 materials) loses 14, including body panels (BUG-163) |

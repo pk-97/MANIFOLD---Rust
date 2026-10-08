@@ -43,7 +43,7 @@ shadow).
 | Pipeline order: automation → reset base→value → drivers → audio mods → envelopes | `modulation.rs:284-319` (order), `automation.rs:112-115` (base writes pre-reset) | exists — step apply slots after reset (D4) |
 | `Param { base, value }` split; modulation writes `value`, never `base` | `crates/manifold-core/src/params.rs:36-60` | exists — step state shadows `base`, serialized project untouched |
 | Deterministic per-cycle random (integer hash, Unity HashToFloat port) | `crates/manifold-core/src/effects.rs:2790-2801` | exists — the house random; reuse for D7 |
-| Non-repeat invariant for cycling (`ClipTriggerCycle`) | `crates/manifold-renderer/src/generators/clip_trigger.rs` | exists renderer-side — the *invariant* moves into the step evaluator (D7); the type stays for graph consumers |
+| Non-repeat invariant for cycling (`ClipTriggerCycle`) | `crates/manifold-node-engine/src/clip_trigger.rs` | exists renderer-side — the *invariant* moves into the step evaluator (D7); the type stays for graph consumers |
 | Discrete-param vocabulary (`whole_numbers`, `value_labels`) | `crates/manifold-core/src/effect_graph_def.rs:456-463` | exists — defines "discrete slider" |
 | Offline export feeds real analysis into the same tick ("param modulation, param triggers, and live clip triggers — deterministic audio reactivity") | `crates/manifold-app/src/content_export.rs:439-451` | exists — step actions inherit export support with no new work |
 | Clip-edge observation (renderer-side): `acquire_clip` + `clip_count`/`audio_count` | `crates/manifold-renderer/src/generator_renderer.rs:44-92,350-360` | exists — stays for gate cards; steps get an ENGINE-side edge (D5) |

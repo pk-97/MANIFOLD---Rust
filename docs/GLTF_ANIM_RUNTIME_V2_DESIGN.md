@@ -57,7 +57,7 @@ Existing/one-wire-away/new: the parser, samplers' math, loop/trigger machinery, 
 
 | Invariant | Enforcement |
 |---|---|
-| No keyframe payload in any def the importer emits | Negative gate: `rg -n '"translation_tracks"\|"rotation_tracks"\|"scale_tracks"\|weight_tracks' crates/manifold-renderer/src/node_graph/gltf_import.rs` → zero hits after P2; plus test `imported_def_json_stays_small` — serialize the dragon-scale synthetic import def, assert < 256 KB |
+| No keyframe payload in any def the importer emits | Negative gate: `rg -n '"translation_tracks"\|"rotation_tracks"\|"scale_tracks"\|weight_tracks' crates/manifold-renderer/src/node_graph/gltf_import/mod.rs` → zero hits after P2; plus test `imported_def_json_stays_small` — serialize the dragon-scale synthetic import def, assert < 256 KB |
 | Sampling never linear-scans keyframes | `row_range_for_key`/`row_range_for_compound_key` DELETED (`rg` zero hits, P2); slice samplers take `partition_point` — reviewed shape, plus perf test below |
 | Dragon-scale posing stays under budget | Test `pose_sampling_dragon_scale_under_1ms` (P1): synthetic AnimSet (52 clips × 630 channels × ~160 keys), 300 joints, one full pose sample < 1 ms release / < 8 ms debug |
 | Deleting the last referencing node frees the payload | Test `anim_cache_drops_when_last_arc_drops` (P1): load, drop all Arcs, assert `Weak::upgrade()` is `None` |

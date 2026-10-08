@@ -97,7 +97,7 @@ here only because it's adjacent (same `UICacheManager`) and shipped this session
 ## 3. How the UI compositing works (the model everything below assumes)
 
 - The main-window UI is composited into **one full-screen atlas texture**
-  (`UICacheManager`, [ui_cache_manager.rs](../crates/manifold-renderer/src/ui_cache_manager.rs)).
+  (`UICacheManager`, [ui_cache_manager.rs](../crates/manifold-ui-paint/src/ui_cache_manager.rs)).
 - Each **panel** (Transport, Header, Footer, Inspector, SplitHandles, LayerHeaders,
   Viewport) renders into the atlas at its screen position with `LoadOp::Load` (preserve).
   Panel order is Transport, Header, **Footer(2), Inspector(3)**, … — footer renders
@@ -111,7 +111,7 @@ here only because it's adjacent (same `UICacheManager`) and shipped this session
   (pass 5), then offscreen → drawable.
 - `render_dirty_panels` renders each panel via `render_tree_range` (full) or
   `render_sub_region` (incremental flat traversal of one dirty card). Both apply clip
-  regions; nested clips **intersect** ([ui_renderer.rs:1067](../crates/manifold-renderer/src/ui_renderer.rs#L1067)).
+  regions; nested clips **intersect** ([ui_renderer.rs:1067](../crates/manifold-ui-paint/src/ui_renderer.rs#L1067)).
 
 ---
 

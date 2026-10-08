@@ -6,7 +6,7 @@
 
 ## What shipped
 
-- `crates/manifold-renderer/src/node_graph/transform.rs` — `Transform { pos, rot_euler (radians), scale }` CPU-struct, `Default` = identity (pos 0 / rot 0 / scale 1), transcribed verbatim from design section 3. Wired into `node_graph/mod.rs`.
+- `crates/manifold-node-engine/src/scene/transform.rs` — `Transform { pos, rot_euler (radians), scale }` CPU-struct, `Default` = identity (pos 0 / rot 0 / scale 1), transcribed verbatim from design section 3. Wired into `node_graph/mod.rs`.
 - `PortType::Transform` variant + full plumbing across `ports.rs`, `backend.rs` (+ `MockBackend`), `bindings.rs` (`NodeInputs::transform`, `NodeOutputs::set_transform` + `pending_transform_writes`), `execution.rs` (scratch + drain), `metal_backend.rs`, `primitive.rs` macro arm, `snapshot.rs`, `catalog_gen.rs`.
 - **UI mirror-enum boundary** (not on the original checklist; caught by the compiler): `manifold-ui/src/graph_view.rs` mirror `PortKindSnapshot` + `manifold-app/src/ui_translate.rs::port_kind_to_ui` both gained a `Transform` arm — the sanctioned translation boundary per the ui-foundation convention.
 - Editor pin color: `PORT_TRANSFORM_COLOR = Color32::new(255, 128, 199, 255)` (hot pink, hue ≈326°) in `graph_canvas/mod.rs`, consumed in `graph_canvas/model.rs`. Nearest existing hues (Camera salmon ~0°, Texture3D purple ~273°) are >45° away.

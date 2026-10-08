@@ -76,3 +76,5 @@ b3a6ba17071e301d8ae5112a899f0e7b23a1c723
 31ad28dcf6d181ed99c6247a9e70fd84d6b95ef2
 b46aebd995060b3f2bbfbe1cc6a872991d772b30
 e09e078badfc9e6c309e2f3331469a88b9bb7c38
+# Renderer crate split P1: carve manifold-node-engine (2026-10-07; proven by crate_move_replay.py verify)
+2fa1010810829f9fd6f78f3e9a71cfa501c2f0c7

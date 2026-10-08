@@ -70,7 +70,7 @@ Solid — **one substitution away**. Points topology — **genuinely new**, smal
   **byte-identical to no input** — the zero-cost contract, same as fog.
 
   ```rust
-  // crates/manifold-renderer/src/node_graph/render_mode.rs
+  // crates/manifold-node-engine/src/scene/render_mode.rs
   pub struct RenderMode {
       /// 0 = Rendered, 1 = Solid, 2 = Wireframe, 3 = Points.
       /// RENDERED MUST STAY 0 — the enable gate multiplies (INV-R2).
@@ -191,7 +191,7 @@ fill-mode threading. Wireframe is the proving mode because it's the cheapest
 mechanism (no shader, no pipeline).
 
 - **Entry state:** `RenderMode.json` does not exist; `rg -n 'render_mode'
-  crates/manifold-renderer/src/node_graph/ports.rs` — zero hits. Re-verify
+  crates/manifold-node-engine/src/ports.rs` — zero hits. Re-verify
   the section-1 anchors for `ports.rs:68`, `atmosphere.rs`, SceneFog.json,
   `encoder.rs:1385`.
 - **Read-back:** this doc's D1–D6; SceneFog.json whole;
