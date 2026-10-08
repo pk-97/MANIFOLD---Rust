@@ -61,7 +61,10 @@ GPU_PROOF_TESTS = re.compile(r'#\[cfg\(all\(test,\s*feature\s*=\s*"gpu-proofs"\)
 
 
 def gpu_proofs_only(source):
-    """True when every test module in `source` is built only under gpu-proofs."""
+    """True when every test module in `source` is built only under gpu-proofs.
+    A deleted or moved file has no text and keeps its module filter."""
+    if not source.is_file():
+        return False
     text = source.read_text()
     return bool(GPU_PROOF_TESTS.search(text)) and '#[cfg(test)]' not in text
 
