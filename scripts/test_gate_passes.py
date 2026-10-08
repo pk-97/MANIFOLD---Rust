@@ -661,10 +661,12 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(self.call_packages(run.call_args_list),
                              [entry['package'] for entry in nightly])
 
-    def run_landing(self, failed=None, keep_going=True, on_build=None):
+    def run_landing(self, failed=None, keep_going=None, on_build=None):
         calls = []
         real_run = landing.run_cmd
-        argv = ['landing_gate.py', '--repo', str(self.repo)] + ([] if keep_going else ['--fail-fast'])
+        argv = ['landing_gate.py', '--repo', str(self.repo)]
+        if keep_going is not None:
+            argv.append('--keep-going' if keep_going else '--fail-fast')
 
         def run(command, cwd, timeout, live_log=None):
             if command[0] == 'git':
@@ -736,7 +738,16 @@ class CacheTests(unittest.TestCase):
         self.assertIn('[REUSED] design-status', self.output.getvalue())
 
     def test_only_a_gate_that_ran_every_check_exits_checks_red(self):
-        self.assertEqual(self.run_landing(failed='deny')[0], landing.CHECKS_RED)
+        code, calls, _, proof_runs = self.run_landing(failed='deny')
+        self.assertEqual(code, 1, 'the default stops at the expensive boundary')
+        self.assertEqual(proof_runs, 0)
+        self.assertFalse(any(command[1:2] == ['scripts/run_ui_flows.py']
+                             and '--build-only' not in command for command in calls))
+        code, calls, _, proof_runs = self.run_landing(failed='deny', keep_going=True)
+        self.assertEqual(code, landing.CHECKS_RED)
+        self.assertGreater(proof_runs, 0, 'the complete run must execute pending proofs')
+        self.assertTrue(any(command[1:2] == ['scripts/run_ui_flows.py']
+                            and '--build-only' not in command for command in calls))
         self.assertEqual(self.run_landing(failed='deny', keep_going=False)[0], 1,
                          'a --fail-fast stop skipped later checks')
         self.write('scratch/untracked.txt', 'build output\n')
@@ -750,7 +761,7 @@ class CacheTests(unittest.TestCase):
             with patch.object(sys, 'argv', argv), \
                     patch.object(land_branch, 'MAIN', self.repo), \
                     patch.object(land_branch, 'step', return_value=MagicMock(stdout='tip\n', returncode=0)), \
-                    patch.object(land_branch, 'run_landing_gate', return_value=gate_code), \
+                    patch.object(land_branch, 'run_landing_gate', return_value=gate_code) as gate, \
                     patch.object(land_branch, 'merge_gated_tree') as merge, \
                     contextlib.redirect_stderr(io.StringIO()):
                 if lands:
@@ -759,6 +770,7 @@ class CacheTests(unittest.TestCase):
                     with self.assertRaises(SystemExit):
                         land_branch.main()
             self.assertEqual(merge.called, lands, f'gate exit {gate_code}')
+            self.assertIn('--keep-going', gate.call_args.args[0])
 
     def test_gate_crate_edit_keeps_other_crate_and_gpu_passes(self):
         self.assertEqual(self.run_landing()[0], 0)

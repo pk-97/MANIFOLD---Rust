@@ -24,10 +24,12 @@ GPU = ["scripts/gpu_queue.py", "--"]
 VERBS = [
     ("Landing and gates",
      "gate", "landing_gate.py",
-     "landing gate for a branch worktree: every check, one `rerun:` command per red (--repo <worktree>)"),
+     "landing gate: collect cheap reds before flows/proofs; --keep-going diagnoses all legs"),
     ("Landing and gates",
      "land", "land_branch.py",
      "the whole landing ceremony: fetch, merge main in, gate, no-ff merge, push, bead close"),
+    ("Landing and gates",
+     "watch-land", "watch_land.py", "watch a gate or landing: --pid PID --log PATH [--kind land]; exit on red, hang or end"),
     ("Landing and gates",
      "land-wave", "land_wave.py", "land one or a batch of wave branches without the main checkout"),
     ("Landing and gates",
@@ -69,7 +71,7 @@ VERBS = [
 
     ("Machine: GPU, worktrees, disk",
      "gpu-queue", "gpu_queue.py",
-     "run any command under the machine-wide GPU lock (`-- <cmd>`); `status` shows who holds it"),
+     "GPU lock: `-- <cmd>`, `status`; campaign `reserve --owner NAME --reason TEXT --seconds N`, `clear`"),
     ("Machine: GPU, worktrees, disk",
      "worktree", "agent-worktree.py", "the slot ring: acquire <task> <branch>, release, retire, list, reclaim"),
     ("Machine: GPU, worktrees, disk",
@@ -173,7 +175,7 @@ VERBS = [
 
 # Importable modules, self-tests and retired probes: not verbs, still accounted for.
 INTERNAL = {
-    "gate_readiness.py", "gate_workspace.py", "gate_policy.py", "dev.py", "cpu_scope.py", "diff_scope.py", "gate_passes.py", "codex_checks.py",
+    "gate_readiness.py", "gate_workspace.py", "gate_policy.py", "gate_cancellation.py", "dev.py", "cpu_scope.py", "diff_scope.py", "gate_passes.py", "codex_checks.py",
     "audit_rename.py", "rt_a2_term_cost.py", "rt_a3_term_cost.py",
     "gate_runner_selftest.sh", "uninstall-abletonosc-patch.sh",
 }

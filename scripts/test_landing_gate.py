@@ -5,6 +5,7 @@ import io
 import json
 import os
 import runpy
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -12,7 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import landing_gate
 import land_branch
@@ -138,7 +139,7 @@ class LandingTests(unittest.TestCase):
 
     checks = ["tooling", "design-status", "ignored-tests", "deny",
               "clippy", "tests-build", "test-ownership/manifold-gpu",
-              "gpu-proofs-build", "flow-gate", "tests", "gpu-proofs"]
+              "gpu-proofs-build", "tests", "flow-gate", "gpu-proofs"]
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None,
                  comment=False, gpu_output=None, proof_cached=False, manifest=None,
@@ -211,10 +212,10 @@ class LandingTests(unittest.TestCase):
             called.append(label)
             events.append(label)
             if label == "gpu-proofs" and gpu_output is not None:
-                return (failure_code if label == failed else 0), gpu_output, "", 0.01
+                return (failure_code if label in ([failed] if isinstance(failed, str) else failed or []) else 0), gpu_output, "", 0.01
             if cmd[:2] == ["cargo", "nextest"] and "--no-run" not in cmd and nextest_output:
-                return (failure_code if label == failed else 0), *nextest_output, 0.01
-            return (failure_code if label == failed else 0), f"output for {label}\n", "", 0.01
+                return (failure_code if label in ([failed] if isinstance(failed, str) else failed or []) else 0), *nextest_output, 0.01
+            return (failure_code if label in ([failed] if isinstance(failed, str) else failed or []) else 0), f"output for {label}\n", "", 0.01
 
         with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
             root = Path(d)
@@ -308,9 +309,7 @@ class LandingTests(unittest.TestCase):
                 code, called, timings, commands, logs, output, deps = self.exercise(
                     failed, extra=["--fail-fast"])
                 self.assertEqual(code, 1)
-                expected = self.checks[:index + 1] if index >= 3 else self.checks[:3]
-                if failed == "tests":
-                    expected = [*expected[:-1], "tests"]
+                expected = self.checks[:index + 1]
                 self.assertEqual(called, expected)
                 self.assertEqual(timings["failed"], 1)
                 if index >= 3:
@@ -324,10 +323,10 @@ class LandingTests(unittest.TestCase):
                 if index < 5:
                     self.assertEqual(deps, 0)
 
-    def test_default_collects_every_red_with_a_rerun_command_each(self):
+    def test_keep_going_collects_every_red_with_a_rerun_command_each(self):
         # The gate is for landing; reds are fixed with the printed commands,
         # never by rerunning the gate to find the next one.
-        code, called, timings, _, _, output, _ = self.exercise("clippy")
+        code, called, timings, _, _, output, _ = self.exercise("clippy", extra=["--keep-going"])
         self.assertEqual(code, landing_gate.CHECKS_RED)
         self.assertEqual(called, self.checks)
         self.assertEqual(timings["failed"], 1)
@@ -335,19 +334,64 @@ class LandingTests(unittest.TestCase):
         self.assertRegex(summary, r"rerun: cargo clippy --manifest-path \S+/Cargo.toml -p manifold-gpu")
         self.assertIn("fix each red with its `rerun:` command", summary)
 
+    def test_default_collects_cheap_reds_and_stops_expensive_legs(self):
+        code, called, timings, _, _, output, _ = self.exercise(
+            failed=['deny', 'clippy', 'tests'],
+            readiness_errors=[('entrypoints', 'missing executable')])
+        self.assertEqual(code, 1)
+        self.assertEqual(called, self.checks[:-3])
+        self.assertEqual(timings['failed'], 3)
+        self.assertFalse(any(event.startswith('hold-enter:') for event in self.events))
+        self.assertIn('flows and GPU proofs were not run because', output)
+        for label in ('entrypoints', 'deny', 'clippy'):
+            self.assertIn('FAIL ' + label, output)
+        self.assertGreaterEqual(output.count('rerun: '), 6)
+
+    def test_terminal_success_follows_verdict_publication(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            root = Path(directory)
+            (root / 'scripts').mkdir()
+            (root / 'scripts/gate_runner.py').write_text(
+                'def append_verdict(*args): print("publication completed")\n')
+            stack.enter_context(patch.object(landing_gate, 'MAIN_CHECKOUT', root))
+            stack.enter_context(patch.object(landing_gate, 'run_cmd',
+                return_value=(0, 'BUG-fake', '', 0)))
+            for changes in (([], []), ([], ['changed-input'])):
+                with patch.object(landing_gate.gate_passes, 'changed_passes', side_effect=changes), \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    code = landing_gate.finish(root, 'base', [('PASS', 'fake', 1, [])])
+                text = output.getvalue()
+                self.assertIn('landing gate: 1 passed, 0 failed', text)
+                if code == 0:
+                    self.assertLess(text.index('publication completed'), text.index('[COMPLETE]'))
+                else:
+                    self.assertIn('[FAIL] inputs changed', text)
+                    self.assertNotIn('[COMPLETE]', text)
+
+    def test_planning_fail_fast_stops_before_any_leg(self):
+        code, called, *_ = self.exercise(extra=['--fail-fast'],
+            readiness_errors=[('entrypoints', 'missing executable'), ('references', 'missing include')])
+        self.assertEqual(code, 1)
+        self.assertEqual(called, [])
+
+    def test_test_failure_precedes_flows_even_in_diagnostic_mode(self):
+        code, called, *_ = self.exercise('tests', extra=['--keep-going'])
+        self.assertEqual(code, landing_gate.CHECKS_RED)
+        self.assertLess(called.index('tests'), called.index('flow-gate'))
+
     def test_quoted_proof_refusal_is_an_ordinary_failure(self):
         output = 'AssertionError: "GPU-PROOFS GATE: FAIL (inputs changed"\n'
         for label in ("tests", "gpu-proofs"):
             with self.subTest(label=label):
                 code, *_ = self.exercise(
-                    failed=label, gpu_output=output, nextest_output=(output, ""))
+                    failed=label, gpu_output=output, nextest_output=(output, ""), extra=["--keep-going"])
                 self.assertEqual(code, landing_gate.CHECKS_RED)
 
     def test_proof_refusal_status_is_only_reserved_for_proof_subprocess(self):
         for label in ("tests", "gpu-proofs", "gpu-proofs-build"):
             with self.subTest(label=label):
                 code, *_ = self.exercise(
-                    failed=label, failure_code=landing_gate.PROOF_INPUTS_CHANGED)
+                    failed=label, failure_code=landing_gate.PROOF_INPUTS_CHANGED, extra=["--keep-going"])
                 self.assertEqual(code, landing_gate.CHECKS_RED if label == "tests" else 1)
 
     def test_leg_rerun_lines_win_over_the_leg_command(self):
@@ -376,8 +420,8 @@ class LandingTests(unittest.TestCase):
     def test_stale_docs_stop_before_cargo_or_rendering(self):
         code, called, timings, *_ = self.exercise(stale_docs=True, extra=["--fail-fast"])
         self.assertEqual(code, 1)
-        self.assertEqual(called, self.checks[:3])
-        self.assertEqual(timings["checks"][-1]["label"], "ignored-tests")
+        self.assertEqual(called, [])
+        self.assertEqual(timings["checks"][-1]["label"], "fresh-docs-index")
 
     def test_readiness_collects_all_cheap_failures_before_runtime(self):
         errors = (("metadata", "cargo metadata failed"),
@@ -385,18 +429,18 @@ class LandingTests(unittest.TestCase):
         code, called, timings, commands, _, output, _ = self.exercise(
             readiness_errors=errors)
         self.assertEqual(code, 1)
-        self.assertEqual(called, ["tooling", "design-status", "ignored-tests"])
-        self.assertEqual([row["label"] for row in timings["checks"]],
-                         ["metadata", "references", "tooling", "design-status",
-                          "ignored-tests"])
+        self.assertEqual(called, self.checks[:-3])
+        self.assertEqual([row["label"] for row in timings["checks"]][:2],
+                         ["metadata", "references"])
         self.assertIn("[FAIL] metadata", output)
         self.assertIn("[FAIL] references", output)
         reruns = [line.strip() for line in output.splitlines() if line.strip().startswith('rerun: ')]
         self.assertEqual(len(reruns), 4)  # Immediate diagnostics and final summary.
         self.assertTrue(all('landing_gate.py --repo ' in line and '--plan-only' in line
                             for line in reruns))
-        self.assertFalse(any(command[0] == "cargo" for command in commands))
-        self.assertFalse(any(event.startswith("hold") for event in self.events))
+        self.assertNotIn("tests", called)
+        self.assertNotIn("flow-gate", called)
+        self.assertNotIn("gpu-proofs", called)
 
     def test_testless_source_module_runs_whole_package_after_inventory(self):
         listing = {"rust-suites": {
@@ -417,11 +461,12 @@ class LandingTests(unittest.TestCase):
             readiness_errors=(("cpu-ownership",
                                "manifold-gpu: ownership mapping resolves to no tests"),))
         self.assertEqual(code, 1)
-        self.assertEqual(called, ["tooling", "design-status", "ignored-tests"])
+        self.assertEqual(called, self.checks[:-3])
         self.assertIn("[FAIL] cpu-ownership", output)
         self.assertIn("resolves to no tests", output)
-        self.assertFalse(any(command[0] == "cargo" for command in commands))
-        self.assertFalse(any(event.startswith("hold") for event in self.events))
+        self.assertNotIn("tests", called)
+        self.assertNotIn("flow-gate", called)
+        self.assertNotIn("gpu-proofs", called)
 
     def test_real_gpu_failure_over_budget_names_failure_and_deferred_in_finish(self):
         import gpu_proofs_gate
@@ -559,7 +604,7 @@ class LandingTests(unittest.TestCase):
         with patch.object(landing_gate, "freshness_problems", return_value=problems):
             code, called, timings, _, _, output, _ = self.exercise()
         self.assertEqual(code, 1)
-        self.assertEqual(called, ["tooling", "design-status", "ignored-tests"])
+        self.assertEqual(called, self.checks[:-3])
         self.assertIn("rerun: regen-cmd", output)
 
     def test_build_failure_stops_before_the_hold(self):
@@ -573,8 +618,8 @@ class LandingTests(unittest.TestCase):
         for failed, skipped, still_run in (("tests-build", "tests", "gpu-proofs"),
                                            ("gpu-proofs-build", "gpu-proofs", "tests")):
             with self.subTest(failed=failed):
-                code, called, _, _, _, output, _ = self.exercise(failed)
-                self.assertEqual(code, landing_gate.CHECKS_RED)
+                code, called, _, _, _, output, _ = self.exercise(failed, extra=["--keep-going"])
+                self.assertEqual(code, 1)
                 self.assertNotIn(skipped, called)
                 self.assertIn(still_run, called)
         skipped_label = "tests/manifold-gpu" if skipped == "tests" else skipped
@@ -1211,10 +1256,168 @@ class DiffScopeTests(unittest.TestCase):
             scope.assert_called_once_with(run_ui_flows.ROOT, "base", "HEAD")
 
 
+class CancellationTests(unittest.TestCase):
+    def test_gate_imports_work_in_both_orders(self):
+        scripts = str(Path(__file__).resolve().parent)
+        for modules in ('landing_gate, gpu_proofs_gate', 'gpu_proofs_gate, landing_gate'):
+            result = subprocess.run([sys.executable, '-B', '-c',
+                f'import sys; sys.path.insert(0, {scripts!r}); import {modules}'],
+                capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_proof_cleanup_timeout_retains_ownership_without_killing_runner(self):
+        proc = Mock(pid=123, _requires_cleanup=True)
+        proc.poll.return_value = None
+        proc.wait.side_effect = [subprocess.TimeoutExpired('proof', 5), 143]
+        with patch.object(landing_gate, 'kill_tree') as kill, \
+                patch.object(landing_gate.os, 'killpg') as killpg:
+            landing_gate.stop_child(proc, graceful=True)
+        proc.send_signal.assert_called_once_with(signal.SIGTERM)
+        self.assertEqual(proc.wait.call_count, 2)
+        self.assertEqual(proc.wait.call_args.kwargs, {})
+        kill.assert_not_called()
+        killpg.assert_not_called()
+
+    def test_cancel_proof_descendants_without_process_enumeration(self):
+        scripts = str(Path(__file__).resolve().parent)
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=sig), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                binary = (
+                    'import os, pathlib, time\n'
+                    f'pathlib.Path({str(root / "test.pid")!r}).write_text(str(os.getpid()))\n'
+                    'print("fake proof running", flush=True)\n'
+                    'time.sleep(120)\n')
+                cargo = (
+                    'import os, pathlib, subprocess, sys\n'
+                    f'pathlib.Path({str(root / "cargo.pid")!r}).write_text(str(os.getpid()))\n'
+                    f'subprocess.run([sys.executable, "-u", "-c", {binary!r}])\n')
+                runner = root / 'gpu_proofs_gate.py'
+                runner.write_text(
+                    'import sys\nfrom pathlib import Path\n'
+                    f'sys.path.insert(0, {scripts!r})\n'
+                    'import gpu_proofs_gate as p\n'
+                    f'p.cargo_test_cmd = lambda *a: [sys.executable, "-u", "-c", {cargo!r}]\n'
+                    'p._main = lambda: p.run_gate(Path("/fake/Cargo.toml"), [], [])[0]\n'
+                    'status = p.main()\n'
+                    f'Path({str(root / "cleanup-ready")!r}).touch()\n'
+                    'import time\n'
+                    f'while not Path({str(root / "cleanup-release")!r}).exists(): time.sleep(.01)\n'
+                    'sys.exit(status)\n')
+                parent = (
+                    'import pathlib, sys\n'
+                    f'sys.path.insert(0, {scripts!r})\n'
+                    'import landing_gate as g, gpu_queue\n'
+                    f'root = pathlib.Path({directory!r})\n'
+                    'original = g.subprocess.run\n'
+                    'def no_ps(cmd, *a, **k):\n'
+                    ' if cmd[0] == "ps": raise OSError("fake ps unavailable")\n'
+                    ' return original(cmd, *a, **k)\n'
+                    'g.subprocess.run = no_ps\n'
+                    'def body(stack):\n'
+                    ' stack.enter_context(gpu_queue.hold("fake proof", directory=root / "queue"))\n'
+                    ' g.run_cmd([sys.executable, "-u", str(root / "gpu_proofs_gate.py")], root, 120, live_log=root / "proof.log")\n'
+                    'g._main = body\n'
+                    'sys.argv = ["landing_gate.py", "--repo", str(root)]\n'
+                    'sys.exit(g.main())\n')
+                proc = subprocess.Popen([sys.executable, '-u', '-c', parent],
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, start_new_session=True)
+                try:
+                    deadline = time.monotonic() + 10
+                    while not (root / 'test.pid').exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue((root / 'test.pid').exists())
+                    cargo_pid = int((root / 'cargo.pid').read_text())
+                    test_pid = int((root / 'test.pid').read_text())
+                    self.assertTrue((root / 'queue/gpu.holder').exists())
+                    proc.send_signal(sig)
+                    deadline = time.monotonic() + 10
+                    while not (root / 'cleanup-ready').exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue((root / 'cleanup-ready').exists())
+                    self.assertFalse(process_alive(cargo_pid))
+                    self.assertFalse(process_alive(test_pid))
+                    self.assertTrue((root / 'queue/gpu.holder').exists())
+                    (root / 'cleanup-release').touch()
+                    output, _ = proc.communicate(timeout=15)
+                    self.assertEqual(proc.returncode, 128 + sig, output)
+                    self.assertIn('descendants stopped', (root / 'proof.log').read_text())
+                    self.assertFalse(process_alive(cargo_pid))
+                    self.assertFalse(process_alive(test_pid))
+                    self.assertFalse((root / 'queue/gpu.holder').exists())
+                finally:
+                    (root / 'cleanup-release').touch()
+                    if proc.poll() is None:
+                        landing_gate.stop_child(proc)
+                    proc.stdout.close()
+
+    def test_signals_reap_children_release_lock_and_keep_incomplete_log(self):
+        # Real dummy processes, private file lock; no Cargo or GPU device.
+        scripts = str(Path(__file__).resolve().parent)
+        for module in ('landing_gate', 'land_branch'):
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                with self.subTest(module=module, signal=sig), tempfile.TemporaryDirectory() as d:
+                    root = Path(d)
+                    child_code = "import time; print('child ready', flush=True); time.sleep(120)"
+                    gate_code = (
+                        "import sys, pathlib, os\n"
+                        f"sys.path.insert(0, {scripts!r})\n"
+                        "import landing_gate as g, gpu_queue\n"
+                        f"root = pathlib.Path({d!r})\n"
+                        "def body(stack):\n"
+                        " stack.enter_context(gpu_queue.hold('fake test', directory=root / 'queue'))\n"
+                        " original = g.subprocess.Popen\n"
+                        " def spawn(*a, **k):\n"
+                        "  p = original(*a, **k)\n"
+                        "  if a[0][0] == sys.executable: (root / 'child.pid').write_text(str(p.pid))\n"
+                        "  return p\n"
+                        " g.subprocess.Popen = spawn\n"
+                        f" g.run_cmd([sys.executable, '-u', '-c', {child_code!r}], root, 120, live_log=root / 'child.log')\n"
+                        "g._main = body\n"
+                        "sys.argv = ['landing_gate.py', '--repo', str(root)]\n"
+                        "sys.exit(g.main())\n")
+                    if module == 'landing_gate':
+                        code = gate_code
+                    else:
+                        code = (
+                            "import sys, pathlib\n"
+                            f"sys.path.insert(0, {scripts!r})\n"
+                            "import land_branch as land\n"
+                            f"root = pathlib.Path({d!r})\n"
+                            f"land._main = lambda: land.run_landing_gate([sys.executable, '-u', '-c', {gate_code!r}], root, root / 'gate.log')\n"
+                            "sys.argv = ['land_branch.py', '--worktree', str(root)]\n"
+                            "sys.exit(land.main())\n")
+                    with (root / 'outer.log').open('w') as output:
+                        proc = subprocess.Popen([sys.executable, '-u', '-c', code], stdout=output,
+                                                stderr=subprocess.STDOUT, start_new_session=True)
+                        try:
+                            deadline = time.monotonic() + 10
+                            while time.monotonic() < deadline and not (root / 'child.log').exists():
+                                if proc.poll() is not None:
+                                    self.fail((root / 'outer.log').read_text())
+                                time.sleep(.02)
+                            self.assertTrue((root / 'child.pid').exists())
+                            child = int((root / 'child.pid').read_text())
+                            proc.send_signal(sig)
+                            self.assertEqual(proc.wait(timeout=15), 128 + sig)
+                            self.assertFalse(process_alive(child))
+                            self.assertFalse((root / 'queue/gpu.holder').exists())
+                            import fcntl
+                            with (root / 'queue/gpu.lock').open('a') as lock:
+                                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            logs = list((root / 'target/landing-logs').glob('incomplete-*.log'))
+                            self.assertTrue(logs)
+                            self.assertIn('[INCOMPLETE]', logs[0].read_text())
+                        finally:
+                            if proc.poll() is None:
+                                landing_gate.stop_child(proc)
+
+
 class DeliveryTests(unittest.TestCase):
-    def test_delivery_never_narrows_the_gate(self):
-        # Every mandatory result is the gate's default; a named red needs
-        # them all and no caller may ask for a first-red stop.
+    def test_delivery_requests_complete_run_only_for_named_red(self):
+        # Ordinary landings retain the cheap-first default. A named red asks
+        # for complete coverage; missing reason/coverage still cannot land.
         cases = [[], ["--named-red", "BUG-test", "--reason", "reviewed"],
                  ["--named-red", "BUG-test"],
                  ["--named-red", "BUG-test", "--reason", "reviewed", "--skip-gpu", "deferred"]]
@@ -1228,7 +1431,7 @@ class DeliveryTests(unittest.TestCase):
                     land_branch.main()
                 argv = gate.call_args.args[0]
                 self.assertNotIn("--fail-fast", argv)
-                self.assertNotIn("--keep-going", argv)
+                self.assertEqual("--keep-going" in argv, "--named-red" in extra)
                 self.assertEqual(argv[argv.index("--repo") + 1], str(Path(d).resolve()))
 
     def test_progress_is_forwarded_before_child_exits(self):
@@ -1262,6 +1465,19 @@ class DeliveryTests(unittest.TestCase):
             self.assertEqual(code, 7)
             self.assertIn("failed detail", output.getvalue())
             self.assertEqual(log.read_text(), "ready\nfailed detail\n")
+
+    def test_named_red_cannot_waive_boundary_stop(self):
+        with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            stack.enter_context(patch.object(sys, 'argv', ['land_branch.py', 'lane/test',
+                '--worktree', d, '--message', 'test', '--named-red', 'BUG-test', '--reason', 'reviewed']))
+            step = stack.enter_context(patch.object(land_branch, 'step'))
+            stack.enter_context(patch.object(land_branch, 'run_landing_gate', return_value=1))
+            with self.assertRaises(SystemExit):
+                land_branch.main()
+            self.assertFalse(any(c.args[0] in ('no-gate verdict', 'merge --no-ff to main', 'push main')
+                                 for c in step.call_args_list))
 
     def test_failed_gate_never_merges_or_pushes(self):
         with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
