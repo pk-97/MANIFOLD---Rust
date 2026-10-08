@@ -1115,17 +1115,16 @@ impl Command for ChangeClipRecordedBpmCommand {
                 &clock,
                 &clock,
             );
-            if old_clip.is_audio() {
-                if let Some(layer_index) = project.timeline.layer_index_for_id(&old_clip.layer_id)
-                    && let Some(placed_clip) = project.timeline.find_clip_by_id(&self.clip_id).cloned()
-                {
-                    self.overlap_commands = EditingService::enforce_non_overlap(
-                        project,
-                        &placed_clip,
-                        layer_index,
-                        &HashSet::new(),
-                    );
-                }
+            if old_clip.is_audio()
+                && let Some(layer_index) = project.timeline.layer_index_for_id(&old_clip.layer_id)
+                && let Some(placed_clip) = project.timeline.find_clip_by_id(&self.clip_id).cloned()
+            {
+                self.overlap_commands = EditingService::enforce_non_overlap(
+                    project,
+                    &placed_clip,
+                    layer_index,
+                    &HashSet::new(),
+                );
             }
         } else if let Some(new_state) = self.new_state {
             Self::apply_state(project, &self.clip_id, new_state);
