@@ -40,6 +40,8 @@ GPU runs move off this machine.
 import argparse
 import contextlib
 import fcntl
+import json
+import math
 import os
 import signal
 import secrets
@@ -56,6 +58,7 @@ HOLDER_ENV = "MANIFOLD_GPU_LOCK_HOLDER"
 LANDING_PENDING_DIR = "landing.pending"
 NIGHTLY_WAITING = "nightly.waiting"
 ADMISSION_LOCK = "gpu.admission"
+RESERVATION = "gpu.reservation"
 
 # Same-process nesting: `hold()` inside `hold()` must not block on itself.
 _held_depth = 0
@@ -266,6 +269,77 @@ def _admission_guard(directory):
         os.close(fd)
 
 
+def _reservation_path(directory):
+    return Path(directory) / RESERVATION
+
+
+def _read_reservation_locked(directory, now=None):
+    """Read the campaign reservation, expiring malformed or old records."""
+    path = _reservation_path(directory)
+    try:
+        record = json.loads(path.read_text())
+        end = float(record["end_epoch"])
+        owner = str(record["owner"]).strip()
+        reason = str(record["reason"]).strip()
+        if (not owner or not reason or not math.isfinite(end)
+                or end <= 0):
+            raise ValueError("invalid reservation")
+    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+        if path.exists():
+            with contextlib.suppress(OSError):
+                path.unlink()
+        return {}
+    if (time.time() if now is None else now) >= end:
+        with contextlib.suppress(OSError):
+            path.unlink()
+        return {}
+    record["owner"] = owner
+    record["reason"] = reason
+    record["end_epoch"] = end
+    return record
+
+
+def reservation(directory=None, now=None):
+    """Return the live campaign reservation, expiring it automatically."""
+    directory = Path(directory) if directory else queue_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    with _admission_guard(directory):
+        return _read_reservation_locked(directory, now=now)
+
+
+def reserve(owner, reason, seconds, directory=None, now=None):
+    """Atomically reserve nightly GPU work for a bounded campaign interval."""
+    owner = " ".join(str(owner).split())[:120]
+    reason = " ".join(str(reason).split())[:300]
+    seconds = float(seconds)
+    if not owner or not reason or not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError("reservation needs an owner, reason, and positive seconds")
+    directory = Path(directory) if directory else queue_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    start = time.time() if now is None else float(now)
+    record = {"owner": owner, "reason": reason, "end_epoch": start + seconds}
+    with _admission_guard(directory):
+        old = _read_reservation_locked(directory, now=start)
+        if old:
+            raise RuntimeError(
+                f"GPU reservation already held by {old['owner']} until {old['end_epoch']:.3f}")
+        path = _reservation_path(directory)
+        tmp = directory / f".{path.name}.tmp.{os.getpid()}"
+        tmp.write_text(json.dumps(record, sort_keys=True) + "\n")
+        os.replace(tmp, path)
+    return record
+
+
+def clear_reservation(directory=None):
+    """Clear a campaign reservation under the admission guard."""
+    directory = Path(directory) if directory else queue_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    with _admission_guard(directory):
+        path = _reservation_path(directory)
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+
+
 def _own_landing_paths(directory):
     with _admission_guard(directory):
         return _own_landing_paths_locked(directory)
@@ -458,7 +532,19 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
             with _admission_guard(directory):
                 waiting = _nightly_waiting(directory)
                 allowed = True
+                campaign_reserved = False
                 if priority == "nightly":
+                    campaign = _read_reservation_locked(directory)
+                    if campaign:
+                        campaign_reserved = True
+                        allowed = False
+                        busy_info = {
+                            "label": f"reservation: {campaign['reason']}",
+                            "pid": "campaign",
+                            "since": campaign["end_epoch"],
+                            "cwd": campaign["owner"],
+                        }
+                if priority == "nightly" and not campaign_reserved:
                     if waiting and not _is_own_turn(waiting):
                         allowed = False
                     elif not waiting:
@@ -471,7 +557,7 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
                         pending = pending_landings(directory)
                         allowed = not any(info["path"] in _batch_paths(waiting)
                                           for info in pending if info.get("path"))
-                elif waiting:
+                elif priority != "nightly" and waiting:
                     allowed = not _normal_waits_for_nightly_locked(directory)
 
                 if allowed and acquired:
@@ -722,10 +808,35 @@ def status(directory=None, out=None):
         os.close(fd)
 
 
+def _reservation_cli(parser, args):
+    try:
+        if args.action == "reserve":
+            record = reserve(args.owner, args.reason, args.seconds)
+            print(json.dumps(record, sort_keys=True))
+        else:
+            clear_reservation()
+            print("GPU reservation cleared")
+        return 0
+    except (RuntimeError, ValueError) as err:
+        print(f"gpu_queue: {err}", file=sys.stderr)
+        return 2
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "status":
         return status()
+    if argv and argv[0] in {"reserve", "clear"}:
+        parser = argparse.ArgumentParser(description="Manage the expiring nightly GPU reservation")
+        parser.add_argument("action", choices=("reserve", "clear"))
+        parser.add_argument("--owner", default="", help="campaign or process owning the reservation")
+        parser.add_argument("--reason", default="", help="why nightly work is deferred")
+        parser.add_argument("--seconds", type=float, default=0,
+                            help="reservation duration in seconds")
+        args = parser.parse_args(argv)
+        if args.action == "reserve" and not args.seconds:
+            parser.error("reserve requires --seconds")
+        return _reservation_cli(parser, args)
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", help="shown to waiters (default: the command)")

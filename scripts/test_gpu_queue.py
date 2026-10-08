@@ -277,6 +277,39 @@ class GpuQueueTests(unittest.TestCase):
         self.assertEqual(observed[0]["pid"], str(os.getpid()))
         gpu_queue._remove_own_nightly_waiting(self.dir / "q")
 
+    def test_reservation_expires_and_clear_is_atomic(self):
+        directory = self.dir / "q"
+        record = gpu_queue.reserve("water-campaign", "GPU campaign", 60,
+                                   directory=directory, now=100)
+        self.assertEqual(record["owner"], "water-campaign")
+        self.assertEqual(gpu_queue.reservation(directory, now=120)["reason"], "GPU campaign")
+        self.assertEqual(gpu_queue.reservation(directory, now=161), {})
+        self.assertFalse((directory / gpu_queue.RESERVATION).exists())
+        gpu_queue.reserve("water-campaign", "GPU campaign", 60,
+                          directory=directory, now=100)
+        gpu_queue.clear_reservation(directory)
+        self.assertEqual(gpu_queue.reservation(directory, now=101), {})
+
+    def test_nightly_reservation_prevents_admission(self):
+        directory = self.dir / "q"
+        gpu_queue.reserve("campaign", "reserved GPU", 60, directory=directory)
+        (directory / gpu_queue.NIGHTLY_WAITING).write_text(
+            f"pid={os.getpid()}\nstart={gpu_queue.process_start_identity()}\n")
+        acquired = threading.Event()
+
+        def wait_for_gpu():
+            held = gpu_queue.acquire("nightly", directory=directory, priority="nightly",
+                                     poll=0.01, report=0.1)
+            acquired.set()
+            held.release()
+
+        worker = threading.Thread(target=wait_for_gpu)
+        worker.start()
+        self.assertFalse(acquired.wait(0.2))
+        gpu_queue.clear_reservation(directory)
+        self.assertTrue(acquired.wait(2))
+        worker.join(timeout=2)
+
     def test_raw_heavy_run_cannot_create_reusable_receipt(self):
         passed = MagicMock()
         passed.reused.return_value = False

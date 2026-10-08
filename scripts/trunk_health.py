@@ -80,6 +80,26 @@ def run_cmd(cmd, cwd, timeout):
     return r.returncode, r.stdout, r.stderr, duration
 
 
+def reservation_message(info):
+    """Human-readable persisted admission decision for a deferred nightly run."""
+    end = float(info["end_epoch"])
+    until = datetime.fromtimestamp(end).isoformat(timespec="seconds")
+    return (f"[trunk-health] deferred: nightly GPU reservation held by "
+            f"{info['owner']} for {info['reason']} until {until} ({end:.3f})")
+
+
+def defer_if_reserved(log_path, log_lines, dry_run):
+    info = gpu_queue.reservation()
+    if not info:
+        return False
+    line = reservation_message(info)
+    print(line)
+    log_lines.append(line + "\n")
+    if not dry_run:
+        log_path.write_text("".join(log_lines))
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true",
@@ -95,6 +115,12 @@ def main():
         print(f"[ABORT] not on PATH: {', '.join(missing)} — no gate can run, nothing filed")
         log_path.write_text(f"[ABORT] not on PATH: {', '.join(missing)}\n")
         return 2
+
+    # A campaign may reserve the shared machine without unloading launchd.
+    # Defer the complete nightly run before fetching, cleanup, or compiling;
+    # the expiring record is the retry signal for the next scheduled run.
+    if defer_if_reserved(log_path, log_lines, args.dry_run):
+        return 0
 
     # Fetch origin
     if not args.dry_run:
@@ -223,11 +249,15 @@ def main():
             red_gates.append((cmd_str, f"[FAIL] {cmd_str}", str(e)[:800]))
 
     for cmd in cpu_gates:
+        if defer_if_reserved(log_path, log_lines, args.dry_run):
+            return 0
         if run_gate(cmd) == 2:
             return 2
     # Each GPU leg is independent. Releasing between legs lets an announced
     # landing take the next admission while a proof already in flight finishes.
     for cmd in gpu_gates:
+        if defer_if_reserved(log_path, log_lines, args.dry_run):
+            return 0
         gpu_hold = (contextlib.nullcontext() if args.dry_run else
                     gpu_queue.hold("trunk_health gpu legs", priority="nightly"))
         with gpu_hold:

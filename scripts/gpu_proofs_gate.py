@@ -263,11 +263,15 @@ def run_gate(
             now = time.monotonic()
             if chunk is None:
                 break
+            # Publish immediately, including libtest's unfinished status line.
+            # Parsing still consumes complete lines below; watchers must not
+            # wait for the rest of the test binary before seeing a failure.
+            if chunk:
+                print(chunk, end="", flush=True)
             pending += chunk
             while "\n" in pending:
                 line, pending = pending.split("\n", 1)
                 line += "\n"
-                print(line, end="", flush=True)
                 lines.append(line)
                 if timings is not None:
                     record_timing(line, now, state, timings, package=package,
@@ -277,11 +281,11 @@ def run_gate(
             watchdog.feed_partial(pending, now)
             beat = watchdog.heartbeat(now)
             if beat:
-                print(beat, flush=True)
+                print(('\n' if pending else '') + beat, flush=True)
             verdict = watchdog.check(now)
             if verdict:
                 name, waited, allowance = verdict
-                print(f"GPU-PROOFS GATE: HUNG {name} after {waited:.0f}s "
+                print(('\n' if pending else '') + f"GPU-PROOFS GATE: HUNG {name} after {waited:.0f}s "
                       f"(allowance {allowance:.0f}s; killing the test process group)", flush=True)
                 _kill_group(proc)
                 if hung is not None:
@@ -291,7 +295,6 @@ def run_gate(
         _kill_group(proc)
         raise
     if pending:
-        print(pending, end="", flush=True)
         lines.append(pending)
     exit_code = proc.wait()
     pump_thread.join(timeout=5)
@@ -307,8 +310,13 @@ def _chunks(stream):
         return
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     while True:
-        data = stream.read(65536)
+        # BufferedReader.read(size) can wait for size bytes or EOF. read1
+        # returns the currently available pipe data, like unbuffered FileIO.
+        data = (stream.read1 if hasattr(stream, "read1") else stream.read)(65536)
         if not data:
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                yield tail
             break
         yield decoder.decode(data)
 

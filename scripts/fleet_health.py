@@ -57,6 +57,23 @@ BLOCKERS = (
     ("says blocked", re.compile(r"\b(?:blocked|cannot continue|could not proceed|stopped because)\b", re.I)),
 )
 
+# These are admission blockers that can occur while a Codex job remains
+# marked running.  Keep the expressions tied to an observed refusal/result;
+# words in the original request ("if approval review refuses...") are not
+# evidence that the job is currently blocked.
+RUNNING_BLOCKERS = (
+    ("disk admission", re.compile(
+        r"(?:storage|disk)\s+admission\s+(?:reported|returned|refused|rejected|blocked)"
+        r"|storage\s+admission[^\n]{0,100}(?:below|free against)", re.I)),
+    ("approval-review refusal", re.compile(
+        r"(?:automatic\s+)?approval\s+review(?:er)?\s+(?:blocked|rejected|refused)"
+        r"|approval\s+review\s+was\s+(?:blocked|rejected|refused)", re.I)),
+)
+RUNNING_RESOLUTION = re.compile(
+    r"(?:blocker|disk admission|approval review) (?:is )?(?:resolved|cleared)|"
+    r"unblocked|approval (?:was )?approved|storage admission (?:allowed|passed)|"
+    r"disk now has [^\n]* free", re.I)
+
 
 def pid_alive(pid):
     if not pid:
@@ -84,6 +101,84 @@ def final_output(log_text):
 
 def blockers_in(text):
     return [name for name, pattern in BLOCKERS if pattern.search(text)]
+
+
+def running_blockers(text):
+    """Return live-job admission blockers that have not been resolved later."""
+    matches = []
+    for name, pattern in RUNNING_BLOCKERS:
+        matches.extend((match.start(), match.end(), name) for match in pattern.finditer(text))
+    if not matches:
+        return []
+    last = max(matches, key=lambda item: item[0])
+    # An explicit resolution closes the observed blocker. An unrelated green
+    # command is insufficient: the refused admission may still be pending.
+    if RUNNING_RESOLUTION.search(text, last[1]):
+        return []
+    return sorted({name for _, _, name in matches})
+
+
+def _session_evidence(path):
+    """Extract assistant/tool events while excluding the user's request."""
+    if not path:
+        return ""
+    chunks = []
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get("type") == "response_item":
+            payload = record.get("payload", {})
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("role") == "assistant":
+                for item in payload.get("content", []):
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        chunks.append(item["text"])
+            elif payload.get("type") == "function_call_output":
+                output = payload.get("output", "")
+                if isinstance(output, str):
+                    chunks.append(output)
+                elif output:
+                    chunks.append(json.dumps(output, sort_keys=True))
+        elif record.get("type") == "event_msg":
+            payload = record.get("payload", {})
+            if not isinstance(payload, dict):
+                continue
+            item = payload.get("item", {})
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "UserMessage":
+                continue
+            # Command/tool results carry the useful evidence in output fields;
+            # command text can repeat the user's prompt and is deliberately
+            # excluded to avoid prompt false positives.
+            for key in ("stdout", "stderr", "aggregated_output", "formatted_output",
+                        "output", "result", "error"):
+                value = item.get(key)
+                if isinstance(value, str) and value:
+                    chunks.append(value)
+    return "\n".join(chunks)
+
+
+def running_job_evidence(log, session):
+    """Prefer current session events; fall back to the companion log."""
+    session_text = _session_evidence(session)
+    if session_text:
+        return session_text
+    if log:
+        try:
+            return log.read_text(errors="replace")
+        except OSError:
+            pass
+    return ""
 
 
 def mtime(path):
@@ -151,6 +246,10 @@ def check_jobs(jobs, seen, now, problems):
                 problems.append(("FAIL", f"{jid}: marked running but pid {job['pid']} is dead. Read its log, then relaunch with continuation context."))
             elif touched and now - touched > STALL_MINUTES * 60:
                 problems.append(("FAIL", f"{jid}: running, no log or session write for {(now - touched) / 60:.0f} min. Stalled; cancel and relaunch."))
+            evidence = running_job_evidence(log, session)
+            found = running_blockers(evidence)
+            if found:
+                problems.append(("FAIL", f"{jid}: running but blocked ({', '.join(found)}); resolve the blocker or run the refused command. Read: codex-companion.mjs result {jid}"))
             continue
         if status not in ("completed", "failed", "cancelled"):
             continue

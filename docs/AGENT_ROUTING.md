@@ -38,6 +38,11 @@ The happy path of a landing is mechanical: fetch, merge `origin/main` into the b
 - It never force-pushes, never `branch -f`, never edits code.
 - Report in the final text turn: the merge SHA, the gate summary line, the beads closed.
 
+The lead acts on a red within two minutes of `scripts/watch_land.py` firing.
+For a blocked lane, the lead unblocks it, runs the refused command, or parks it
+within five minutes. `scripts/fleet_health.py` repeats unresolved running-lane
+blockers; the watcher and fleet scripts define the reports.
+
 ## The steering model
 
 - **A judgment-tier model is the only orchestrator.** The lead. Never a lane model over lane models, at any depth.

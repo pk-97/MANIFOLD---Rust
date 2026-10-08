@@ -119,9 +119,17 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   delete with per-step exit checks; push happens only after a green gate or
   an explicit `--named-red BUG-id --reason` over a gate that ran every check
   (`landing_gate.py` exit `CHECKS_RED`; a refusal or crash never lands).
-  **The gate finds every red in one run and prints a `rerun:` command per
-  red; fix each with that command, never by rerunning the gate** (serial
-  discovery cost 3-10 gate runs per water landing, 2026-09-20..10-06). The gate script itself is the
+  **The gate collects cheap reds before flows and GPU proofs.** Any cheap red
+  stops at that boundary; every red prints its `rerun:` command. `--fail-fast`
+  stops at the first red; `--keep-going` is an explicit diagnostic run. A named
+  red never waives an unrun leg. Fix the reds with their printed commands.
+  Follow background runs with `scripts/watch_land.py --pid PID --log PATH`
+  (`--kind land` for `land_branch.py`). It reads the active leg's live transcript
+  and exits on a red, refusal, hang or completion; `--hang-seconds` sets silence
+  tolerance. SIGINT/SIGTERM stop children and preserve an incomplete log.
+  Campaigns defer nightly work with `scripts/gpu_queue.py reserve --owner NAME
+  --reason TEXT --seconds N`; `clear` releases it early. Scripts are the spec.
+  The gate script itself is the
   whole landing gate and gates only what
   the branch touched: design-status housekeeping
   (`.claude/hooks/design_status_check.py origin/main HEAD`, so status lines
