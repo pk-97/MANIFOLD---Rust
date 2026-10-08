@@ -18,7 +18,6 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
-use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::color;
 use manifold_ui::node::{UIFlags, Vec2};
@@ -83,13 +82,18 @@ fn render(tree: &UITree, h: u32) -> Vec<u8> {
     ui.begin_frame();
     ui.render_tree(tree, None);
     assert!(ui.prepare(&device, W, h, 1.0), "dropdown produced no draw commands");
-    let target = RenderTarget::new(&device, W, h, FORMAT, "dropdown-render");
+    let target = device.create_texture(&manifold_gpu::GpuTextureDesc {
+        width: W, height: h, depth: 1, format: FORMAT,
+        dimension: manifold_gpu::GpuTextureDimension::D2,
+        usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+        label: "dropdown-render", mip_levels: 1,
+    });
     {
         let mut enc = device.create_encoder("dropdown-render");
-        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        ui.render(&mut enc, &target, GpuLoadAction::Clear);
         enc.commit_and_wait_completed();
     }
-    readback(&device, &target.texture, h)
+    readback(&device, &target, h)
 }
 
 fn save(out_dir: &str, name: &str, bytes: &[u8], h: u32) {

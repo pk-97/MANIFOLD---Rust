@@ -23,7 +23,6 @@ use manifold_gpu::{
     GpuDevice, GpuLoadAction, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
-use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::{texture_handle_for_key, UIFlags};
 use manifold_ui::{Rect, UITree, ZTier};
@@ -119,13 +118,18 @@ fn render_with(
     ui.begin_frame();
     ui.render_tree(tree, None);
     assert!(ui.prepare(device, W, h, 1.0), "cell repro produced no draw commands");
-    let target = RenderTarget::new(device, W, h, FORMAT, "cell-arc-render");
+    let target = device.create_texture(&manifold_gpu::GpuTextureDesc {
+        width: W, height: h, depth: 1, format: FORMAT,
+        dimension: manifold_gpu::GpuTextureDimension::D2,
+        usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+        label: "cell-arc-render", mip_levels: 1,
+    });
     {
         let mut enc = device.create_encoder("cell-arc-render");
-        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        ui.render(&mut enc, &target, GpuLoadAction::Clear);
         enc.commit_and_wait_completed();
     }
-    readback(device, &target.texture, h)
+    readback(device, &target, h)
 }
 
 fn readback(device: &GpuDevice, texture: &GpuTexture, h: u32) -> Vec<u8> {

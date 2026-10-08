@@ -3,7 +3,6 @@
 #![cfg(all(target_os = "macos", feature = "gpu-proofs"))]
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTextureFormat};
-use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::Color32;
 
@@ -23,16 +22,21 @@ fn automation_stroke_has_antialiased_edges_and_continuous_centre() {
         // Renderer coordinates and viewport dimensions are logical pixels;
         // only the target/readback dimensions scale to physical pixels.
         assert!(ui.prepare(&device, 256, 128, f64::from(scale)));
-        let target = RenderTarget::new(&device, width, height, format, "automation-stroke");
+        let target = device.create_texture(&manifold_gpu::GpuTextureDesc {
+        width, height, depth: 1, format,
+        dimension: manifold_gpu::GpuTextureDimension::D2,
+        usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+        label: "automation-stroke", mip_levels: 1,
+    });
         let mut encoder = device.create_encoder("automation-stroke-render");
-        ui.render(&mut encoder, &target.texture, GpuLoadAction::Clear);
+        ui.render(&mut encoder, &target, GpuLoadAction::Clear);
         encoder.commit_and_wait_completed();
 
         let bytes_per_row = width * 4;
         let size = (height * bytes_per_row) as usize;
         let buffer = device.create_buffer_shared(size as u64);
         let mut encoder = device.create_encoder("automation-stroke-readback");
-        encoder.copy_texture_to_buffer(&target.texture, &buffer, width, height, bytes_per_row);
+        encoder.copy_texture_to_buffer(&target, &buffer, width, height, bytes_per_row);
         encoder.commit_and_wait_completed();
         let ptr = buffer.mapped_ptr().expect("shared buffer is mapped");
         // The completed readback owns `size` bytes for the lifetime of buffer.

@@ -202,7 +202,9 @@ class Plan:
             filters = (UI_PAINT_FILTERS if self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
                        else self.final_filters())
             targets = [t['name'] for t in self.workspace.targets(package, 'test')
-                       if 'gpu-proofs' in t.get('required-features', [])
+                       if ('gpu-proofs' in t.get('required-features', [])
+                           or (self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
+                               and t['name'] == 'main'))
                        and t['name'] not in GLB_TESTS
                        and not (route and route[:2] == (package, t['name']) and not route[2])]
             has_lib = bool(self.workspace.targets(package, 'lib'))
@@ -217,7 +219,7 @@ class Plan:
                     # The folded sweep retains its separate, unbudgeted run.
                     skips = sorted(set(skips) | {route[2]})
                 runs.append({'package': package, 'targets': [target], 'lib': False, 'target': target,
-                             'filters': [] if whole else self.final_filters(),
+                             'filters': [] if whole else filters,
                              'skips': skips, 'budgeted': True})
         if self.glb:
             package, target, prefix = route

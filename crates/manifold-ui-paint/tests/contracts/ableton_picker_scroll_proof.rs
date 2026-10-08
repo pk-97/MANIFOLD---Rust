@@ -16,7 +16,6 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
-use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::{UIFlags, Vec2};
 use manifold_ui::panels::ableton_picker::{
@@ -78,19 +77,24 @@ fn build_fresh(dd: &mut AbletonPickerPopup) -> UITree {
     tree
 }
 
-fn render(tree: &UITree) -> (Vec<u8>, RenderTarget) {
+fn render(tree: &UITree) -> (Vec<u8>, GpuTexture) {
     let device = GpuDevice::new_queued("ableton_picker_scroll_proof");
     let mut ui = UIRenderer::new(&device, FORMAT);
     ui.begin_frame();
     ui.render_tree(tree, None);
     assert!(ui.prepare(&device, W, H, 1.0), "picker produced no draw commands");
-    let target = RenderTarget::new(&device, W, H, FORMAT, "picker-scroll");
+    let target = device.create_texture(&manifold_gpu::GpuTextureDesc {
+        width: W, height: H, depth: 1, format: FORMAT,
+        dimension: manifold_gpu::GpuTextureDimension::D2,
+        usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+        label: "picker-scroll", mip_levels: 1,
+    });
     {
         let mut enc = device.create_encoder("picker-render");
-        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        ui.render(&mut enc, &target, GpuLoadAction::Clear);
         enc.commit_and_wait_completed();
     }
-    (readback(&device, &target.texture), target)
+    (readback(&device, &target), target)
 }
 
 #[test]

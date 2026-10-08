@@ -15,7 +15,6 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
-use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::{Color32, TextAlign, UIStyle};
 use manifold_ui::{Rect, UIFlags, UITree, ZTier};
@@ -72,13 +71,18 @@ fn overlong_label_stays_inside_button() {
     let drew = ui.prepare(&device, W, H, 1.0);
     assert!(drew, "fixture produced no draw commands");
 
-    let target = RenderTarget::new(&device, W, H, FORMAT, "text-clip-proof");
+    let target = device.create_texture(&manifold_gpu::GpuTextureDesc {
+        width: W, height: H, depth: 1, format: FORMAT,
+        dimension: manifold_gpu::GpuTextureDimension::D2,
+        usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+        label: "text-clip-proof", mip_levels: 1,
+    });
     {
         let mut enc = device.create_encoder("text-clip-render");
-        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        ui.render(&mut enc, &target, GpuLoadAction::Clear);
         enc.commit_and_wait_completed();
     }
-    let bytes = readback(&device, &target.texture);
+    let bytes = readback(&device, &target);
 
     // Eyeball copy.
     let out_dir = std::env::var("SWATCH_OUT")
@@ -205,13 +209,18 @@ fn flush_fit_label_keeps_edge_glyphs() {
     let drew = ui.prepare(&device, W, H, 1.0);
     assert!(drew, "fixture produced no draw commands");
 
-    let target = RenderTarget::new(&device, W, H, FORMAT, "flush-fit-proof");
+    let target = device.create_texture(&manifold_gpu::GpuTextureDesc {
+        width: W, height: H, depth: 1, format: FORMAT,
+        dimension: manifold_gpu::GpuTextureDimension::D2,
+        usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+        label: "flush-fit-proof", mip_levels: 1,
+    });
     {
         let mut enc = device.create_encoder("flush-fit-render");
-        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        ui.render(&mut enc, &target, GpuLoadAction::Clear);
         enc.commit_and_wait_completed();
     }
-    let bytes = readback(&device, &target.texture);
+    let bytes = readback(&device, &target);
 
     let out_dir = std::env::var("SWATCH_OUT")
         .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());

@@ -31,7 +31,7 @@ def fixture_workspace(repo):
         "manifold-nodes-image": ("crates/manifold-nodes-image", True, []),
         "manifold-renderer": ("crates/manifold-renderer", True, ["gpu_proofs", "glb_conformance"]),
         "manifold-node-engine": ("crates/manifold-node-engine", True, []),
-        "manifold-ui-paint": ("crates/manifold-ui-paint", True, []),
+        "manifold-ui-paint": ("crates/manifold-ui-paint", True, ["main"]),
         "manifold-gpu": ("crates/manifold-gpu", False, []),
     }
     for index, (name, (root, gpu, tests)) in enumerate(rows.items()):
@@ -39,7 +39,7 @@ def fixture_workspace(repo):
                     "required-features": []}]
         targets.extend({"name": target, "kind": ["test"],
                         "src_path": str(repo / root / "tests" / ("gpu_proofs/main.rs" if target == "gpu_proofs" else f"{target}.rs")),
-                        "required-features": ["gpu-proofs"]}
+                        "required-features": [] if name == "manifold-ui-paint" and target == "main" else ["gpu-proofs"]}
                        for target in tests)
         packages.append({
             "id": f"path+file://{repo}/{root}#{name}@0.1.0",
@@ -314,6 +314,10 @@ class ScopeTests(unittest.TestCase):
         self.assertTrue(paint["lib"])
         self.assertEqual(paint["targets"], [])
         self.assertEqual(paint["filters"], g.UI_PAINT_FILTERS)
+        contracts = next(run for run in result.runs()
+                         if run["package"] == "manifold-ui-paint" and run["target"] == "main")
+        self.assertFalse(contracts["lib"])
+        self.assertIn("contracts::", contracts["filters"])
 
     def test_gpu_core_also_selects_ui_paint(self):
         result = plan(["crates/manifold-gpu/src/testkit.rs"])
@@ -467,7 +471,8 @@ class ScopeTests(unittest.TestCase):
                               and target["name"] not in g.GLB_TESTS
                               and target["name"] != "glb_conformance"])
                        for package in p.workspace.feature_packages("gpu-proofs"))
-        self.assertEqual(len(runs), expected)
+        # The ordinary UI harness also owns ungated device proofs after P3b.
+        self.assertEqual(len(runs), expected + 1)
         self.assertIn("manifold-ui-paint", {run["package"] for run in runs})
 
     def test_broad_set_is_bounded(self):

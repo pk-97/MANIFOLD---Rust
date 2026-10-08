@@ -2673,6 +2673,7 @@ dependencies = [
  "core-graphics",
  "core-text",
  "half",
+ "image",
  "log",
  "manifold-foundation",
  "manifold-gpu",

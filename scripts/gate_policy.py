@@ -14,7 +14,6 @@ GPU_DEFAULT_CPU_ONLY = {
     "manifold-nodes-scene": "Device proofs require gpu-proofs; ungated imported-graph validation lives in the catalog",
     "manifold-compositor": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     "manifold-nodes-image": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
-    'manifold-ui-paint': 'GPU test modules require gpu-proofs; default tests do not open devices',
     'manifold-editing': 'GPU graph construction is gated by gpu-proofs',
     'manifold-spectral': 'spectrogram device tests require gpu-proofs',
 }
@@ -23,12 +22,9 @@ NEXTTEST_GPU_FILTER = '''
   | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
   | (binary_id(manifold-renderer) & test(/^node_graph::(catalog_tests::gltf_import::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
   | (binary_id(manifold-node-engine) & test(/^(exec::execution::tests::aliased_output_assertion_fires_on_silent_primitive|load::graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan))$/))
-  | binary_id(manifold-renderer::ableton_picker_scroll_proof)
-  | binary_id(manifold-renderer::dropdown_clip_proof)
+  | (binary_id(manifold-ui-paint::main) & test(/^contracts::(ableton_picker_scroll_proof|dropdown_clip_proof|text_clip_to_node_bounds|ui_cell_arc_repro)::/))
   | binary_id(manifold-renderer::scene_loop_probe)
   | binary_id(manifold-renderer::scene_loop_wrap_parity)
-  | binary_id(manifold-renderer::text_clip_to_node_bounds)
-  | binary_id(manifold-renderer::ui_cell_arc_repro)
   | (binary_id(manifold-app::renderer_contracts) & test(/^ui_color_swatches::/))
   | binary_id(manifold-app::led_edge_identity)
   | (binary_id(manifold-app::bin/manifold) & test(/^(content_thread::tests::paused_|gap_start_probe::|mute_visibility_probe::|viewport_p5c_demo::|viewport_p6_demo::|ui_bridge::project::tests::sdr_controls_route_pointer_gestures_to_content_and_undo$)/))
@@ -51,7 +47,7 @@ ENGINE_SRC = "crates/manifold-node-engine/src/"
 CONTRACT_TESTS_DIR = tuple(RENDERER_SRC + module for module in
                            ("exec", "freeze", "load", "runtime", "water", "palette", "preview_encoding"))
 UI_PAINT_DIR = "crates/manifold-ui-paint/"
-UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::"]
+UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::", "contracts::"]
 PROOFS_DIR = "crates/manifold-renderer/tests/gpu_proofs/"
 CPU_FLIP_FIXTURES_DIR = "crates/manifold-renderer/tests/fixtures/cpu-flip/"
 CPU_FLIP_REFERENCE_FILTERS = [
