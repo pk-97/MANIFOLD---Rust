@@ -3,12 +3,25 @@ name = "manifold-app"
 version = "0.1.0"
 edition = "2024"
 publish = false
+default-run = "manifold"
 
 [[bin]]
 name = "manifold"
 path = "src/main.rs"
 
+[[bin]]
+name = "generate-preset-thumbnails"
+path = "src/bin/generate_preset_thumbnails.rs"
+[[bin]]
+name = "graph-tool"
+path = "src/bin/graph_tool.rs"
+[[bin]]
+name = "render-import"
+path = "src/bin/render_import.rs"
+
 [dependencies]
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+inventory = "0.3"
 manifold-compositor = { path = "../manifold-compositor" }
 manifold-nodes-scene = { path = "../manifold-nodes-scene" }
 manifold-nodes-image = { path = "../manifold-nodes-image" }
@@ -28,7 +41,7 @@ manifold-audio = { path = "../manifold-audio" }
 # renderer (the worker, via manifold-audio, uses the CPU CQT only).
 manifold-spectral = { path = "../manifold-spectral", features = ["gpu"] }
 manifold-recording = { path = "../manifold-recording" }
-sha2 = { version = "0.10", optional = true }
+sha2 = "0.10"
 winit = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
@@ -52,7 +65,7 @@ half = "2"
 manifold-profiler = { path = "../manifold-profiler", optional = true }
 # Headless UI snapshot harness (feature `ui-snapshot`): PNG encode of the
 # rendered tree. Optional so it never enters the shipping binary.
-image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
 muda = "0.19.3"
 
 # macOS platform dependencies
@@ -74,25 +87,48 @@ objc2-app-kit = { version = "0.3", features = [
 ] }
 
 [features]
-gpu-proofs = ["manifold-compositor/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-renderer/gpu-proofs", "manifold-node-engine/gpu-proofs"]
+whitewater-oracle = ["manifold-renderer/whitewater-oracle", "gpu-proofs"]
+water-race-probes = ["manifold-renderer/water-race-probes", "gpu-proofs"]
+matter-perf-proofs = ["manifold-renderer/matter-perf-proofs", "gpu-proofs"]
+fluid-perf-proofs = ["manifold-renderer/fluid-perf-proofs", "gpu-proofs"]
+rt-perf-proofs = ["manifold-renderer/rt-perf-proofs", "gpu-proofs"]
+gpu-proofs = ["manifold-editing/gpu-proofs", "manifold-compositor/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-renderer/gpu-proofs", "manifold-node-engine/gpu-proofs"]
 ui-automation = []
 profiling = ["dep:manifold-profiler"]
-ui-snapshot = ["dep:image"]
+ui-snapshot = []
 # P3 release-journey harness (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md):
 # headless end-to-end export proofs (audio-reactive + LFO + round-trip),
 # plus the deliberate corridor reference-project acceptance journey.
 # Deliberate-run only, like gpu-proofs — GPU + video encode, minutes-long.
 # `dep:image` for PNG luma decode, same optional dep `ui-snapshot` uses.
-journey-proofs = ["dep:image"]
+journey-proofs = []
 # `cargo xtask perf-soak` (docs/PERF_BUDGET_GATE_DESIGN.md P1): headless
 # frame-budget soak of a real project. Needs `profiling` for
 # `manifold-profiler`'s per-frame section-timing collector (min/p50/p95/max +
 # worst-frame breakdown come from its FrameRecord/SessionSummary, not a new
 # timing framework).
-perf-soak = ["profiling", "dep:sha2"]
+perf-soak = ["profiling"]
 
 [dev-dependencies]
+manifold-foundation = { path = "../manifold-foundation" }
+manifold-physics = { path = "../manifold-physics" }
+manifold-fluids = { path = "../manifold-fluids" }
+glam = "0.29.3"
+manifold-renderer = { path = "../manifold-renderer", features = ["testkit"] }
+manifold-compositor = { path = "../manifold-compositor", features = ["testkit"] }
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
+manifold-nodes-image = { path = "../manifold-nodes-image", features = ["testkit"] }
+manifold-nodes-scene = { path = "../manifold-nodes-scene", features = ["testkit"] }
 sha2 = "0.10"
 
 [lints]
 workspace = true
+
+[[test]]
+name = "renderer_contracts"
+path = "tests/renderer_contracts.rs"
+
+[[test]]
+name = "renderer_gpu_proofs"
+path = "tests/renderer_contracts/gpu_proofs/main.rs"
+required-features = ["gpu-proofs"]

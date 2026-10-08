@@ -51,10 +51,7 @@ mod freeze_install;
 
 mod freeze_region;
 
-mod physics_impulses;
 
-#[cfg(feature = "gpu-proofs")]
-mod physics_collection;
 
 mod physics_sampling;
 
@@ -81,8 +78,6 @@ pub(crate) mod liquid_bricks_gpu;
 #[cfg(feature = "gpu-proofs")]
 pub(crate) mod whitewater_scene;
 
-#[cfg(feature = "gpu-proofs")]
-pub(crate) mod whitewater_io;
 
 #[cfg(feature = "gpu-proofs")]
 pub(crate) mod whitewater_emitters;
@@ -115,8 +110,6 @@ mod particle_publication_gpu_tests;
 
 mod seed_particles_from_texture;
 
-#[cfg(feature = "gpu-proofs")]
-mod bokeh_gather;
 
 mod relight;
 
@@ -124,7 +117,6 @@ mod scene_vm;
 
 mod scene_exposure;
 
-mod fluid_objects;
 
 mod gltf_animation_source;
 
@@ -133,22 +125,15 @@ mod gltf_upgrade_project;
 #[cfg(feature = "gpu-proofs")]
 mod copy_positions;
 
-#[cfg(feature = "gpu-proofs")]
-mod generator_renderer_tests;
 
-#[cfg(feature = "gpu-proofs")]
-mod generator_renderer_warmup_tests;
 
 mod gltf_upgrade;
 
 mod loop_upgrade;
 
-mod layer_compositor;
 
 mod gltf_import;
 mod gltf_card_precedence;
 mod surface_mesh_normals;
 
-mod preset_thumbnail;
 
-mod registered_assets;

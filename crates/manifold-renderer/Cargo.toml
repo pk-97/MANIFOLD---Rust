@@ -136,21 +136,12 @@ path = "src/bin/check_presets.rs"
 name = "freeze-profile"
 path = "src/bin/freeze_profile.rs"
 
-[[bin]]
-name = "generate-preset-thumbnails"
-path = "src/bin/generate_preset_thumbnails.rs"
 
-[[bin]]
-name = "graph-tool"
-path = "src/bin/graph_tool.rs"
 
 [[bin]]
 name = "render-generator-preset"
 path = "src/bin/render_generator_preset.rs"
 
-[[bin]]
-name = "render-import"
-path = "src/bin/render_import.rs"
 
 # GPU-proof integration binary: the alpha-contract sweep + generator smoke.
 # Gated behind `gpu-proofs` (see [features]) so it's excluded from the
