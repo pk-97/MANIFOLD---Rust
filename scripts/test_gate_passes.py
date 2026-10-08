@@ -162,10 +162,10 @@ class CacheTests(unittest.TestCase):
     def test_proof_input_change_is_a_nonwaivable_gate_refusal(self):
         landing.RAN_EVERY_CHECK.set(True)
         with patch.object(landing, 'run_cmd', return_value=(
-                2, 'GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)', '', 0.01)):
+                proofs.INPUTS_CHANGED, 'GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)', '', 0.01)):
             result = landing.run_check('gpu-proofs', ['python3', 'scripts/gpu_proofs_gate.py'],
                                        self.repo, 30)
-        self.assertEqual(result[0], 2)
+        self.assertEqual(result[0], proofs.INPUTS_CHANGED)
         self.assertFalse(landing.RAN_EVERY_CHECK.get())
 
     def test_failed_execution_with_changed_inputs_is_a_gate_refusal(self):
