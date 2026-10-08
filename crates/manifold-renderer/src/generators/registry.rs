@@ -28,23 +28,15 @@ impl GeneratorRegistry {
         Self { target_format }
     }
 
-    /// Pre-compile all generator pipelines into the binary archive.
-    /// Creates and immediately drops each generator — the compiled Metal pipeline
-    /// binaries persist in the archive. Call at startup before `save_pipeline_archive()`.
+    /// Prewarm fixed generator and encoder pipelines. Graph-specific WGSL is
+    /// prepared by node installation. Call before `save_pipeline_archive()`.
     pub fn prewarm_all(&self, device: &std::sync::Arc<GpuDevice>) {
+        device.prepare_utility_pipelines();
         let json_count = bundled_preset_type_ids(PresetKind::Generator).count();
         log::info!("Pre-warming {json_count} JSON generator pipelines...");
-        // BUG-olp9: the loop below builds a full PresetRuntime per bundled
-        // generator — including pre_allocate_resources, which allocates every
-        // preset's Array buffers at declared capacity — then drops it.
-        // Measured (rt-capture cure test, 2026-08-14): 5.73GB of buffer
-        // allocation churn per process startup, 0.84GB peak RSS, and ZERO
-        // pipeline compiles (from_def is deviceless; MetalBackend/Executor
-        // construction compiles nothing — the atom sweep + hand-written
-        // prewarms below do the real pipeline warming). The loop's remaining
-        // value is parse/plan validation of bundled presets, which
-        // `graph-tool validate` covers at authoring time. Skip it unless
-        // MANIFOLD_PRESET_PREWARM=1 re-enables it for debugging.
+        // Building every bundled runtime allocates all of its graph resources.
+        // Keep that validation opt-in; fixed pipelines warm below and each
+        // installed graph prepares its authored/fused WGSL through node hooks.
         let preset_prewarm = std::env::var_os("MANIFOLD_PRESET_PREWARM").is_some();
         // Pre-warm JSON-defined generators. We need a default
         // render resolution here — use a small placeholder; real sizes
@@ -361,7 +353,7 @@ impl GeneratorRegistry {
 /// return `CodegenError::NoBody` and are silently skipped — nothing to
 /// prewarm generically for those; `render_scene`/`gltf_texture_source` have
 /// their own explicit prewarm calls above, `wgsl_compute`'s kernel is live
-/// user content compiled on demand, and `draw_*` is BUG-114 (tracked
+/// user content prepared by its install hook, and `draw_*` is BUG-114 (tracked
 /// separately, not a de-facto exemption from anything this function claims).
 ///
 /// A handful of atoms (`scale_offset_texture`, `gradient_central_diff`,

@@ -41,6 +41,23 @@ fn compiles() -> u64 {
     cold_touch_count(ColdTouchKind::PipelineCompile)
 }
 
+fn cold_device_with_shader_cache(label: &str) -> Arc<GpuDevice> {
+    let device = Arc::new(GpuDevice::new_queued(label));
+    // Match the app/headless harness: reuse source-keyed translation and Metal
+    // binaries, not live pipeline objects. Every cache miss still records a
+    // PipelineCompile before consulting these disk caches, so missing provider
+    // requests cannot be hidden by a previous process warming the disk cache.
+    let cache = std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME"))
+        .join("Library/Caches/com.latentspace.manifold");
+    std::fs::create_dir_all(&cache).expect("shader cache directory");
+    let before = compiles();
+    device.load_pipeline_archive(&cache.join("pipeline_cache.metallib"));
+    device.load_msl_cache(&cache.join("msl_cache"));
+    assert_eq!(cache_counts(&device), (0, 0), "disk caches must not warm the device");
+    assert_eq!(compiles(), before, "loading disk caches must not request pipelines");
+    device
+}
+
 #[test]
 fn registered_prewarm_preserves_the_direct_pipeline_cache() {
     if let Some(log) = isolated("registered_prewarm_preserves_the_direct_pipeline_cache") {
@@ -65,10 +82,7 @@ fn registered_prewarm_preserves_the_direct_pipeline_cache() {
         return;
     }
 
-    let provider_device = Arc::new(GpuDevice::new_queued("generator provider parity"));
-    let direct_device = Arc::new(GpuDevice::new_queued("generator direct baseline"));
-    assert_eq!(cache_counts(&provider_device), (0, 0));
-    assert_eq!(cache_counts(&direct_device), (0, 0));
+    let provider_device = cold_device_with_shader_cache("generator provider parity");
     let provider = generator_provider();
     let registry = GeneratorRegistry::new(FORMAT);
 
@@ -79,6 +93,7 @@ fn registered_prewarm_preserves_the_direct_pipeline_cache() {
     eprintln!("provider-prewarm-end");
     let provider_counts = cache_counts(&provider_device);
 
+    let direct_device = cold_device_with_shader_cache("generator direct baseline");
     eprintln!("direct-prewarm-start");
     let before = compiles();
     registry.prewarm_all(&direct_device);
@@ -95,17 +110,14 @@ fn registered_prewarm_preserves_the_direct_pipeline_cache() {
     registry.prewarm_all(&provider_device);
     assert_eq!(cache_counts(&provider_device), provider_counts, "direct warming found a missing key");
     assert_eq!(compiles(), before, "direct warming after provider must compile nothing");
+    // The direct replay above compiled nothing, so this remains the device
+    // warmed solely by the provider. Do not pay for another full prewarm.
+    provider_prewarm_first_generator_frame_compiles_nothing(provider_device);
     eprintln!("generator-provider-proof-complete");
 }
 
-#[test]
-fn provider_prewarm_first_generator_frame_compiles_nothing() {
-    if isolated("provider_prewarm_first_generator_frame_compiles_nothing").is_some() {
-        return;
-    }
-    let device = Arc::new(GpuDevice::new_queued("generator provider first frame"));
+fn provider_prewarm_first_generator_frame_compiles_nothing(device: Arc<GpuDevice>) {
     let provider = generator_provider();
-    (provider.prewarm)(&device, FORMAT);
     let mut generator = (provider.create)(
         device.clone(), FORMAT, &PresetTypeId::new("Plasma"), None,
         16, 16, false, None, None,
@@ -128,7 +140,6 @@ fn provider_prewarm_first_generator_frame_compiles_nothing() {
     assert!(generator.errors().is_empty(), "first frame must render: {:?}", generator.errors());
     assert_eq!(compiles(), before, "first generator frame must compile no pipeline");
     assert_eq!(cache_counts(&device), cache_before);
-    eprintln!("generator-provider-proof-complete");
 }
 
 #[test]

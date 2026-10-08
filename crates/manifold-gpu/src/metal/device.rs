@@ -1365,7 +1365,19 @@ impl GpuDevice {
         })
     }
 
-    /// Get or lazily compile all compute clear pipelines.
+    /// Prepare device-global pipelines for texture clears and depth-to-float
+    /// conversion before encoding work.
+    ///
+    /// This device API is backend-neutral: each backend prepares the utility
+    /// pipelines its encoders need, without allocating a command buffer or
+    /// submitting GPU work. Repeated calls reuse the device's lazy cache.
+    /// Calling this is optional; encoder creation initializes the same cache
+    /// on demand when no explicit preparation occurred.
+    pub fn prepare_utility_pipelines(&self) {
+        self.clear_pipelines();
+    }
+
+    /// Get or lazily compile all compute clear and depth-conversion pipelines.
     fn clear_pipelines(&self) -> &ClearPipelines {
         self.clear_pipelines.get_or_init(|| {
             let make = |fmt: &str| {
