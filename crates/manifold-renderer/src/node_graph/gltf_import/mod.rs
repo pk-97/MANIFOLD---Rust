@@ -35,23 +35,30 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use super::gltf_load;
 
 mod animation;
+#[cfg(not(any(test, feature = "testkit")))]
 mod assembly;
+#[cfg(any(test, feature = "testkit"))]
+pub mod assembly;
 mod bounds_probe;
 mod cards;
 mod cinematic_tail;
 mod materials;
+#[cfg(not(any(test, feature = "testkit")))]
 mod merge;
+#[cfg(any(test, feature = "testkit"))]
+pub mod merge;
 mod object_group;
 mod report;
+#[cfg(not(any(test, feature = "testkit")))]
 mod scene;
+#[cfg(any(test, feature = "testkit"))]
+pub mod scene;
 #[cfg(not(any(test, feature = "testkit")))]
 mod upgrade;
 #[cfg(any(test, feature = "testkit"))]
 pub mod upgrade;
 
 mod scene_scale;
-#[cfg(test)]
-mod card_precedence_tests;
 #[cfg(test)]
 mod synthetic_glbs;
 #[cfg(test)]

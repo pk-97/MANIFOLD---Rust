@@ -39,6 +39,7 @@ mod render_scene_pbr_fidelity;
 mod render_scene_subsurface;
 mod render_scene_punctual_fidelity;
 mod render_scene_uv1_preservation;
+#[path = "catalog/render_scene_material_upgrade.rs"]
 mod render_scene_material_upgrade;
 mod render_legacy_parity;
 mod render_scene_ibl;
@@ -65,9 +66,12 @@ mod rt_p4_metalfx_temporal;
 mod rt_t1b_vertex_normals;
 mod rt_t2a_alpha_mask;
 mod rt_bug17r3_lightless_gi;
+#[path = "catalog/rt_bug318_import_toggle.rs"]
 mod rt_bug318_import_toggle;
+#[path = "catalog/rt_bug326_fix_gate.rs"]
 mod rt_bug326_fix_gate;
 mod rt_bug88m_blend_specular_gate;
+#[path = "catalog/rt_bugmajv_kernel_toggle.rs"]
 mod rt_bugmajv_kernel_toggle;
 mod rt_edc_enclosure;
 mod rt_emissive_direct;
@@ -92,6 +96,7 @@ mod gpu_flip_frame_perf;
 mod matter_solver_perf;
 mod rt_dynamic_fusion;
 mod rt_dynamic_shading;
+#[path = "catalog/rt_normal_tangent_mirror.rs"]
 mod rt_normal_tangent_mirror;
 mod rt_multi_caster_shadow;
 mod rt_6caster_shadow;
@@ -99,6 +104,7 @@ mod rt_object_cast_shadows;
 mod rt_r1_reflection;
 mod rt_r2_accumulation;
 mod rt_r2_clamp;
+#[path = "catalog/rt_r3_heldout_gltf.rs"]
 mod rt_r3_heldout_gltf;
 mod rt_r3_textured_roughness;
 mod rt_t2b_temporal_wiring;

@@ -1,3 +1,6 @@
+use super::*;
+use manifold_core::effect_graph_def::SerializedParamValue;
+use crate::node_graph::gltf_load::GltfImportSummary;
 /// A synthetic [`GltfMaterialInfo`] carrying every texture kind F-P4
 /// wires, with independent test-controlled fields for the three
 /// report-only features (clearcoat/transmission/BLEND). Defaults mirror
@@ -187,3 +190,150 @@ pub fn write_synthetic_multimaterial_glb(n: usize) -> std::path::PathBuf {
     path
 }
 
+
+
+pub fn azalea_fixture_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb")
+}
+
+pub fn merge_summary(materials: Vec<super::gltf_load::GltfMaterialInfo>, half_extent: f32) -> GltfImportSummary {
+    GltfImportSummary {
+        materials,
+        bbox_min: [-half_extent, -half_extent, -half_extent],
+        bbox_max: [half_extent, half_extent, half_extent],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
+    }
+}
+
+/// The scene's own render_scene node id + its `objects` count, read the
+/// same way a caller would before building the merge summary's expected
+/// port range.
+pub fn render_scene_objects(def: &EffectGraphDef) -> (u32, u32) {
+    let node = def.nodes.iter().find(|n| n.type_id == "node.render_scene").unwrap();
+    let objects = match node.params.get("objects") {
+        Some(SerializedParamValue::Int { value }) => *value as u32,
+        Some(SerializedParamValue::Float { value }) => *value as u32,
+        _ => 0,
+    };
+    (node.id, objects)
+}
+
+// ── SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P3 held-out gate: the_rosetta_stone.glb ──
+// A fixture v1's briefs never used for emission tests (per the P3 phase
+// brief) — proves the importer's NEW scene_object-shaped emission on an
+// asset none of the earlier scene_object work was tuned against.
+
+pub fn rosetta_stone_fixture_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/the_rosetta_stone.glb")
+}
+
+// -----------------------------------------------------------------
+// SCENE_SETUP_PANEL_DESIGN.md P4 — merge_import_into_graph (D5)
+// -----------------------------------------------------------------
+
+/// Build a target scene `EffectGraphDef` (as if produced by a PRIOR
+/// import) whose bbox is a cube of half-extent `half_extent` centered
+/// at the origin, and whose `objects` count on `render_scene` is
+/// whatever a single-material summary produces (1). Its synthesized
+/// `node.orbit_camera`'s `distance` param is `2.2 * radius` — the exact
+/// value [`merge_import_into_graph`]'s scene-reference-radius proxy
+/// inverts back out.
+pub fn scene_def_with_bbox_half_extent(half_extent: f32) -> EffectGraphDef {
+    let summary = GltfImportSummary {
+        materials: vec![full_material(0, "Existing", 500)],
+        bbox_min: [-half_extent, -half_extent, -half_extent],
+        bbox_max: [half_extent, half_extent, half_extent],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
+    };
+    let path = std::path::Path::new("/tmp/synthetic_target_scene.glb");
+    let (def, _report) = build_import_graph(&summary, path).expect("build target scene");
+    def
+}
+
+/// Build a minimal, valid `.glb` with ONE triangle primitive that has NO
+/// `material` key at all — glTF's implicit default material
+/// (GLB_XFAIL_BURNDOWN_DESIGN.md D4, BUG-171). No `materials` array in
+/// the document at all, matching a real asset like `BoxVertexColors.glb`
+/// that carries geometry but declares zero materials. Same hand-rolled
+/// binary-container shape as `write_synthetic_multimaterial_glb`.
+pub fn write_synthetic_default_material_glb() -> std::path::PathBuf {
+    let tri: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+    let mut bin = Vec::with_capacity(36);
+    for v in &tri {
+        for c in v {
+            bin.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+
+    let doc = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "mesh": 0 }],
+        // No "material" key on the primitive — glTF's implicit default
+        // material. No "materials" array at all, matching a real asset
+        // that declares zero materials.
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+        "accessors": [{
+            "bufferView": 0,
+            "componentType": 5126,
+            "count": 3,
+            "type": "VEC3",
+            "min": [0.0, 0.0, 0.0],
+            "max": [1.0, 1.0, 0.0],
+        }],
+        "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }],
+        "buffers": [{ "byteLength": bin.len() }],
+    });
+    let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic glTF JSON");
+
+    let mut json_padded = json_bytes;
+    while !json_padded.len().is_multiple_of(4) {
+        json_padded.push(b' ');
+    }
+    let mut bin_padded = bin;
+    while !bin_padded.len().is_multiple_of(4) {
+        bin_padded.push(0);
+    }
+    let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+
+    let mut glb = Vec::with_capacity(total_len);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+    glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json_padded);
+    glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin_padded);
+
+    let path = std::env::temp_dir().join(format!(
+        "manifold_synthetic_defaultmat_{}_{}.glb",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&path, &glb).expect("write synthetic glb to temp dir");
+    path
+}

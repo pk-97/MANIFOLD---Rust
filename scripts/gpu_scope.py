@@ -370,6 +370,21 @@ def shader_index(repo, workspace):
     return resolve
 
 
+def proof_module_prefix(path, repo):
+    """Honor explicit catalog-proof mounts before deriving a path prefix."""
+    root = Path(repo) / PROOFS_DIR / 'main.rs'
+    if root.is_file():
+        from crate_move_replay import module_items
+        text = root.read_text()
+        for start, end, head, scope in module_items(text):
+            declaration = re.fullmatch(r'(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;', text[head:end])
+            attrs = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', text[start:head])
+            if declaration and attrs and root.parent.joinpath(*scope, attrs[-1]).resolve() == (Path(repo) / path).resolve():
+                return '::'.join((*scope, declaration[1])) + '::'
+    parts = list(Path(path[len(PROOFS_DIR):]).with_suffix('').parts)
+    return '::'.join(parts[:-1] if parts[-1] == 'mod' else parts) + '::'
+
+
 def changed_test_filters(path, repo, base, patch=None):
     """Promote changed test bodies; shared-helper edits retain module scope."""
     # Only renderer lib and proof paths have a derivable test-name prefix.
@@ -390,8 +405,7 @@ def changed_test_filters(path, repo, base, patch=None):
     hunks = [(int(m[1]), max(1, int(m[2] or 1))) for m in re.finditer(
         r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", patch, re.M)]
     if path.startswith(PROOFS_DIR):
-        parts = list(Path(path[len(PROOFS_DIR):]).with_suffix("").parts)
-        prefix = "::".join(parts[:-1] if parts[-1] == "mod" else parts) + "::"
+        prefix = proof_module_prefix(path, repo)
     else:
         prefixes = path_attr_filters(path, repo) or module_filters(path)
         prefix = prefixes[0] if prefixes else ''
@@ -484,8 +498,8 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
             _map_wgsl(plan, path, repo, shader_users)
             continue
         if path.startswith(PROOFS_DIR) and path.endswith(".rs"):
-            rel = path[len(PROOFS_DIR):].split("/")
-            plan.filters.add(rel[0][:-3] + "::" if len(rel) == 1 else rel[0] + "::")
+            prefix = proof_module_prefix(path, repo)
+            plan.filters.add(prefix.split("::")[0] + "::")
             continue
         if path.startswith(CPU_FLIP_FIXTURES_DIR):
             plan.filters.update(CPU_FLIP_REFERENCE_FILTERS)

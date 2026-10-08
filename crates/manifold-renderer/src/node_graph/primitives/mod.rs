@@ -319,7 +319,10 @@ mod transform_3d;
 mod transform_components;
 pub(crate) mod divide_by_value;
 // Standalone staged encoder; the step keeps its existing pressure path.
+#[cfg(not(any(test, feature = "testkit")))]
 mod smooth_surface_mesh;
+#[cfg(any(test, feature = "testkit"))]
+pub mod smooth_surface_mesh;
 mod surface_mesh_normals;
 #[cfg(test)]
 mod surface_mesh_freeze_tests;

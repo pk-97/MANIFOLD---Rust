@@ -616,6 +616,16 @@ class ScopeTests(unittest.TestCase):
         p = plan([g.PROOFS_DIR + "water_basin/helpers.rs"])
         self.assertIn("water_basin::", p.filters)
 
+    def test_catalog_proof_mount_keeps_original_test_prefix(self):
+        repo = Path(__file__).resolve().parent.parent
+        path = g.PROOFS_DIR + "catalog/rt_bug318_import_toggle.rs"
+        result = plan([path], repo=repo)
+        self.assertIn("rt_bug318_import_toggle::", result.filters)
+        self.assertNotIn("catalog::", result.filters)
+        selected = g.changed_test_filters(path, repo, "HEAD", patch="@@ -0,0 +1,99999 @@")
+        self.assertTrue(selected)
+        self.assertTrue(all(name.startswith("rt_bug318_import_toggle::") for name in selected))
+
     def test_harness_is_broad(self):
         p = plan([g.PROOFS_DIR + "harness.rs"])
         self.assertTrue(set(g.BROAD_FILTERS) <= p.filters)
