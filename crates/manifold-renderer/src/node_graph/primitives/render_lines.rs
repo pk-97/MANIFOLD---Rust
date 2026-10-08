@@ -390,7 +390,7 @@ impl RenderLines {
     /// — matches legacy Wireframe / Tesseract / Duocylinder, all
     /// of which left `projected_z` at zero so the depth-sort in the
     /// legacy pipeline collapsed to declaration order anyway. See
-    /// `crates/manifold-renderer/src/generators/line_pipeline.rs:277`
+    /// `crates/manifold-node-engine/src/line.rs:277`
     /// for the legacy reference.
     ///
     /// `show_verts=true` appends one degenerate (a==b) dot instance

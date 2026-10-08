@@ -11,14 +11,14 @@
 //! - `manifold-gpu/src/`: the definition, and its own unit tests, which take
 //!   the queue inside `new` under `cfg(test)`.
 //! - `manifold-app/src/app.rs`: the live GUI, which must never queue.
-//! - `manifold-renderer/src/gpu.rs`: the `GpuContext` wrapper definition.
+//! - `manifold-node-engine/src/gpu/context.rs`: the `GpuContext` wrapper definition.
 
 use std::path::{Path, PathBuf};
 
 const ALLOWED: &[&str] = &[
     "manifold-gpu/src/",
     "manifold-app/src/app.rs",
-    "manifold-renderer/src/gpu.rs",
+    "manifold-node-engine/src/gpu/context.rs",
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
