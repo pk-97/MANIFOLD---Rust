@@ -26,6 +26,7 @@ def fixture_workspace(repo):
     repo = repo.resolve()
     packages = []
     rows = {
+        "manifold-compositor": ("crates/manifold-compositor", True, ["gpu_proofs"]),
         "manifold-nodes-scene": ("crates/manifold-nodes-scene", True, ["gpu_proofs"]),
         "manifold-nodes-image": ("crates/manifold-nodes-image", True, []),
         "manifold-renderer": ("crates/manifold-renderer", True, ["gpu_proofs", "glb_conformance"]),
@@ -55,6 +56,45 @@ def fixture_workspace(repo):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_p2_catalog_contracts_follow_leaf_sources(self):
+        cases = {
+            "crates/manifold-compositor/src/layer_compositor.rs": ["layer_compositor"],
+            "crates/manifold-compositor/src/preset_thumbnail.rs": ["preset_thumbnail"],
+            "crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade.rs": ["loop_upgrade"],
+            "crates/manifold-nodes-scene/src/node_graph/gltf_import/assembly.rs":
+                ["gltf_import", "gltf_card_precedence", "gltf_upgrade", "gltf_upgrade_project"],
+        }
+        import cpu_scope
+        for path, modules in cases.items():
+            with self.subTest(path=path):
+                workspace = fixture_workspace(Path("/nonexistent"))
+                cpu = cpu_scope.plan_for_paths([path], Path("/nonexistent"), workspace)
+                gpu = plan([path])
+                for module in modules:
+                    prefix = "node_graph::catalog_tests::" + module + "::"
+                    self.assertIn(prefix, cpu.filterset)
+                    self.assertIn(prefix, gpu.filters)
+        gltf = plan(["crates/manifold-nodes-scene/src/node_graph/gltf_import/assembly.rs"])
+        self.assertTrue({"render_scene_material_upgrade::", "rt_bug318_import_toggle::",
+                         "rt_bug326_fix_gate::", "rt_bugmajv_kernel_toggle::",
+                         "rt_normal_tangent_mirror::", "rt_r3_heldout_gltf::"}.issubset(gltf.filters))
+        for owner in ("manifold-nodes-image", "manifold-nodes-scene"):
+            path = f"crates/{owner}/src/node_graph/primitives/mod.rs"
+            cpu = cpu_scope.plan_for_paths([path], Path("/nonexistent"), fixture_workspace(Path("/nonexistent")))
+            self.assertIn("binary(=file_loader_exhaustiveness)", cpu.filterset)
+
+    def test_all_p2_extraction_rows_select_catalog_home(self):
+        import cpu_scope
+        for prefix, module, cpu_expected in g.CATALOG_TEST_ROWS:
+            self.assertTrue(list(Path(__file__).resolve().parents[1].glob(prefix + "*")), prefix)
+            path = prefix + ("mod.rs" if prefix.endswith("/") else ".rs")
+            with self.subTest(path=path, module=module):
+                gpu = plan([path])
+                self.assertIn("node_graph::catalog_tests::" + module + "::", gpu.filters)
+                if cpu_expected:
+                    cpu = cpu_scope.plan_for_paths([path], Path("/nonexistent"), fixture_workspace(Path("/nonexistent")))
+                    self.assertIn("node_graph::catalog_tests::" + module + "::", cpu.filterset)
+
     def test_moved_shared_harness_keeps_broad_and_readback_consumers(self):
         selected = plan(["crates/manifold-nodes-scene/src/testkit/gpu_harness.rs"])
         self.assertFalse(selected.unmapped)

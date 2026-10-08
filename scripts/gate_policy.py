@@ -215,6 +215,14 @@ EXPLICIT_ROWS = [
      (["rt_t2b_temporal_wiring::", "rt_bug318_import_toggle::",
        "rt_bugmajv_kernel_toggle::"], [])),
 
+    # Imported graph tails need image registrations, so these proofs stay catalog-side.
+    (("crates/manifold-nodes-scene/src/node_graph/gltf_import/",
+      "crates/manifold-nodes-scene/src/node_graph/gltf_load.rs",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/render_scene"),
+     (["render_scene_material_upgrade::", "rt_bug318_import_toggle::",
+       "rt_bug326_fix_gate::", "rt_bugmajv_kernel_toggle::",
+       "rt_normal_tangent_mirror::", "rt_r3_heldout_gltf::"], [])),
+
     # Blob bounds controls the sparse reach and dense particle field together.
     ((RENDERER_SRC + "node_graph/primitives/blob_bounds.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/blob_bounds.wgsl"),
@@ -407,6 +415,8 @@ def godfile_paths():
 INTEGRATION_ROWS = {
     "Cargo.toml": ("manifold-app", ["crate_layering"]),
     "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
+    "crates/manifold-nodes-image/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
+    "crates/manifold-nodes-scene/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
     "crates/manifold-node-engine/src/water/fluid.rs": ("manifold-renderer", ["gpu_proofs"]),
 }
 
@@ -455,3 +465,40 @@ PREFIX_ROWS += [
 ]
 
 PREFIX_ROWS += [('crates/manifold-compositor/src/', ".wgsl", "manifold-renderer", [], ["wgsl_validation"])]
+
+# P2 extractions retain catalog ownership when their production source changes.
+# (source prefix, catalog module, has default-config CPU tests).
+CATALOG_TEST_ROWS = [
+    ("crates/manifold-compositor/src/layer_compositor", "layer_compositor", True),
+    ("crates/manifold-compositor/src/preset_thumbnail", "preset_thumbnail", True),
+    ("crates/manifold-compositor/src/generator_renderer", "generator_renderer_tests", False),
+    ("crates/manifold-compositor/src/generator_renderer", "generator_renderer_warmup_tests", False),
+    ("crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade", "loop_upgrade", True),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_import", True),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_card_precedence", True),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_upgrade", True),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_upgrade_project", True),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_load", "gltf_import", True),
+    ("crates/manifold-nodes-scene/src/node_graph/relight", "relight", True),
+    ("crates/manifold-nodes-scene/src/node_graph/scene_vm", "scene_vm", True),
+    ("crates/manifold-nodes-scene/src/node_graph/scene_exposure", "scene_exposure", True),
+    ("crates/manifold-nodes-scene/src/node_graph/scene_exposure", "fluid_objects", True),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/gltf_animation_source", "gltf_animation_source", True),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/surface_mesh_normals", "surface_mesh_normals", True),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/copy_positions", "copy_positions", False),
+    ("crates/manifold-nodes-image/src/node_graph/primitives/wave_field_3d", "copy_positions", False),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/nested_cubes_geometry", "nested_cubes_geometry", False),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/lerp_instance_fields", "image_fused", True),
+    ("crates/manifold-nodes-image/src/node_graph/primitives/neighbor_smooth", "image_fused", True),
+    ("crates/manifold-nodes-image/src/node_graph/primitives/bokeh_gather", "bokeh_gather", False),
+    ("crates/manifold-nodes-image/src/node_graph/primitives/seed_particles_from_texture", "seed_particles_from_texture", True),
+    ("crates/manifold-node-engine/src/water/primitives/blob_bounds", "blob_bounds", True),
+    ("crates/manifold-node-engine/src/water/primitives/face_grid_", "face_grid_scene_tests", False),
+    ("crates/manifold-nodes-image/src/node_graph/primitives/interpolate_particle_frames", "particle_frame_blend_tests", True),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/particles_to_copies", "particle_frame_blend_tests", True),
+    ("crates/manifold-node-engine/src/water/primitives/push_out_of_solid", "particle_frame_blend_tests", True),
+    ("crates/manifold-node-engine/src/water/primitives/particle_publication", "particle_publication_gpu_tests", False),
+]
+PREFIX_ROWS += [(prefix, ".rs", CATALOG_PACKAGE,
+                 ["node_graph::catalog_tests::" + module], [])
+                for prefix, module, cpu in CATALOG_TEST_ROWS if cpu]

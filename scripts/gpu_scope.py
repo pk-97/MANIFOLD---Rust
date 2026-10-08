@@ -38,7 +38,7 @@ from gate_policy import (
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
-    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS,
+    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS,
 )
 from gate_workspace import Workspace
 
@@ -455,6 +455,9 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
     for path in sorted(set(paths)):
         if not is_gpu_path(path, workspace):
             continue
+        plan.filters.update("node_graph::catalog_tests::" + module + "::"
+                            for prefix, module, _ in CATALOG_TEST_ROWS
+                            if path.startswith(prefix) and path.endswith(".rs"))
         plan.paths.append(path)
         owner = workspace.owner(path)
         if owner and path == workspace.roots[owner] + '/Cargo.toml':
