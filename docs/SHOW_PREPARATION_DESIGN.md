@@ -16,8 +16,8 @@ This is a bounded source audit, not a runtime proof. Extend these owners and pat
 |---|---|---|
 | Project warmup coordinator | `crates/manifold-app/src/content_commands.rs:82` | Exists; content thread coordinates loading and publishes snapshots. |
 | Time/frame caps and failure outcomes | `crates/manifold-core/src/warmup.rs:41` | Exists; defaults are 10 seconds/layer, 600 frames, 60 seconds total. Exhaustion can leave work unfinished. |
-| Generator pre-roll | `crates/manifold-renderer/src/generator_renderer.rs:1325` | Exists; activates first clip, uses production runtime, renders synthetic contexts. Does not establish coverage of every clip-dependent asset or dynamic branch. |
-| Effect topology preparation | `crates/manifold-renderer/src/layer_compositor.rs:881` | Exists; preserve existing topology enumeration, including group/master/LED paths. |
+| Generator pre-roll | `crates/manifold-compositor/src/generator_renderer.rs:1325` | Exists; activates first clip, uses production runtime, renders synthetic contexts. Does not establish coverage of every clip-dependent asset or dynamic branch. |
+| Effect topology preparation | `crates/manifold-compositor/src/layer_compositor.rs:881` | Exists; preserve existing topology enumeration, including group/master/LED paths. |
 | Image preparation | `crates/manifold-media/src/image_renderer.rs:381` | Exists; synchronous decode, local byte cap, temporary clip activation. Needs explicit ownership and failure accounting. |
 | Video lookahead | `crates/manifold-media/src/video_renderer.rs:425` | Exists; submits WarmOpen candidates. Opening a file is not proof the correct launch frame is ready. |
 | Decoder workers | `crates/manifold-media/src/decode_scheduler.rs:111` | Exists; worker-affinity ownership and result channels. Extend this service; no new decoder pool. |

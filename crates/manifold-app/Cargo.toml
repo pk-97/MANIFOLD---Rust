@@ -74,7 +74,7 @@ objc2-app-kit = { version = "0.3", features = [
 ] }
 
 [features]
-gpu-proofs = ["manifold-nodes-scene/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-renderer/gpu-proofs", "manifold-node-engine/gpu-proofs"]
+gpu-proofs = ["manifold-compositor/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-renderer/gpu-proofs", "manifold-node-engine/gpu-proofs"]
 ui-automation = []
 profiling = ["dep:manifold-profiler"]
 ui-snapshot = ["dep:image"]

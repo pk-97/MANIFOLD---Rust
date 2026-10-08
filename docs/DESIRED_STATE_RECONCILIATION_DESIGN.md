@@ -218,7 +218,7 @@ Export is unaffected: export ticks already sync every tick.
 
 1. **Membership never reads mute/solo.** Enforcement: `rg "is_muted|is_solo" crates/manifold-core/src/timeline.rs` → zero hits inside `get_active_clips_at_beat_ref`; cure-test `muted_layer_clip_stays_active` (P2).
 2. **Reconcile runs every tick in every state.** Enforcement: cure-test `stopped_engine_activates_clip_under_playhead` — stopped engine, no dirty calls, tick once, clip active (rewrite of `engine_tick_while_stopped_has_no_active_clips`, P1).
-3. **Visibility is single-sourced.** Enforcement: `rg "any_solo|is_solo" crates/manifold-renderer/src/layer_compositor.rs` → zero hits; `rg "\.is_muted" crates/manifold-renderer/src/layer_compositor.rs` → zero hits outside the `hidden` field read; `rg "is_muted|is_solo" crates/manifold-app/src/content_pipeline.rs` → zero hits outside the predicate call and descriptor build (occlusion's own flag reads are deleted); predicate unit tests in `manifold-core` (P2).
+3. **Visibility is single-sourced.** Enforcement: `rg "any_solo|is_solo" crates/manifold-compositor/src/layer_compositor.rs` → zero hits; `rg "\.is_muted" crates/manifold-compositor/src/layer_compositor.rs` → zero hits outside the `hidden` field read; `rg "is_muted|is_solo" crates/manifold-app/src/content_pipeline.rs` → zero hits outside the predicate call and descriptor build (occlusion's own flag reads are deleted); predicate unit tests in `manifold-core` (P2).
 4. **An active clip's realized layer matches its project layer within one tick.** Enforcement: cure-test `drag_active_clip_across_layers_rebinds` (paused and playing variants, P3).
 5. **No new shared state, no NEW per-frame allocation on the reconcile path** (house rules). Enforcement: `rg "Arc<Mutex|Arc<RwLock" crates/manifold-playback/src` → zero new hits; the reconcile uses existing scratch buffers only. Pre-existing debt named, not silently kept: `get_active_clips_at_beat_ref` allocates one `Vec::new()` per call (`timeline.rs:410`) — P2 threads a caller scratch through and deletes it.
 
@@ -270,7 +270,7 @@ Export is unaffected: export ticks already sync every tick.
   layers push none), `all_muted_paused_rig_idles` (D7a).
 - **Gate — positive:** `cargo test -p manifold-core -p manifold-playback -p manifold-renderer -p manifold-app`
   green; new cure-tests fail on pre-P2 code. **Negative:** `rg "any_solo|is_solo"
-  crates/manifold-renderer/src/layer_compositor.rs` → zero; `rg "is_muted"
+  crates/manifold-compositor/src/layer_compositor.rs` → zero; `rg "is_muted"
   crates/manifold-core/src/timeline.rs` → zero inside the query fn; `rg "is_muted|is_solo"
   crates/manifold-app/src/content_pipeline.rs` → zero outside the predicate call and
   descriptor build.
@@ -290,7 +290,7 @@ Export is unaffected: export ticks already sync every tick.
 
 ### P3 — Layer-aware binding identity (fixes BUG-2z07 (layer-drag staleness))
 
-- **Entry state:** P2 landed; `rg "any_solo" crates/manifold-renderer/src/layer_compositor.rs` → zero.
+- **Entry state:** P2 landed; `rg "any_solo" crates/manifold-compositor/src/layer_compositor.rs` → zero.
 - **Read-back:** D5/D6; restate: heal is stop+start only; identity is exactly
   (clip_id, layer_id) — no structural fields this phase; heals suppress edge emission
   (no `clip_edge_layers` push, `clip_edge_enabled=false` on the heal's acquire,

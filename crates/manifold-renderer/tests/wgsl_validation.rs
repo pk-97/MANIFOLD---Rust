@@ -124,6 +124,10 @@ fn is_partial(path: &std::path::Path) -> bool {
 fn all_wgsl_shaders_validate() {
     let mut files = find_wgsl_files(&shader_dir());
     let leaf_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../manifold-compositor/src");
+    assert!(leaf_shaders.is_dir(), "manifold-compositor shader directory must exist");
+    files.extend(find_wgsl_files(&leaf_shaders));
+    let leaf_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../manifold-nodes-scene/src");
     assert!(leaf_shaders.is_dir(), "manifold-nodes-scene shader directory must exist");
     files.extend(find_wgsl_files(&leaf_shaders));

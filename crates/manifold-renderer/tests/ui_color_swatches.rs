@@ -9,6 +9,7 @@
 
 #![cfg(target_os = "macos")]
 
+use manifold_renderer as _;
 use std::ffi::c_void;
 use std::path::Path;
 use std::slice;

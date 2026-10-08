@@ -20,14 +20,7 @@ png = "0.18"
 [dev-dependencies]
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
 
-[[test]]
-name = "main"
-path = "tests/main.rs"
 
-[[test]]
-name = "gpu_proofs"
-path = "tests/gpu_proofs/main.rs"
-required-features = ["gpu-proofs"]
 
 [features]
 testkit = ["manifold-node-engine/testkit"]

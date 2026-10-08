@@ -105,7 +105,7 @@ fn kind_subdir(kind: PresetKind) -> Option<&'static str> {
 
 /// Resolve the factory-thumbnail root for `kind`: packaged bundle
 /// `Resources/preset-thumbnails/<kind>` if it exists, else the dev workspace
-/// `assets/preset-thumbnails/<kind>` (this crate's `CARGO_MANIFEST_DIR`) —
+/// `preset-thumbnails/<kind>` under the catalog's registered assets root —
 /// same two-tier resolution shape as `preset_loader::resolve_stock_root`,
 /// specialised to thumbnails (a sibling asset kind, not a preset JSON root).
 fn factory_thumbnail_root(kind: PresetKind) -> Option<PathBuf> {
@@ -122,8 +122,8 @@ fn factory_thumbnail_root(kind: PresetKind) -> Option<PathBuf> {
             return Some(bundle);
         }
     }
-    Some(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("assets/preset-thumbnails")
+    Some(manifold_node_engine::load::preset_loader::registered_assets_root()?
+        .join("preset-thumbnails")
         .join(subdir))
 }
 

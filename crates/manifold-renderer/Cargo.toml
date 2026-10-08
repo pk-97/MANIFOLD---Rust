@@ -95,6 +95,7 @@ core-foundation = "0.9"
 sha2 = "0.10"
 
 [dev-dependencies]
+manifold-compositor = { path = "../manifold-compositor", features = ["testkit"] }
 manifold-nodes-scene = { path = "../manifold-nodes-scene", features = ["testkit"] }
 manifold-nodes-image = { path = "../manifold-nodes-image", features = ["testkit"] }
 manifold-gpu = { path = "../manifold-gpu", features = ["testkit"] }

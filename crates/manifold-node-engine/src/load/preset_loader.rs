@@ -377,13 +377,8 @@ pub fn resolve_stock_root(dirs: &KindDirs) -> (Option<PathBuf>, Vec<PathBuf>) {
         }
     }
 
-    if let Some(root) = select_assets_root(
-        inventory::iter::<PresetAssetsRoot>
-            .into_iter()
-            .map(|root| root.dir)
-            .collect(),
-    ) {
-        let dev = Path::new(root).join(dirs.dev_subdir);
+    if let Some(root) = registered_assets_root() {
+        let dev = root.join(dirs.dev_subdir);
         tried.push(dev.clone());
         if dev.is_dir() {
             return (Some(dev), tried);
@@ -391,6 +386,16 @@ pub fn resolve_stock_root(dirs: &KindDirs) -> (Option<PathBuf>, Vec<PathBuf>) {
     }
 
     (None, tried)
+}
+
+/// The catalog's registered development assets directory.
+pub fn registered_assets_root() -> Option<PathBuf> {
+    select_assets_root(
+        inventory::iter::<PresetAssetsRoot>
+            .into_iter()
+            .map(|root| root.dir)
+            .collect(),
+    ).map(PathBuf::from)
 }
 
 #[doc(hidden)]

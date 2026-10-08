@@ -5,6 +5,7 @@ import re
 
 SHARED_ASSETS = ['crates/manifold-foundation/assets/fonts']
 GPU_DEFAULT_CPU_ONLY = {
+    "manifold-compositor": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     "manifold-nodes-image": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     'manifold-ui-paint': 'GPU test modules require gpu-proofs; default tests do not open devices',
     'manifold-editing': 'GPU graph construction is gated by gpu-proofs',
@@ -452,3 +453,5 @@ PREFIX_ROWS += [
     ('crates/manifold-nodes-scene/src/node_graph/primitives/', '.rs', "manifold-renderer", [], ['uniform_layout_proof', 'uniform_layout_extended']),
     ('crates/manifold-nodes-scene/src/', '.wgsl', "manifold-renderer", [], ['uniform_layout_extended', 'wgsl_validation']),
 ]
+
+PREFIX_ROWS += [('crates/manifold-compositor/src/', ".wgsl", "manifold-renderer", [], ["wgsl_validation"])]

@@ -64,6 +64,7 @@
 //! (prints the last non-black fraction); 3 = import error (parse/build
 //! failure — prints the `ImportReport` if one was produced, then the error).
 
+use manifold_renderer as _;
 use std::path::PathBuf;
 
 use manifold_core::params::{Param, ParamManifest};

@@ -31,6 +31,7 @@
 //! Exit codes: `0` valid / report produced, `1` invalid graph (`validate`
 //! only — errors present), `2` usage / file-read / parse failure.
 
+use manifold_renderer as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 

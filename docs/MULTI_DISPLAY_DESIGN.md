@@ -377,7 +377,7 @@ its existing layer loop. `PresetContext` gets island-local `width/height` — wh
 already gets today per chain (that is what `ensure_buffers` reads); no new field
 needed for state. **Re-derivation command:** `rg -n
 'effect_chains|group_effect_chains|master_effect_chain|layer_bufs|last_used_frame'
-crates/manifold-renderer/src/layer_compositor.rs` — re-run at execution time; if the
+crates/manifold-compositor/src/layer_compositor.rs` — re-run at execution time; if the
 field set differs from this table, stop and list before touching. Compiler-driven:
 change the field types first; red is the checklist. **Negative gate:** after P2, no
 chain map keyed by bare `LayerId` remains on the screen path — `rg -n

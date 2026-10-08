@@ -55,7 +55,7 @@ Re-derive before editing. These are source findings, not runtime observations.
 
 | Piece | Anchor | Classification |
 |---|---|---|
-| Per-layer generator ownership | `crates/manifold-renderer/src/generator_renderer.rs`: `LayerGeneratorState`, `render_all`, `stop_clip`, `release_all` | Reuse. `layer_generators` is keyed by `LayerId`; clip stop removes the clip target, not the layer's generator. Structural removal evicts absent layers. |
+| Per-layer generator ownership | `crates/manifold-compositor/src/generator_renderer.rs`: `LayerGeneratorState`, `render_all`, `stop_clip`, `release_all` | Reuse. `layer_generators` is keyed by `LayerId`; clip stop removes the clip target, not the layer's generator. Structural removal evicts absent layers. |
 | Graph lifecycle | `crates/manifold-node-engine/src/runtime/core.rs`: `render`, `reset_state`, `clear_state`, `clear_trigger_state` | Reuse. Full reset clears nodes and `StateStore`; trigger-only clearing must not erase water. |
 | Persistent buffers | `crates/manifold-node-engine/src/state_store.rs`: `StateStore`, `NodeState`; `primitives/array_feedback.rs`: `ArrayFeedback` | Extend by analogy. Keys remain `(NodeInstanceId, OwnerKey)` inside the owning runtime. Existing feedback is frame-based and specifically `Particle`, not a generic substep solver. |
 | Graph execution | `node_graph/execution_plan.rs`: `ExecutionPlan`, `ExecutionStep`; `node_graph/execution.rs`: `execute_frame_with_state`, `compute_live_steps` | New bounded substep-region support required. Today there is one frame traversal, frame-level late capture, hoisting and resource recycling. |

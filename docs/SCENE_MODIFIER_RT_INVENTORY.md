@@ -159,7 +159,7 @@ Cancellation is polled nonblocking in the frame loop (`content_export.rs:583-628
 `EffectNodeContext::error` (`node_graph/effect_node.rs:430–455`) only logs; current export completion detects GPU faults/timeouts, not render diagnostics. Design §5.4 adds a separate status value through existing renderer `gpu_encoder::GpuEncoder` wrappers, merged into `ContentPipeline` before export. Audit all wrapper constructors/early returns with:
 
 ```sh
-rg -n 'GpuEncoder::(new|with_pool)|commit_and_continue|fn render_content|fn export_one_frame|fn render_all' crates/manifold-node-engine/src/gpu/gpu_encoder.rs crates/manifold-renderer/src/layer_compositor.rs crates/manifold-renderer/src/generator_renderer.rs crates/manifold-app/src/content_pipeline.rs crates/manifold-app/src/content_export.rs
+rg -n 'GpuEncoder::(new|with_pool)|commit_and_continue|fn render_content|fn export_one_frame|fn render_all' crates/manifold-node-engine/src/gpu/gpu_encoder.rs crates/manifold-compositor/src/layer_compositor.rs crates/manifold-compositor/src/generator_renderer.rs crates/manifold-app/src/content_pipeline.rs crates/manifold-app/src/content_export.rs
 ```
 
 No function signature change is required in the compositor/generator render APIs; status travels through their existing mutable wrapper. Wrapper constructors default to Complete; nested wrappers must explicitly merge back. Do not substitute the global hardware fault counter for a per-frame scene error.
@@ -277,7 +277,7 @@ PYCOUNT
 * `crates/manifold-node-engine/src/runtime/build.rs:409`
 * `crates/manifold-renderer/src/engine_contract_tests/runtime_amount_zero_passthrough_tests.rs:117`
 * `crates/manifold-renderer/src/node_graph/catalog_tests/runtime_bool_convert_heal.rs:38`
-* `crates/manifold-renderer/src/preset_thumbnail.rs:471`
+* `crates/manifold-compositor/src/preset_thumbnail.rs:471`
 * `crates/manifold-renderer/tests/fragment_cut_scene.rs:143,210,272`
 * `crates/manifold-renderer/tests/gpu_proofs/film_grain_decorrelation.rs:116`
 

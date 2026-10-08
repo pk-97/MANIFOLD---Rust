@@ -55,3 +55,5 @@ mod runtime;
 use manifold_nodes_image as _;
 
 use manifold_nodes_scene as _;
+
+use manifold_compositor as _;

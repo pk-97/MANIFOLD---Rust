@@ -12,6 +12,7 @@
 
 #![cfg(feature = "gpu-proofs")]
 
+use manifold_renderer as _;
 use std::sync::Arc;
 
 use half::f16;

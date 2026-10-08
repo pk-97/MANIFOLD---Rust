@@ -23,6 +23,7 @@
 //! Run: `cargo run -p manifold-renderer --bin generate-preset-thumbnails`
 //! Pass exact preset IDs after `--` to update only those thumbnails.
 
+use manifold_renderer as _;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
