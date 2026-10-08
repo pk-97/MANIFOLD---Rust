@@ -1,0 +1,37 @@
+[package]
+name = "manifold-compositor"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[dependencies]
+ahash = { workspace = true }
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+half = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "exr"] }
+log = { workspace = true }
+manifold-core = { path = "../manifold-core" }
+manifold-gpu = { path = "../manifold-gpu" }
+manifold-node-engine = { path = "../manifold-node-engine" }
+manifold-playback = { path = "../manifold-playback" }
+png = "0.18"
+
+[dev-dependencies]
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
+
+[[test]]
+name = "gpu_proofs"
+path = "tests/gpu_proofs/main.rs"
+required-features = ["gpu-proofs"]
+
+[features]
+testkit = ["manifold-node-engine/testkit"]
+gpu-proofs = ["manifold-node-engine/gpu-proofs", "manifold-node-engine/testkit"]
+
+[lints]
+workspace = true
