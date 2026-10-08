@@ -1,4 +1,38 @@
-# Kick ground-truth labels for the audio fixtures
+# Kick labels for the audio fixtures
+
+**2026-10-09 review: the historical CSVs are not yet reliable attack-time
+ground truth.** A visual review of all five drum stems and full mixes found
+late timestamps and an Apricots duplicate. Do not treat the old scores or
+per-track timing corrections as validated detector performance.
+
+`attack_review.csv` records the review against all 73 existing rows. It is
+not loaded by the evaluator and does not replace the historical track CSVs.
+Estimated attacks use the full-band waveform leading edge, checked against
+drum spectrograms, rather than the 30–90 Hz peak. Values are rounded to 5 ms;
+this is display precision, not a guarantee of perceptual timing accuracy.
+No listening review has been performed by the agent.
+
+- Apricots: 9.385 and 9.495 label the same attack, approximately 9.310 s.
+  The later row is a duplicate on the decay, not a second visible attack.
+- Bad Guy at approximately 14.765 s and Inhale Exhale at 13.035 s are ending
+  fills whose kick identity needs a listening decision.
+- Four first events intersect the clip start. Their estimated time of zero
+  does not establish the original onset or permit a clean latency measurement.
+- The complete overviews revealed no additional obvious kick-shaped attacks,
+  but this does not certify that no quiet or ambiguous kicks are missing.
+
+All five mix/stem sums were rechecked at 8 kHz: zero relative lag,
+correlation above 0.999999999, and gain within 0.00002 of unity. Audio was
+not changed. Local evidence (alignment measurements and source hashes,
+overview/detail plots, and short drum-then-mix listening clips) is in
+`~/.cache/manifold/kick-label-review-2026-10-09/`.
+
+**Remaining (BUG-qtd):** settle the listening cases and review perceptual
+timing, then promote the accepted attacks into the per-track CSVs and
+invalidate the old onset calibration before the full-mix baseline rerun.
+Phase 1 remains incomplete until that review is settled.
+
+## Historical labels
 
 One CSV per track in `tests/fixtures/audio/` (the audio itself is gitignored;
 these labels are ours and committed). Columns: `mix_time_s` (grade mix
@@ -6,8 +40,9 @@ detection against this), `drums_time_s` (grade drums-stem detection against
 this). Onset = walk-back to 25% of the sub-envelope peak; grading tolerance
 ±35 ms per AUDIO_EVAL_HARNESS_GUIDE.md.
 
-**Provenance (2026-07-07, extracted by `scripts/kick_label_extract.py`, every
-event verified by eye on drums-stem + mix spectrograms):** a kick = a local
+**Historical provenance claim (2026-07-07; the review above supersedes its
+accuracy claims):** extracted by `scripts/kick_label_extract.py` and reported
+as verified by eye on drums-stem + mix spectrograms. A kick = a local
 peak of the 30–90 Hz envelope of the ISOLATED drums stem above 0.5× the
 track's p99 sub level. Absolute sub strength, not sub/body dominance —
 dominance mislabels kicks that land together with a snare. The split is
