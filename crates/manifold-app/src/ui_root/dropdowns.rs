@@ -498,6 +498,47 @@ impl UIRoot {
         self.overlay_dirty = true;
     }
 
+    /// Open the searchable one-column list picker below `trigger`: typing
+    /// filters, arrows move, Enter or a click fires the item's action.
+    /// `actions` is parallel to `labels`.
+    pub(crate) fn open_action_list(
+        &mut self,
+        labels: Vec<String>,
+        actions: Vec<PanelAction>,
+        list: manifold_ui::panels::browser_popup::ActionListOptions,
+        trigger: Rect,
+    ) {
+        use manifold_ui::panels::browser_popup::*;
+        use manifold_ui::panels::picker_core::PickerItem;
+        let items = labels
+            .into_iter()
+            .map(|label| PickerItem {
+                type_id: label.clone(),
+                label,
+                category: None,
+                search_text: None,
+                source: None,
+                thumbnail: None,
+            })
+            .collect();
+        self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
+        self.browser_popup.open_actions(
+            BrowserPopupRequest {
+                mode: BrowserPopupMode::Actions,
+                tab: self.inspector.last_effect_tab(),
+                layer_id: None,
+                items,
+                category_names: Vec::new(),
+                spawn_graph_pos: None,
+                paste_count: 0,
+                screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
+            },
+            actions,
+            list,
+        );
+        self.overlay_dirty = true;
+    }
+
     /// Refresh the embedded-preset list surfaced into the Add pickers from the
     /// project snapshot. Change-gated by the embedded-preset fingerprint so the
     /// Vec rebuilds only when a fork / import / remove actually changed the set,
@@ -918,7 +959,10 @@ impl UIRoot {
                     spawn_graph_pos: None,
                     paste_count: 0,
                     screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
-                }, actions);
+                }, actions, ActionListOptions {
+                    empty_label: "No parameters match",
+                    ..ActionListOptions::default()
+                });
                 true
             }
             PanelAction::Params(ParamsAction::AddEffectClicked { tab, layer_id }) => {

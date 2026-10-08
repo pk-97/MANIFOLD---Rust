@@ -1548,17 +1548,30 @@ impl UIRenderer {
                     );
                 }
 
-                self.text_renderer.draw_text(
-                    start_x + prefix_advance,
-                    text_y,
-                    text,
-                    fs,
-                    text_color,
-                    style.font_weight,
-                    clip_bounds,
-                    depth,
-                    transform,
-                );
+                match node.font_family.as_deref() {
+                    Some(family) => self.text_renderer.draw_text_in_family(
+                        start_x + prefix_advance,
+                        text_y,
+                        text,
+                        fs,
+                        text_color,
+                        family,
+                        clip_bounds,
+                        depth,
+                        transform,
+                    ),
+                    None => self.text_renderer.draw_text(
+                        start_x + prefix_advance,
+                        text_y,
+                        text,
+                        fs,
+                        text_color,
+                        style.font_weight,
+                        clip_bounds,
+                        depth,
+                        transform,
+                    ),
+                }
             }
         }
 

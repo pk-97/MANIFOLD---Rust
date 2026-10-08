@@ -1639,7 +1639,30 @@ impl Application {
                     continue;
                 }
                 PanelAction::Params(ParamsAction::GenStringParamDropdownClicked(sp_idx)) => {
-                    // Open a dropdown for a string param (e.g. font selector).
+                    // The font param opens the searchable font list: each
+                    // name in its own font, opened on the current font.
+                    let font_pick = self.ws.ui_root.inspector.gen_params().and_then(|gp| {
+                        let sp = gp.string_param(*sp_idx).filter(|sp| sp.key == "fontFamily")?;
+                        let r = gp.string_param_rect(&self.ws.ui_root.tree, *sp_idx)?;
+                        Some((sp.value.clone(), r))
+                    });
+                    if let Some((current, r)) = font_pick {
+                        let families =
+                            manifold_renderer::text_rasterizer::TextRasterizer::available_font_families();
+                        let actions = families
+                            .iter()
+                            .map(|name| PanelAction::Params(ParamsAction::GenStringParamSelected(*sp_idx, name.clone())))
+                            .collect();
+                        let list = manifold_ui::panels::browser_popup::ActionListOptions {
+                            empty_label: "No fonts match",
+                            label_in_own_font: true,
+                            current: families.iter().position(|f| *f == current),
+                        };
+                        let trigger = manifold_ui::node::Rect::new(r.x, r.y, r.width, r.height);
+                        self.ws.ui_root.open_action_list(families, actions, list, trigger);
+                        continue;
+                    }
+                    // Other string params open a plain dropdown.
                     if let Some(gp) = self.ws.ui_root.inspector.gen_params()
                         && let Some(sp) = gp.string_param(*sp_idx)
                     {
@@ -1650,15 +1673,7 @@ impl Application {
                             // projected onto the generator card by
                             // `attach_audio_sends`, so this reuses the same
                             // stable payload path as effect cards.
-                            let items: Vec<manifold_ui::panels::dropdown::DropdownItem> = if key
-                                == "fontFamily"
-                            {
-                                manifold_renderer::text_rasterizer::TextRasterizer::available_font_families()
-                                        .into_iter()
-                                        .map(|name| manifold_ui::panels::dropdown::DropdownItem::new(&name)
-                                            .with_action(PanelAction::Params(ParamsAction::GenStringParamSelected(*sp_idx, name.clone()))))
-                                        .collect()
-                            } else if key == "audioSend" {
+                            let items: Vec<manifold_ui::panels::dropdown::DropdownItem> = if key == "audioSend" {
                                 sp.dropdown_choices
                                     .iter()
                                     .map(|choice| {
