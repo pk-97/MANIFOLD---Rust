@@ -538,6 +538,9 @@ pub struct UINode {
     /// cell of an atlas (a clip or node-preview atlas). Same mechanism
     /// the graph canvas's `draw_image_uv` uses for the node-preview atlas.
     pub uv: [f32; 4],
+    /// Draw `text` in this installed font instead of the UI font — the font
+    /// picker shows each name in its own font.
+    pub font_family: Option<String>,
     pub draw_order: i32,
 }
 

@@ -1070,6 +1070,22 @@ class DiffScopeTests(unittest.TestCase):
             self.assertIn("test(/^water::fluid::checks::/)", plan.filterset)
             self.assertIn("binary(=gpu_proofs)", plan.filterset)
 
+    def test_gpu_proofs_only_module_gets_no_cpu_filter(self):
+        with tempfile.TemporaryDirectory() as d:
+            crate = Path(d) / "crates/manifold-ui-paint"
+            src = crate / "src"
+            src.mkdir(parents=True)
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-ui-paint"\n')
+            (src / "ui_renderer.rs").write_text(
+                '#[cfg(all(test, feature = "gpu-proofs"))]\nmod tests {}\n')
+            (src / "native_text.rs").write_text('#[cfg(test)]\nmod tests {}\n')
+            paths = ["crates/manifold-ui-paint/src/ui_renderer.rs",
+                     "crates/manifold-ui-paint/src/native_text.rs"]
+            workspace = synthetic_workspace(d, paths)
+            plan = cpu_scope.plan_for_paths(paths, d, workspace=workspace)
+            self.assertNotIn("test(/^ui_renderer::/)", plan.filterset)
+            self.assertIn("test(/^native_text::/)", plan.filterset)
+
     def test_deleted_integration_test_selects_no_binary(self):
         with tempfile.TemporaryDirectory() as d:
             crate = Path(d) / "crates/manifold-renderer"

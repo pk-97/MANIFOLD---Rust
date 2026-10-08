@@ -8,6 +8,8 @@
 //! callers and the text field renderer. Only ONE session active at a time;
 //! `begin()` auto-cancels any existing session (matches Unity behavior).
 
+use manifold_ui::text_edit;
+
 /// What kind of field is being edited.
 // FIXME(dead-code-audit): EffectParam/GroupRename/GenParam are matched on in app.rs
 // but no path constructs them — begin() callers don't reach these branches.
@@ -366,6 +368,11 @@ pub struct TextInputState {
     pub font_size: f32,
     /// When true, Shift+Enter inserts a newline instead of committing.
     pub multiline: bool,
+    /// Horizontal scroll of a single-line field, in logical px. Updated by
+    /// [`Self::overlay_geometry`] so the caret stays visible; a `Cell` because
+    /// the renderer only holds `&self`, and clicks must map against the
+    /// offset that was last drawn.
+    scroll_x: std::cell::Cell<f32>,
     /// LayerId for the LayerName field (not Copy, so stored separately).
     pub layer_id: Option<manifold_core::LayerId>,
     /// MarkerId for MarkerName field (String not Copy, so stored separately).
@@ -430,6 +437,7 @@ impl TextInputState {
             anchor: AnchorRect::zero(),
             font_size: 12.0,
             multiline: false,
+            scroll_x: std::cell::Cell::new(0.0),
             layer_id: None,
             marker_id: None,
             audio_send_id: None,
@@ -493,6 +501,7 @@ impl TextInputState {
         self.seed = initial.to_string();
         self.anchor = anchor;
         self.font_size = font_size;
+        self.scroll_x.set(0.0);
         self.multiline = matches!(
             field,
             TextInputField::GenStringParam(_) | TextInputField::GraphWgsl(_)
@@ -638,14 +647,85 @@ impl TextInputState {
         self.model.move_right(select, word);
     }
 
-    /// Move the caret to the start of the text (Cmd+Left). `select` extends.
+    /// Move the caret to the start of the text (Cmd+Up). `select` extends.
     pub fn move_home(&mut self, select: bool) {
         self.model.move_home(select);
     }
 
-    /// Move the caret to the end of the text (Cmd+Right). `select` extends.
+    /// Move the caret to the end of the text (Cmd+Down). `select` extends.
     pub fn move_end(&mut self, select: bool) {
         self.model.move_end(select);
+    }
+
+    /// Up/Down arrow: the same x on the visual line above or below; past the
+    /// first or last line, the text's start or end.
+    pub fn move_vertical(&mut self, down: bool, select: bool, measure: &mut dyn FnMut(&str) -> f32) {
+        let mut lines = Vec::new();
+        self.overlay_geometry(&mut lines, measure);
+        let target = text_edit::vertical_target(self.model.text(), &lines, self.model.caret(), down, measure);
+        self.model.caret_to(target, select);
+    }
+
+    /// Cmd+Left/Right: start or end of the caret's visual line.
+    pub fn move_line_edge(&mut self, end: bool, select: bool, measure: &mut dyn FnMut(&str) -> f32) {
+        let mut lines = Vec::new();
+        self.overlay_geometry(&mut lines, measure);
+        let i = text_edit::line_of(&lines, self.model.caret());
+        let target = if end {
+            text_edit::line_caret_end(self.model.text(), &lines, i)
+        } else {
+            lines[i].start
+        };
+        self.model.caret_to(target, select);
+    }
+
+    /// Byte offset under a pointer at logical `(x, y)`: picks the visual line
+    /// from `y`, then the nearest spot on it from `x`.
+    pub fn byte_at_point(&self, x: f32, y: f32, measure: &mut dyn FnMut(&str) -> f32) -> usize {
+        let mut lines = Vec::new();
+        let g = self.overlay_geometry(&mut lines, measure);
+        let i = ((y - g.text_y) / g.line_h).floor().clamp(0.0, (lines.len() - 1) as f32) as usize;
+        text_edit::byte_on_line(self.model.text(), &lines, i, x - g.text_x, measure)
+    }
+
+    /// The overlay's box and line layout, shared by drawing and pointer
+    /// mapping so a click acts on exactly what is drawn. Fills `lines` with
+    /// the visual lines (multiline fields wrap to the box width). For a
+    /// single-line field, also scrolls so the caret stays inside the box.
+    pub fn overlay_geometry(
+        &self,
+        lines: &mut Vec<std::ops::Range<usize>>,
+        measure: &mut dyn FnMut(&str) -> f32,
+    ) -> OverlayGeometry {
+        let a = &self.anchor;
+        let fs = self.font_size;
+        let line_h = fs + 3.0;
+        let w = a.width.max(40.0);
+        let inner_w = w - TEXT_INPUT_PAD_H * 2.0;
+        let text = self.model.text();
+        text_edit::layout_lines(text, self.multiline.then_some(inner_w), measure, lines);
+        let line_count = if self.multiline { lines.len().max(3) } else { 1 };
+        let h = (line_count as f32 * line_h + TEXT_INPUT_PAD_V * 2.0)
+            .max(a.height.max(fs + TEXT_INPUT_PAD_V * 2.0));
+        let scroll = if self.multiline {
+            0.0
+        } else {
+            let visible = inner_w - TEXT_INPUT_CURSOR_W;
+            let caret_x = measure(&text[..self.model.caret()]);
+            let max_scroll = (measure(text) - visible).max(0.0);
+            let s = self.scroll_x.get().max(caret_x - visible).min(caret_x);
+            s.clamp(0.0, max_scroll)
+        };
+        self.scroll_x.set(scroll);
+        OverlayGeometry {
+            x: a.x,
+            y: a.y,
+            w,
+            h,
+            text_x: a.x + TEXT_INPUT_PAD_H - scroll,
+            text_y: a.y + TEXT_INPUT_PAD_V,
+            line_h,
+        }
     }
 
     /// Select all text (Cmd+A / Ctrl+A).
@@ -691,6 +771,25 @@ impl TextInputState {
             let flat: String = s.chars().filter(|&c| c != '\n' && c != '\r').collect();
             self.model.insert_str(&flat);
         }
+    }
+}
+
+/// Where the text overlay sits and where its text starts, in logical px.
+/// `text_x` already includes a single-line field's scroll.
+#[derive(Debug, Clone, Copy)]
+pub struct OverlayGeometry {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub text_x: f32,
+    pub text_y: f32,
+    pub line_h: f32,
+}
+
+impl OverlayGeometry {
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x <= self.x + self.w && y >= self.y && y <= self.y + self.h
     }
 }
 
@@ -890,5 +989,54 @@ mod parse_tests {
             PanelAction::Scrub(ValueRef::ParamRgb(GraphParamTarget::Generator, got), ScrubPhase::Commit)
                 if got == &ids
         ));
+    }
+}
+
+#[cfg(test)]
+mod overlay_geometry_tests {
+    use super::*;
+
+    fn mono(s: &str) -> f32 {
+        s.chars().count() as f32 * 10.0
+    }
+
+    #[test]
+    fn multiline_click_on_the_third_line_stays_inside_and_lands_there() {
+        let mut ti = TextInputState::new();
+        // A one-row anchor, as the generator card row gives it.
+        ti.begin(TextInputField::GenStringParam(0), "ab\ncd\nef", AnchorRect::new(0.0, 0.0, 200.0, 16.0), 11.0);
+        let g = ti.overlay_geometry(&mut Vec::new(), &mut mono);
+        let third_line_y = g.text_y + g.line_h * 2.5;
+        assert!(g.contains(5.0, third_line_y), "drawn box must take the click, not pass it through");
+        assert_eq!(ti.byte_at_point(g.text_x + 11.0, third_line_y, &mut mono), 7);
+    }
+
+    #[test]
+    fn single_line_scrolls_to_keep_the_caret_visible() {
+        let mut ti = TextInputState::new();
+        let long = "x".repeat(50);
+        ti.begin(TextInputField::Bpm, &long, AnchorRect::new(0.0, 0.0, 100.0, 16.0), 11.0);
+        ti.model.move_end(false);
+        let g = ti.overlay_geometry(&mut Vec::new(), &mut mono);
+        let caret_x = g.text_x + 500.0;
+        assert!(caret_x <= g.x + g.w, "caret at the end is inside the box");
+        ti.model.move_home(false);
+        let g = ti.overlay_geometry(&mut Vec::new(), &mut mono);
+        assert_eq!(g.text_x, TEXT_INPUT_PAD_H, "back at the start, scroll resets");
+    }
+
+    #[test]
+    fn multiline_wraps_to_the_box_and_arrows_follow_visual_lines() {
+        let mut ti = TextInputState::new();
+        // inner width 52px → 5 chars per line
+        ti.begin(TextInputField::GenStringParam(0), "aaaa bbbb", AnchorRect::new(0.0, 0.0, 60.0, 16.0), 11.0);
+        let mut lines = Vec::new();
+        ti.overlay_geometry(&mut lines, &mut mono);
+        assert_eq!(lines, vec![0..5, 5..9]);
+        ti.model.caret_to(1, false);
+        ti.move_vertical(true, false, &mut mono);
+        assert_eq!(ti.model.caret(), 6);
+        ti.move_line_edge(true, false, &mut mono);
+        assert_eq!(ti.model.caret(), 9);
     }
 }

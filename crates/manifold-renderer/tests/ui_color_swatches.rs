@@ -117,6 +117,86 @@ fn browser_popup_thumbnails_paint() {
     eprintln!("browser popup thumbnails → {png}");
 }
 
+/// The Text generator's font picker: the one-column searchable list with
+/// every row drawn in the installed font it names, opened on the current
+/// font. Writes `font_list_picker.png` to eyeball.
+#[test]
+fn font_list_picker_paints() {
+    use manifold_ui::node::Vec2;
+    use manifold_ui::panels::browser_popup::{
+        ActionListOptions, BrowserPopupMode, BrowserPopupPanel, BrowserPopupRequest,
+    };
+    use manifold_ui::panels::picker_core::PickerItem;
+    use manifold_ui::panels::{InspectorTab, PanelAction};
+    use manifold_ui::{ParamsAction, Rect, UIFlags, UITree, ZTier};
+
+    let device = GpuDevice::new_queued("ui_color_swatches");
+    let mut ui = UIRenderer::new(&device, FORMAT);
+
+    let families = manifold_renderer::text_rasterizer::TextRasterizer::available_font_families();
+    let current = families.iter().position(|f| f == "Georgia");
+    let items: Vec<PickerItem> = families
+        .iter()
+        .map(|f| PickerItem {
+            label: f.clone(),
+            type_id: f.clone(),
+            category: None,
+            search_text: None,
+            source: None,
+            thumbnail: None,
+        })
+        .collect();
+    let actions = families
+        .iter()
+        .map(|f| PanelAction::Params(ParamsAction::GenStringParamSelected(0, f.clone())))
+        .collect();
+
+    let mut popup = BrowserPopupPanel::new();
+    popup.set_screen_size(W as f32, H as f32);
+    popup.open_actions(
+        BrowserPopupRequest {
+            mode: BrowserPopupMode::Actions,
+            tab: InspectorTab::Layer,
+            layer_id: None,
+            items,
+            category_names: Vec::new(),
+            spawn_graph_pos: None,
+            paste_count: 0,
+            screen_anchor: Vec2::new(30.0, 40.0),
+        },
+        actions,
+        ActionListOptions { empty_label: "No fonts match", label_in_own_font: true, current },
+    );
+
+    let mut tree = UITree::new();
+    let region = tree.begin_region(
+        Rect::new(0.0, 0.0, W as f32, H as f32),
+        ZTier::Overlay,
+        "browser_popup",
+        UIFlags::empty(),
+    );
+    let start = tree.count();
+    popup.build(&mut tree);
+    tree.end_region(region, start);
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_3);
+    ui.render_tree(&tree, None);
+    assert!(ui.prepare(&device, W, H, 1.0), "font picker produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "font-list-picker");
+    {
+        let mut enc = device.create_encoder("font-list-picker-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/font_list_picker.png");
+    save_capture(&png, &bytes, W, H);
+    eprintln!("font list picker → {png}");
+}
+
 /// Renders audio-clip bodies with their waveform painted INSIDE the body via the
 /// per-clip GPU content path (section 24 5b) — so the in-clip waveform (spectral colour,
 /// rounded-corner inset, sitting on the gradient body) can be eyeballed headlessly.

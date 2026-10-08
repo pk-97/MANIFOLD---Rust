@@ -380,6 +380,122 @@ pub fn x_for_byte_offset(text: &str, byte: usize, measure: &mut dyn FnMut(&str) 
     measure(&text[..byte])
 }
 
+// ── Visual line layout ──────────────────────────────────────────────
+//
+// One layout feeds drawing, click mapping, and up/down/line-home/line-end
+// motion, so what the user sees is what the pointer and arrows act on. A
+// visual line is a byte range into the text, excluding any `'\n'`. Hard
+// breaks leave a one-byte gap (the `'\n'`) between consecutive ranges; soft
+// wraps leave none (`lines[i].end == lines[i + 1].start`).
+
+/// Fills `out` with the visual lines of `text`. `max_width` wraps each hard
+/// line greedily at whitespace (a word wider than the line breaks between
+/// chars); `None` never wraps. Always yields at least one line.
+pub fn layout_lines(
+    text: &str,
+    max_width: Option<f32>,
+    measure: &mut dyn FnMut(&str) -> f32,
+    out: &mut Vec<Range<usize>>,
+) {
+    out.clear();
+    let mut hard_start = 0;
+    for hard in text.split('\n') {
+        let hard_end = hard_start + hard.len();
+        match max_width {
+            Some(w) if w > 0.0 => wrap_hard_line(text, hard_start..hard_end, w, measure, out),
+            _ => out.push(hard_start..hard_end),
+        }
+        hard_start = hard_end + 1;
+    }
+}
+
+fn wrap_hard_line(
+    text: &str,
+    line: Range<usize>,
+    max_width: f32,
+    measure: &mut dyn FnMut(&str) -> f32,
+    out: &mut Vec<Range<usize>>,
+) {
+    let mut start = line.start;
+    loop {
+        if measure(&text[start..line.end]) <= max_width {
+            out.push(start..line.end);
+            return;
+        }
+        // Last break after whitespace that still fits; failing that, the last
+        // char boundary that fits (at least one char, so we always advance).
+        let mut fit_char = None;
+        let mut fit_space = None;
+        for (i, ch) in text[start..line.end].char_indices() {
+            let end = start + i + ch.len_utf8();
+            if measure(&text[start..end]) > max_width {
+                break;
+            }
+            fit_char = Some(end);
+            if ch.is_whitespace() {
+                fit_space = Some(end);
+            }
+        }
+        let first_char_end = start + text[start..].chars().next().map_or(0, char::len_utf8);
+        let end = fit_space.or(fit_char).unwrap_or(first_char_end);
+        out.push(start..end);
+        start = end;
+    }
+}
+
+/// Index of the visual line holding `byte`. A byte on a soft-wrap boundary
+/// belongs to the line it starts.
+pub fn line_of(lines: &[Range<usize>], byte: usize) -> usize {
+    lines.iter().rposition(|l| l.start <= byte).unwrap_or(0)
+}
+
+/// The furthest caret position on line `i`. On a soft-wrapped line the
+/// range's end is the next line's start, so the caret stops one char short
+/// to stay visibly on this line.
+pub fn line_caret_end(text: &str, lines: &[Range<usize>], i: usize) -> usize {
+    let l = &lines[i];
+    let soft = lines.get(i + 1).is_some_and(|n| n.start == l.end);
+    if soft && l.end > l.start {
+        text[..l.end].char_indices().next_back().map_or(l.start, |(p, _)| p)
+    } else {
+        l.end
+    }
+}
+
+/// Byte offset on visual line `i` nearest `rel_x` (relative to the line's
+/// left edge).
+pub fn byte_on_line(
+    text: &str,
+    lines: &[Range<usize>],
+    i: usize,
+    rel_x: f32,
+    measure: &mut dyn FnMut(&str) -> f32,
+) -> usize {
+    let l = &lines[i];
+    let b = l.start + byte_offset_for_x(&text[l.clone()], rel_x, measure);
+    b.min(line_caret_end(text, lines, i))
+}
+
+/// Caret target for an up (`down == false`) or down arrow from `caret`,
+/// keeping its x. Past the first or last line it goes to the text's start
+/// or end, the macOS convention.
+pub fn vertical_target(
+    text: &str,
+    lines: &[Range<usize>],
+    caret: usize,
+    down: bool,
+    measure: &mut dyn FnMut(&str) -> f32,
+) -> usize {
+    let i = line_of(lines, caret);
+    let x = measure(&text[lines[i].start..caret]);
+    match (down, i) {
+        (false, 0) => 0,
+        (false, _) => byte_on_line(text, lines, i - 1, x, measure),
+        (true, _) if i + 1 >= lines.len() => text.len(),
+        (true, _) => byte_on_line(text, lines, i + 1, x, measure),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,5 +825,58 @@ mod tests {
         assert_eq!(x_for_byte_offset("hello", 0, &mut measure), 0.0);
         assert_eq!(x_for_byte_offset("hello", 3, &mut measure), 30.0);
         assert_eq!(x_for_byte_offset("hello", 5, &mut measure), 50.0);
+    }
+
+    // ── Visual line layout ───────────────────────────────────────────
+
+    fn lines(text: &str, max_width: Option<f32>) -> Vec<Range<usize>> {
+        let mut out = Vec::new();
+        layout_lines(text, max_width, &mut monospace, &mut out);
+        out
+    }
+
+    #[test]
+    fn layout_splits_hard_breaks_and_keeps_empty_lines() {
+        assert_eq!(lines("", None), vec![0..0]);
+        assert_eq!(lines("ab\n\ncd\n", None), vec![0..2, 3..3, 4..6, 7..7]);
+    }
+
+    #[test]
+    fn layout_wraps_at_the_last_space_that_fits() {
+        // 6 chars per line: "hello " | "world"
+        assert_eq!(lines("hello world", Some(60.0)), vec![0..6, 6..11]);
+    }
+
+    #[test]
+    fn layout_breaks_a_word_too_wide_for_the_line() {
+        assert_eq!(lines("abcdefgh", Some(30.0)), vec![0..3, 3..6, 6..8]);
+    }
+
+    #[test]
+    fn soft_wrap_boundary_belongs_to_the_next_line_and_caret_end_stays_short() {
+        let text = "hello world";
+        let l = lines(text, Some(60.0));
+        assert_eq!(line_of(&l, 6), 1);
+        assert_eq!(line_caret_end(text, &l, 0), 5, "stops before the trailing space");
+        assert_eq!(line_caret_end(text, &l, 1), 11);
+    }
+
+    #[test]
+    fn click_on_second_line_lands_on_that_line() {
+        let text = "ab\ncdef";
+        let l = lines(text, None);
+        assert_eq!(byte_on_line(text, &l, 1, 21.0, &mut monospace), 5);
+        assert_eq!(byte_on_line(text, &l, 0, 500.0, &mut monospace), 2, "clamps to line end");
+    }
+
+    #[test]
+    fn up_and_down_keep_x_and_fall_off_to_text_ends() {
+        let text = "abcd\nef\nghij";
+        let l = lines(text, None);
+        assert_eq!(vertical_target(text, &l, 3, true, &mut monospace), 7, "x=30 clamps to end of 'ef'");
+        assert_eq!(vertical_target(text, &l, 6, true, &mut monospace), 9);
+        assert_eq!(vertical_target(text, &l, 9, false, &mut monospace), 6);
+        assert_eq!(vertical_target(text, &l, 2, false, &mut monospace), 0);
+        assert_eq!(vertical_target(text, &l, 9, true, &mut monospace), text.len());
     }
 }

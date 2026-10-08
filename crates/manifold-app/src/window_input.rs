@@ -134,38 +134,50 @@ impl Application {
     // gate's shape (`self.text_input.active`) rather than duplicating a
     // second one per window.
 
-    /// Approximate rendered rect of the active text overlay, in the same
-    /// logical-pixel space as `self.cursor_pos` — mirrors
-    /// `app_render::render_text_input_overlay`'s own `bg_w`/`bg_h` sizing
-    /// (single-line fields exactly; multiline uses the anchor height, a
-    /// reasonable approximation — precise multiline geometry needs the live
-    /// line count, which only the renderer computes today).
-    fn text_input_overlay_rect(&self) -> (f32, f32, f32, f32) {
-        let a = self.text_input.anchor;
-        let bg_w = a.width.max(40.0);
-        let bg_h = a
-            .height
-            .max(self.text_input.font_size + crate::text_input::TEXT_INPUT_PAD_V * 2.0);
-        (a.x, a.y, bg_w, bg_h)
+    /// Runs `f` on the text session with the live `UIRenderer`'s measurer —
+    /// the same one the overlay draws with, so pointer and arrow mapping
+    /// match what is on screen. `None` before a renderer exists (a session
+    /// can't be visible then).
+    pub(crate) fn with_text_measure<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::text_input::TextInputState, &mut dyn FnMut(&str) -> f32) -> R,
+    ) -> Option<R> {
+        let fs = self.text_input.font_size as u16;
+        let r = self.ui_renderer.as_mut()?;
+        Some(f(&mut self.text_input, &mut |s| {
+            r.measure_text_cached(s, fs, manifold_ui::FontWeight::Medium).x
+        }))
     }
 
-    /// Byte offset under `x` (logical px, relative to the anchor's left
-    /// edge) via the live `UIRenderer`'s own measurer — the same
-    /// `byte_offset_for_x` helper `x_for_byte_offset` inverts for rendering.
-    /// Falls back to the text's end when no renderer is up yet (can't
-    /// happen once a session is active in practice, since the overlay that
-    /// hosts it needs the renderer to draw — belt and suspenders).
-    fn text_input_byte_at_x(&mut self, x: f32) -> usize {
-        let pad_h = crate::text_input::TEXT_INPUT_PAD_H;
-        let rel_x = x - self.text_input.anchor.x - pad_h;
-        let fs = self.text_input.font_size as u16;
-        let text = self.text_input.text().to_string();
-        match self.ui_renderer.as_mut() {
-            Some(r) => manifold_ui::text_edit::byte_offset_for_x(&text, rel_x, &mut |s| {
-                r.measure_text_cached(s, fs, manifold_ui::FontWeight::Medium).x
-            }),
-            None => text.len(),
+    /// Arrow keys in a text session, both windows. Left/Right step a char
+    /// (Option: a word); Cmd+Left/Right go to the visual line's start/end;
+    /// Up/Down move a visual line; Cmd+Up/Down go to the text's start/end.
+    /// Shift extends the selection throughout.
+    pub(crate) fn text_input_arrow(&mut self, key: winit::keyboard::NamedKey) {
+        use winit::keyboard::NamedKey;
+        let (select, word, cmd) = (self.modifiers.shift, self.modifiers.alt, self.modifiers.command);
+        match (key, cmd) {
+            (NamedKey::ArrowLeft, false) => self.text_input.move_left(select, word),
+            (NamedKey::ArrowRight, false) => self.text_input.move_right(select, word),
+            (NamedKey::ArrowUp, true) => self.text_input.move_home(select),
+            (NamedKey::ArrowDown, true) => self.text_input.move_end(select),
+            (NamedKey::ArrowLeft | NamedKey::ArrowRight, true) => {
+                let end = key == NamedKey::ArrowRight;
+                self.with_text_measure(|ti, m| ti.move_line_edge(end, select, m));
+            }
+            (NamedKey::ArrowUp | NamedKey::ArrowDown, false) => {
+                let down = key == NamedKey::ArrowDown;
+                self.with_text_measure(|ti, m| ti.move_vertical(down, select, m));
+            }
+            _ => {}
         }
+    }
+
+    /// Byte offset under `pos`, mapped through the overlay's shared layout.
+    fn text_input_byte_at(&mut self, pos: Vec2) -> usize {
+        let len = self.text_input.text().len();
+        self.with_text_measure(|ti, m| ti.byte_at_point(pos.x, pos.y, m))
+            .unwrap_or(len)
     }
 
     /// A left-press anywhere while a text session is active. Inside the
@@ -180,14 +192,15 @@ impl Application {
         if !self.text_input.active {
             return false;
         }
-        let (rx, ry, rw, rh) = self.text_input_overlay_rect();
-        let inside = pos.x >= rx && pos.x <= rx + rw && pos.y >= ry && pos.y <= ry + rh;
+        let inside = self
+            .with_text_measure(|ti, m| ti.overlay_geometry(&mut Vec::new(), m).contains(pos.x, pos.y))
+            .unwrap_or(false);
         if !inside {
             let (field, text) = self.text_input.commit();
             self.handle_text_input_commit(field, &text);
             return false;
         }
-        let byte = self.text_input_byte_at_x(pos.x);
+        let byte = self.text_input_byte_at(pos);
         let now = self.time_since_start;
         let is_double_click = self.text_input.last_press.is_some_and(|(t, px, py)| {
             (now - t) < manifold_ui::color::DOUBLE_CLICK_TIME_SEC
@@ -212,7 +225,7 @@ impl Application {
         if !self.text_input.active || !self.text_input.dragging {
             return false;
         }
-        let byte = self.text_input_byte_at_x(pos.x);
+        let byte = self.text_input_byte_at(pos);
         self.text_input.drag_to(byte);
         true
     }
@@ -2111,10 +2124,9 @@ impl Application {
                     }
                 }
                 Key::Named(NamedKey::Enter) => {
-                    // Multiline (WGSL code): Enter inserts a newline, the
-                    // natural code-editor convention; Cmd+Enter commits.
-                    // Single-line fields commit on a bare Enter.
-                    if self.text_input.multiline && !self.modifiers.command {
+                    // Same rule as the main window: Shift+Enter is a new
+                    // line in a multiline field, Enter commits.
+                    if self.text_input.multiline && self.modifiers.shift {
                         self.text_input.insert_char('\n');
                     } else {
                         let (field, text) = self.text_input.commit();
@@ -2123,20 +2135,12 @@ impl Application {
                 }
                 Key::Named(NamedKey::Backspace) => self.text_input.backspace(),
                 Key::Named(NamedKey::Delete) => self.text_input.delete(),
-                Key::Named(NamedKey::ArrowLeft) => {
-                    if self.modifiers.command {
-                        self.text_input.move_home(self.modifiers.shift);
-                    } else {
-                        self.text_input.move_left(self.modifiers.shift, self.modifiers.alt);
-                    }
-                }
-                Key::Named(NamedKey::ArrowRight) => {
-                    if self.modifiers.command {
-                        self.text_input.move_end(self.modifiers.shift);
-                    } else {
-                        self.text_input.move_right(self.modifiers.shift, self.modifiers.alt);
-                    }
-                }
+                Key::Named(
+                    k @ (NamedKey::ArrowLeft
+                    | NamedKey::ArrowRight
+                    | NamedKey::ArrowUp
+                    | NamedKey::ArrowDown),
+                ) => self.text_input_arrow(*k),
                 Key::Named(NamedKey::Space) if typing => self.text_input.insert_char(' '),
                 Key::Character(c) => {
                     if c == "a" && self.modifiers.command {
@@ -2728,32 +2732,23 @@ impl Application {
                         self.text_input.delete();
                         consumed = true;
                     }
-                    Key::Named(NamedKey::ArrowLeft) => {
-                        if self.modifiers.command {
-                            self.text_input.move_home(self.modifiers.shift);
-                        } else {
-                            self.text_input.move_left(self.modifiers.shift, self.modifiers.alt);
-                        }
-                        consumed = true;
-                    }
-                    Key::Named(NamedKey::ArrowRight) => {
-                        if self.modifiers.command {
-                            self.text_input.move_end(self.modifiers.shift);
-                        } else {
-                            self.text_input.move_right(self.modifiers.shift, self.modifiers.alt);
-                        }
-                        consumed = true;
-                    }
-                    // Picker keyboard nav (P2) — only meaningful while the
-                    // browser search field owns the session; every other
-                    // active text field suppresses arrows (falls to `_`,
-                    // unchanged from before).
+                    // Picker keyboard nav (P2) — while the browser search
+                    // field owns the session, up/down move the pick.
                     Key::Named(NamedKey::ArrowUp) if is_search_filter => {
                         self.ws.ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Up);
                         consumed = true;
                     }
                     Key::Named(NamedKey::ArrowDown) if is_search_filter => {
                         self.ws.ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Down);
+                        consumed = true;
+                    }
+                    Key::Named(
+                        k @ (NamedKey::ArrowLeft
+                        | NamedKey::ArrowRight
+                        | NamedKey::ArrowUp
+                        | NamedKey::ArrowDown),
+                    ) => {
+                        self.text_input_arrow(*k);
                         consumed = true;
                     }
                     Key::Named(NamedKey::Space) => {

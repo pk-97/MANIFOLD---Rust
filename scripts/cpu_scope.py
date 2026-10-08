@@ -57,6 +57,18 @@ class Plan:
         return "mode: scoped (changed modules + mapped integration binaries)\nfilterset: " + self.filterset
 
 
+GPU_PROOF_TESTS = re.compile(r'#\[cfg\(all\(test,\s*feature\s*=\s*"gpu-proofs"\)\)\]')
+
+
+def gpu_proofs_only(source):
+    """True when every test module in `source` is built only under gpu-proofs.
+    A deleted or moved file has no text and keeps its module filter."""
+    if not source.is_file():
+        return False
+    text = source.read_text()
+    return bool(GPU_PROOF_TESTS.search(text)) and '#[cfg(test)]' not in text
+
+
 def plan_for_paths(paths, repo, workspace=None, base=None):
     repo, plan, cache = Path(repo).resolve(), Plan(), {}
     workspace = workspace or Workspace(repo)
@@ -135,6 +147,10 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
                 binary_filter = f" & binary(={target})"
                 root = (crate / target_path).parent.resolve()
                 modules = [module_parts(source.relative_to(root)) if source != (crate / target_path).resolve() else []]
+            elif gpu_proofs_only(source):
+                # Its tests run in the gpu-proofs leg (gpu_scope); a CPU
+                # filter here would select nothing and fail ownership.
+                modules = []
             else:
                 modules = [module_name(source, root, aliases)]
             for sibling in source.parent.glob(source.stem + "_*tests.rs"):
