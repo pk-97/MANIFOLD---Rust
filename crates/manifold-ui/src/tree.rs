@@ -338,6 +338,7 @@ impl UITree {
             tooltip: None,
             texture: None,
             uv: [0.0, 0.0, 1.0, 1.0],
+            font_family: None,
             draw_order: self.count as i32,
         };
 
@@ -761,6 +762,20 @@ impl UITree {
             return;
         }
         self.nodes[idx].text = Some(text.to_string());
+        self.nodes[idx].flags |= UIFlags::DIRTY;
+        self.has_dirty = true;
+    }
+
+    /// Draw this node's text in an installed font (see `UINode::font_family`).
+    pub fn set_font_family(&mut self, id: NodeId, family: &str) {
+        if !self.is_live(id) {
+            return;
+        }
+        let idx = id.index();
+        if self.nodes[idx].font_family.as_deref() == Some(family) {
+            return;
+        }
+        self.nodes[idx].font_family = Some(family.to_string());
         self.nodes[idx].flags |= UIFlags::DIRTY;
         self.has_dirty = true;
     }

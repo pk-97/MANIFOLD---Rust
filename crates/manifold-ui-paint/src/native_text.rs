@@ -151,6 +151,9 @@ struct FontManager {
     /// look the exact font back up when it later rasterizes that run's
     /// glyph ids.
     fallback_fonts: AHashMap<u64, CTFont>,
+    /// Installed fonts drawn by name (font-picker previews), keyed by
+    /// (family id from `NativeTextRenderer::families`, size_x10 physical).
+    family_fonts: AHashMap<(u16, u16), CTFont>,
 }
 
 impl FontManager {
@@ -164,7 +167,27 @@ impl FontManager {
             bold,
             cache: AHashMap::new(),
             fallback_fonts: AHashMap::new(),
+            family_fonts: AHashMap::new(),
         }
+    }
+
+    /// An installed font by family name, resolved the same way the Text
+    /// generator resolves it (`new_from_name`), so a preview shows what the
+    /// generator will draw. An unknown name, or a symbol font (Wingdings,
+    /// Zapf Dingbats, Emoji — its name would draw as pictures), falls back
+    /// to Inter Regular so the name stays readable.
+    fn get_family_font(&mut self, family_id: u16, name: &str, physical_size: f32) -> CTFont {
+        use core_text::font_descriptor::{kCTFontClassMaskTrait, kCTFontSymbolicClass};
+        let size_x10 = (physical_size * 10.0).round() as u16;
+        if let Some(f) = self.family_fonts.get(&(family_id, size_x10)) {
+            return f.clone();
+        }
+        let font = core_text::font::new_from_name(name, physical_size as f64)
+            .ok()
+            .filter(|f| f.symbolic_traits() & kCTFontClassMaskTrait != kCTFontSymbolicClass)
+            .unwrap_or_else(|| core_text::font::new_from_CGFont(&self.regular, physical_size as f64));
+        self.family_fonts.insert((family_id, size_x10), font.clone());
+        font
     }
 
     /// Register a CoreText-resolved fallback font (a run's font that isn't
@@ -276,8 +299,9 @@ impl GlyphAtlas {
         // own glyph table instead of an arbitrary glyph in Inter's.
         let ct_font: CTFont = match key.font {
             GlyphFont::Base(weight) => font_mgr.get_ct_font(physical_size, weight).clone(),
+            // Interned at whatever size first shaped it; the key's size wins.
             GlyphFont::Fallback(hash) => match font_mgr.fallback_fonts.get(&hash) {
-                Some(f) => f.clone(),
+                Some(f) => f.clone_with_font_size(physical_size as f64),
                 None => {
                     // Shaping always interns a fallback font before any of
                     // its glyphs reach the atlas this same frame, so this
@@ -800,6 +824,9 @@ struct TextCommand {
     font_size: f32,
     color: [u8; 4],
     font_weight: FontWeight,
+    /// An installed font to draw in instead of Inter (index into
+    /// `NativeTextRenderer::families`).
+    family: Option<u16>,
     clip_bounds: Option<[f32; 4]>,
     depth: Depth,
     /// Transform captured at draw time — see `ui_renderer::RectCommand::transform`.
@@ -906,6 +933,10 @@ pub struct NativeTextRenderer {
     /// Uses hash keys to avoid String allocations on cache hits.
     measure_cache: AHashMap<u64, Vec2>,
     frame_generation: u64,
+    /// Interned installed-font family names for `draw_text_in_family`.
+    /// Bounded by the installed font list; never cleared.
+    families: Vec<String>,
+    family_ids: AHashMap<String, u16>,
 }
 
 impl NativeTextRenderer {
@@ -976,7 +1007,47 @@ impl NativeTextRenderer {
             depths: Vec::with_capacity(8),
             measure_cache: AHashMap::new(),
             frame_generation: 0,
+            families: Vec::new(),
+            family_ids: AHashMap::new(),
         }
+    }
+
+    /// The installed-font family of each queued text command, in queue
+    /// order (`None` = the UI font) — for proofs that a node's font reached
+    /// the renderer.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub(crate) fn queued_families(&self) -> Vec<Option<&str>> {
+        self.commands
+            .iter()
+            .map(|c| c.family.map(|id| self.families[id as usize].as_str()))
+            .collect()
+    }
+
+    /// Queue a text draw in an installed font, by family name — used where
+    /// the text should look like the font it names (the font picker).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_text_in_family(
+        &mut self,
+        x: f32,
+        y: f32,
+        text: &str,
+        font_size: f32,
+        color: [u8; 4],
+        family: &str,
+        clip_bounds: Option<[f32; 4]>,
+        depth: Depth,
+        transform: Affine2,
+    ) {
+        let id = match self.family_ids.get(family) {
+            Some(&id) => id,
+            None => {
+                let id = self.families.len().min(u16::MAX as usize) as u16;
+                self.families.push(family.to_string());
+                self.family_ids.insert(family.to_string(), id);
+                id
+            }
+        };
+        self.push_text(x, y, text, font_size, color, FontWeight::Regular, Some(id), clip_bounds, depth, transform);
     }
 
     /// Queue a text draw command.
@@ -989,6 +1060,23 @@ impl NativeTextRenderer {
         font_size: f32,
         color: [u8; 4],
         font_weight: FontWeight,
+        clip_bounds: Option<[f32; 4]>,
+        depth: Depth,
+        transform: Affine2,
+    ) {
+        self.push_text(x, y, text, font_size, color, font_weight, None, clip_bounds, depth, transform);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_text(
+        &mut self,
+        x: f32,
+        y: f32,
+        text: &str,
+        font_size: f32,
+        color: [u8; 4],
+        font_weight: FontWeight,
+        family: Option<u16>,
         clip_bounds: Option<[f32; 4]>,
         depth: Depth,
         transform: Affine2,
@@ -1007,6 +1095,7 @@ impl NativeTextRenderer {
             font_size,
             color,
             font_weight,
+            family,
             clip_bounds,
             depth,
             transform,
@@ -1130,11 +1219,18 @@ impl NativeTextRenderer {
             // Clone (a cheap CF retain bump) so the borrow of `font_manager`
             // ends here — `shape_line` below needs its own `&mut` borrow to
             // intern any fallback fonts it discovers (BUG-107).
-            let ct_font: CTFont = self
-                .font_manager
-                .get_ct_font(physical_size, cmd.font_weight)
-                .clone();
-            let Some(runs) = shape_line(&mut self.font_manager, cmd.font_weight, &ct_font, text)
+            let (ct_font, base_weight): (CTFont, Option<FontWeight>) = match cmd.family {
+                Some(id) => (
+                    self.font_manager
+                        .get_family_font(id, &self.families[id as usize], physical_size),
+                    None,
+                ),
+                None => (
+                    self.font_manager.get_ct_font(physical_size, cmd.font_weight).clone(),
+                    Some(cmd.font_weight),
+                ),
+            };
+            let Some(runs) = shape_line(&mut self.font_manager, base_weight, &ct_font, text)
             else {
                 continue;
             };
@@ -1661,11 +1757,13 @@ struct ShapedRun {
 /// Shape text into its CoreText glyph runs. A run whose resolved font
 /// differs from `ct_font` is interned into `font_mgr` (`intern_fallback`) so
 /// the glyph atlas can rasterize it with the right font later — `base_weight`
-/// is `ct_font`'s own weight, carried through for the common non-fallback
-/// case so the atlas key stays the cheap `GlyphFont::Base` variant.
+/// is `ct_font`'s own Inter weight, carried through for the common
+/// non-fallback case so the atlas key stays the cheap `GlyphFont::Base`
+/// variant. `None` means `ct_font` is not Inter (an installed font drawn by
+/// name), so every run is interned.
 fn shape_line(
     font_mgr: &mut FontManager,
-    base_weight: FontWeight,
+    base_weight: Option<FontWeight>,
     ct_font: &CTFont,
     text: &str,
 ) -> Option<Vec<ShapedRun>> {
@@ -1689,10 +1787,11 @@ fn shape_line(
             let key = unsafe { kCTFontAttributeName };
             attrs.find(key).and_then(|v| v.downcast::<CTFont>())
         });
-        let font = match run_font {
-            Some(f) if f.postscript_name() == base_ps_name => GlyphFont::Base(base_weight),
-            Some(f) => GlyphFont::Fallback(font_mgr.intern_fallback(&f)),
-            None => GlyphFont::Base(base_weight),
+        let font = match (run_font, base_weight) {
+            (Some(f), Some(w)) if f.postscript_name() == base_ps_name => GlyphFont::Base(w),
+            (Some(f), _) => GlyphFont::Fallback(font_mgr.intern_fallback(&f)),
+            (None, Some(w)) => GlyphFont::Base(w),
+            (None, None) => GlyphFont::Fallback(font_mgr.intern_fallback(ct_font)),
         };
         let run_glyphs = run.glyphs().into_owned();
         let run_positions = run.positions().into_owned();
@@ -1800,5 +1899,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The font picker draws a name in its own installed font: shaping
+    /// against that font must key every run to it (not Inter), and each
+    /// atlas size must rasterize at its own size.
+    #[test]
+    fn installed_font_shapes_as_its_own_font_at_each_size() {
+        let mut fm = FontManager::new();
+        let georgia = fm.get_family_font(0, "Georgia", 24.0);
+        assert_eq!(georgia.family_name(), "Georgia", "Georgia ships with macOS");
+        let runs = shape_line(&mut fm, None, &georgia, "Hg").expect("shapes");
+        assert!(runs.iter().all(|r| matches!(r.font, GlyphFont::Fallback(_))));
+
+        let mut atlas = GlyphAtlas::new_cpu_only();
+        let font = runs[0].font;
+        let glyph_id = runs[0].glyphs[0];
+        let small = atlas
+            .rasterize_glyph(&mut fm, GlyphKey { glyph_id, size_x10: 120, font })
+            .map(|g| g.pixel_h)
+            .expect("small");
+        let large = atlas
+            .rasterize_glyph(&mut fm, GlyphKey { glyph_id, size_x10: 480, font })
+            .map(|g| g.pixel_h)
+            .expect("large");
+        assert!(large > small * 3, "48px glyph ({large}) must be ~4x the 12px one ({small})");
+    }
+
+    /// A symbol font's name would draw as pictures, so the picker shows it
+    /// in Inter instead. Wingdings and Zapf Dingbats ship with macOS.
+    #[test]
+    fn symbol_fonts_preview_their_name_in_the_ui_font() {
+        let mut fm = FontManager::new();
+        for (id, name) in ["Wingdings", "Zapf Dingbats"].into_iter().enumerate() {
+            let f = fm.get_family_font(id as u16, name, 24.0);
+            assert!(f.family_name().starts_with("Inter"), "{name} resolved to {}", f.family_name());
+        }
+        assert_eq!(fm.get_family_font(9, "Georgia", 24.0).family_name(), "Georgia");
     }
 }

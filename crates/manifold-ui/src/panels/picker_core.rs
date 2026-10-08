@@ -162,6 +162,19 @@ impl PickerCore {
         self.cursor
     }
 
+    /// Put the keyboard cursor on the item at `items` index `item` (the
+    /// picker's current value, so arrows start from it). `false`, cursor
+    /// unchanged, when that item is filtered out or out of range.
+    pub fn set_cursor_to_item(&mut self, item: usize) -> bool {
+        match self.filtered.iter().position(|&i| i == item) {
+            Some(pos) => {
+                self.cursor = Some(pos);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Count of items passing the current filter/category — avoids
     /// materializing [`Self::filtered`] just to measure it (the grid's
     /// row-count math).
