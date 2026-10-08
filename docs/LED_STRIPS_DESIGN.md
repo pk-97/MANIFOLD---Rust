@@ -210,7 +210,7 @@ Peter's directives (2026-09-03, verbatim — these decide the MVP):
   → `live_clip_manager.rs` (phantom clips, 5ms guard); layer matching via
   `Layer.midi_note/channel/device/trigger_mode` (`crates/manifold-core/src/layer.rs:146-155`).
   LED layers inherit all of it — zero new trigger work.
-- **Pattern atoms exist.** 254 primitives (`rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/`);
+- **Pattern atoms exist.** 254 primitives (`rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/`);
   beat gates/ramps, directional ramps, trigger cycling, texture combines all present.
   Per D3's prediction: the pack composes from existing atoms, no new primitives expected.
   Section 2.5 audit re-run at preset-authoring time regardless.

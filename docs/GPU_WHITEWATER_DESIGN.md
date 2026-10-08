@@ -60,7 +60,7 @@ Extend, don't redesign. `F/` is `crates/manifold-fluids/native/flip_engine/`, `R
 
 ### 1.1 Primitive audit
 
-DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`; reference presets `WaterDamBreakGpu.json` (FLIP whitewater into the three copies objects, ids 44, 47, 50) and `WaterDamBreakMatter.json`, read end to end.
+DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`; reference presets `WaterDamBreakGpu.json` (FLIP whitewater into the three copies objects, ids 44, 47, 50) and `WaterDamBreakMatter.json`, read end to end.
 
 | Job | Verdict | Nearest existing, and why it isn't it |
 |---|---|---|

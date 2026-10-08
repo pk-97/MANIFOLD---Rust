@@ -15,7 +15,7 @@ Honesty about certification: this doc barely moves the conformance number — mo
 
 ```
 rg -n 'JOINTS_0|WEIGHTS_0|read_morph|animations\(\)|skins\(\)' crates/manifold-nodes-scene/src/node_graph/gltf_load.rs   # expect: still zero hits
-rg -n 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/{morph_mesh,bend_mesh,displace_mesh,gltf_mesh_source}.rs
+rg -n 'purpose: "' crates/manifold-nodes-scene/src/node_graph/primitives/{morph_mesh,bend_mesh,displace_mesh,gltf_mesh_source}.rs
 rg -n 'anim_progress|trigger_count' crates/manifold-renderer/src/node_graph/effect_runtime.rs | head
 ```
 
@@ -138,7 +138,7 @@ turned out to be the WRONG stress axis (see Deviation from D2 below).
   frame to find the range — cheap at the joint counts these fixtures carry, confirmed by
   the hot-path gate below) instead of one Table per channel.
 - **section 2.5 audit (CLAUDE.md, mandatory before proposing `node.skin_mesh`):**
-  `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"` — no
+  `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"` — no
   existing primitive does per-vertex joint blending, matrix-palette lookup, or anything
   adjacent (`node.morph_mesh` is the nearest relative — a coincident two-mesh lerp with
   an optional coincident weights buffer — and it directly informed the `joints`/`weights`
@@ -249,7 +249,7 @@ assumed):**
   A2's node-transform deviation (see A2 brief above): the doc's assumption doesn't survive
   contact with the real assets.
 - section 2.5 audit (CLAUDE.md, mandatory before proposing new primitives):
-  `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/` — no existing
+  `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/` — no existing
   primitive does N-ary weighted delta-sum blending. `node.morph_mesh` and
   `node.blend_copies` are the nearest relatives, both strictly 2-ary. Genuinely new,
   confirmed.

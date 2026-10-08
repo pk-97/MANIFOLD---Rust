@@ -1150,7 +1150,7 @@ wait costs about 0.8 ms per frame (2026-09-30, M-series GPU, floating-box scene)
 
 ## 9. Section 2.5 audit and codegen classification
 
-Per DECOMPOSING_GENERATORS.md section 2.5 (Precondition: audit by analogy before workflow step 1). Survey: `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'` (322 registered type ids at `c8961489d`). Reference presets read end to end:
+Per DECOMPOSING_GENERATORS.md section 2.5 (Precondition: audit by analogy before workflow step 1). Survey: `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'` (322 registered type ids at `c8961489d`). Reference presets read end to end:
 `WaterDamBreak.json` (FLIP node, column Transform, moving box, whitewater wiring),
 `FluidSim3D.json` (particles into a flat 3D accumulator, fixed-point resolve).
 

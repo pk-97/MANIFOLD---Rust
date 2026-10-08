@@ -23,7 +23,7 @@ Authority: [design](SCENE_MODIFIER_RT_DESIGN.md), [acceptance](SCENE_MODIFIER_RT
 | `instantiate_def` / `NodeInstantiation` | `node_graph/graph_loader.rs:689`, `:160`, stable-ID resolution `:913` | Append rules argument, install through numeric `id_map` after source/params; handle names are not stable IDs. |
 | `from_render_def` / chain splice | `preset_runtime/build.rs:277`; `node_graph/chain_spec.rs:83` | Forward prepared rules through existing shared loader. |
 
-All abbreviated renderer paths below are under `crates/manifold-renderer/src/`; primitive filenames are under `node_graph/primitives/`. GPU abbreviated paths above are under `crates/manifold-gpu/src/metal/raytrace/`, except `shadow_rays.msl` under `metal/`. Line ranges are inspection aids; function/type names are the migration anchors.
+Abbreviated scene paths below are under `crates/manifold-nodes-scene/src/`; primitive filenames are under `node_graph/primitives/`. Catalog tests and binaries remain under `crates/manifold-renderer/src/`. GPU abbreviated paths above are under `crates/manifold-gpu/src/metal/raytrace/`, except `shadow_rays.msl` under `metal/`. Line ranges are inspection aids; function/type names are the migration anchors.
 
 ## Stock scene-modifier recipes
 
@@ -80,8 +80,8 @@ for f in crates/manifold-renderer/assets/scene-modifier-presets/*.json; do
 done
 
 # all primitive/recipe/fusion anchors
-rg -n 'type_id: "node\.(normal_wave_mesh|wave_shear_mesh|transform_mesh_patches|ordered_recon_mesh|morph_mesh|mesh_spatial_mask|mesh_stagger_envelope|analytic_echo_instances|scene_array)"|"typeId": "node\.(normal_wave_mesh|wave_shear_mesh|transform_mesh_patches|ordered_recon_mesh|morph_mesh|mesh_spatial_mask|mesh_stagger_envelope|analytic_echo_instances|scene_array)"' crates/manifold-renderer/src crates/manifold-renderer/assets/scene-modifier-presets
-rg -n 'is_fragment|is_mesh_unary|is_weight_source|remap_mesh_cut|topology|MeshTopologyHistory' crates/manifold-node-engine/src/load/expand crates/manifold-node-engine/src/scene/scene_object.rs crates/manifold-renderer/src/node_graph/primitives/{scene_object.rs,render_scene.rs}
+rg -n 'type_id: "node\.(normal_wave_mesh|wave_shear_mesh|transform_mesh_patches|ordered_recon_mesh|morph_mesh|mesh_spatial_mask|mesh_stagger_envelope|analytic_echo_instances|scene_array)"|"typeId": "node\.(normal_wave_mesh|wave_shear_mesh|transform_mesh_patches|ordered_recon_mesh|morph_mesh|mesh_spatial_mask|mesh_stagger_envelope|analytic_echo_instances|scene_array)"' crates/manifold-nodes-scene/src crates/manifold-renderer/assets/scene-modifier-presets
+rg -n 'is_fragment|is_mesh_unary|is_weight_source|remap_mesh_cut|topology|MeshTopologyHistory' crates/manifold-node-engine/src/load/expand crates/manifold-node-engine/src/scene/scene_object.rs crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs
 rg -n 'FusedGeneratorView|FusedDef|fused_generator_def_for|fuse_generator_def|fused_effect_view_for|SegmentView|LoadedPresetView|expected_spaces|node_retarget|fused_retarget' crates/manifold-node-engine/src/freeze/install.rs crates/manifold-node-engine/src/ crates/manifold-renderer/src/{generators,node_graph}/ -g '*.rs'
 ```
 
@@ -332,7 +332,7 @@ Whole-workspace lexical census, using the same script above with the following a
 * `crates/manifold-app/src/ui_snapshot/mod.rs:715`
 * `crates/manifold-app/src/viewport_p6_demo.rs:136,162,188`
 * `crates/manifold-app/src/window_input.rs:1009,1110`
-* `crates/manifold-renderer/src/node_graph/gltf_import/card_precedence_tests.rs:75`
+* `crates/manifold-renderer/src/node_graph/catalog_tests/gltf_card_precedence.rs:75`
 * `crates/manifold-nodes-scene/src/node_graph/gltf_import/tests.rs:64,385,447,746,988,1001,1581,2181,2246,2807,2903,3212,3270,3543,3598,3832`
 * `crates/manifold-node-engine/src/load/loaded_preset_view.rs:230`
 * `crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_tests.rs:264`

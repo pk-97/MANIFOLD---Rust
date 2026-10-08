@@ -632,7 +632,7 @@ fluid_surface ─ particles_a/b, counts, identities, blend, span ─► interpol
 ```
 
 Section 2.5 audit, per DECOMPOSING_GENERATORS.md section 2.5 (audit by analogy).
-Survey: `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'`.
+Survey: `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'`.
 Reference presets read end to end: `WaterBasin.json` (fluid → scene object, obstacle
 pose wiring), `WaterDamBreak.json` (whitewater instances and counts), `FluidSim3D.json`
 (particles → flat 3D accumulator → volume → field sampling).

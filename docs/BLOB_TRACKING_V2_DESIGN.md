@@ -32,7 +32,7 @@ Snapshot: `9b419c32587f4370d1f2f216850d274900603273`. Paths below are repository
 | Mask composition/proofs | `MaskCircle.json`, `MaskImage.json`; `crates/manifold-renderer/src/engine_contract_tests/runtime_group_mask_tests.rs` | Existing invert/amount convention and dry-input, wet/dry, reload tests. Extend these tests. |
 | Native distribution | `assets/plugins/BlobDetector/build.sh` | Builds and embeds OpenCV dependencies in `assets/plugins/BlobDetector.bundle`; rebuilds the bundle directory. Run only in the implementation slot. |
 
-The primitive filenames above without a full directory are under `crates/manifold-renderer/src/node_graph/primitives/`; preset filenames are under `crates/manifold-renderer/assets/effect-presets/`.
+The primitive filenames above without a full directory are under `crates/manifold-nodes-image/src/node_graph/primitives/`; preset filenames are under `crates/manifold-renderer/assets/effect-presets/`.
 
 ## 2. Decisions
 
