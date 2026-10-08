@@ -6,7 +6,7 @@
 
 The occupied-block rule in the contract comes from BUG-l2h3 (SWASH to a live instrument) item .10, closed 2026-10-02 as deferred to BUG-jyot.
 
-Companions: GPU_FLIP_PRESSURE_SOLVE.md (the solver as built), GPU_WHITEWATER_DESIGN.md (reads the step's faces), DECOMPOSING_GENERATORS.md section 1.2 (Specialised solvers are stage nodes).
+Companions: GPU_FLIP_PRESSURE_SOLVE.md (the solver as built), GPU_WHITEWATER_DESIGN.md (reads the step's faces), DECOMPOSING_GENERATORS.md section 1.2 (Engine internals are stage nodes).
 
 ## 0. The finding that shaped this design
 

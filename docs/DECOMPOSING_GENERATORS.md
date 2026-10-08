@@ -34,6 +34,8 @@ The win condition: every shipping effect and generator is a graph of single-purp
 
 ## 1.1 No fused single-effect or single-generator monoliths
 
+**Scope:** Effect and generator graphs (2D, TouchDesigner-style). 3D scenes use section 1.2 (Engine internals are stage nodes).
+
 **Hard rule:** A primitive does one composable thing — a single GPU dispatch, a single DNN inference, a single FFI call, a single CPU operation. Bundling multiple distinct operations into a "this is the whole effect" or "this is the whole generator" kernel is not permitted.
 
 This rule applies regardless of where the work runs:
@@ -47,7 +49,7 @@ The four effects historically labelled "permanent monoliths" in `NODE_CATALOG.md
 
 **Why the rule:** the graph editor only meets the section 0 framing — composable surface for users and AI agents — if effects and generators are *graphs*, not blackboxes. A user who wants to swap Bloom's Gaussian for a box blur needs Bloom to be a graph. A user who wants to drive AutoGain's envelope follower from an audio band instead of luminance needs AutoGain to be a graph. The bundles defeat this; decomposition restores it.
 
-**The fuse-for-parity diagnosis:** if a previous decomposition pass produced a primitive that wraps multiple dispatches and pretends to be primitive-level, it's a 2nd-pass target. The histogram tells you exactly which: `fluid_simulate` (Euler + noise + diffusion + injection), `fluid_simulate_3d` (same in 3D), `fluid_gradient_rotate` (gradient + rotate), `fluid_gradient_curl_3d` (gradient + curl), the curated kernels (`plasma_pattern_2d`, `shape_2d`, `star_field_2d`, `generate_lissajous`), the mesh monoliths (`nested_cubes_geometry`, `digital_plants_render`, `render_3d_mesh_pbr_ibl`), and the six wrapped legacy effects. See `PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` for the tranche order and atom-on-the-shelf inventory.
+**The fuse-for-parity diagnosis:** if a previous decomposition pass produced a primitive that wraps multiple dispatches and pretends to be primitive-level, it's a 2nd-pass target. The histogram tells you exactly which: `fluid_simulate` (Euler + noise + diffusion + injection), `fluid_simulate_3d` (same in 3D), `fluid_gradient_rotate` (gradient + rotate), `fluid_gradient_curl_3d` (gradient + curl), the curated kernels (`plasma_pattern_2d`, `shape_2d`, `star_field_2d`, `generate_lissajous`), and the six wrapped legacy effects. The 3D-scene items previously listed here (`nested_cubes_geometry`, `digital_plants_render`, `render_3d_mesh_pbr_ibl`) are re-judged under BUG-0r2ok (3D scene engine internals epic), using section 1.2 (Engine internals are stage nodes). See `PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` for the tranche order and atom-on-the-shelf inventory.
 
 **Time budgeting**: the first decomposition that uses a new primitive family (Plasma → curated procedural texture; Lissajous → curve sources; WireframeZoo → 3D wireframe pipeline) pays a one-time *inherent* tax — building the new primitives that didn't exist (`wireframe_shape`, `EdgePair`, the `edges` input on `render_lines`). That's an investment, not waste — those primitives become the vocabulary the next generator in the family reuses.
 
@@ -55,25 +57,27 @@ What's *not* part of that tax is extending adjacent primitives for port-shadow �
 
 Subsequent decompositions in the same family are far cheaper. Tesseract / Duocylinder will inherit the entire 3D wireframe pipeline from WireframeZoo; they'll likely be JSON-only changes plus one or two 4D primitive additions. Don't budget the second decomposition like the first.
 
-## 1.2 Specialised solvers are stage nodes
+## 1.2 Engine internals are stage nodes
 
 Peter, 2026-10-01. The atom rule in section 1.1 exists so a user can swap a part they would plausibly rewire: Bloom's blur, AutoGain's envelope source. A numerical method's internals don't qualify. Nobody swaps a multigrid smoother or reroutes a particle-to-grid transfer; people play a simulation through its params (forces, emitters, solids, look). Built as atoms, a solver costs the show: hundreds of nodes, a dispatch and a fusion boundary per step, and region machinery to express loops that are plain Rust.
 
-A node qualifies as a solver stage only when all three hold:
+Peter, 2026-10-09. The same boundary rule covers 3D scene engine internals. Code modularity remains binding inside each node.
 
-1. **Seam-typed ports.** Every input and output is a type the liquid seam (or the equivalent contract for another solver) already names: particles, face grids, solid lattices, forces. Nothing internal leaks out as a port.
-2. **One numerical method, proven at the boundary against an external reference.** The node reproduces a published method, and its tests compare its output with that reference (an f64 script, the vendored engine), not with a mirror of its own kernels.
-3. **No internal pass used twice outside the solver.** A pass that other graphs use stays a catalog atom (a prefix sum, spatial binning), and the stage calls its code, not its node.
+The boundary test: would a user plausibly rewire, swap or insert something here? If yes, it is a node boundary. If no, it stays inside. Not every operation needs to be a node.
 
-A stage node is allowed only when all three hold:
+Specialised solvers (GPU FLIP, whitewater) expose forces, emitters, solids and look controls. Their numerical loops and transfers stay inside. GPU FLIP is one step node plus one whitewater node, not five stages.
 
-1. Every port is a type another solver or a scene could plausibly rewire: particles, face grids, distance lattices, occupancy, clock scalars.
-2. The inside is one numerical method, proven at the boundary against an external reference (an f64 script, a vendored engine). Its internal passes mean nothing outside that method.
-3. No internal pass is used twice outside the solver. If it is, it stays a catalog atom that the stage wires to or calls.
+A 3D scene's render passes, lighting, ray tracing and prewarm are complex, static engine internals. Users do not wire their compute kernels by hand. The scene panel is their interface, as in a traditional rendering engine. Mesh sources, materials, lights, camera and post effects after the scene are useful node boundaries.
 
-The test question: would a user swap one internal pass for a different node? If yes, use atoms. If the only reason to look inside is to debug the solver, use a stage. An effect or generator never qualifies, however complex: its parts are the look, and users swap them. FluidSim2D's `fluid_simulate` bundles noise, diffusion and injection, so it stays a decomposition target under section 1.1.
+A stage node must meet these three criteria:
 
-Use as few stages as the ports allow. Fewer stages mean fewer wires nobody rewires and more room to fuse. GPU FLIP is one step node plus one whitewater node, not five stages.
+1. **Ports follow user boundaries.** Expose types a user could plausibly rewire, swap or insert: particles, face grids, solid lattices, forces or scene resources. Keep internal buffers and pass plumbing inside.
+2. **Behaviour is proven at the boundary.** A specialised solver reproduces a published numerical method and is tested against an external reference (an f64 script or vendored engine), not a mirror of its own kernels. Scene stages are verified against their rendering contracts.
+3. **Reusable operations stay reusable.** A pass used twice outside the engine internals stays a catalog atom (a prefix sum, spatial binning). The stage reuses its code rather than making internal node wiring.
+
+Use as few stages as the user boundaries require, with free fusion inside. Complexity alone does not justify bundling a 2D effect or generator graph: its parts are the look, and users swap them. FluidSim2D's `fluid_simulate` bundles noise, diffusion and injection, so it stays a decomposition target under section 1.1.
+
+**Code modularity is a separate rule.** Inside a stage node, split code into modules, one pass or stage per module behind a clean interface. The god-file guards still apply. A 9,665-line `render_scene.rs` is a code problem even when the scene stays one node. Track the 3D scene work under BUG-0r2ok (3D scene engine internals epic).
 
 **Signs the cut is too fine.** Each of these means the atoms are slicing through one method. Move the boundary out; never patch the symptom.
 

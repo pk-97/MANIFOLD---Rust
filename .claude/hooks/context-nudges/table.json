@@ -18,7 +18,7 @@
     },
     {
       "topic": "graph-authoring",
-      "globs": ["*node_graph/primitives/*", "*manifold-node-engine/src/primitives/*", "*manifold-node-engine/src/water/primitives/*", "*presets/*.json", "*composites/*"],
+      "globs": ["*node_graph/primitives/*", "*node_graph/gltf_load*", "*manifold-node-engine/src/primitives/*", "*manifold-node-engine/src/water/primitives/*", "*presets/*.json", "*composites/*"],
       "snippet": "graph-authoring-rules.md"
     },
     {
