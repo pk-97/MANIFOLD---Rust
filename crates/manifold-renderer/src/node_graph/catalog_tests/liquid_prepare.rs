@@ -23,9 +23,13 @@ fn cache_len(device: &manifold_gpu::GpuDevice) -> (usize, usize) {
 
 #[test]
 fn liquid_prepare_pipelines_is_idempotent() {
+    let _serial = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     for file in LIQUID_PRESETS {
         let device = manifold_node_engine::gpu::context::test_gpu_device("liquid_prepare_pipelines_is_idempotent");
+        // Each preset must populate its own cold live cache.
+        manifold_gpu::testkit::load_disk_shader_caches(&device);
+        assert_eq!(cache_len(&device), (0, 0), "{file}: install starts cold");
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/generator-presets").join(file);
         let json = std::fs::read_to_string(path).expect("preset reads");
         let install = || {

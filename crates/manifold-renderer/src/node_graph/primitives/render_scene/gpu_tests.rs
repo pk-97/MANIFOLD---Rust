@@ -1085,12 +1085,11 @@ fn fs_extension_map_probe(in: VsOut) -> @location(0) vec4<f32> {
 
     #[test]
     fn prewarm_pipelines_populates_the_shared_render_cache() {
-        let device = manifold_gpu::testkit::test_device();
-        // Order-independent (BUG-144): the cache is process-global and shared
-        // with other gpu_tests, so another test's prewarm may already have
-        // populated the exact entries this call would add — an
-        // after > before delta then reads zero even though prewarm worked.
-        // Assert the cache ends up populated, not that THIS call grew it.
+        let _serial = manifold_gpu::testkit::test_device();
+        let device = manifold_node_engine::gpu::context::test_gpu_device("render scene prewarm");
+        // Disk reuse must not pre-populate the live cache under test.
+        manifold_gpu::testkit::load_disk_shader_caches(&device);
+        assert_eq!(device.render_pipeline_cache_len(), 0, "prewarm starts cold");
         RenderScene::prewarm_pipelines(&device);
         let after = device.render_pipeline_cache_len();
         assert!(

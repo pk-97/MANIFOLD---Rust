@@ -17,6 +17,8 @@
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
+    // Exercise per-layer warmup with an empty renderer, not the unrelated
+    // catalog startup sweep. prewarm_layer must install its own fixture.
     const CANVAS_W: u32 = 640;
     const CANVAS_H: u32 = 360;
 
@@ -306,7 +308,7 @@
     #[test]
     fn warmup_gate_zero_cold_touches_during_playback() {
         let device = manifold_gpu::testkit::test_device();
-        let mut renderer = GeneratorRenderer::new(
+        let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
             CANVAS_H,
@@ -351,7 +353,7 @@
     #[test]
     fn warmup_inv2_budget_terminates_never_quiescent() {
         let device = manifold_gpu::testkit::test_device();
-        let mut renderer = GeneratorRenderer::new(
+        let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
             CANVAS_H,
@@ -381,7 +383,7 @@
     #[test]
     fn warmup_inv3_acquire_clip_hits_installed_generator() {
         let device = manifold_gpu::testkit::test_device();
-        let mut renderer = GeneratorRenderer::new(
+        let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
             CANVAS_H,
@@ -436,7 +438,7 @@
     #[test]
     fn edit_time_generator_assignment_warms_when_stopped() {
         let device = manifold_gpu::testkit::test_device();
-        let mut renderer = GeneratorRenderer::new(
+        let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
             CANVAS_H,
