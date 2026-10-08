@@ -3,10 +3,7 @@
 //! Authored custom graphs remain intact when their ownership is ambiguous.
 
 mod fragment_masks;
-#[cfg(not(any(test, feature = "testkit")))]
-mod loop_upgrade;
-#[cfg(any(test, feature = "testkit"))]
-pub mod loop_upgrade;
+manifold_core::testkit_visible! { mod loop_upgrade; }
 mod photoscan;
 mod sources;
 

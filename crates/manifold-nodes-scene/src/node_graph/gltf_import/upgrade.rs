@@ -12,10 +12,7 @@ use std::path::{Path, PathBuf};
 mod calibration;
 mod maps;
 mod params;
-#[cfg(not(any(test, feature = "testkit")))]
-pub(super) mod project;
-#[cfg(any(test, feature = "testkit"))]
-pub mod project;
+manifold_core::testkit_visible! { pub(super) mod project; }
 /// Per-project-load cache. It deliberately owns no locks: graph migration is
 /// a load-time CPU operation and one caller owns a cache for that load.
 #[derive(Default)]

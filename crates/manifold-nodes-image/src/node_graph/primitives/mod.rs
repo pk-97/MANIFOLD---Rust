@@ -13,20 +13,14 @@ mod apply_radial_burst_to_particles;
 mod array_connect_nearest;
 mod array_diffuse_particles;
 mod array_filter_detections;
-#[cfg(not(any(test, feature = "testkit")))]
-mod array_feedback;
-#[cfg(any(test, feature = "testkit"))]
-pub mod array_feedback;
+manifold_core::testkit_visible! { mod array_feedback; }
 mod array_math;
 mod array_unpack_vec2;
 pub(crate) mod beat_gate;
 mod beat_ramp;
 mod bilateral_blur;
 mod blob_detect_ffi;
-#[cfg(not(any(test, feature = "testkit")))]
-mod blob_overlay_render;
-#[cfg(any(test, feature = "testkit"))]
-pub mod blob_overlay_render;
+manifold_core::testkit_visible! { mod blob_overlay_render; }
 mod block_displace_field;
 mod block_sample;
 pub mod bokeh_gather;
@@ -43,10 +37,10 @@ mod pack_channels;
 mod clip_trigger_cycle;
 mod clip_trigger_index;
 mod coc_dilate;
-#[cfg(not(any(test, feature = "testkit")))]
-mod coc_from_depth;
-#[cfg(any(test, feature = "testkit"))]
-pub(crate) mod coc_from_depth;
+manifold_core::testkit_visible! {
+    testkit { pub(crate) mod coc_from_depth; }
+    production { mod coc_from_depth; }
+}
 mod color;
 pub use color::{
     BRIGHTNESS_TYPE_ID, Brightness, CHANNEL_MIX_TYPE_ID, COLOR_RAMP_TYPE_ID, ChannelMix, ColorRamp,
@@ -54,15 +48,12 @@ pub use color::{
 mod color_sample;
 mod colorize;
 mod compressor_envelope;
-#[cfg(not(any(test, feature = "testkit")))]
-mod contrast;
-#[cfg(any(test, feature = "testkit"))]
-pub(crate) mod contrast;
+manifold_core::testkit_visible! {
+    testkit { pub(crate) mod contrast; }
+    production { mod contrast; }
+}
 mod convolution_2d_9tap;
-#[cfg(not(any(test, feature = "testkit")))]
-mod cycle_table_row;
-#[cfg(any(test, feature = "testkit"))]
-pub mod cycle_table_row;
+manifold_core::testkit_visible! { mod cycle_table_row; }
 mod depth_estimate_midas;
 pub mod detect_regions;
 mod region_types;
@@ -75,27 +66,12 @@ mod dither;
 mod dither_pattern;
 mod downsample;
 mod resize_limit;
-#[cfg(not(any(test, feature = "testkit")))]
-mod draw_connections;
-#[cfg(any(test, feature = "testkit"))]
-pub mod draw_connections;
-#[cfg(not(any(test, feature = "testkit")))]
-mod draw_dots;
-#[cfg(any(test, feature = "testkit"))]
-pub mod draw_dots;
-#[cfg(not(any(test, feature = "testkit")))]
-mod draw_gauge;
-#[cfg(any(test, feature = "testkit"))]
-pub mod draw_gauge;
-#[cfg(not(any(test, feature = "testkit")))]
-mod draw_markers;
-#[cfg(any(test, feature = "testkit"))]
-pub mod draw_markers;
+manifold_core::testkit_visible! { mod draw_connections; }
+manifold_core::testkit_visible! { mod draw_dots; }
+manifold_core::testkit_visible! { mod draw_gauge; }
+manifold_core::testkit_visible! { mod draw_markers; }
 mod draw_scanlines;
-#[cfg(not(any(test, feature = "testkit")))]
-mod draw_ticks;
-#[cfg(any(test, feature = "testkit"))]
-pub mod draw_ticks;
+manifold_core::testkit_visible! { mod draw_ticks; }
 mod edge_detect;
 mod envelope_decay;
 mod envelope_beats;
@@ -105,10 +81,7 @@ mod vector_fields;
 mod film_grain;
 pub mod filter;
 mod flash;
-#[cfg(not(any(test, feature = "testkit")))]
-mod flow_field_noise;
-#[cfg(any(test, feature = "testkit"))]
-pub mod flow_field_noise;
+manifold_core::testkit_visible! { mod flow_field_noise; }
 mod fract_texture;
 mod fresnel_rim;
 mod frequency_ratio;
@@ -119,10 +92,7 @@ mod simplex_noise_force_3d_at_particles;
 mod diffuse_force_3d_at_particles;
 mod container_repel_force_3d;
 mod euler_step_particles_3d;
-#[cfg(not(any(test, feature = "testkit")))]
-mod container_bounds_3d;
-#[cfg(any(test, feature = "testkit"))]
-pub mod container_bounds_3d;
+manifold_core::testkit_visible! { mod container_bounds_3d; }
 mod flatten_to_camera_plane;
 mod apply_radial_burst_3d_to_particles;
 mod scatter_particles_camera;
@@ -140,35 +110,20 @@ mod heightmap_to_normal;
 mod hue_saturation;
 mod image_folder;
 mod inject_burst;
-#[cfg(not(any(test, feature = "testkit")))]
-mod euler_step_particles;
-#[cfg(any(test, feature = "testkit"))]
-pub mod euler_step_particles;
-#[cfg(not(any(test, feature = "testkit")))]
-mod sample_texture_at_particles;
-#[cfg(any(test, feature = "testkit"))]
-pub mod sample_texture_at_particles;
-#[cfg(not(any(test, feature = "testkit")))]
-mod wrap_particles_torus;
-#[cfg(any(test, feature = "testkit"))]
-pub mod wrap_particles_torus;
-#[cfg(not(any(test, feature = "testkit")))]
-mod wave_field_3d;
-#[cfg(any(test, feature = "testkit"))]
-pub mod wave_field_3d;
+manifold_core::testkit_visible! { mod euler_step_particles; }
+manifold_core::testkit_visible! { mod sample_texture_at_particles; }
+manifold_core::testkit_visible! { mod wrap_particles_torus; }
+manifold_core::testkit_visible! { mod wave_field_3d; }
 mod inverse_fft_2d;
 mod over;
-#[cfg(not(any(test, feature = "testkit")))]
-mod invert;
-#[cfg(any(test, feature = "testkit"))]
-pub(crate) mod invert;
+manifold_core::testkit_visible! {
+    testkit { pub(crate) mod invert; }
+    production { mod invert; }
+}
 mod lambert_directional;
 mod length_vec2;
 mod levels;
-#[cfg(not(any(test, feature = "testkit")))]
-mod lfo;
-#[cfg(any(test, feature = "testkit"))]
-pub mod lfo;
+manifold_core::testkit_visible! { mod lfo; }
 pub mod layer_source;
 mod lic_integrate;
 mod lightning_bolt;
@@ -183,10 +138,7 @@ pub mod multi_blend;
 mod motion_blur;
 mod mux_array;
 mod mux_scalar;
-#[cfg(not(any(test, feature = "testkit")))]
-mod neighbor_smooth;
-#[cfg(any(test, feature = "testkit"))]
-pub mod neighbor_smooth;
+manifold_core::testkit_visible! { mod neighbor_smooth; }
 mod normalize_vec2;
 mod one_euro_filter;
 mod optical_flow_estimate;
@@ -207,16 +159,10 @@ mod reinhard_tone_map;
 mod remap;
 mod remove_drift_3d;
 mod render_filled_rects;
-#[cfg(not(any(test, feature = "testkit")))]
-mod render_text;
-#[cfg(any(test, feature = "testkit"))]
-pub mod render_text;
+manifold_core::testkit_visible! { mod render_text; }
 mod render_value_overlay;
 mod resolve_3d_accumulator;
-#[cfg(not(any(test, feature = "testkit")))]
-mod resolve_accumulator;
-#[cfg(any(test, feature = "testkit"))]
-pub mod resolve_accumulator;
+manifold_core::testkit_visible! { mod resolve_accumulator; }
 mod rotate_vec2_by_angle;
 mod sample_and_hold;
 mod sample_volume_2d;
@@ -224,25 +170,19 @@ mod saturation;
 mod scalar_array_accumulator;
 mod scale_offset_texture;
 mod scanline_jitter_field;
-#[cfg(not(any(test, feature = "testkit")))]
-mod scatter_particles;
-#[cfg(any(test, feature = "testkit"))]
-pub mod scatter_particles;
+manifold_core::testkit_visible! { mod scatter_particles; }
 mod scatter_particles_3d;
 pub mod seed_particles_from_texture;
-#[cfg(not(any(test, feature = "testkit")))]
-mod seed_particles;
-#[cfg(any(test, feature = "testkit"))]
-pub mod seed_particles;
+manifold_core::testkit_visible! { mod seed_particles; }
 mod separable_gaussian;
 pub use separable_gaussian::{
     GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,
 };
 mod set_alpha;
-#[cfg(not(any(test, feature = "testkit")))]
-mod sharpen;
-#[cfg(any(test, feature = "testkit"))]
-pub(crate) mod sharpen;
+manifold_core::testkit_visible! {
+    testkit { pub(crate) mod sharpen; }
+    production { mod sharpen; }
+}
 mod ssao_gtao;
 mod simplex_field_2d;
 mod simplex_noise_force_at_particles;
@@ -266,10 +206,7 @@ mod tone_map;
 mod trigger_ease_to;
 mod trigger_gate;
 mod transform_components;
-#[cfg(not(any(test, feature = "testkit")))]
-pub(crate) mod divide_by_value;
-#[cfg(any(test, feature = "testkit"))]
-pub mod divide_by_value;
+manifold_core::testkit_visible! { pub(crate) mod divide_by_value; }
 mod uv_displace_by_flow;
 mod uv_field;
 mod compose_vec3;
@@ -278,8 +215,5 @@ mod voronoi_2d;
 pub mod watercolor;
 mod wet_dry_mix;
 pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
-#[cfg(not(any(test, feature = "testkit")))]
-mod interpolate_particle_frames;
-#[cfg(any(test, feature = "testkit"))]
-pub mod interpolate_particle_frames;
+manifold_core::testkit_visible! { mod interpolate_particle_frames; }
 mod mix_arrays;

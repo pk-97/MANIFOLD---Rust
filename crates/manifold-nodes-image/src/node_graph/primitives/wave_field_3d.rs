@@ -9,7 +9,22 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
-#[cfg(not(any(test, feature = "testkit")))]
+manifold_core::testkit_visible! {
+    testkit {
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Uniforms {
+    pub frequency: f32,
+    pub phase: f32,
+    pub direction_x: f32,
+    pub direction_y: f32,
+    pub direction_z: f32,
+    pub dispatch_count: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+}
+    }
+    production {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct Uniforms {
@@ -22,19 +37,7 @@ pub(super) struct Uniforms {
     pub(super) _pad0: u32,
     pub(super) _pad1: u32,
 }
-
-#[cfg(any(test, feature = "testkit"))]
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Uniforms {
-    pub frequency: f32,
-    pub phase: f32,
-    pub direction_x: f32,
-    pub direction_y: f32,
-    pub direction_z: f32,
-    pub dispatch_count: u32,
-    pub _pad0: u32,
-    pub _pad1: u32,
+    }
 }
 
 manifold_node_engine::primitive! {

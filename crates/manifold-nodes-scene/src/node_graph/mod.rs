@@ -8,10 +8,7 @@ pub(crate) mod decode_cache;
 mod gltf_anim_cache;
 mod gltf_anim_identity;
 pub mod gltf_import;
-#[cfg(not(any(test, feature = "testkit")))]
-mod gltf_load;
-#[cfg(any(test, feature = "testkit"))]
-pub mod gltf_load;
+manifold_core::testkit_visible! { mod gltf_load; }
 pub mod primitives;
 pub mod relight;
 pub mod scene_modifier_authoring;

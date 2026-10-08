@@ -7,7 +7,18 @@ use manifold_node_engine::mesh::{InstanceTransform, Vec4Vertex};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::primitive::Primitive;
 
-#[cfg(not(any(test, feature = "testkit")))]
+manifold_core::testkit_visible! {
+    testkit {
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Uniforms {
+    pub dispatch_count: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
+}
+    }
+    production {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -16,15 +27,7 @@ struct Uniforms {
     _pad1: u32,
     _pad2: u32,
 }
-
-#[cfg(any(test, feature = "testkit"))]
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Uniforms {
-    pub dispatch_count: u32,
-    pub _pad0: u32,
-    pub _pad1: u32,
-    pub _pad2: u32,
+    }
 }
 
 manifold_node_engine::primitive! {

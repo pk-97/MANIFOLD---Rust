@@ -15,12 +15,32 @@ fn testkit_visibility_uses_the_calling_crate_configuration() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let module_dir = root.join("surface");
+    std::fs::create_dir_all(&module_dir).unwrap();
+    std::fs::write(module_dir.join("external.rs"), "pub struct ExternalProbe;\n").unwrap();
     let caller = root.join("caller.rs");
     std::fs::write(&caller, r#"
 pub mod surface {
     visibility_owner::testkit_visible! { pub(crate) struct Probe; }
+    visibility_owner::testkit_visible! { mod external; }
+    visibility_owner::testkit_visible! {
+        testkit { pub struct Fields { pub value: u32 } }
+        production { pub(crate) struct Fields { value: u32 } }
+    }
+    visibility_owner::testkit_visible! {
+        testkit { pub(crate) struct CrateProbe; }
+        production { struct CrateProbe; }
+    }
+    pub fn scoped_probe() { let _ = CrateProbe; }
 }
 pub use surface::Probe;
+pub use surface::external::ExternalProbe;
+pub use surface::Fields;
+#[cfg(any(test, feature = "testkit"))]
+pub fn test_access() -> u32 {
+    let _ = surface::CrateProbe;
+    Fields { value: 7 }.value
+}
 "#).unwrap();
     for configuration in [None, Some("feature=\"testkit\""), Some("test")] {
         let mut command = Command::new(&compiler);

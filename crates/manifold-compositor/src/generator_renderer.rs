@@ -20,10 +20,7 @@ use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneView
 use manifold_node_engine::runtime::ModifierPreviewContext;
 
 mod physics_events;
-#[cfg(not(any(test, feature = "testkit")))]
-mod state;
-#[cfg(any(test, feature = "testkit"))]
-pub mod state;
+manifold_core::testkit_visible! { mod state; }
 use state::{ActiveClip, LayerGeneratorState, ThumbGen};
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
