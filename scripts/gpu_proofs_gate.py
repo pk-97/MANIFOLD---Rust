@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """GPU-proofs landing gate wrapper — one consolidated drift report.
 
-`cargo test -p manifold-renderer --features gpu-proofs` alone stops at the
+`cargo test --features gpu-proofs` alone stops at the
 first failing test binary, so golden drift surfaces piecemeal over review
 rounds. This wrapper streams output live, then parses the full captured run
 into one summary: every failed test name, every golden-mismatch detail (file +
@@ -21,10 +21,11 @@ set. A touched GPU path with no mapping fails loudly; there is no silent
 run-everything fallback. `--all` runs the whole suite (nightly trunk_health).
 Explicit `--test NAME` / `--filter` / `--skip` bypass scoping for a hand-picked
 run. `--budget SECONDS` reports a separate budget warning when passing tests
-exceed it; test failures and hangs remain red. Scoped runs skip tests measured
-over gpu_scope.SLOW_THRESHOLD_S unless selected by exact name. Successful gate-driven runs retain their
-times in the Git common directory for all slots; scripts/gpu_test_times.json
-seeds fresh checkouts. `--record-times PATH` exports a merged timing table.
+exceed it; test failures and hangs remain red. Scoped runs never drop tests
+by duration. Successful gate-driven runs retain informational timings in the
+Git common directory; only reviewed package/target/test entries committed in
+scripts/gpu_test_times.json set watchdog allowances. `--record-times PATH`
+exports successful measurements for review before landing a new heavy proof.
 
 Scoped and explicit runs reuse shared content-addressed passes before building
 or taking the GPU lock. --all and measurement requests always execute.
@@ -53,6 +54,7 @@ import os
 import queue
 import re
 import signal
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -64,6 +66,10 @@ import gpu_queue
 import gpu_scope
 import diff_scope
 import gate_passes
+from gate_workspace import Workspace
+
+# Reserved for input changes; child failures with this status become ordinary reds.
+INPUTS_CHANGED = 78
 
 # Matches glb_conformance.rs's check_golden() mismatch message:
 #   "golden mismatch: mean_abs_diff {mean_abs:.4} > tol {mean_abs_tol} \
@@ -104,6 +110,7 @@ IGNORED_LINE_RE = re.compile(r"^test (\S+) \.\.\. ignored\b")
 HANG_FLOOR_S = 120.0
 HANG_MULTIPLE = 5.0
 NO_RECORD_ALLOWANCE_S = 300.0
+MAX_HANG_ALLOWANCE_S = 3600.0
 HEARTBEAT_S = 60.0
 WATCH_TICK_S = 1.0
 
@@ -119,7 +126,7 @@ def cargo_test_cmd(
     targets: list[str] | None = None,
     full_suite: bool = False,
     lib: bool = False,
-    package: str = "manifold-renderer",
+    package: str | None = None,
 ) -> list[str]:
     """The `cargo test` command up to the libtest `--`, shared by the build
     and the run so the run finds every binary already built."""
@@ -128,14 +135,14 @@ def cargo_test_cmd(
     cmd = [
         "cargo",
         "test",
-        "-p",
-        package,
         "--features",
         "gpu-proofs",
         "--no-fail-fast",
         "--manifest-path",
         str(manifest_path),
     ]
+    if package is not None:
+        cmd[2:2] = ["-p", package]
     if not full_suite:
         if lib:
             cmd.append("--lib")
@@ -156,8 +163,11 @@ def build_tests(manifest_path: Path, runs: list[dict]) -> int:
     starts testing. Returns the first nonzero cargo exit, else 0."""
     built: list[list[str]] = []
     for run in runs:
+        package = run.get("package")
+        if not package:
+            raise ValueError("GPU proof run has no Cargo package owner")
         cmd = cargo_test_cmd(manifest_path, run["targets"], run["full"], run["lib"],
-                             run.get("package", "manifold-renderer")) + ["--no-run"]
+                             package) + ["--no-run"]
         if cmd in built:
             continue
         built.append(cmd)
@@ -166,6 +176,25 @@ def build_tests(manifest_path: Path, runs: list[dict]) -> int:
         if code:
             return code
     return 0
+
+
+def target_from_binary(label: str, target_specs: list[dict]) -> str | None:
+    """Map Cargo's `Running` label to a metadata target without guessing."""
+    path = label.split(" (", 1)[0].strip()
+    for spec in target_specs:
+        source = spec.get("src_path")
+        if not source:
+            continue
+        source_path = Path(source)
+        parts = source_path.parts
+        anchor = next((i for i, part in enumerate(parts)
+                       if part in {"src", "tests", "examples", "benches"}), None)
+        if anchor is None:
+            continue
+        suffix = "/".join(parts[anchor:])
+        if path.endswith(suffix):
+            return "lib" if "lib" in spec.get("kind", []) else spec["name"]
+    return None
 
 
 def run_gate(
@@ -178,7 +207,10 @@ def run_gate(
     timings: list | None = None,
     hung: list | None = None,
     hang_floor: float | None = None,
-    package: str = "manifold-renderer",
+    package: str | None = None,
+    target: str | None = None,
+    budgeted: bool = True,
+    target_specs: list[dict] | None = None,
 ) -> tuple[int, str]:
     cmd = cargo_test_cmd(manifest_path, targets, full_suite, lib, package)
     # Serial test threads, always: ~135 proofs share one Metal device, and
@@ -196,7 +228,11 @@ def run_gate(
 
     # Own process group so a hang kill takes cargo and the test binary, and
     # nothing else.
-    watchdog = Watchdog(gpu_scope.load_times(), hang_floor)
+    # Learned timings are advisory until reviewed into the committed table.
+    resolver = ((lambda label: target_from_binary(label, target_specs))
+                if target_specs is not None else None)
+    watchdog = Watchdog(gpu_scope.read_times(gpu_scope.TIMES_PATH), hang_floor,
+                        package=package, target=target, target_resolver=resolver)
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -234,7 +270,9 @@ def run_gate(
                 print(line, end="", flush=True)
                 lines.append(line)
                 if timings is not None:
-                    record_timing(line, now, state, timings)
+                    record_timing(line, now, state, timings, package=package,
+                                  target=target, budgeted=budgeted,
+                                  target_resolver=resolver)
                 watchdog.feed_line(line, now)
             watchdog.feed_partial(pending, now)
             beat = watchdog.heartbeat(now)
@@ -281,6 +319,32 @@ def _kill_group(proc) -> None:
         os.killpg(proc.pid, signal.SIGKILL)
 
 
+def timing_key(package: str | None, target: str | None, test: str) -> str:
+    """Stable identity for a proof allowance, including its Cargo owner."""
+    if package is None:
+        return test
+    return "/".join((package or "?", target or "?", test))
+
+
+def timing_fields(entry):
+    """Return (package, target, test, seconds, status, budgeted) for old/new rows."""
+    if isinstance(entry, dict):
+        return (entry.get("package"), entry.get("target"), entry["test"],
+                entry["seconds"], entry["status"], entry.get("budgeted", True))
+    if len(entry) == 6:
+        return entry
+    if len(entry) == 5:
+        name, seconds, binary, budgeted, status = entry
+        return None, binary, name, seconds, status, budgeted
+    name, seconds, binary, status = entry
+    return None, binary, name, seconds, status, True
+
+
+def timing_entry(package, target, test, seconds, status, budgeted):
+    return {"package": package, "target": target, "test": test,
+            "seconds": seconds, "status": status, "budgeted": budgeted}
+
+
 class Watchdog:
     """Tracks the one running test and says when it has outlived its allowance.
 
@@ -289,16 +353,27 @@ class Watchdog:
     logic over (text, now): no clock, no process, unit-testable without a GPU.
     """
 
-    def __init__(self, times: dict, floor: float | None = None):
+    def __init__(self, times: dict, floor: float | None = None, *,
+                 package: str | None = None, target: str | None = None,
+                 target_resolver=None):
         self.times = times
         self.floor = HANG_FLOOR_S if floor is None else floor
         self.no_record = NO_RECORD_ALLOWANCE_S if floor is None else floor
+        self.package = package
+        self.target = target
+        self.target_resolver = target_resolver
         self.name: str | None = None
         self.started = 0.0
         self.last_beat = 0.0
 
     def allowance(self, name: str) -> float:
-        rec = self.times.get(name)
+        rec = self.times.get(timing_key(self.package, self.target, name))
+        if rec is None and self.package is None and self.target is None:
+            # Legacy unit callers can still inspect old name-only tables. Real
+            # runs always carry package/target and must not inherit collisions.
+            rec = self.times.get(name)
+        if isinstance(rec, dict):
+            rec = rec.get("s", rec.get("seconds"))
         if rec is None:
             return self.no_record
         return max(self.floor, HANG_MULTIPLE * rec)
@@ -308,7 +383,10 @@ class Watchdog:
             self.name, self.started, self.last_beat = name, now, now
 
     def feed_line(self, line: str, now: float) -> None:
-        if RUNNING_BINARY_RE.match(line):
+        binary = RUNNING_BINARY_RE.match(line)
+        if binary:
+            if self.target_resolver is not None:
+                self.target = self.target_resolver(binary.group(1))
             self.name = None
             return
         m = TEST_LINE_RE.match(line) or IGNORED_LINE_RE.match(line)
@@ -343,11 +421,15 @@ class Watchdog:
                 f"(hang allowance {self.allowance(self.name):.0f}s)")
 
 
-def record_timing(line: str, now: float, state: dict, timings: list) -> None:
-    """Append (test, seconds, binary, status) for a finished test."""
+def record_timing(line: str, now: float, state: dict, timings: list, *,
+                  package: str | None = None, target: str | None = None,
+                  budgeted: bool = True, target_resolver=None) -> None:
+    """Append a completed test timing with its package/target identity."""
     m = RUNNING_BINARY_RE.match(line)
     if m:
         state["t"], state["bin"] = now, m.group(1)
+        state["target"] = (target if target not in (None, "all") else
+                            (target_resolver(m.group(1)) if target_resolver else None))
         return
     if state.get("t") is None:
         return
@@ -357,7 +439,18 @@ def record_timing(line: str, now: float, state: dict, timings: list) -> None:
         name = state["open"]
     if name is not None:
         status = m.group(2) if m else BARE_RESULT_RE.match(line).group(1)
-        timings.append((name, now - state["t"], state["bin"], status))
+        row_target = target if target not in (None, "all") else state.get("target")
+        if row_target is None and target_resolver is None:
+            row_target = state.get("bin")
+        if row_target is None:
+            row_target = "unknown"
+        if package is None:
+            # Unit callers and old queue integrations still receive the former
+            # tuple shape; all real gate runs provide package ownership.
+            timings.append((name, now - state["t"], row_target, status))
+        else:
+            timings.append(timing_entry(package, row_target, name,
+                                        now - state["t"], status, budgeted))
         state["t"], state["open"] = now, None
         return
     m = TEST_START_RE.match(line)
@@ -397,32 +490,48 @@ def parse_golden_mismatches(output: str) -> list[tuple[str, str, str, str]]:
 
 
 def slowest(timings: list, n: int) -> list:
-    return sorted(timings, key=lambda t: t[1], reverse=True)[:n]
+    return sorted(timings, key=lambda t: timing_fields(t)[3], reverse=True)[:n]
 
 
 def budgeted_seconds(timings: list) -> float:
-    return sum(t[1] for t in timings if t[3])
+    return sum(seconds for _package, _target, _name, seconds, _status, budgeted
+               in (timing_fields(t) for t in timings) if budgeted)
 
 
 def write_timings_md(path: Path, timings: list, n: int = 25) -> None:
     rows = ["# Slowest GPU tests", "", f"{len(timings)} tests, "
-            f"{sum(t[1] for t in timings):.0f}s total test time.", "",
+            f"{sum(timing_fields(t)[3] for t in timings):.0f}s total test time.", "",
             "| # | seconds | test | binary |", "|---|---|---|---|"]
-    for i, (name, secs, binary, _) in enumerate(slowest(timings, n), 1):
-        rows.append(f"| {i} | {secs:.1f} | `{name}` | {binary} |")
+    for i, entry in enumerate(slowest(timings, n), 1):
+        _package, target, name, secs, _status, _budgeted = timing_fields(entry)
+        rows.append(f"| {i} | {secs:.1f} | `{name}` | {target} |")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(rows) + "\n")
 
 
 def write_times_json(path: Path, timings: list, *, merge=False, learned=False) -> str:
-    """Write measured per-test seconds; return a diff against the committed file."""
+    """Write successful allowances keyed by package, target, and test."""
+    if any(timing_fields(entry)[4] == "FAILED" for entry in timings):
+        return "GPU test times not written: a failed proof cannot export allowances"
     old = gpu_scope.read_times(gpu_scope.TIMES_PATH)
-    new = {n: round(secs, 1) for n, secs, _b, _bud, status in timings if status == "ok"}
+    new = {}
+    for entry in timings:
+        package, target, name, seconds, status, _budgeted = timing_fields(entry)
+        if status == "ok":
+            if package is not None:
+                # Drop a pre-metadata bare-name seed when replacing it with the
+                # scoped identity; otherwise merge would retain two allowances.
+                new.pop(name, None)
+            new[timing_key(package, target, name)] = round(seconds, 1)
     if merge and not learned:
         new = gpu_scope.merge_times(old, gpu_scope.read_times(path), new)
-        for n, _s, _b, _bud, status in timings:
+        for entry in timings:
+            _package, _target, name, _seconds, status, _budgeted = timing_fields(entry)
+            if status == "ok" and _package is not None:
+                new.pop(name, None)
             if status != "ok":
-                new.pop(n, None)
+                new.pop(timing_key(_package, _target, name), None)
+                new.pop(name, None)
     sha = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "HEAD"],
                          capture_output=True, text=True).stdout.strip()
     entries = new
@@ -462,6 +571,40 @@ def write_times_json(path: Path, timings: list, *, merge=False, learned=False) -
     return "\n".join(lines)
 
 
+def unmeasured_heavy(timings: list) -> list[dict]:
+    """Find successful slow tests absent from the reviewed committed table."""
+    reviewed = gpu_scope.read_times(gpu_scope.TIMES_PATH)
+    findings = []
+    for entry in timings:
+        package, target, name, seconds, status, _budgeted = timing_fields(entry)
+        key = timing_key(package, target, name)
+        if (status == "ok" and package is not None and target != "unknown"
+                and seconds > gpu_scope.SLOW_THRESHOLD_S
+                and key not in reviewed):
+            findings.append({"package": package, "target": target, "test": name,
+                             "seconds": seconds, "key": key})
+    return findings
+
+
+def unknown_target_timings(timings: list) -> list[dict]:
+    return [{"package": package, "target": target, "test": name,
+             "seconds": seconds, "key": timing_key(package, target, name)}
+            for package, target, name, seconds, status, _budgeted
+            in (timing_fields(entry) for entry in timings)
+            if status == "ok" and package is not None and target == "unknown"]
+
+
+def measurement_command(finding: dict, manifest_path: Path) -> str:
+    command = [str(Path(__file__).resolve()), "--manifest-path", str(manifest_path),
+               "--package", finding["package"]]
+    if finding["target"] != "lib":
+        command.extend(["--test", finding["target"]])
+    command.extend(["--filter", finding["test"], "--record-times",
+                    "/tmp/gpu_test_times.measure.json", "--hang-allowance",
+                    str(int(NO_RECORD_ALLOWANCE_S))])
+    return shlex.join(command)
+
+
 def remember_times(timings: list, exit_code: int, hung: list) -> None:
     """Learn only from a completed passing invocation, never a failure or hang."""
     if exit_code or hung or not timings:
@@ -476,8 +619,8 @@ def remember_times(timings: list, exit_code: int, hung: list) -> None:
         with path.with_suffix(".lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             write_times_json(path, timings, learned=True)
-        print(f"[gpu-times] retained {len(timings)} measurements in {path}; "
-              f"tests over {gpu_scope.SLOW_THRESHOLD_S}s are deferred unless selected by exact name")
+        print(f"[gpu-times] retained {len(timings)} informational measurements in {path}; "
+              "watchdog allowances require committed package/target/test entries")
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"[WARN] GPU timings not retained: {error}")
 
@@ -489,12 +632,16 @@ def print_summary(
     budget: float | None = None,
     hung: list | None = None,
     manifest_path: Path | None = None,
+    unmeasured: list[dict] | None = None,
+    unknown_targets: list[dict] | None = None,
 ) -> int:
     """Print the consolidated report; return the final exit code."""
     failed_tests = parse_failed_tests(output)
     goldens = parse_golden_mismatches(output)
     binaries = parse_binaries(output)
     timings = timings or []
+    unmeasured = unmeasured or []
+    unknown_targets = unknown_targets or []
     spent = budgeted_seconds(timings)
     over_budget = budget is not None and spent > budget
 
@@ -524,8 +671,10 @@ def print_summary(
     if timings:
         print(f"\nSlowest tests (budgeted test time {spent:.0f}s"
               + (f" of {budget:.0f}s budget" if budget is not None else "") + "):")
-        for name, secs, binary, _ in slowest(timings, 10):
-            print(f"  - {secs:7.1f}s {name} [{binary}]")
+        for entry in slowest(timings, 10):
+            package, target, name, secs, _status, _budgeted = timing_fields(entry)
+            owner = f"{package}/" if package else ""
+            print(f"  - {secs:7.1f}s {owner}{target}/{name}")
 
     if binaries:
         print("\nPer-binary results:")
@@ -540,6 +689,17 @@ def print_summary(
             print(f"GPU-PROOFS GATE: HUNG {name} after {waited:.0f}s")
         print("GPU-PROOFS GATE: FAIL (hung test killed; a hang is a red gate, never skip or ignore it)")
         return 4
+    if unmeasured:
+        print("GPU-PROOFS TIMING: FAIL (new heavy proof lacks a reviewed allowance)")
+        for finding in unmeasured:
+            print(f"  - {finding['key']}: {finding['seconds']:.1f}s")
+            print(f"    measure: {measurement_command(finding, manifest_path or default_manifest_path())}")
+        return 5
+    if unknown_targets:
+        print("GPU-PROOFS TIMING: FAIL (Cargo emitted an unmapped proof target)")
+        for finding in unknown_targets:
+            print(f"  - {finding['package']}/{finding['test']}: target path was not in Cargo metadata")
+        return 6
     # Output evidence also wins over an erroneously successful cargo status.
     if failed_tests or goldens or any(status == "FAILED" for _, status, _, _ in binaries):
         exit_code = exit_code or 1
@@ -585,7 +745,79 @@ def changed_paths(repo: Path, base: str) -> list[str]:
     return sorted(paths)
 
 
+def default_gpu_package(workspace: Workspace) -> str:
+    """Resolve the package owning the conventional GPU proof test target."""
+    return workspace.binary_owner("gpu_proofs")
+
+
+def package_for_run(workspace: Workspace, run: dict) -> str:
+    package = run.get("package")
+    targets = run.get("targets") or []
+    if package is not None:
+        if package not in workspace.feature_packages("gpu-proofs"):
+            raise ValueError(f"package {package} has no gpu-proofs feature")
+        owned_targets = {target["name"] for target in workspace.targets(package, "test")}
+        unknown = sorted(set(targets) - owned_targets)
+        if unknown:
+            raise ValueError(f"targets {unknown} are not owned by {package}")
+        return package
+    owners = {workspace.binary_owner(target) for target in targets}
+    if len(owners) == 1:
+        return next(iter(owners))
+    if len(owners) > 1:
+        raise ValueError(f"targets have multiple owners: {sorted(owners)}")
+    return default_gpu_package(workspace)
+
+
+def normalize_runs(workspace: Workspace, runs: list[dict]) -> list[dict]:
+    """Return the canonical one-package/one-target proof invocation shape."""
+    normalized = []
+    for source in runs:
+        package = package_for_run(workspace, source)
+        targets = list(source.get("targets") or [])
+        if len(targets) > 1:
+            for target in targets:
+                child = dict(source, package=package, targets=[target], lib=False,
+                             full=False, target=target)
+                normalized.extend(normalize_runs(workspace, [child]))
+            continue
+        if source.get("lib"):
+            target = "lib"
+            cargo_targets = []
+        elif targets:
+            target = source.get("target") or targets[0]
+            cargo_targets = [targets[0]]
+        elif source.get("full"):
+            normalized.append(dict(source, package=package, targets=None,
+                                   target=None, full=True))
+            continue
+        else:
+            target = source.get("target") or "gpu_proofs"
+            cargo_targets = [target]
+        normalized.append(dict(source, package=package, targets=cargo_targets,
+                               target=target, full=False))
+    return normalized
+
+
+def all_runs(workspace: Workspace) -> list[dict]:
+    """Run each gpu-proofs package's complete Cargo test target set."""
+    runs = []
+    for package in workspace.feature_packages("gpu-proofs"):
+        target_specs = workspace.targets(package)
+        if not target_specs:
+            raise ValueError(f"package {package} has gpu-proofs but no targets")
+        runs.append({"package": package, "targets": None, "lib": False,
+                     "filters": [], "skips": [], "budgeted": False, "full": True,
+                     "target": None, "target_specs": target_specs})
+    return runs
+
+
 def main() -> int:
+    with gate_passes.session():
+        return _main()
+
+
+def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--manifest-path",
@@ -593,6 +825,8 @@ def main() -> int:
         default=None,
         help="Path to the workspace Cargo.toml (default: repo root next to scripts/)",
     )
+    parser.add_argument("--package", default=None,
+                        help="Cargo package to own an explicit proof run")
     parser.add_argument(
         "--filter",
         action="append",
@@ -646,6 +880,8 @@ def main() -> int:
                         help="retain passing gate-driven measurements in the shared cache")
     parser.add_argument("--forget", metavar="NAME", help="remove a shared timing entry and exit")
     args = parser.parse_args()
+    if args.hang_allowance is not None and not 0 < args.hang_allowance <= MAX_HANG_ALLOWANCE_S:
+        parser.error(f"--hang-allowance must be > 0 and <= {MAX_HANG_ALLOWANCE_S:.0f}s")
     if args.forget:
         path = gpu_scope.learned_times_path()
         if path is None:
@@ -664,24 +900,33 @@ def main() -> int:
 
     manifest_path = args.manifest_path or default_manifest_path()
     repo = manifest_path.parent
-    explicit = bool(args.filter or args.skip or args.targets)
+    try:
+        workspace = Workspace(repo)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        print(f"GPU-PROOFS METADATA: FAIL - {error}")
+        return 2
+    explicit = bool(args.filter or args.skip or args.targets or args.package)
 
     if args.all_tests:
         print("GPU-PROOFS MODE: all (--all: every test binary, no scoping)", flush=True)
-        runs = [{"targets": None, "lib": False, "filters": args.filter, "skips": args.skip,
-                 "budgeted": False, "full": True},
-                {"package": "manifold-node-engine", "targets": None, "lib": False,
-                 "filters": args.filter, "skips": args.skip, "budgeted": False, "full": True},
-                {"package": "manifold-ui-paint", "targets": None, "lib": False,
-                 "filters": args.filter, "skips": args.skip, "budgeted": False, "full": True}]
+        try:
+            runs = all_runs(workspace)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            print(f"GPU-PROOFS SCOPE: FAIL - {error}")
+            return 2
+        for run in runs:
+            run["filters"], run["skips"] = args.filter, args.skip
     elif explicit:
         print("GPU-PROOFS MODE: explicit (--test/--filter/--skip given; no scoping)", flush=True)
-        runs = [{"targets": args.targets, "lib": False, "filters": args.filter,
-                 "skips": args.skip, "budgeted": True, "full": False}]
+        package_lib = args.package is not None and args.targets is None
+        runs = [{"package": args.package,
+                 "targets": [] if package_lib else (args.targets or ["gpu_proofs"]),
+                 "lib": package_lib, "filters": args.filter, "skips": args.skip,
+                 "budgeted": True, "full": False}]
     else:
         try:
             paths = args.path if args.path is not None else changed_paths(repo, args.base)
-            plan = gpu_scope.plan_for_paths(paths, repo, base=args.base)
+            plan = gpu_scope.plan_for_paths(paths, repo, base=args.base, workspace=workspace)
         except RuntimeError as error:
             print(f"GPU-PROOFS SCOPE: FAIL - {error}")
             return 2
@@ -698,62 +943,99 @@ def main() -> int:
             print(f"  note: {note}")
         runs = [dict(r, full=False) for r in plan.runs()]
 
+    try:
+        runs = normalize_runs(workspace, runs)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(f"GPU-PROOFS SCOPE: FAIL - {error}")
+        return 2
+
     # Nightly/full sweeps and measurement requests always execute. The key is
     # per cargo invocation, so queue-wrapped standalone runs count too.
     reuse = not (args.all_tests or args.record_times or args.timings_md or args.hang_allowance)
     passes = [gate_passes.proof_pass(repo, run) if reuse else None for run in runs]
     pending = [run for run, p in zip(runs, passes) if not (p and p.record)]
-    for p in passes:
-        if p:
-            p.reused()
     build_code = build_tests(manifest_path, pending) if pending else 0
     if build_code:
         print(f"GPU-PROOFS GATE: FAIL (test build failed, exit {build_code}; no GPU lock taken)")
-        return build_code
+        return 1 if build_code == INPUTS_CHANGED else build_code
     if args.build_only:
         print("GPU-PROOFS GATE: BUILT (--build-only; no test run, no GPU lock taken)")
         return 0
 
+    if gate_passes.changed_passes(passes):
+        print('GPU-PROOFS GATE: FAIL (inputs changed after planning; rerun before GPU admission)')
+        return INPUTS_CHANGED
     exit_code, outputs, all_timings, hung = 0, [], [], []
     # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for all
     # cargo runs so another run cannot interleave between test binaries.
     measured = []
     recorded_timings = []
     with gpu_queue.hold("gpu_proofs_gate") if pending else contextlib.nullcontext():
+        if gate_passes.changed_passes(passes):
+            print('GPU-PROOFS GATE: FAIL (inputs changed while waiting for the GPU)')
+            return INPUTS_CHANGED
         for run, passed in zip(runs, passes):
             if passed and passed.record:
-                all_timings.append(('reused proof set', passed.record['seconds'],
-                                    ','.join(run['targets'] or []), run['budgeted']))
+                if not passed.reused():
+                    print('GPU-PROOFS GATE: FAIL (inputs changed before reuse)')
+                    return INPUTS_CHANGED
+                target = ','.join(run['targets'] or []) or ('lib' if run['lib'] else 'all')
+                all_timings.append(timing_entry(run.get('package'), target,
+                                                'reused proof set', passed.record['seconds'],
+                                                'ok', run['budgeted']))
                 continue
             run_timings: list = []
             code, output = run_gate(manifest_path, run["filters"], run["skips"], run["targets"],
                                     run["full"], run["lib"], run_timings, hung,
-                                    args.hang_allowance, run.get("package", "manifold-renderer"))
+                                    args.hang_allowance, run["package"], run["target"],
+                                    run["budgeted"], run.get("target_specs"))
+            if code == INPUTS_CHANGED:
+                code = 1
             if (parse_failed_tests(output) or parse_golden_mismatches(output)
                     or any(status == "FAILED" for _, status, _, _ in parse_binaries(output))
-                    or any(t[3] == "FAILED" for t in run_timings)):
+                    or any(timing_fields(t)[4] == "FAILED" for t in run_timings)):
                 code = code or 1
-            measured.append((passed, code, sum(t[1] for t in run_timings)))
+            measured.append((passed, code,
+                             sum(timing_fields(t)[3] for t in run_timings)))
             exit_code = exit_code or code
             outputs.append(output)
-            all_timings += [(n, s, b, run["budgeted"]) for n, s, b, status in run_timings]
-            recorded = [(n, s, b, run["budgeted"], status) for n, s, b, status in run_timings]
+            normalized = []
+            for entry in run_timings:
+                row_package, row_target, name, seconds, status, _row_budgeted = timing_fields(entry)
+                normalized.append(timing_entry(run.get("package") or row_package,
+                                               run.get("target") or row_target,
+                                               name, seconds, status, run["budgeted"]))
+            all_timings += normalized
+            recorded = list(normalized)
             recorded_timings.extend(recorded)
             if hung:
                 break
     output = "".join(outputs)
     if args.timings_md:
         write_timings_md(args.timings_md, all_timings)
-    if args.record_times:
+    functional_ok = (exit_code == 0 and not hung and not parse_failed_tests(output)
+                     and not parse_golden_mismatches(output)
+                     and not any(status == "FAILED" for _, status, _, _ in parse_binaries(output))
+                     and not any(timing_fields(entry)[4] == "FAILED"
+                                 for entry in recorded_timings))
+    if args.record_times and functional_ok:
         print(write_times_json(args.record_times, recorded_timings, merge=True))
-    verdict = print_summary(output, exit_code, all_timings, args.budget, hung, manifest_path)
+    timing_red = [] if args.all_tests or args.record_times else unmeasured_heavy(recorded_timings)
+    unknown_red = unknown_target_timings(recorded_timings)
+    verdict = print_summary(output, exit_code, all_timings, args.budget, hung, manifest_path,
+                            timing_red, unknown_red)
     if args.learn_times:
         remember_times(recorded_timings, verdict, hung)
+    if gate_passes.changed_passes([p for p in passes if p]):
+        print('GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)')
+        return INPUTS_CHANGED
     for passed, code, seconds in measured:
         if passed:
             # Budget warnings do not invalidate functional passes. Real
             # failures and hangs can never acquire a reusable pass.
-            passed.save(code or verdict, seconds)
+            if passed.save(code or verdict, seconds) is False:
+                print('GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)')
+                return INPUTS_CHANGED
     return verdict
 
 

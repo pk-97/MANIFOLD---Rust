@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import codex_checks
 import landing_gate
 import run_ui_flows
+import gpu_scope
+from gate_workspace import Workspace
 
 
 class PlannerTests(unittest.TestCase):
@@ -41,6 +43,8 @@ class PlannerTests(unittest.TestCase):
                 expected.append("scripts/test_landing_gate.py")
             if path.endswith(".py"):
                 expected.append("scripts/test_dev.py")  # every script is inventoried
+            if path == 'scripts/trunk_health.py':
+                expected.append('scripts/test_gpu_queue.py')
             self.assertEqual([c["name"] for c in checks], expected)
             self.assertEqual(checks[0]["argv"],
                              ["python3", "-B", str(repo / "scripts/test_rt_noise_gate.py")])
@@ -73,7 +77,12 @@ class PlannerTests(unittest.TestCase):
             repo = Path(d)
             (repo / "scripts/ui-flows").mkdir(parents=True)
             (repo / "scripts/ui-flows/manifest.json").write_text('{"path_triggers": {}}')
-            with patch("codex_regressions.inventory", return_value=[]):
+            workspace = Workspace(repo, {'workspace_members': ['fixture'], 'packages': [{
+                'id': 'fixture', 'name': 'fixture', 'manifest_path': str(repo / 'crates/fixture/Cargo.toml'),
+                'targets': [], 'features': {}, 'dependencies': []}]})
+            with patch("codex_regressions.inventory", return_value=[]), \
+                    patch.object(landing_gate, 'Workspace', return_value=workspace), \
+                    patch.object(gpu_scope, 'Workspace', return_value=workspace):
                 plan = codex_checks.build_plan(repo, ["scripts/run_ui_flows.py"])
             self.assertEqual(plan["checks"][0]["argv"], ["python3", "-B", str(repo.resolve() / "scripts/test_codex_checks.py")])
 
