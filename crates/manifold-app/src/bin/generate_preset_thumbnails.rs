@@ -20,7 +20,7 @@
 //! resulting PNGs + hashes; the browser reads them at browse time, never
 //! renders.
 //!
-//! Run: `cargo run -p manifold-nodes --bin generate-preset-thumbnails`
+//! Run: `cargo run -p manifold-app --bin generate-preset-thumbnails`
 //! Pass exact preset IDs after `--` to update only those thumbnails.
 
 use manifold_nodes as _;

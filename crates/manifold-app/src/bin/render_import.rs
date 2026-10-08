@@ -12,7 +12,7 @@
 //! hides premultiplication errors that are visible in the instrument.
 //!
 //! Run:
-//!   cargo run -p manifold-nodes --bin render-import -- \
+//!   cargo run -p manifold-app --bin render-import -- \
 //!       tests/fixtures/gltf/DamagedHelmet.glb --out /tmp/helmet.png
 //!
 //! The input may also be a saved `EffectGraphDef` `.json` or
