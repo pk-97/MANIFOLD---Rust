@@ -283,7 +283,10 @@ impl ContentThread {
             .collect();
         log::info!("[ContentThread] Warmup RT quality: {:?}", project.settings.rt_quality.realtime);
         let total = warmup_layers.len() as u32;
-        let budget = manifold_core::WarmupBudget::default();
+        let budget = manifold_core::WarmupBudget {
+            frame_interval: std::time::Duration::from_secs_f64(1.0 / f64::from(project.settings.frame_rate)),
+            ..manifold_core::WarmupBudget::default()
+        };
         let start = std::time::Instant::now();
         let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
         let mut report = WarmupReport { total_layers: total, ..WarmupReport::default() };
@@ -1988,7 +1991,10 @@ impl ContentThread {
                                 {
                                     let _ = gen_renderer.prewarm_layer(
                                         layer,
-                                        manifold_core::WarmupBudget::default(),
+                                        manifold_core::WarmupBudget {
+                                            frame_interval: std::time::Duration::from_secs_f64(1.0 / f64::from(p.settings.frame_rate)),
+                                            ..manifold_core::WarmupBudget::default()
+                                        },
                                     );
                                     break;
                                 }

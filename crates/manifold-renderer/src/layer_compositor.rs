@@ -976,11 +976,9 @@ impl LayerCompositor {
         for frame in 0..budget.per_layer_frames {
             // Wall-clock is the primary per-layer cap; the frame cap is only
             // a safety bound for runaway spin loops.
-            if layer_start.elapsed() >= budget.per_layer {
-                outcome = WarmupOutcome::BudgetExhausted {
-                    cap: manifold_core::WarmupCap::PerLayerWallClock,
-                    elapsed: layer_start.elapsed(),
-                };
+            let pump_start = std::time::Instant::now();
+            if let Some(exhausted) = budget.exhausted(layer_start.elapsed(), frame) {
+                outcome = exhausted;
                 break;
             }
 
@@ -1057,7 +1055,10 @@ impl LayerCompositor {
                     .and_then(|chain| chain.as_ref())
                     .is_some_and(|cg| cg.warmup_pending())
             {
-                std::thread::sleep(std::time::Duration::from_millis(2));
+                let delay = budget.pending_pump_delay(layer_start.elapsed(), pump_start.elapsed());
+                if !delay.is_zero() {
+                    std::thread::sleep(delay);
+                }
             }
         }
 
@@ -1065,6 +1066,9 @@ impl LayerCompositor {
         scratch.resize(device, width, height);
         // A warmed chain's output target is owned by the cached PresetRuntime;
         // the scratch is only an input stand-in.
+        if matches!(outcome, WarmupOutcome::BudgetExhausted { .. }) {
+            outcome = budget.exhausted(layer_start.elapsed(), budget.per_layer_frames).unwrap();
+        }
         outcome
     }
 
@@ -1229,12 +1233,10 @@ impl LayerCompositor {
         };
         let mut warmup_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 
-        for _frame in 0..budget.per_layer_frames {
-            if start.elapsed() >= budget.per_layer {
-                outcome = WarmupOutcome::BudgetExhausted {
-                    cap: WarmupCap::PerLayerWallClock,
-                    elapsed: start.elapsed(),
-                };
+        for frame in 0..budget.per_layer_frames {
+            let pump_start = std::time::Instant::now();
+            if let Some(exhausted) = budget.exhausted(start.elapsed(), frame) {
+                outcome = exhausted;
                 break;
             }
 
@@ -1279,10 +1281,16 @@ impl LayerCompositor {
             if !warmup_frame_status.presentable()
                 || chain.as_ref().is_some_and(|cg| cg.warmup_pending())
             {
-                std::thread::sleep(std::time::Duration::from_millis(2));
+                let delay = budget.pending_pump_delay(start.elapsed(), pump_start.elapsed());
+                if !delay.is_zero() {
+                    std::thread::sleep(delay);
+                }
             }
         }
 
+        if matches!(outcome, WarmupOutcome::BudgetExhausted { .. }) {
+            outcome = budget.exhausted(start.elapsed(), budget.per_layer_frames).unwrap();
+        }
         outcome
     }
 

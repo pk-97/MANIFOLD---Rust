@@ -1714,11 +1714,9 @@ impl ClipRenderer for GeneratorRenderer {
         for frame in 0..budget.per_layer_frames {
             // Wall-clock is the primary per-layer cap; the frame cap is only
             // a safety bound for runaway spin loops.
-            if layer_start.elapsed() >= budget.per_layer {
-                outcome = manifold_core::WarmupOutcome::BudgetExhausted {
-                    cap: manifold_core::WarmupCap::PerLayerWallClock,
-                    elapsed: layer_start.elapsed(),
-                };
+            let pump_start = std::time::Instant::now();
+            if let Some(exhausted) = budget.exhausted(layer_start.elapsed(), frame) {
+                outcome = exhausted;
                 break;
             }
 
@@ -1793,7 +1791,10 @@ impl ClipRenderer for GeneratorRenderer {
                     .get(&layer_id)
                     .is_some_and(|ls| ls.generator.warmup_pending())
             {
-                std::thread::sleep(std::time::Duration::from_millis(2));
+                let delay = budget.pending_pump_delay(layer_start.elapsed(), pump_start.elapsed());
+                if !delay.is_zero() {
+                    std::thread::sleep(delay);
+                }
             }
         }
 
@@ -1801,19 +1802,8 @@ impl ClipRenderer for GeneratorRenderer {
         scratch.resize(&device, self.width, self.height);
         self.available_rts.push(scratch);
 
-        // The frame-cap exhausted path leaves the initial placeholder value
-        // with a zero elapsed — stamp the real wall time so the log is honest
-        // and budget-exhausted layers don't look like install failures.
-        if let manifold_core::WarmupOutcome::BudgetExhausted {
-            cap: manifold_core::WarmupCap::PerLayerFrames,
-            elapsed,
-        } = outcome
-            && elapsed.is_zero()
-        {
-            return manifold_core::WarmupOutcome::BudgetExhausted {
-                cap: manifold_core::WarmupCap::PerLayerFrames,
-                elapsed: layer_start.elapsed(),
-            };
+        if matches!(outcome, manifold_core::WarmupOutcome::BudgetExhausted { .. }) {
+            outcome = budget.exhausted(layer_start.elapsed(), budget.per_layer_frames).unwrap();
         }
         outcome
     }
@@ -2582,6 +2572,7 @@ mod warmup_tests {
         let layer = &project.timeline.layers[0];
 
         let tight_budget = manifold_core::WarmupBudget {
+            frame_interval: std::time::Duration::from_secs_f64(1.0 / 60.0),
             per_layer: std::time::Duration::from_nanos(1),
             per_layer_frames: 600,
             total: std::time::Duration::from_secs(60),

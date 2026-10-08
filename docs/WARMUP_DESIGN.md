@@ -138,6 +138,12 @@ budget and a total load budget (defaults set in P1 from the Liveschool fixture:
 loud warning naming the layer and opens anyway — that layer may first-touch once,
 exactly like today. Warmup must never make a project unopenable.
 
+The per-layer wall clock (10 s by default) is authoritative; the 600-frame cap
+is a spin guard. Pending pumps wait out the project frame interval, or the
+wall-budget/guard interval when that is longer, minus time already spent pumping.
+The wait never exceeds the remaining wall budget. Quiescent pumps return immediately;
+pacing does not change the readiness predicate (BUG-7qz2l).
+
 **D7 — Clips added during editing warm at add-time, transport-gated.** Adding a
 generator to a layer while the transport is stopped warms that layer immediately
 (same path as load). While the transport is playing, warmup is skipped — blocking the
