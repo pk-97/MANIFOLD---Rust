@@ -97,7 +97,7 @@ pub fn loose_scene_object_owned_ids(
 /// `(legacy port prefix, scene_object input port name)`. No prefix here is a
 /// prefix of another, so at most one entry ever matches a given port name —
 /// order is cosmetic, kept in the same order `SceneObject`'s fields are
-/// declared (`crates/manifold-renderer/src/node_graph/scene_object.rs`).
+/// declared (`crates/manifold-node-engine/src/scene/scene_object.rs`).
 const LEGACY_OBJECT_PORT_FAMILIES: &[(&str, &str)] = &[
     ("mesh_", "vertices"),
     ("material_", "material"),

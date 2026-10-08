@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Bounded, read-only Cargo target inventory and file-level cache cleanup.
+"""Bounded Cargo target inventory, build admission and cache cleanup.
 
-This module deliberately has no operation which removes a directory.  Cargo
-targets are shared build state, so cleanup is limited to an explicit manifest
-of regular files in the cache subtrees Cargo owns.  Unknown files, links,
-directories, binaries and proof captures are left alone.
+Cleanup uses an exact Cargo-file manifest; only empty incremental session
+directories may also be removed. Unknown files, links and proof captures stay.
+Admission prunes caches older than an hour in idle slots and the admitting
+slot, holding Cargo locks and failing closed on unavailable process inspection.
+MANIFOLD_SLOT_TARGET_CAP_GIB configures the per-slot budget (default 160 GiB).
+Budgets are best effort: protected data can exceed them; the 50 GiB reserve
+still refuses a build when safe reclamation cannot meet it.
 """
 
 from __future__ import annotations
@@ -19,6 +22,9 @@ import shutil
 import stat as stat_module
 import subprocess
 import sys
+import time
+import threading
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -26,6 +32,8 @@ from typing import Callable, Iterable, Optional
 GIB = 2 ** 30
 # Two concurrent landing gates (~20 GiB of build cache each) plus headroom.
 MAINTENANCE_GOAL_BYTES = 50 * GIB
+DEFAULT_SLOT_CAP_BYTES = 160 * GIB
+STALE_CACHE_SECONDS = 60 * 60
 DEFAULT_TMP_ROOT = Path("/private/tmp")
 PROFILE_NAMES = ("debug", "release")
 CARGO_MARKERS = (".rustc_info.json", "CACHEDIR.TAG")
@@ -336,17 +344,128 @@ def disk_free(path: Path) -> int:
 
 def check_build(target_dir: Path, repo: Path, free_bytes: Optional[int] = None,
                 reserve_bytes: int = MAINTENANCE_GOAL_BYTES) -> BuildCheck:
-    """Cheap build admission check: canonical target and free-space reserve."""
+    """Maintain slot caches before admission. An injected free count is read-only."""
+    reserve_bytes = max(reserve_bytes, MAINTENANCE_GOAL_BYTES)
     valid, target, reason = canonical_target(target_dir, repo)
     if not valid:
         return BuildCheck(False, target, 0 if free_bytes is None else free_bytes,
                           reserve_bytes, "REFUSED: " + reason)
     available = disk_free(target.parent if target.parent.exists() else Path.cwd()) if free_bytes is None else free_bytes
+    if free_bytes is None:
+        try:
+            cap = slot_cap_bytes()
+            roots = registered_worktrees(repo)
+            slots = [root for root in roots[1:] if is_slot(root)]
+            own = target.parent if target.parent in slots else None
+            removed, files, failures = 0, 0, ()
+            if slots:
+                # Coordinate with acquire/release: eligibility cannot change
+                # underneath this pass. Never create pool files from admission.
+                with admission_pool_lock(slots[0].parent) as locked:
+                    if locked:
+                        eligible = [root / "target" for root in slots
+                                    if root == own or idle_slot(root)]
+                        removed, files, failures = maintain_caches(
+                            eligible, target.parent, reserve_bytes, cap,
+                            same_slot=own / "target" if own else None)
+                    else:
+                        failures = ("cache maintenance skipped: pool lock busy or unavailable",)
+            if files:
+                print(f"STORAGE: removed {files} stale cache files ({removed / GIB:.1f} GiB)",
+                      file=sys.stderr)
+            for failure in failures:
+                print(f"STORAGE: {failure}", file=sys.stderr)
+            available = disk_free(target.parent)
+        except (OSError, ValueError) as error:
+            return BuildCheck(False, target, available, reserve_bytes,
+                              f"REFUSED: cache maintenance unavailable: {error}")
     if available < reserve_bytes:
         return BuildCheck(False, target, available, reserve_bytes,
                           f"REFUSED: only {available / GIB:.1f} GiB free; reserve is {reserve_bytes / GIB:.0f} GiB",
                           reclaimable=True)
     return BuildCheck(True, target, available, reserve_bytes, "build target and free-space reserve are valid")
+
+
+def slot_cap_bytes() -> int:
+    value = float(os.environ.get("MANIFOLD_SLOT_TARGET_CAP_GIB", str(DEFAULT_SLOT_CAP_BYTES / GIB)))
+    if not 0 < value < float("inf"):
+        raise ValueError("MANIFOLD_SLOT_TARGET_CAP_GIB must be finite and positive")
+    return int(value * GIB)
+
+
+_reservations = threading.local()
+
+
+@contextmanager
+def admission_pool_lock(pool: Path, create: bool = False):
+    """Share the ring reservation, including nested cleanup in the same thread.
+
+    The persistent lock inode must never be replaced. Admission never creates
+    the pool; ring lifecycle commands may create it before their first use.
+    """
+    pool = _absolute(pool)
+    held = getattr(_reservations, "held", {})
+    key = (os.getpid(), pool)
+    if key in held:
+        yield True
+        return
+    with ExitStack() as stack:
+        try:
+            if create:
+                pool.mkdir(parents=True, exist_ok=True)
+            directory = _open_directory(pool)
+            stack.callback(os.close, directory)
+            flags = os.O_RDWR | O_NOFOLLOW | (os.O_CREAT if create else 0)
+            fd = os.open(".agent-worktree.lock", flags, 0o666, dir_fd=directory)
+            stack.callback(os.close, fd)
+            if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError("reservation is not a regular file")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        held[key] = fd
+        _reservations.held = held
+        try:
+            yield True
+        finally:
+            del held[key]
+
+
+def is_slot(root: Path) -> bool:
+    return (bool(re.fullmatch(r"slot-[0-9]+", root.name))
+            and root.parent.name == "worktrees" and root.parent.parent.name == ".claude"
+            and not root.is_symlink())
+
+
+def idle_slot(root: Path) -> bool:
+    """A foreign slot must be clean, landed and lease-free; never infer lease expiry."""
+    if (root / ".worktree-lease.json").exists():
+        return False
+    try:
+        status = subprocess.run(["git", "-C", str(root), "status", "--porcelain"],
+                                capture_output=True, text=True, timeout=10)
+        landed = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor",
+                                 "HEAD", "origin/main"], capture_output=True, timeout=10)
+        return status.returncode == 0 and not status.stdout.strip() and landed.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def target_size(target: Path) -> int:
+    if target.is_symlink() or not target.is_dir():
+        return 0
+    result = subprocess.run(["du", "-sk", str(target)], capture_output=True, text=True)
+    if result.returncode:
+        raise OSError(f"cannot measure {target}: {result.stderr.strip()}")
+    return int(result.stdout.split()[0]) * 1024
+
+
+def incremental_size(target: Path) -> int:
+    if target.is_symlink() or not target.is_dir():
+        return 0
+    return sum(target_size(profile / "incremental") for profile in target.iterdir()
+               if _profile_dir(profile) and not profile.is_symlink())
 
 
 def _profile_dir(path: Path) -> bool:
@@ -464,7 +583,7 @@ def _iter_regular_files(root: Path, errors: Optional[list[str]] = None) -> Itera
         return
 
 
-def plan_cache_cleanup(target: Path) -> CleanupPlan:
+def plan_cache_cleanup(target: Path, profiles: Optional[Iterable[Path]] = None) -> CleanupPlan:
     """Build a manifest of exact Cargo cache files below a tagged target."""
     target = _absolute(target)
     refusals: list[str] = []
@@ -475,7 +594,8 @@ def plan_cache_cleanup(target: Path) -> CleanupPlan:
     entries: list[CacheEntry] = []
     inode_seen: set[tuple[int, int]] = set()
     try:
-        profiles = [p for p in target.iterdir() if p.is_dir() and not p.is_symlink() and _profile_dir(p)]
+        profiles = list(profiles) if profiles is not None else [
+            p for p in target.iterdir() if p.is_dir() and not p.is_symlink() and _profile_dir(p)]
     except OSError as error:
         return CleanupPlan(target, (), 0, (f"cannot inspect target: {error}",))
     for profile in profiles:
@@ -498,42 +618,239 @@ def plan_cache_cleanup(target: Path) -> CleanupPlan:
     return CleanupPlan(target, tuple(entries), sum(entry.size_bytes for entry in entries), tuple(refusals))
 
 
-def target_live_status(target: Path) -> Optional[bool]:
-    """Return live/idle, or None when process inspection is unavailable.
+def process_snapshot():
+    """Index lsof paths and device/inode pairs, including hard-link aliases.
 
-    A compiler can keep its cwd at the checkout root while holding files below
-    target, so inspect all descriptors rather than cwd alone.
+    This is a liveness veto, never an exclusion lock for future launches.
     """
     try:
         result = subprocess.run(
-            ["lsof", "-n", "-P", "-Fpcfn"],
+            ["lsof", "-n", "-P", "-FpcfnDi"],
             capture_output=True, text=True, timeout=20, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0 or not result.stdout:
-        return None
-    target_root = _absolute(target)
-    checkout_root = target_root.parent
-    current_pid: Optional[str] = None
-    current_fd: Optional[str] = None
+        return lambda *args, **kwargs: None
+    if result.returncode != 0 or not result.stdout or getattr(result, "stderr", "").strip():
+        return lambda *args, **kwargs: None
+    occupied, identities = set(), set()
+    pid, record = None, {}
+
+    def flush():
+        if not pid or "f" not in record or "n" not in record:
+            return
+        opened = Path(record["n"])
+        if not opened.is_absolute():
+            return
+        if pid == str(os.getpid()) and opened.name == ".cargo-lock":
+            return
+        occupied.update((opened, *opened.parents))
+        if "D" in record and "i" in record:
+            identities.add((int(record["D"], 16), int(record["i"])))
+        else:
+            # Some lsof file kinds omit inode fields. Resolve their pathname
+            # when possible; missing local filesystem identity fails closed.
+            st = opened.stat()
+            identities.add((st.st_dev, st.st_ino))
+
     try:
         for line in result.stdout.splitlines():
-            if line.startswith("p"):
-                current_pid = line[1:]
-            elif line.startswith("f"):
-                current_fd = line[1:]
-            elif line.startswith("n") and current_pid and current_fd:
-                opened = Path(line[1:])
-                # cwd at the worktree root is a live session; any descriptor
-                # under target is also live even when cwd is elsewhere.
-                if ((current_fd == "cwd" and
-                     (opened == checkout_root or checkout_root in opened.parents)) or
-                        opened == target_root or target_root in opened.parents):
-                    return True
-    except (OSError, RuntimeError):
-        return None
-    return False
+            if not line:
+                continue
+            if line[0] in ("p", "f"):
+                flush()
+                record = {}
+            if line[0] == "p":
+                pid = line[1:]
+            elif line[0] in ("f", "n", "D", "i"):
+                record[line[0]] = line[1:]
+        flush()
+    except (OSError, RuntimeError, ValueError):
+        return lambda *args, **kwargs: None
+    if not occupied:
+        return lambda *args, **kwargs: None
+
+    def check(path: Path, include_checkout: bool = True) -> Optional[bool]:
+        path = _absolute(path)
+        root = path.parent if include_checkout else path
+        if root in occupied:
+            return True
+        try:
+            if root.is_file():
+                st = root.stat()
+                return (st.st_dev, st.st_ino) in identities
+            errors = []
+            for directory, dirs, files in os.walk(root, followlinks=False,
+                                                  onerror=errors.append):
+                dirs[:] = [d for d in dirs if not (Path(directory) / d).is_symlink()]
+                for candidate in (Path(directory), *(Path(directory) / f for f in files)):
+                    st = candidate.lstat()
+                    if (st.st_dev, st.st_ino) in identities:
+                        return True
+            return None if errors else False
+        except OSError:
+            return None
+    return check
+
+
+def target_live_status(target: Path, include_checkout: bool = True) -> Optional[bool]:
+    """Return live/idle, or None when process inspection is unavailable."""
+    return process_snapshot()(target, include_checkout=include_checkout)
+
+
+def stale_cache_units(plan: CleanupPlan, cutoff: float):
+    """Whole known incremental sessions first; other manifest files second, LRU.
+
+    Unknown contents or a recently touched file protect the entire session.
+    Build-script products, fixtures and reports never enter the manifest.
+    """
+    sessions: dict[Path, list[CacheEntry]] = {}
+    units = []
+    for entry in plan.entries:
+        if entry.path.relative_to(plan.target).parts[1] == "incremental":
+            sessions.setdefault(entry.path.parent, []).append(entry)
+        elif entry.identity[3] / 1e9 <= cutoff:
+            units.append((1, entry.identity[3] / 1e9, entry.path, (entry,)))
+    for session, entries in sessions.items():
+        try:
+            if set(session.iterdir()) != {entry.path for entry in entries}:
+                continue
+            newest = max(session.stat().st_mtime,
+                         *(entry.identity[3] / 1e9 for entry in entries))
+            if newest <= cutoff:
+                units.append((0, newest, session, tuple(entries)))
+        except OSError:
+            continue
+    return sorted(units)
+
+
+def _remove_empty_session(target: Path, session: Path):
+    """Empty-only removal through no-follow fds; never remove its crate directory."""
+    parts = _relative_parts(target, session)
+    if parts is None or len(parts) != 4 or parts[1] != "incremental":
+        return
+    with ExitStack() as stack:
+        fd = _open_directory(target)
+        stack.callback(os.close, fd)
+        for component in parts[:-1]:
+            fd = _open_directory(Path(component), fd)
+            stack.callback(os.close, fd)
+        os.rmdir(parts[-1], dir_fd=fd)
+
+
+def maintain_caches(targets: Iterable[Path], disk_path: Path,
+                    reserve_bytes: int = MAINTENANCE_GOAL_BYTES,
+                    cap_bytes: Optional[int] = None,
+                    same_slot: Optional[Path] = None,
+                    process_check=None, free_check=None, repo: Optional[Path] = None
+                    ) -> tuple[int, int, tuple[str, ...]]:
+    """Pressure-driven stale cleanup through the shared reservation executor."""
+    return _execute_cleanup(targets, repo or disk_path, disk_path=disk_path,
+                            reserve_bytes=max(reserve_bytes, MAINTENANCE_GOAL_BYTES),
+                            cap_bytes=slot_cap_bytes() if cap_bytes is None else cap_bytes,
+                            same_slot=same_slot, process_check=process_check,
+                            free_check=free_check)
+
+
+def _execute_cleanup(targets, repo, *, disk_path=None, reserve_bytes=0,
+                     cap_bytes=0, same_slot=None, process_check=None,
+                     free_check=None, manifest=None, dry_run=False):
+    """The sole deletion executor: registry, reservation, Cargo locks, then scan.
+
+    Direct app/test launches do not participate in Cargo's lock. Keep deps and
+    examples even in apparently idle slots: a process snapshot cannot exclude
+    a future open. Only rustc-owned metadata is eligible under the Cargo lock.
+    """
+    roots = registered_worktrees(repo)
+    if not roots:
+        return 0, 0, ("REFUSED: unable to inspect Git worktree registry",)
+    pool = roots[0] / ".claude" / "worktrees"
+    with admission_pool_lock(pool) as locked:
+        if not locked:
+            return 0, 0, ("REFUSED: pool reservation busy or unavailable",)
+        with ExitStack() as stack:
+            failures, units, sizes = [], [], {}
+            free = disk_free if free_check is None else free_check
+            available = free(disk_path) if disk_path is not None else 0
+            cutoff = time.time() - STALE_CACHE_SECONDS
+            for target in dict.fromkeys(_absolute(t) for t in targets):
+                valid, target, reason = canonical_target(target, repo)
+                if not valid:
+                    failures.append("REFUSED: " + reason)
+                    continue
+                # Size is only a pressure hint; the deletion inventory comes
+                # after exclusion, and never includes an unlocked profile.
+                sizes[target] = target_size(target)
+                if disk_path is not None and available >= reserve_bytes and sizes[target] <= cap_bytes:
+                    continue
+                profiles, errors = _lock_profiles(target, stack)
+                failures.extend(errors)
+                plan = plan_cache_cleanup(target, profiles)
+                if plan.refusals:
+                    failures.extend(plan.refusals)
+                    continue
+                if manifest is not None:
+                    current = {e.path: e for e in plan.entries}
+                    selected = []
+                    for entry in manifest.entries:
+                        if not (parts := _relative_parts(target, entry.path)) or parts[0] not in {p.name for p in profiles}:
+                            continue
+                        if current.get(entry.path) != entry:
+                            failures.append(f"changed since manifest: {entry.path}")
+                        else:
+                            selected.append(entry)
+                    units.extend((1, e.identity[3] / 1e9, e.path, (e,), target) for e in selected)
+                else:
+                    units.extend((*unit, target) for unit in stale_cache_units(plan, cutoff))
+            check = process_snapshot() if process_check is None else process_check
+            removed_bytes = removed_files = 0
+            reported = set()
+            foreign_status = {}
+            for kind, _mtime, path, entries, target in sorted(units):
+                if disk_path is not None and available >= reserve_bytes and sizes[target] <= cap_bytes:
+                    continue
+                if path.relative_to(target).parts[1] in ("deps", "examples"):
+                    message = f"KEEP deps/examples in {target}: direct launches have no exclusion lock"
+                    if message not in reported:
+                        failures.append(message)
+                        reported.add(message)
+                    continue
+                if target == same_slot:
+                    live = check(path, include_checkout=False)
+                else:
+                    if target not in foreign_status:
+                        foreign_status[target] = check(target)
+                    live = foreign_status[target]
+                if live is not False:
+                    message = f"KEEP cache in {target}: " + ("live process" if live else "process inspection unavailable")
+                    if message not in reported:
+                        failures.append(message)
+                        reported.add(message)
+                    continue
+                try:
+                    if (any(_identity(e.path) != e.identity for e in entries)
+                            or (kind == 0 and (path.stat().st_mtime > cutoff
+                                or set(path.iterdir()) != {e.path for e in entries}))):
+                        failures.append(f"changed since manifest: {path}")
+                        continue
+                except OSError as error:
+                    failures.append(f"cannot revalidate {path}: {error}")
+                    continue
+                for entry in entries:
+                    removed, error = (True, None) if dry_run else _unlink_entry(target, entry)
+                    if removed:
+                        removed_bytes += entry.size_bytes
+                        removed_files += 1
+                        sizes[target] -= entry.size_bytes
+                    elif error:
+                        failures.append(error)
+                if kind == 0 and not dry_run:
+                    try:
+                        _remove_empty_session(target, path)
+                    except OSError as error:
+                        failures.append(f"kept session directory {path}: {error}")
+                if disk_path is not None:
+                    available = free(disk_path)
+            return removed_bytes, removed_files, tuple(failures)
 
 
 def _open_directory(path: Path, parent_fd: Optional[int] = None) -> int:
@@ -571,36 +888,41 @@ def _relative_parts(target: Path, path: Path) -> Optional[tuple[str, ...]]:
     return parts
 
 
-def _acquire_cargo_locks(target: Path) -> tuple[list[object], Optional[str]]:
-    """Acquire existing Cargo lock files without creating or following links."""
-    handles: list[object] = []
-    candidates: list[Path] = []
-    errors: list[str] = []
-    for root, dirs, files in os.walk(target, topdown=True, followlinks=False,
-                                     onerror=lambda error: errors.append(str(error))):
-        root_path = Path(root)
-        dirs[:] = [name for name in dirs if not (root_path / name).is_symlink()]
-        for name in files:
-            if name == ".cargo-lock":
-                candidates.append(root_path / name)
-    if errors:
-        return [], "REFUSED: cannot inspect Cargo lock paths: " + "; ".join(errors)
-    for path in candidates:
-        handle = None
-        try:
-            fd = os.open(os.fspath(path), os.O_RDONLY | O_NOFOLLOW)
-            handle = os.fdopen(fd, "rb", closefd=True)
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            handles.append(handle)
-        except (OSError, IOError) as error:
-            if handle is not None:
-                handle.close()
-            for handle in handles:
-                handle.close()
-            if getattr(error, "errno", None) in (errno.EACCES, errno.EAGAIN):
-                return [], f"REFUSED: Cargo lock is held: {path}"
-            return [], f"REFUSED: cannot hold Cargo lock {path}: {error}"
-    return handles, None
+def _lock_profiles(target: Path, stack: ExitStack):
+    """Take Cargo's profile flock non-blockingly, creating its file if absent.
+
+    Cargo opens .cargo-lock read/write with create and without truncation.
+    Retain the inode and every descriptor until the deletion pass finishes.
+    """
+    profiles, failures = [], []
+    try:
+        target_fd = _open_directory(target)
+    except OSError as error:
+        return [], [f"cannot inspect target {target}: {error}"]
+    try:
+        for name in os.listdir(target_fd):
+            profile = target / name
+            if not _profile_dir(profile):
+                continue
+            try:
+                directory = _open_directory(Path(name), target_fd)
+                try:
+                    fd = os.open(".cargo-lock", os.O_RDWR | os.O_CREAT | O_NOFOLLOW,
+                                 0o666, dir_fd=directory)
+                finally:
+                    os.close(directory)
+                stack.callback(os.close, fd)
+                if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+                    raise OSError("Cargo lock is not a regular file")
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                profiles.append(profile)
+            except OSError as error:
+                failures.append(f"KEEP profile {profile}: Cargo lock busy or unavailable: {error}")
+    except OSError as error:
+        failures.append(f"cannot inspect target {target}: {error}")
+    finally:
+        os.close(target_fd)
+    return profiles, failures
 
 
 def _unlink_entry(target: Path, entry: CacheEntry) -> tuple[bool, Optional[str]]:
@@ -636,42 +958,13 @@ def _unlink_entry(target: Path, entry: CacheEntry) -> tuple[bool, Optional[str]]
 
 
 def apply_cache_cleanup(plan: CleanupPlan, dry_run: bool = True,
-                        process_check: Optional[Callable[[Path], Optional[bool]]] = None) -> tuple[int, int, tuple[str, ...]]:
-    """Apply an exact manifest; return (bytes_removed, files_removed, failures)."""
-    check = target_live_status if process_check is None else process_check
+                        process_check: Optional[Callable[[Path], Optional[bool]]] = None,
+                        repo: Optional[Path] = None) -> tuple[int, int, tuple[str, ...]]:
+    """Revalidate a manifest under the same executor used for admission/scrub."""
     if plan.refusals:
         return 0, 0, plan.refusals
-    live = check(plan.target)
-    if live is None:
-        return 0, 0, ("REFUSED: process inspection unavailable",)
-    if live:
-        return 0, 0, ("REFUSED: target has a live process",)
-    handles, lock_error = _acquire_cargo_locks(plan.target)
-    if lock_error:
-        return 0, 0, (lock_error,)
-    removed_bytes = removed_files = 0
-    failures: list[str] = []
-    try:
-        for entry in plan.entries:
-            if dry_run:
-                path = entry.path
-                if (_cache_path(plan.target, path) and not path.is_symlink()
-                        and _regular_file(path) and _identity(path) == entry.identity):
-                    removed_bytes += entry.size_bytes
-                    removed_files += 1
-                else:
-                    failures.append(f"stale or unsafe manifest entry: {path}")
-                continue
-            removed, error = _unlink_entry(plan.target, entry)
-            if removed:
-                removed_bytes += entry.size_bytes
-                removed_files += 1
-            elif error:
-                failures.append(error)
-    finally:
-        for handle in handles:
-            handle.close()
-    return removed_bytes, removed_files, tuple(failures)
+    return _execute_cleanup([plan.target], repo or plan.target.parent,
+                            manifest=plan, dry_run=dry_run, process_check=process_check)
 
 
 def _format_gib(value: int) -> str:

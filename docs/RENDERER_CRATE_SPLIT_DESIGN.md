@@ -1,8 +1,8 @@
 # Renderer Crate Split — one engine crate, node families as leaves
 
-**Status:** IN PROGRESS · P0, P1a and P1 landed · P2 next (prerequisites complete on `lane/crate-split-p2-prep`, not landed) · P3–P4 owed · P5 waits for Peter. See section 5 (Phasing).
+**Status:** IN PROGRESS · P0, P1a and P1 landed · P2 next (prerequisites complete on `lane/crate-split-p2-prep`, not landed) · P3–P4 owed · P5 awaits Peter. Section 5 (Phasing).
 **Prerequisites:** none.
-**Work items:** epic BUG-hkbdp (renderer crate split epic); phases BUG-jo1qt (P0 census and seams), BUG-k452g (P1a ui-paint), BUG-9hndn (P1 carve manifold-node-engine), BUG-vnbdt (P2 leaves), BUG-uones (P3 catalog), BUG-l6ltu (P4 review and measurement), BUG-t2jwg (P5 water seam). Status lives on the Status line only.
+**Work items:** epic BUG-hkbdp (renderer crate split epic); phases BUG-jo1qt (P0 census and seams), BUG-k452g (P1a ui-paint), BUG-9hndn (P1 carve manifold-node-engine), BUG-vnbdt (P2 leaves), BUG-uones (P3 catalog), BUG-l6ltu (P4 review and measurement), BUG-t2jwg (P5 water seam). Status is recorded only above.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before any phase. Lead: Opus 5.5. Lanes: Astra (Codex) for every mechanical phase (Peter, 2026-10-07: *"please use Astra agents for this work"*); this overrides `feedback_astra_review_only` for this campaign only. Lanes make one commit then stop; the lead lands.
 
 <!-- index: Split manifold-renderer into an engine hub, node-family leaf crates, a catalog, the compositor and UI paint; pure moves proven by identity, census and compiler. -->

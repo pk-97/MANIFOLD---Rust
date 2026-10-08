@@ -196,6 +196,26 @@ pub struct BrowserPopupRequest {
     pub screen_anchor: Vec2,
 }
 
+/// How an Actions list reads: what an empty search says, whether each row
+/// shows its label in the installed font it names (the font picker), and
+/// which item is the current value (marked, and the list opens on it).
+#[derive(Debug, Clone)]
+pub struct ActionListOptions {
+    pub empty_label: &'static str,
+    pub label_in_own_font: bool,
+    /// Index into the request's `items`.
+    pub current: Option<usize>,
+}
+
+impl Default for ActionListOptions {
+    fn default() -> Self {
+        Self { empty_label: "No matches", label_in_own_font: false, current: None }
+    }
+}
+
+/// Row font for `label_in_own_font` lists: large enough to judge a face.
+const FONT_PREVIEW_SIZE: u16 = color::FONT_HEADING;
+
 /// Per-cell metadata needed for click AND right-click routing. Selection only
 /// needs `type_id`; the right-click management menu (PRESET_LIBRARY_DESIGN
 /// P5) additionally needs the cell's classified source.
@@ -277,6 +297,10 @@ pub struct BrowserSession {
     pub paste_count: usize,
     /// Typed actions parallel to `picker` items for an Actions session.
     actions: Option<Vec<PanelAction>>,
+    list: ActionListOptions,
+    /// Set at open when the cursor starts on `list.current`: the first build
+    /// (the first with real geometry) scrolls it to the middle.
+    center_cursor_on_build: bool,
     layout: BrowserLayout,
 }
 
@@ -351,19 +375,29 @@ impl BrowserPopupPanel {
     }
 
     pub fn open(&mut self, req: BrowserPopupRequest) {
-        self.open_with_actions(req, None);
+        self.open_with_actions(req, None, ActionListOptions::default());
     }
 
     /// Open a searchable picker whose cells dispatch the supplied typed
     /// actions. `actions` is parallel to `req.items`, keyed by the picker
     /// item's stable index; filtering never changes that identity.
-    pub fn open_actions(&mut self, req: BrowserPopupRequest, actions: Vec<PanelAction>) {
+    pub fn open_actions(
+        &mut self,
+        req: BrowserPopupRequest,
+        actions: Vec<PanelAction>,
+        list: ActionListOptions,
+    ) {
         debug_assert_eq!(req.mode, BrowserPopupMode::Actions);
         debug_assert_eq!(req.items.len(), actions.len());
-        self.open_with_actions(req, Some(actions));
+        self.open_with_actions(req, Some(actions), list);
     }
 
-    fn open_with_actions(&mut self, req: BrowserPopupRequest, actions: Option<Vec<PanelAction>>) {
+    fn open_with_actions(
+        &mut self,
+        req: BrowserPopupRequest,
+        actions: Option<Vec<PanelAction>>,
+        list: ActionListOptions,
+    ) {
         // The search-focus hook is effect/generator-only; Node mode never
         // dirties it.
         if req.mode != BrowserPopupMode::Node {
@@ -371,14 +405,18 @@ impl BrowserPopupPanel {
         }
         let mut layout = BrowserLayout::new();
         layout.anchor = req.screen_anchor;
+        let mut picker = PickerCore::new(req.items, req.category_names);
+        let center_cursor_on_build = list.current.is_some_and(|i| picker.set_cursor_to_item(i));
         self.session = Some(BrowserSession {
             mode: req.mode,
             tab: req.tab,
             layer_id: req.layer_id,
-            picker: PickerCore::new(req.items, req.category_names),
+            picker,
             pending_spawn_graph_pos: req.spawn_graph_pos,
             paste_count: req.paste_count,
             actions,
+            list,
+            center_cursor_on_build,
             layout,
         });
     }
@@ -661,6 +699,15 @@ impl BrowserPopupPanel {
         // Content height now that the viewport is fresh — the clamp lands
         // against THIS build's geometry.
         session.picker.scroll.set_content_height(grid_content_h);
+        if std::mem::take(&mut session.center_cursor_on_build)
+            && let Some(cursor) = session.picker.cursor()
+        {
+            let row_y = (cursor / columns) as f32 * pitch;
+            session
+                .picker
+                .scroll
+                .set_scroll_offset(row_y + cell_h * 0.5 - vp_h * 0.5);
+        }
         // The grid's own clip handles cell overflow against the viewport;
         // rooting it under the container also ties the grid to the popup's
         // structural containment, same as every other content node.
@@ -676,7 +723,7 @@ impl BrowserPopupPanel {
                 vp_top,
                 content_w,
                 vp_h,
-                if mode == BrowserPopupMode::Actions { "No parameters match" } else { "No presets match" },
+                if mode == BrowserPopupMode::Actions { session.list.empty_label } else { "No presets match" },
                 UIStyle {
                     font_size: CELL_FONT,
                     text_color: TEXT_DIM,
@@ -764,6 +811,9 @@ impl BrowserPopupPanel {
             // fills the body) and the hover/press tints turn translucent so
             // interaction feedback still shows without blotting the picture.
             let is_cursor = cursor == Some(fi);
+            // The current value reads like a dropdown's checked row.
+            let is_current = session.list.current == Some(item_index);
+            let own_font = session.list.label_in_own_font;
             let id = tree.add_button(
                 clip_parent,
                 cell_x,
@@ -775,19 +825,24 @@ impl BrowserPopupPanel {
                         if is_cursor { CELL_HOVER_OVER_IMAGE } else { Color32::TRANSPARENT }
                     } else if is_cursor {
                         CELL_HOVER
+                    } else if is_current {
+                        color::DROPDOWN_ITEM_SELECTED
                     } else {
                         CELL_NORMAL
                     },
                     hover_bg_color: if has_image { CELL_HOVER_OVER_IMAGE } else { CELL_HOVER },
                     pressed_bg_color: if has_image { CELL_PRESSED_OVER_IMAGE } else { CELL_PRESSED },
                     corner_radius: CELL_RADIUS,
-                    font_size: CELL_FONT,
-                    text_color: TEXT_PRIMARY,
+                    font_size: if own_font { FONT_PREVIEW_SIZE } else { CELL_FONT },
+                    text_color: if is_current { color::DROPDOWN_CHECK_COLOR } else { TEXT_PRIMARY },
                     text_inset_x: CAPTION_PAD_X,
                     ..UIStyle::default()
                 },
                 if has_caption { "" } else { &item.label },
             );
+            if own_font {
+                tree.set_font_family(id, &item.label);
+            }
 
             session.layout.cell_ids.push((
                 id,
@@ -1468,6 +1523,7 @@ mod tests {
                 screen_anchor: Vec2::ZERO,
             },
             vec![action.clone()],
+            ActionListOptions::default(),
         );
         popup.set_filter("density".to_string());
         let Some(BrowserPopupAction::ActionSelected(selected)) = popup.handle_key_nav(Key::Enter) else {
@@ -1478,5 +1534,83 @@ mod tests {
             ref param,
         )) if param.as_ref() == "density"));
         assert!(!popup.is_open());
+    }
+
+    fn font_list(count: usize, current: usize) -> BrowserPopupPanel {
+        let labels: Vec<String> = (0..count).map(|i| format!("Font {i:03}")).collect();
+        let items = labels
+            .iter()
+            .map(|l| PickerItem {
+                label: l.clone(),
+                type_id: l.clone(),
+                category: None,
+                search_text: None,
+                source: None,
+                thumbnail: None,
+            })
+            .collect();
+        let actions = labels
+            .iter()
+            .map(|l| PanelAction::Params(ParamsAction::GenStringParamSelected(0, l.clone())))
+            .collect();
+        let mut popup = BrowserPopupPanel::new();
+        popup.set_screen_size(1280.0, 800.0);
+        popup.open_actions(
+            BrowserPopupRequest {
+                mode: BrowserPopupMode::Actions,
+                tab: InspectorTab::Layer,
+                layer_id: None,
+                items,
+                category_names: Vec::new(),
+                spawn_graph_pos: None,
+                paste_count: 0,
+                screen_anchor: Vec2::new(100.0, 100.0),
+            },
+            actions,
+            ActionListOptions { empty_label: "No fonts match", label_in_own_font: true, current: Some(current) },
+        );
+        popup
+    }
+
+    #[test]
+    fn font_list_opens_on_the_current_font_drawn_in_its_own_face() {
+        let mut tree = UITree::new();
+        let mut popup = font_list(300, 150);
+        popup.build(&mut tree);
+        let session = popup.session.as_ref().unwrap();
+        assert_eq!(session.picker.cursor(), Some(150));
+        let current_row = session
+            .layout
+            .cell_ids
+            .iter()
+            .find(|(_, m)| m.item_index == 150)
+            .map(|(id, _)| *id)
+            .expect("the current font's row is built, i.e. scrolled into view");
+        let node = tree.get_node(current_row).unwrap();
+        assert_eq!(node.font_family.as_deref(), Some("Font 150"));
+
+        // Down moves from the current font, Enter picks the next one.
+        popup.handle_key_nav(Key::Down);
+        let Some(BrowserPopupAction::ActionSelected(PanelAction::Params(
+            ParamsAction::GenStringParamSelected(_, picked),
+        ))) = popup.handle_key_nav(Key::Enter)
+        else {
+            panic!("Enter picks a font");
+        };
+        assert_eq!(picked, "Font 151");
+    }
+
+    #[test]
+    fn font_list_search_narrows_and_says_so_when_empty() {
+        let mut tree = UITree::new();
+        let mut popup = font_list(20, 0);
+        popup.set_filter("font 01".to_string());
+        assert_eq!(popup.picker().unwrap().filtered_len(), 10);
+        popup.set_filter("zzz".to_string());
+        popup.build(&mut tree);
+        let found = (0..tree.count()).any(|i| {
+            tree.get_node(tree.id_at(i)).and_then(|n| n.text.as_deref()) == Some("No fonts match")
+        });
+        assert!(found);
     }
 }

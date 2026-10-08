@@ -8,7 +8,11 @@ use manifold_node_engine::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATO
 use crate::node_graph::gltf_load::GltfImportSummary;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;
 use manifold_node_engine::runtime::PresetRuntime;
+#[cfg(feature = "gpu-proofs")]
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_core::NodeId;
+#[cfg(feature = "gpu-proofs")]
+use manifold_core::WarmupBudget;
 use manifold_core::effect_graph_def::BindingTarget;
 use super::synthetic_glbs::*;
 use manifold_core::effect_graph_def::{EffectGraphNode, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, SerializedParamValue};
@@ -4170,13 +4174,9 @@ fn point_camera_down_to_see_inner_box(def: &mut manifold_core::effect_graph_def:
 /// `node.gltf_morph_weights`): `progress = wrap(beats * rate /
 /// (duration_s * beats_per_second))` with `rate=1.0` and the
 /// `beats_per_second=2.0` fallback picked by setting
-/// `seconds = beats * 0.5`. Polls for the background mesh parse to
-/// converge (the BUG-100 double condition: byte-stable frames AND a
-/// non-black floor) and PANICS if it never does — a blank or unstable
-/// frame is a harness/environment fault (BUG-cs6, skinned all-black
-/// headless: a post-crash GPU rendered black while the app was fine)
-/// and must fail HERE with that message, never leak black frames into
-/// downstream assertions where they read as "frames byte-identical".
+/// `seconds = beats * 0.5`. Convergence requires finished warmup, a complete
+/// frame, a non-black floor, and byte-stable pixels. Stable partial scenes
+/// must not become golden candidates while another object is still loading.
 #[cfg(feature = "gpu-proofs")]
 fn render_import_def_at_progress(
     def: manifold_core::effect_graph_def::EffectGraphDef,
@@ -4220,11 +4220,18 @@ fn render_import_def_at_progress(
     };
 
     const STABLE_STREAK: u32 = 3;
-    const MAX_ATTEMPTS: u32 = 200;
+    let warmup_budget = WarmupBudget::default();
+    let warmup_start = std::time::Instant::now();
+    let mut attempts = 0u32;
     let mut prev_rgba: Option<Vec<u8>> = None;
     let mut stable_count = 0u32;
     let mut last_fraction = 0.0f64;
-    for _attempt in 0..MAX_ATTEMPTS {
+    let mut last_warmup_pending = true;
+    let mut last_frame_status =
+        FrameRenderStatus::PendingGeometry;
+    while warmup_start.elapsed() < warmup_budget.per_layer {
+        attempts += 1;
+        let frame_status;
         {
             let mut enc = device.create_encoder("import-def-render");
             {
@@ -4235,6 +4242,7 @@ fn render_import_def_at_progress(
                     &ctx,
                     &manifold_core::params::ParamManifest::default(),
                 );
+                frame_status = gpu.frame_status();
             }
             enc.commit_and_wait_completed();
         }
@@ -4262,7 +4270,13 @@ fn render_import_def_at_progress(
             rgba.push((a * 255.0).round() as u8);
         }
         last_fraction = non_black as f64 / (w * h) as f64;
-        if last_fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
+        last_warmup_pending = generator.warmup_pending();
+        last_frame_status = frame_status;
+        if !last_warmup_pending
+            && frame_status == FrameRenderStatus::Complete
+            && last_fraction > 0.02
+            && prev_rgba.as_deref() == Some(rgba.as_slice())
+        {
             stable_count += 1;
         } else {
             stable_count = 0;
@@ -4272,13 +4286,18 @@ fn render_import_def_at_progress(
         if converged {
             return prev_rgba.expect("frame stored above");
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        let remaining = warmup_budget.per_layer.saturating_sub(warmup_start.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20).min(remaining));
     }
     panic!(
-        "{label}: render at progress {progress} never converged after {MAX_ATTEMPTS} attempts \
-         (last non-black fraction {last_fraction:.4}) — blank or unstable headless render. If \
-         the app renders this asset correctly, suspect the headless GPU environment (BUG-cs6, \
-         skinned all-black headless, was a post-crash GPU firmware fault, not a code bug)."
+        "{label}: render at progress {progress} never converged after {attempts} attempts \
+         in {:?} (last non-black fraction {last_fraction:.4}, \
+         warmup_pending={last_warmup_pending}, frame_status={last_frame_status:?}) — \
+         blank, incomplete, or unstable render; \
+         node errors: {:?}", warmup_start.elapsed(), generator.errors()
     );
 }
 
@@ -4943,7 +4962,15 @@ fn material_maps_repeat_out_of_range_uvs() {
     let mut prev: Option<Vec<u8>> = None;
     let mut stable = 0u32;
     let mut converged = false;
-    for _ in 0..200 {
+    let mut last_warmup_pending = true;
+    let mut last_frame_status =
+        FrameRenderStatus::PendingGeometry;
+    let warmup_budget = WarmupBudget::default();
+    let warmup_start = std::time::Instant::now();
+    let mut attempts = 0u32;
+    while warmup_start.elapsed() < warmup_budget.per_layer {
+        attempts += 1;
+        let frame_status;
         {
             let mut enc = device.create_encoder("uv-wrap-render");
             {
@@ -4954,6 +4981,7 @@ fn material_maps_repeat_out_of_range_uvs() {
                     &ctx,
                     &manifold_core::params::ParamManifest::default(),
                 );
+                frame_status = gpu.frame_status();
             }
             enc.commit_and_wait_completed();
         }
@@ -4974,7 +5002,13 @@ fn material_maps_repeat_out_of_range_uvs() {
             raw.extend(px.iter().flat_map(|v| v.to_le_bytes()));
         }
         let non_black = rgb_sum.iter().sum::<f32>() > 1.0;
-        if non_black && prev.as_deref() == Some(raw.as_slice()) {
+        last_warmup_pending = generator.warmup_pending();
+        last_frame_status = frame_status;
+        if !last_warmup_pending
+            && frame_status == FrameRenderStatus::Complete
+            && non_black
+            && prev.as_deref() == Some(raw.as_slice())
+        {
             stable += 1;
         } else {
             stable = 0;
@@ -4984,9 +5018,18 @@ fn material_maps_repeat_out_of_range_uvs() {
             converged = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        let remaining = warmup_budget.per_layer.saturating_sub(warmup_start.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50).min(remaining));
     }
-    assert!(converged, "uv-wrap fixture render never stabilized non-black");
+    assert!(
+        converged,
+        "uv-wrap fixture render never stabilized non-black after {attempts} attempts in {:?} \
+         (warmup_pending={last_warmup_pending}, frame_status={last_frame_status:?})",
+        warmup_start.elapsed()
+    );
     assert!(
         rgb_sum[2] > rgb_sum[0] * 2.0,
         "out-of-range V must WRAP to the blue top row, not clamp to the red \
@@ -5095,13 +5138,20 @@ fn damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate() {
     // `fraction > 0.02` (measured, non-black) alongside byte-stability,
     // exactly like the azalea proof's own convergence check.
     const STABLE_STREAK: u32 = 3;
-    let max_attempts = 200;
     let mut rgba = Vec::new();
     let mut prev_rgba: Option<Vec<u8>> = None;
     let mut stable_count = 0u32;
     let mut converged = false;
     let mut fraction = 0.0f64;
-    for attempt in 0..max_attempts {
+    let mut last_warmup_pending = true;
+    let mut last_frame_status =
+        FrameRenderStatus::PendingGeometry;
+    let warmup_budget = WarmupBudget::default();
+    let warmup_start = std::time::Instant::now();
+    let mut attempts = 0u32;
+    while warmup_start.elapsed() < warmup_budget.per_layer {
+        attempts += 1;
+        let frame_status;
         {
             let mut enc = device.create_encoder("damaged-helmet-render");
             {
@@ -5112,6 +5162,7 @@ fn damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate() {
                     &ctx,
                     &manifold_core::params::ParamManifest::default(),
                 );
+                frame_status = gpu.frame_status();
             }
             enc.commit_and_wait_completed();
         }
@@ -5144,7 +5195,13 @@ fn damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate() {
         }
         fraction = non_black as f64 / (w * h) as f64;
 
-        if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
+        last_warmup_pending = generator.warmup_pending();
+        last_frame_status = frame_status;
+        if !last_warmup_pending
+            && frame_status == FrameRenderStatus::Complete
+            && fraction > 0.02
+            && prev_rgba.as_deref() == Some(rgba.as_slice())
+        {
             stable_count += 1;
         } else {
             stable_count = 0;
@@ -5154,17 +5211,23 @@ fn damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate() {
         if stable_count >= STABLE_STREAK {
             println!(
                 "damaged_helmet_imports_wires_all_maps_and_renders_non_degenerate: converged \
-                 on attempt {attempt} (non-black fraction {fraction:.4})"
+                 on attempt {attempts} (non-black fraction {fraction:.4})"
             );
             converged = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        let remaining = warmup_budget.per_layer.saturating_sub(warmup_start.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50).min(remaining));
     }
     assert!(
         converged,
-        "DamagedHelmet render never stabilized non-black after {max_attempts} attempts \
-         (last non-black fraction {fraction:.4}) — a background texture decode may be stuck"
+        "DamagedHelmet render never stabilized non-black after {attempts} attempts in {:?} \
+         (last non-black fraction {fraction:.4}, warmup_pending={last_warmup_pending}, \
+         frame_status={last_frame_status:?}) — a background texture decode may be stuck",
+        warmup_start.elapsed()
     );
 
     // Mean luminance (Rec. 601 luma over the tonemapped LDR frame),
@@ -5392,13 +5455,20 @@ fn rosetta_stone_import_renders_gpu_proof() {
     // above — background texture decodes need to land before the
     // readback means anything.
     const STABLE_STREAK: u32 = 3;
-    let max_attempts = 200;
     let mut rgba = Vec::new();
     let mut prev_rgba: Option<Vec<u8>> = None;
     let mut stable_count = 0u32;
     let mut converged = false;
     let mut fraction = 0.0f64;
-    for attempt in 0..max_attempts {
+    let mut last_warmup_pending = true;
+    let mut last_frame_status =
+        FrameRenderStatus::PendingGeometry;
+    let warmup_budget = WarmupBudget::default();
+    let warmup_start = std::time::Instant::now();
+    let mut attempts = 0u32;
+    while warmup_start.elapsed() < warmup_budget.per_layer {
+        attempts += 1;
+        let frame_status;
         {
             let mut enc = device.create_encoder("rosetta-stone-render");
             {
@@ -5409,6 +5479,7 @@ fn rosetta_stone_import_renders_gpu_proof() {
                     &ctx,
                     &manifold_core::params::ParamManifest::default(),
                 );
+                frame_status = gpu.frame_status();
             }
             enc.commit_and_wait_completed();
         }
@@ -5441,7 +5512,13 @@ fn rosetta_stone_import_renders_gpu_proof() {
         }
         fraction = non_black as f64 / (w * h) as f64;
 
-        if fraction > 0.02 && prev_rgba.as_deref() == Some(rgba.as_slice()) {
+        last_warmup_pending = generator.warmup_pending();
+        last_frame_status = frame_status;
+        if !last_warmup_pending
+            && frame_status == FrameRenderStatus::Complete
+            && fraction > 0.02
+            && prev_rgba.as_deref() == Some(rgba.as_slice())
+        {
             stable_count += 1;
         } else {
             stable_count = 0;
@@ -5450,18 +5527,24 @@ fn rosetta_stone_import_renders_gpu_proof() {
 
         if stable_count >= STABLE_STREAK {
             println!(
-                "rosetta_stone_import_renders_gpu_proof: converged on attempt {attempt} \
+                "rosetta_stone_import_renders_gpu_proof: converged on attempt {attempts} \
                  (non-black fraction {fraction:.4})"
             );
             converged = true;
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        let remaining = warmup_budget.per_layer.saturating_sub(warmup_start.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50).min(remaining));
     }
     assert!(
         converged,
-        "the_rosetta_stone render never stabilized non-black after {max_attempts} attempts \
-         (last non-black fraction {fraction:.4})"
+        "the_rosetta_stone render never stabilized non-black after {attempts} attempts in {:?} \
+         (last non-black fraction {fraction:.4}, warmup_pending={last_warmup_pending}, \
+         frame_status={last_frame_status:?})",
+        warmup_start.elapsed()
     );
 
     let out_path = std::env::var("MESH_SNAP_OUT")
@@ -5474,8 +5557,8 @@ fn rosetta_stone_import_renders_gpu_proof() {
     println!("rosetta_stone_import_renders_gpu_proof: wrote {out_path}");
 }
 
-/// One frame, no convergence loop (this is a look-check demo, not a
-/// numeric gate) — renders `def` at time 0 into a fresh RGBA buffer.
+/// Render at fixed time zero until the import is ready and non-black.
+/// Reject incomplete or blank output before comparing the demo images.
 #[cfg(feature = "gpu-proofs")]
 fn render_once(def: EffectGraphDef, w: u32, h: u32, label: &str) -> Vec<u8> {
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
@@ -5506,13 +5589,21 @@ fn render_once(def: EffectGraphDef, w: u32, h: u32, label: &str) -> Vec<u8> {
         trigger_count: 0,
     };
     let mut rgba = Vec::new();
-    // A few frames for background texture decodes to land (no
-    // stability-polling needed for a demo, just enough headroom).
-    for _ in 0..30 {
+    let mut non_black_fraction = 0.0f64;
+    let mut last_warmup_pending = true;
+    let mut last_frame_status =
+        FrameRenderStatus::PendingGeometry;
+    let warmup_budget = WarmupBudget::default();
+    let warmup_start = std::time::Instant::now();
+    let mut attempts = 0u32;
+    while warmup_start.elapsed() < warmup_budget.per_layer {
+        attempts += 1;
+        let frame_status;
         let mut enc = device.create_encoder(label);
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
             generator.render(&mut gpu, &target.texture, &ctx, &manifold_core::params::ParamManifest::default());
+            frame_status = gpu.frame_status();
         }
         enc.commit_and_wait_completed();
 
@@ -5525,14 +5616,43 @@ fn render_once(def: EffectGraphDef, w: u32, h: u32, label: &str) -> Vec<u8> {
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
         rgba = Vec::with_capacity((w * h * 4) as usize);
+        let mut non_black = 0usize;
         for px in halves.chunks_exact(4) {
-            rgba.push(tonemap_channel(half_to_f32(px[0])));
-            rgba.push(tonemap_channel(half_to_f32(px[1])));
-            rgba.push(tonemap_channel(half_to_f32(px[2])));
+            let r = tonemap_channel(half_to_f32(px[0]));
+            let g = tonemap_channel(half_to_f32(px[1]));
+            let b = tonemap_channel(half_to_f32(px[2]));
+            if r != 0 || g != 0 || b != 0 {
+                non_black += 1;
+            }
+            rgba.push(r);
+            rgba.push(g);
+            rgba.push(b);
             rgba.push((half_to_f32(px[3]).clamp(0.0, 1.0) * 255.0).round() as u8);
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        non_black_fraction = non_black as f64 / (w * h) as f64;
+        last_warmup_pending = generator.warmup_pending();
+        last_frame_status = frame_status;
+        if !last_warmup_pending
+            && last_frame_status == FrameRenderStatus::Complete
+            && non_black_fraction > 0.02
+        {
+            return rgba;
+        }
+        let remaining = warmup_budget.per_layer.saturating_sub(warmup_start.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20).min(remaining));
     }
+    assert!(
+        !last_warmup_pending
+            && last_frame_status == FrameRenderStatus::Complete
+            && non_black_fraction > 0.02,
+        "{label}: render_once exhausted its warmup budget after {attempts} attempts in {:?} \
+         without a ready, non-black frame (non-black fraction {non_black_fraction:.4}, \
+         warmup_pending={last_warmup_pending}, frame_status={last_frame_status:?})",
+        warmup_start.elapsed()
+    );
     rgba
 }
 

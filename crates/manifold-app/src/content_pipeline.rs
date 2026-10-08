@@ -3934,13 +3934,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn prewarm_layer_chains(
         &mut self,
         layer: &manifold_core::layer::Layer,
-        budget: manifold_core::WarmupBudget,
+        pass: &mut manifold_core::WarmupPass,
     ) -> manifold_core::WarmupOutcome {
         let device = self
             .native_device
             .as_ref()
             .expect("native device required for chain warmup");
-        self.compositor.prewarm_layer_chains(layer, budget, device)
+        self.compositor.prewarm_layer_chains(layer, pass, device)
     }
 
     /// P7 D17 (WARMUP_DESIGN section 5): build every unique per-clip chain
@@ -3952,14 +3952,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn prewarm_clip_chain_topologies(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: manifold_core::WarmupBudget,
+        pass: &mut manifold_core::WarmupPass,
     ) -> manifold_core::WarmupOutcome {
         let device = self
             .native_device
             .as_ref()
             .expect("native device required for clip-topology warmup");
         self.compositor
-            .prewarm_clip_chain_topologies(project, budget, device)
+            .prewarm_clip_chain_topologies(project, pass, device)
     }
 
     /// Warm up LED tap / composite resources when the loaded project routes
@@ -3983,7 +3983,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn prewarm_master_chain(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: manifold_core::WarmupBudget,
+        pass: &mut manifold_core::WarmupPass,
     ) -> manifold_core::WarmupOutcome {
         let device = self
             .native_device
@@ -3991,7 +3991,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             .expect("native device required for master-chain warmup");
         self.compositor.prewarm_master_chain(
             project,
-            budget,
+            pass,
             device,
             self.texture_pool.as_ref(),
             self.led_grid_size,
@@ -4004,7 +4004,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn prewarm_group_chains(
         &mut self,
         project: &manifold_core::project::Project,
-        budget: manifold_core::WarmupBudget,
+        pass: &mut manifold_core::WarmupPass,
         output_dims: (u32, u32),
     ) -> manifold_core::WarmupOutcome {
         let device = self
@@ -4013,7 +4013,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             .expect("native device required for group-chain warmup");
         self.compositor.prewarm_group_chains(
             project,
-            budget,
+            pass,
             device,
             self.texture_pool.as_ref(),
             self.led_grid_size,

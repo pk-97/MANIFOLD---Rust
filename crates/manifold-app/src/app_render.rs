@@ -1639,7 +1639,30 @@ impl Application {
                     continue;
                 }
                 PanelAction::Params(ParamsAction::GenStringParamDropdownClicked(sp_idx)) => {
-                    // Open a dropdown for a string param (e.g. font selector).
+                    // The font param opens the searchable font list: each
+                    // name in its own font, opened on the current font.
+                    let font_pick = self.ws.ui_root.inspector.gen_params().and_then(|gp| {
+                        let sp = gp.string_param(*sp_idx).filter(|sp| sp.key == "fontFamily")?;
+                        let r = gp.string_param_rect(&self.ws.ui_root.tree, *sp_idx)?;
+                        Some((sp.value.clone(), r))
+                    });
+                    if let Some((current, r)) = font_pick {
+                        let families =
+                            manifold_renderer::text_rasterizer::TextRasterizer::available_font_families();
+                        let actions = families
+                            .iter()
+                            .map(|name| PanelAction::Params(ParamsAction::GenStringParamSelected(*sp_idx, name.clone())))
+                            .collect();
+                        let list = manifold_ui::panels::browser_popup::ActionListOptions {
+                            empty_label: "No fonts match",
+                            label_in_own_font: true,
+                            current: families.iter().position(|f| *f == current),
+                        };
+                        let trigger = manifold_ui::node::Rect::new(r.x, r.y, r.width, r.height);
+                        self.ws.ui_root.open_action_list(families, actions, list, trigger);
+                        continue;
+                    }
+                    // Other string params open a plain dropdown.
                     if let Some(gp) = self.ws.ui_root.inspector.gen_params()
                         && let Some(sp) = gp.string_param(*sp_idx)
                     {
@@ -1650,15 +1673,7 @@ impl Application {
                             // projected onto the generator card by
                             // `attach_audio_sends`, so this reuses the same
                             // stable payload path as effect cards.
-                            let items: Vec<manifold_ui::panels::dropdown::DropdownItem> = if key
-                                == "fontFamily"
-                            {
-                                manifold_renderer::text_rasterizer::TextRasterizer::available_font_families()
-                                        .into_iter()
-                                        .map(|name| manifold_ui::panels::dropdown::DropdownItem::new(&name)
-                                            .with_action(PanelAction::Params(ParamsAction::GenStringParamSelected(*sp_idx, name.clone()))))
-                                        .collect()
-                            } else if key == "audioSend" {
+                            let items: Vec<manifold_ui::panels::dropdown::DropdownItem> = if key == "audioSend" {
                                 sp.dropdown_choices
                                     .iter()
                                     .map(|choice| {
@@ -3617,105 +3632,55 @@ pub(crate) fn render_text_input_overlay(
 ) {
     use crate::text_input::*;
 
-    let a = &ti.anchor;
     let fs = ti.font_size;
-    let pad_h = TEXT_INPUT_PAD_H;
-    let pad_v = TEXT_INPUT_PAD_V;
-    let line_h = fs + 3.0; // line height with leading
-
-    let bg_x = a.x;
-    let bg_y = a.y;
-    let bg_w = a.width.max(40.0);
+    let width = |ui: &mut UIRenderer, s: &str| ui.measure_text_cached(s, fs as u16, FontWeight::Medium).x;
+    let mut lines = Vec::new();
+    let g = ti.overlay_geometry(&mut lines, &mut |s| width(ui, s));
+    let line_h = g.line_h;
 
     let text = ti.model.text();
     let sel = ti.model.selection();
     let has_selection = ti.model.has_selection();
-
-    // For multiline fields, compute height from line count (minimum 3 lines).
-    let line_count = if ti.multiline { text.split('\n').count().max(3) } else { 1 };
-    let bg_h = (line_count as f32 * line_h + pad_v * 2.0).max(a.height.max(fs + pad_v * 2.0));
+    let caret = ti.model.caret();
 
     ui.draw_bordered_rect(
-        bg_x,
-        bg_y,
-        bg_w,
-        bg_h,
+        g.x,
+        g.y,
+        g.w,
+        g.h,
         TEXT_INPUT_BG,
         3.0,
         1.0,
         manifold_ui::Color32::new(89, 115, 179, 204), // sRGB, was [0.35, 0.45, 0.7, 0.8]
     );
 
-    let text_x = bg_x + pad_h;
-    let width = |ui: &mut UIRenderer, s: &str| ui.measure_text_cached(s, fs as u16, FontWeight::Medium).x;
-
-    if ti.multiline {
-        // Draw each line separately.
-        for (i, line) in text.split('\n').enumerate() {
-            let ly = bg_y + pad_v + i as f32 * line_h;
-            // This line's byte range within `text` (offsets, not indices).
-            let line_start = text
-                .split('\n')
-                .take(i)
-                .map(|l| l.len() + 1)
-                .sum::<usize>();
-            let line_end = line_start + line.len();
-            if has_selection && sel.start < line_end && sel.end > line_start {
-                let hl_start = sel.start.max(line_start) - line_start;
-                let hl_end = sel.end.min(line_end) - line_start;
-                let hx = text_x + width(ui, &line[..hl_start]);
-                let hw = width(ui, &line[..hl_end]) - width(ui, &line[..hl_start]);
-                ui.draw_rect(hx, ly, hw.max(2.0), line_h, TEXT_INPUT_SELECT_BG);
-            }
-            ui.draw_text(text_x, ly, line, fs, TEXT_INPUT_FG);
+    // Clip to the box: a long single-line field scrolls, so its text and
+    // selection run past the edges.
+    ui.push_immediate_clip(g.x + 1.0, g.y + 1.0, g.w - 2.0, g.h - 2.0);
+    for (i, l) in lines.iter().enumerate() {
+        let ly = g.text_y + i as f32 * line_h;
+        let line = &text[l.clone()];
+        if has_selection && sel.start < l.end && sel.end > l.start {
+            let hl_start = sel.start.max(l.start) - l.start;
+            let hl_end = sel.end.min(l.end) - l.start;
+            let hx = g.text_x + width(ui, &line[..hl_start]);
+            let hw = width(ui, &line[..hl_end]) - width(ui, &line[..hl_start]);
+            ui.draw_rect(hx, ly, hw.max(2.0), line_h, TEXT_INPUT_SELECT_BG);
         }
+        ui.draw_text(g.text_x, ly, line, fs, TEXT_INPUT_FG);
+    }
 
-        // Blinking caret — find which line it's on.
-        if !has_selection {
-            let elapsed = timer.realtime_since_start();
-            let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
-            if blink_on {
-                let before = &text[..ti.model.caret()];
-                let cursor_line = before.matches('\n').count();
-                let line_start = before.rfind('\n').map_or(0, |p| p + 1);
-                let before_on_line = &before[line_start..];
-                let cursor_x = text_x + width(ui, before_on_line);
-                let cursor_y = bg_y + pad_v + cursor_line as f32 * line_h;
-                ui.draw_rect(cursor_x, cursor_y, TEXT_INPUT_CURSOR_W, line_h, TEXT_INPUT_CURSOR);
-            }
-        }
-    } else {
-        // Single-line rendering.
-        let text_y = bg_y + pad_v;
-        if has_selection {
-            let hx = text_x + width(ui, &text[..sel.start]);
-            let hw = width(ui, &text[..sel.end]) - width(ui, &text[..sel.start]);
-            ui.draw_rect(
-                hx,
-                bg_y + pad_v,
-                hw.min(bg_w - pad_h * 2.0).max(2.0),
-                line_h,
-                TEXT_INPUT_SELECT_BG,
-            );
-        }
-        ui.draw_text(text_x, text_y, text, fs, TEXT_INPUT_FG);
-
-        if !has_selection {
-            let elapsed = timer.realtime_since_start();
-            let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
-            if blink_on {
-                let before = &text[..ti.model.caret()];
-                let cursor_x = text_x + width(ui, before);
-                ui.draw_rect(
-                    cursor_x,
-                    bg_y + pad_v,
-                    TEXT_INPUT_CURSOR_W,
-                    bg_h - pad_v * 2.0,
-                    TEXT_INPUT_CURSOR,
-                );
-            }
+    if !has_selection {
+        let elapsed = timer.realtime_since_start();
+        let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
+        if blink_on {
+            let i = manifold_ui::text_edit::line_of(&lines, caret);
+            let cursor_x = g.text_x + width(ui, &text[lines[i].start..caret]);
+            let cursor_y = g.text_y + i as f32 * line_h;
+            ui.draw_rect(cursor_x, cursor_y, TEXT_INPUT_CURSOR_W, line_h, TEXT_INPUT_CURSOR);
         }
     }
+    ui.pop_immediate_clip();
 }
 
 

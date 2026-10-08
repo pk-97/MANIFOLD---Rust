@@ -312,8 +312,8 @@ overlay plumbing, not visual-correctness work), which unblocked everything that 
   `TextInputState` / `render_text_input_overlay`. Four `TextInputField` graph variants
   (`GraphGroupRename` / `GraphStringParam` / `GraphWgsl` / `GraphNodeSearch`, plus
   `GraphTableCell` below) dispatch to the content thread only (the canvas renders from
-  content-thread snapshots). Multiline fields (WGSL) insert a newline on Enter and commit on
-  Cmd+Enter; single-line fields commit on bare Enter.
+  content-thread snapshots). Enter commits every field; Shift+Enter is a new line in
+  multiline fields (WGSL), the same rule as the main window.
 - **Group rename (F2). SHIPPED (a5f743dc).** Single-selected group, inline field anchored over
   its header (`group_rename_target` + `editor_canvas_viewport`), routes to `RenameGroupCommand`
   at the canvas scope.

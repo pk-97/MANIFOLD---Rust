@@ -142,7 +142,7 @@ class LandingTests(unittest.TestCase):
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None,
                  comment=False, gpu_output=None, proof_cached=False, manifest=None,
-                 nextest_output=None, readiness_errors=(), failure_code=1):
+                 nextest_output=None, readiness_errors=(), failure_code=1, test_inventory=None):
         called, commands = [], []
         self.events = events = []
         paths = paths or ["crates/manifold-gpu/src/metal/device.rs"]
@@ -199,7 +199,8 @@ class LandingTests(unittest.TestCase):
                                        "uniform_layout_proof", "uniform_layout_extended",
                                        "godfile_regrowth", "no_bespoke_row_infra",
                                        "file_loader_exhaustiveness")}
-                return (1 if failed == ownership_label else 0), json.dumps({"rust-suites": suites}), "", 0.01
+                return (1 if failed == ownership_label else 0), json.dumps(
+                    test_inventory if test_inventory is not None else {"rust-suites": suites}), "", 0.01
             label = ({"nextest": "tests"}.get(cmd[1], cmd[1]) if cmd[0] == "cargo"
                      else labels[Path(cmd[1]).name])
             if "test(regenerates_in_sync)" in cmd:
@@ -395,6 +396,20 @@ class LandingTests(unittest.TestCase):
                             for line in reruns))
         self.assertFalse(any(command[0] == "cargo" for command in commands))
         self.assertFalse(any(event.startswith("hold") for event in self.events))
+
+    def test_testless_source_module_runs_whole_package_after_inventory(self):
+        listing = {"rust-suites": {
+            "gpu": {"binary-name": "manifold_gpu", "testcases": ["other::case"]},
+        }}
+        code, called, _, commands, _, output, _ = self.exercise(test_inventory=listing)
+        self.assertEqual(code, 0)
+        self.assertIn("tests", called)
+        runs = [cmd for cmd in commands if cmd[:3] == ["cargo", "nextest", "run"]
+                and "--no-run" not in cmd]
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0][runs[0].index("-E") + 1], "package(=manifold-gpu)")
+        self.assertIn("device.rs has no tests of its own: running manifold-gpu whole", output)
+        self.assertNotIn("[SKIP] tests/manifold-gpu", output)
 
     def test_empty_ownership_scope_is_red_before_runtime(self):
         code, called, _, commands, _, output, _ = self.exercise(
@@ -1069,6 +1084,22 @@ class DiffScopeTests(unittest.TestCase):
                                             workspace=workspace)
             self.assertIn("test(/^water::fluid::checks::/)", plan.filterset)
             self.assertIn("binary(=gpu_proofs)", plan.filterset)
+
+    def test_gpu_proofs_only_module_gets_no_cpu_filter(self):
+        with tempfile.TemporaryDirectory() as d:
+            crate = Path(d) / "crates/manifold-ui-paint"
+            src = crate / "src"
+            src.mkdir(parents=True)
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-ui-paint"\n')
+            (src / "ui_renderer.rs").write_text(
+                '#[cfg(all(test, feature = "gpu-proofs"))]\nmod tests {}\n')
+            (src / "native_text.rs").write_text('#[cfg(test)]\nmod tests {}\n')
+            paths = ["crates/manifold-ui-paint/src/ui_renderer.rs",
+                     "crates/manifold-ui-paint/src/native_text.rs"]
+            workspace = synthetic_workspace(d, paths)
+            plan = cpu_scope.plan_for_paths(paths, d, workspace=workspace)
+            self.assertNotIn("test(/^ui_renderer::/)", plan.filterset)
+            self.assertIn("test(/^native_text::/)", plan.filterset)
 
     def test_deleted_integration_test_selects_no_binary(self):
         with tempfile.TemporaryDirectory() as d:

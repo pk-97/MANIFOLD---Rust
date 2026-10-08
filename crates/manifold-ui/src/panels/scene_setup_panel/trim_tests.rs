@@ -297,3 +297,35 @@ fn scene_trim_release_after_layer_change_commits_original_address() {
     );
     release(&mut panel, &mut tree, kind, false);
 }
+
+#[test]
+fn custom_matrix_click_survives_per_frame_rebuild() {
+    use crate::panels::param_slider_shared::{audio_band_from_index, audio_kind_from_index, trigger_source_chips};
+    let (mut panel, mut tree, surface) = fixture(TrimKind::Audio);
+    let (custom_id, closed_count) = {
+        let (dids, send_count) = panel.properties_card.row_host.audio_configs[0]
+            .as_ref()
+            .expect("armed audio row draws its drawer");
+        let row = &panel.properties_card.mod_state.audio_rows[0];
+        let current = crate::types::AudioFeature::new(
+            audio_kind_from_index(row.kind_idx as usize),
+            audio_band_from_index(row.band_idx as usize),
+        );
+        (dids.button_ids()[*send_count + trigger_source_chips(current).len()], dids.button_count())
+    };
+
+    let (consumed, _) = panel.handle_event(
+        &UIEvent::Click { node_id: custom_id, pos: Vec2::ZERO, modifiers: Modifiers::default() },
+        &mut tree,
+    );
+    assert!(consumed);
+
+    // The next frames re-feed the surface and rebuild; the matrix must stay open.
+    for _ in 0..2 {
+        panel.configure_params(Some(surface.clone()));
+        rebuild(&mut panel);
+    }
+    assert!(panel.properties_card.mod_state.audio_matrix_open[0], "Custom must stay open across rebuilds");
+    let open_count = panel.properties_card.row_host.audio_configs[0].as_ref().unwrap().0.button_count();
+    assert_eq!(open_count, closed_count + 12, "open matrix adds the 8 Feature + 4 Band buttons");
+}

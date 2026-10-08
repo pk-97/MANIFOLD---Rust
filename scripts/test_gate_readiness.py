@@ -113,6 +113,44 @@ class P1PlannerTests(unittest.TestCase):
         self.assertEqual(cpu_scope.validate_inventory(whole, "fixture", listing),
                          {("smoke", "present::case")})
 
+    def test_testless_path_module_widens_only_its_package(self):
+        plan = cpu_scope.plan_for_paths([
+            "crates/manifold-app/src/frame_time.rs",
+            "crates/manifold-gpu/src/metal/device.rs",
+        ], ROOT, self.workspace)
+        listing = {"rust-suites": {
+            "app": {"binary-name": "manifold", "testcases": ["other::case"]},
+        }}
+        cpu_scope.validate_inventory(plan, "manifold-app", listing)
+        self.assertEqual(plan.whole, {"manifold-app"})
+        self.assertEqual(plan.selections()["manifold-app"], "package(=manifold-app)")
+        self.assertIn("test(/^metal::device::/)", plan.selections()["manifold-gpu"])
+        self.assertIn("frame_time.rs has no tests of its own: running manifold-app whole",
+                      plan.describe())
+
+    def test_testless_path_does_not_hide_an_explicit_mapping_typo(self):
+        expression = "(package(=fixture) & test(/^empty::/))"
+        plan = cpu_scope.Plan(packages={"fixture"},
+                              filters={expression, "(package(=fixture) & binary(=typo))"},
+                              path_filters={expression: {"crates/fixture/src/empty.rs"}})
+        listing = {"rust-suites": {
+            "smoke": {"binary-name": "smoke", "testcases": ["present::case"]},
+        }}
+        with self.assertRaisesRegex(ValueError, "ownership mapping resolves to no tests"):
+            cpu_scope.validate_inventory(plan, "fixture", listing)
+        self.assertFalse(plan.whole)
+
+    def test_explicit_module_mapping_keeps_guard_when_also_path_derived(self):
+        path = "crates/manifold-app/src/frame_time.rs"
+        row = (path, ".rs", "manifold-app", ["frame_time"], [])
+        with patch.object(cpu_scope, "PREFIX_ROWS", [row]):
+            plan = cpu_scope.plan_for_paths([path], ROOT, self.workspace)
+        listing = {"rust-suites": {
+            "app": {"binary-name": "manifold", "testcases": ["other::case"]},
+        }}
+        with self.assertRaisesRegex(ValueError, "ownership mapping resolves to no tests"):
+            cpu_scope.validate_inventory(plan, "manifold-app", listing)
+
     def test_metadata_failure_is_red_without_a_build_plan(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)

@@ -31,11 +31,20 @@ pub(crate) struct WarmupReport {
     pub completed: bool,
     pub budget_exhausted: bool,
     pub install_failed: bool,
+    pub preparation_failed: bool,
     pub interrupted: bool,
     pub total_layers: u32,
     pub pending_workers: usize,
     pub residency: Option<WarmupResidencyReport>,
     pub layers: Vec<WarmupLayerReport>,
+}
+
+impl WarmupReport {
+    fn merge_pass_failures(&mut self, pass: &manifold_core::WarmupPass) {
+        self.budget_exhausted |= pass.budget_exhausted;
+        self.install_failed |= pass.install_failed;
+        self.preparation_failed |= pass.preparation_failed;
+    }
 }
 
 /// A residency request is memory preparation, not proof of physical residency.
@@ -258,6 +267,7 @@ impl ContentThread {
         cmd_tx: &Sender<ContentCommand>,
         state_tx: &Sender<ContentState>,
     ) -> WarmupReport {
+        let start = std::time::Instant::now();
         // Warmup precedes render_content: install the new project's live
         // quality now rather than inheriting defaults or a previous export.
         self.content_pipeline.apply_rt_quality(&mut self.engine, false);
@@ -283,12 +293,17 @@ impl ContentThread {
             .collect();
         log::info!("[ContentThread] Warmup RT quality: {:?}", project.settings.rt_quality.realtime);
         let total = warmup_layers.len() as u32;
-        let budget = manifold_core::WarmupBudget::default();
-        let start = std::time::Instant::now();
+        let budget = manifold_core::WarmupBudget {
+            frame_interval: std::time::Duration::from_secs_f64(1.0 / f64::from(project.settings.frame_rate)),
+            ..manifold_core::WarmupBudget::default()
+        };
+        let mut pass = manifold_core::WarmupPass::new(budget, start);
+        let run = pass.run();
         let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
         let mut report = WarmupReport { total_layers: total, ..WarmupReport::default() };
         let mut any_budget_exhausted = false;
         let mut any_install_failed = false;
+        let mut any_preparation_failed = false;
 
         // D12: wait for the chain-fusion worker queue to drain BEFORE the
         // per-layer chain pre-roll, so fused segment / per-card view swap-ins
@@ -298,7 +313,7 @@ impl ContentThread {
         let drain_start = std::time::Instant::now();
         let mut drain_logged = false;
         while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
-            if start.elapsed() >= budget.total {
+            if run.exhausted(std::time::Instant::now(), 0).is_some() {
                 log::warn!(
                     "[ContentThread] Warmup fusion worker drain timed out after {:.1?}; \
                      chains may swap in fused segments during playback",
@@ -308,7 +323,11 @@ impl ContentThread {
                 break;
             }
             manifold_node_engine::freeze::install::pump_segment_results();
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            if manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
+                std::thread::sleep(run.clamp_wait(
+                    std::time::Instant::now(), std::time::Duration::from_millis(2),
+                ));
+            }
             if !drain_logged && drain_start.elapsed() >= std::time::Duration::from_secs(1) {
                 log::info!("[ContentThread] Waiting for fusion worker drain...");
                 drain_logged = true;
@@ -341,7 +360,7 @@ impl ContentThread {
                 Err(_) => {}
             }
 
-            if start.elapsed() >= budget.total {
+            if run.exhausted(std::time::Instant::now(), 0).is_some() {
                 log::warn!(
                     "[ContentThread] Warmup total budget exhausted (wall-clock) after {} layers ({:.1?}); \
                      continuing load without warming remaining layers",
@@ -353,6 +372,7 @@ impl ContentThread {
             }
 
             let layer_start = std::time::Instant::now();
+            let run = pass.layer(_layer_id, layer_start);
             let mut layer_completed = true;
             let label = format!("Loading {}...", layer_name.as_str());
             let _ = state_tx.send(ContentState {
@@ -385,7 +405,7 @@ impl ContentThread {
                 && let Some(layer) = p.timeline.layers.get(*layer_index)
             {
                 for renderer in renderers.iter_mut() {
-                    match renderer.prewarm_layer(layer, budget) {
+                    match renderer.prewarm_layer(layer, run) {
                         manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } => {
                             log::warn!(
                                 "[ContentThread] Warmup budget exhausted ({cap:?}) for a renderer on \
@@ -396,18 +416,19 @@ impl ContentThread {
                             any_budget_exhausted = true;
                             layer_completed = false;
                         }
-                        manifold_core::WarmupOutcome::InstallFailed => {
+                        outcome @ (manifold_core::WarmupOutcome::InstallFailed | manifold_core::WarmupOutcome::PreparationFailed) => {
                             log::error!(
-                                "[ContentThread] Warmup install failed for layer '{}' ({}); \
-                                 generator construction failed — layer will be cold on stage",
+                                "[ContentThread] Warmup preparation failed for layer '{}' ({}); \
+                                 layer will be cold on stage",
                                 layer_name.as_str(),
                                 _layer_id.as_str()
                             );
-                            any_install_failed = true;
+                            any_install_failed |= outcome == manifold_core::WarmupOutcome::InstallFailed;
+                            any_preparation_failed |= outcome == manifold_core::WarmupOutcome::PreparationFailed;
                             layer_completed = false;
                         }
                         manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
-                    manifold_core::WarmupOutcome::Quiescent => {}
+                        manifold_core::WarmupOutcome::Quiescent => {}
                     }
                 }
             }
@@ -416,7 +437,7 @@ impl ContentThread {
             // first clip is still active. Skip if the generator pre-roll or the
             // total load budget already ran out.
             let mut chain_warm_loops = 0;
-            while start.elapsed() < budget.total && chain_warm_loops < 3 {
+            while layer_completed && run.exhausted(std::time::Instant::now(), 0).is_none() && chain_warm_loops < 3 {
                 chain_warm_loops += 1;
 
                 if let Some(layer) = self
@@ -424,11 +445,14 @@ impl ContentThread {
                     .project()
                     .and_then(|p| p.timeline.layers.get(*layer_index))
                 {
-                    let chain_outcome = self.content_pipeline.prewarm_layer_chains(layer, budget);
-                    if chain_outcome == manifold_core::WarmupOutcome::InstallFailed {
-                        any_install_failed = true;
+                    let chain_outcome = self.content_pipeline.prewarm_layer_chains(layer, &mut pass);
+                    if matches!(chain_outcome, manifold_core::WarmupOutcome::InstallFailed | manifold_core::WarmupOutcome::PreparationFailed) {
+                        let outcome = chain_outcome;
+                        any_install_failed |= outcome == manifold_core::WarmupOutcome::InstallFailed;
+                        any_preparation_failed |= outcome == manifold_core::WarmupOutcome::PreparationFailed;
                         layer_completed = false;
-                        log::error!("[ContentThread] Warmup chain install failed for layer {}", layer_name);
+                        log::error!("[ContentThread] Warmup chain preparation failed for layer {}", layer_name);
+                        break;
                     }
                     if chain_outcome == manifold_core::WarmupOutcome::GpuFailed {
                         crate::abort_gpu_work("GPU failure during layer-chain warmup");
@@ -441,7 +465,7 @@ impl ContentThread {
                             _layer_id.as_str()
                         );
                         any_budget_exhausted = true;
-                            layer_completed = false;
+                        layer_completed = false;
                         break;
                     }
                 }
@@ -459,18 +483,20 @@ impl ContentThread {
                 let drain_start = std::time::Instant::now();
                 let mut drain_logged = false;
                 while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
-                    if start.elapsed() >= budget.total {
+                    if run.exhausted(std::time::Instant::now(), 0).is_some() {
                         log::warn!(
                             "[ContentThread] Warmup chain-fusion drain timed out after {:.1?}; \
                              chains may swap in fused views during playback",
                             drain_start.elapsed()
                         );
                         any_budget_exhausted = true;
-                            layer_completed = false;
+                        layer_completed = false;
                         break;
                     }
                     manifold_node_engine::freeze::install::pump_segment_results();
-                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    if manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
+                        std::thread::sleep(run.clamp_wait(std::time::Instant::now(), std::time::Duration::from_millis(2)));
+                    }
                     if !drain_logged
                         && drain_start.elapsed() >= std::time::Duration::from_secs(1)
                     {
@@ -493,11 +519,12 @@ impl ContentThread {
             // warm, instead of paying for its first GPU use during playback.
             #[cfg(target_os = "macos")]
             self.content_pipeline.finish_warmup_gpu_resources();
+            any_budget_exhausted |= run.exhausted(std::time::Instant::now(), 0).is_some();
             report.layers.push(WarmupLayerReport {
                 id: _layer_id.to_string(),
                 name: layer_name.clone(),
                 elapsed_ms: layer_start.elapsed().as_secs_f64() * 1000.0,
-                completed: layer_completed && start.elapsed() < budget.total
+                completed: layer_completed && run.exhausted(std::time::Instant::now(), 0).is_none()
                     && manifold_node_engine::runtime::prewarm_worker_pending_count() == 0,
                 allocated_gpu_bytes: self.content_pipeline.native_device()
                     .and_then(|device| device.modifier_memory_snapshot())
@@ -519,7 +546,9 @@ impl ContentThread {
         // LED output may not be initialized yet; default grid size is enough to
         // construct the resources that don't depend on the live controller.
         #[cfg(target_os = "macos")]
-        if let Some(p) = self.engine.project() {
+        if let Some(p) = self.engine.project()
+            && run.exhausted(std::time::Instant::now(), 0).is_none()
+        {
             if self.led_controller.is_none() {
                 log::info!(
                     "[ContentThread] LED output not initialized at load; \
@@ -536,60 +565,28 @@ impl ContentThread {
         // stage at that clip's boundary. Walk every clip, dedup by the
         // production topology hash, and build each unique topology through
         // the production chain-build path.
-        // D18: the fusion quiescence drain (D12) runs after this walk too —
+        // D18: each topology drains fusion under its original layer deadline —
         // topologies that built unfused get their fused views compiled and
         // re-built inside the warm, not swapped in on stage.
         if let Some(p) = self.engine.project() {
-            let mut clip_walk_loops = 0;
-            while start.elapsed() < budget.total && clip_walk_loops < 3 {
-                clip_walk_loops += 1;
-                match self.content_pipeline.prewarm_clip_chain_topologies(p, budget) {
-                    manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } => {
-                        log::warn!(
-                            "[ContentThread] Warmup clip-topology budget exhausted ({cap:?}) \
-                             after {elapsed:.1?}; later clips' chains may first-touch once at play"
-                        );
-                        any_budget_exhausted = true;
-                        break;
-                    }
-                    manifold_core::WarmupOutcome::InstallFailed => {
-                        log::error!(
-                            "[ContentThread] Warmup clip-topology install failed; \
-                             that chain topology will be cold on stage"
-                        );
-                        any_install_failed = true;
-                        break;
-                    }
-                    manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
-                    manifold_core::WarmupOutcome::Quiescent => {}
+            match self.content_pipeline.prewarm_clip_chain_topologies(p, &mut pass) {
+                manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } => {
+                    log::warn!(
+                        "[ContentThread] Warmup clip-topology budget exhausted ({cap:?}) \
+                         after {elapsed:.1?}; later clips' chains may first-touch once at play"
+                    );
+                    any_budget_exhausted = true;
                 }
-
-                let pending_after = manifold_node_engine::runtime::prewarm_worker_pending_count();
-                if pending_after == 0 {
-                    break;
+                outcome @ (manifold_core::WarmupOutcome::InstallFailed | manifold_core::WarmupOutcome::PreparationFailed) => {
+                    log::error!(
+                        "[ContentThread] Warmup clip-topology preparation failed; \
+                         that chain topology will be cold on stage"
+                    );
+                    any_install_failed |= outcome == manifold_core::WarmupOutcome::InstallFailed;
+                    any_preparation_failed |= outcome == manifold_core::WarmupOutcome::PreparationFailed;
                 }
-                let drain_start = std::time::Instant::now();
-                let mut drain_logged = false;
-                while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
-                    if start.elapsed() >= budget.total {
-                        log::warn!(
-                            "[ContentThread] Warmup clip-topology fusion drain timed out \
-                             after {:.1?}; later clips' chains may swap in fused views \
-                             during playback",
-                            drain_start.elapsed()
-                        );
-                        any_budget_exhausted = true;
-                        break;
-                    }
-                    manifold_node_engine::freeze::install::pump_segment_results();
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                    if !drain_logged
-                        && drain_start.elapsed() >= std::time::Duration::from_secs(1)
-                    {
-                        log::info!("[ContentThread] Waiting for clip-topology fusion drain...");
-                        drain_logged = true;
-                    }
-                }
+                manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
+                manifold_core::WarmupOutcome::Quiescent => {}
             }
         }
 
@@ -598,8 +595,9 @@ impl ContentThread {
         // the first playback frame. Each pass is followed by a fusion-worker
         // drain and re-primed if the worker produced new segment compiles.
         if let Some(p) = self.engine.project() {
-            while start.elapsed() < budget.total {
-                match self.content_pipeline.prewarm_master_chain(p, budget) {
+            let run = pass.master(std::time::Instant::now());
+            while run.exhausted(std::time::Instant::now(), 0).is_none() {
+                match self.content_pipeline.prewarm_master_chain(p, &mut pass) {
                     manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } => {
                         log::warn!(
                             "[ContentThread] Warmup master-chain budget exhausted ({cap:?}) after {elapsed:.1?}; \
@@ -608,12 +606,13 @@ impl ContentThread {
                         any_budget_exhausted = true;
                         break;
                     }
-                    manifold_core::WarmupOutcome::InstallFailed => {
+                    outcome @ (manifold_core::WarmupOutcome::InstallFailed | manifold_core::WarmupOutcome::PreparationFailed) => {
                         log::error!(
-                            "[ContentThread] Warmup master-chain install failed; \
+                            "[ContentThread] Warmup master-chain preparation failed; \
                              master FX will be cold on stage"
                         );
-                        any_install_failed = true;
+                        any_install_failed |= outcome == manifold_core::WarmupOutcome::InstallFailed;
+                        any_preparation_failed |= outcome == manifold_core::WarmupOutcome::PreparationFailed;
                         break;
                     }
                     manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
@@ -627,7 +626,7 @@ impl ContentThread {
                 let drain_start = std::time::Instant::now();
                 let mut drain_logged = false;
                 while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
-                    if start.elapsed() >= budget.total {
+                    if run.exhausted(std::time::Instant::now(), 0).is_some() {
                         log::warn!(
                             "[ContentThread] Warmup master-chain fusion drain timed out after {:.1?}; \
                              master FX may swap in fused segments during playback",
@@ -637,7 +636,9 @@ impl ContentThread {
                         break;
                     }
                     manifold_node_engine::freeze::install::pump_segment_results();
-                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    if manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
+                        std::thread::sleep(run.clamp_wait(std::time::Instant::now(), std::time::Duration::from_millis(2)));
+                    }
                     if !drain_logged
                         && drain_start.elapsed() >= std::time::Duration::from_secs(1)
                     {
@@ -647,56 +648,29 @@ impl ContentThread {
                 }
             }
 
-            while start.elapsed() < budget.total {
+            {
                 let output_dims = (
                     p.settings.output_width.max(1) as u32,
                     p.settings.output_height.max(1) as u32,
                 );
-                match self.content_pipeline.prewarm_group_chains(p, budget, output_dims) {
+                match self.content_pipeline.prewarm_group_chains(p, &mut pass, output_dims) {
                     manifold_core::WarmupOutcome::BudgetExhausted { cap, elapsed } => {
                         log::warn!(
                             "[ContentThread] Warmup group-chain budget exhausted ({cap:?}) after {elapsed:.1?}; \
                              group FX may first-touch once at play"
                         );
                         any_budget_exhausted = true;
-                        break;
                     }
-                    manifold_core::WarmupOutcome::InstallFailed => {
+                    outcome @ (manifold_core::WarmupOutcome::InstallFailed | manifold_core::WarmupOutcome::PreparationFailed) => {
                         log::error!(
-                            "[ContentThread] Warmup group-chain install failed; \
+                            "[ContentThread] Warmup group-chain preparation failed; \
                              group FX will be cold on stage"
                         );
-                        any_install_failed = true;
-                        break;
+                        any_install_failed |= outcome == manifold_core::WarmupOutcome::InstallFailed;
+                        any_preparation_failed |= outcome == manifold_core::WarmupOutcome::PreparationFailed;
                     }
                     manifold_core::WarmupOutcome::GpuFailed => crate::abort_gpu_work("GPU failure during project warmup"),
                     manifold_core::WarmupOutcome::Quiescent => {}
-                }
-
-                let pending_after = manifold_node_engine::runtime::prewarm_worker_pending_count();
-                if pending_after == 0 {
-                    break;
-                }
-                let drain_start = std::time::Instant::now();
-                let mut drain_logged = false;
-                while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
-                    if start.elapsed() >= budget.total {
-                        log::warn!(
-                            "[ContentThread] Warmup group-chain fusion drain timed out after {:.1?}; \
-                             group FX may swap in fused segments during playback",
-                            drain_start.elapsed()
-                        );
-                        any_budget_exhausted = true;
-                        break;
-                    }
-                    manifold_node_engine::freeze::install::pump_segment_results();
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                    if !drain_logged
-                        && drain_start.elapsed() >= std::time::Duration::from_secs(1)
-                    {
-                        log::info!("[ContentThread] Waiting for group-chain fusion drain...");
-                        drain_logged = true;
-                    }
                 }
             }
         }
@@ -720,14 +694,20 @@ impl ContentThread {
         any_budget_exhausted |= start.elapsed() >= budget.total;
         let pending_workers = manifold_node_engine::runtime::prewarm_worker_pending_count();
         let gpu_faults = manifold_gpu::gpu_fault::fault_count().saturating_sub(initial_gpu_faults);
+        report.budget_exhausted = any_budget_exhausted;
+        report.install_failed = any_install_failed;
+        report.preparation_failed = any_preparation_failed;
+        report.merge_pass_failures(&pass);
         let status = if gpu_faults > 0 {
             log::error!(
                 "[ContentThread] {gpu_faults} GPU errors observed during warmup; warmup success is unverified"
             );
             "ended with GPU errors"
-        } else if any_install_failed {
+        } else if report.install_failed {
             "completed with install failure(s)"
-        } else if any_budget_exhausted {
+        } else if report.preparation_failed {
+            "completed with preparation failure(s)"
+        } else if report.budget_exhausted {
             "completed with budget exhaustion"
         } else if pending_workers > 0 {
             "completed with pending compilation work"
@@ -745,10 +725,8 @@ impl ContentThread {
         // subsequent playback window are counted against the warm guarantee.
         manifold_core::cold_touch::reset_cold_touch_counts();
         report.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-        report.budget_exhausted = any_budget_exhausted;
-        report.install_failed = any_install_failed;
         report.pending_workers = pending_workers;
-        report.completed = !any_budget_exhausted && !any_install_failed
+        report.completed = !report.budget_exhausted && !report.install_failed && !report.preparation_failed
             && gpu_faults == 0 && pending_workers == 0;
         report
     }
@@ -1988,7 +1966,10 @@ impl ContentThread {
                                 {
                                     let _ = gen_renderer.prewarm_layer(
                                         layer,
-                                        manifold_core::WarmupBudget::default(),
+                                        manifold_core::WarmupPass::new(manifold_core::WarmupBudget {
+                                            frame_interval: std::time::Duration::from_secs_f64(1.0 / f64::from(p.settings.frame_rate)),
+                                            ..manifold_core::WarmupBudget::default()
+                                        }, std::time::Instant::now()).layer(&layer.layer_id, std::time::Instant::now()),
                                     );
                                     break;
                                 }
@@ -2318,5 +2299,30 @@ mod modifier_selection_tests {
             Some(12)
         );
         assert_eq!(newly_added_object_modifier_id(&[4, 9], &[4, 9]), None);
+    }
+}
+
+#[cfg(test)]
+mod warmup_tests {
+    use super::WarmupReport;
+    use manifold_core::{WarmupBudget, WarmupCap, WarmupOutcome, WarmupPass};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn preparation_failure_survives_later_budget_exhaustion_in_report() {
+        let mut pass = WarmupPass::new(WarmupBudget::default(), Instant::now());
+        pass.record_outcome(WarmupOutcome::PreparationFailed);
+        pass.record_outcome(WarmupOutcome::InstallFailed);
+        pass.record_outcome(WarmupOutcome::BudgetExhausted {
+            cap: WarmupCap::TotalWallClock,
+            elapsed: Duration::from_secs(60),
+        });
+        pass.record_outcome(WarmupOutcome::Quiescent);
+
+        let mut report = WarmupReport::default();
+        report.merge_pass_failures(&pass);
+        assert!(report.preparation_failed);
+        assert!(report.install_failed);
+        assert!(report.budget_exhausted);
     }
 }

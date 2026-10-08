@@ -105,7 +105,7 @@
         assert_eq!(
             comp.prewarm_layer_chains(
                 layer,
-                manifold_core::WarmupBudget::default(),
+                &mut manifold_core::WarmupPass::new(manifold_core::WarmupBudget::default(), std::time::Instant::now()),
                 device,
             ),
             manifold_core::WarmupOutcome::Quiescent,
@@ -189,7 +189,7 @@
         assert_eq!(
             comp.prewarm_master_chain(
                 &project,
-                manifold_core::WarmupBudget::default(),
+                &mut manifold_core::WarmupPass::new(manifold_core::WarmupBudget::default(), std::time::Instant::now()),
                 &device,
                 None,
                 (1, 1),
@@ -500,7 +500,7 @@
         // Warmup should build the per-layer chain.
         let outcome = comp.prewarm_layer_chains(
             &layer,
-            manifold_core::WarmupBudget::default(),
+            &mut manifold_core::WarmupPass::new(manifold_core::WarmupBudget::default(), std::time::Instant::now()),
             &device,
         );
         assert_eq!(

@@ -7,7 +7,7 @@ use manifold_core::BlendMode;
 use manifold_core::LayerId;
 use manifold_core::LayerType;
 use manifold_core::effects::{EffectGroup, PresetInstance};
-use manifold_core::{EffectId, NodeId, WarmupBudget, WarmupOutcome};
+use manifold_core::{EffectId, NodeId, WarmupOutcome, WarmupPass};
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 
@@ -352,7 +352,7 @@ pub trait Compositor: Send {
     fn prewarm_layer_chains(
         &mut self,
         _layer: &Layer,
-        _budget: WarmupBudget,
+        _pass: &mut WarmupPass,
         _device: &manifold_gpu::GpuDevice,
     ) -> WarmupOutcome {
         WarmupOutcome::Quiescent
@@ -364,7 +364,7 @@ pub trait Compositor: Send {
     fn prewarm_layer_chains_with_output(
         &mut self,
         _layer: &Layer,
-        _budget: WarmupBudget,
+        _pass: &mut WarmupPass,
         _device: &manifold_gpu::GpuDevice,
         _output_dims: (u32, u32),
     ) -> WarmupOutcome {
@@ -389,7 +389,7 @@ pub trait Compositor: Send {
     fn prewarm_master_chain(
         &mut self,
         _project: &Project,
-        _budget: WarmupBudget,
+        _pass: &mut WarmupPass,
         _device: &manifold_gpu::GpuDevice,
         _pool: Option<&manifold_gpu::TexturePool>,
         _led_grid_size: (u32, u32),
@@ -404,7 +404,7 @@ pub trait Compositor: Send {
     fn prewarm_clip_chain_topologies(
         &mut self,
         _project: &Project,
-        _budget: WarmupBudget,
+        _pass: &mut WarmupPass,
         _device: &manifold_gpu::GpuDevice,
     ) -> WarmupOutcome {
         WarmupOutcome::Quiescent
@@ -416,7 +416,7 @@ pub trait Compositor: Send {
     fn prewarm_group_chains(
         &mut self,
         _project: &Project,
-        _budget: WarmupBudget,
+        _pass: &mut WarmupPass,
         _device: &manifold_gpu::GpuDevice,
         _pool: Option<&manifold_gpu::TexturePool>,
         _led_grid_size: (u32, u32),

@@ -319,7 +319,12 @@
         let layer = &project.timeline.layers[0];
 
         // Warmup is where first-touch costs are expected and logged.
-        let outcome = renderer.prewarm_layer(layer, manifold_core::WarmupBudget::default());
+        let mut pass = manifold_core::WarmupPass::new(
+            manifold_core::WarmupBudget::default(), std::time::Instant::now(),
+        );
+        let outcome = renderer.prewarm_layer(
+            layer, pass.layer(&layer.layer_id, std::time::Instant::now()),
+        );
         assert!(
             matches!(outcome, manifold_core::WarmupOutcome::Quiescent),
             "fixture scene must warm within default budget; got {:?}",
@@ -364,11 +369,17 @@
         let layer = &project.timeline.layers[0];
 
         let tight_budget = manifold_core::WarmupBudget {
+            frame_interval: std::time::Duration::from_secs_f64(1.0 / 60.0),
             per_layer: std::time::Duration::from_nanos(1),
             per_layer_frames: 600,
             total: std::time::Duration::from_secs(60),
         };
-        let outcome = renderer.prewarm_layer(layer, tight_budget);
+        let mut pass = manifold_core::WarmupPass::new(
+            tight_budget, std::time::Instant::now(),
+        );
+        let outcome = renderer.prewarm_layer(
+            layer, pass.layer(&layer.layer_id, std::time::Instant::now()),
+        );
         assert!(
             matches!(
                 outcome,
@@ -394,7 +405,12 @@
         let layer = &project.timeline.layers[0];
         let layer_id = layer.layer_id.clone();
 
-        let outcome = renderer.prewarm_layer(layer, manifold_core::WarmupBudget::default());
+        let mut pass = manifold_core::WarmupPass::new(
+            manifold_core::WarmupBudget::default(), std::time::Instant::now(),
+        );
+        let outcome = renderer.prewarm_layer(
+            layer, pass.layer(&layer.layer_id, std::time::Instant::now()),
+        );
         assert!(
             matches!(outcome, manifold_core::WarmupOutcome::Quiescent),
             "fixture scene must warm within default budget; got {:?}",
@@ -454,7 +470,12 @@
 
         // Simulate the command path: type change notification, then warm.
         renderer.update_active_types_for_layer(&layer_id, layer.generator_type().clone());
-        let outcome = renderer.prewarm_layer(&layer, manifold_core::WarmupBudget::default());
+        let mut pass = manifold_core::WarmupPass::new(
+            manifold_core::WarmupBudget::default(), std::time::Instant::now(),
+        );
+        let outcome = renderer.prewarm_layer(
+            &layer, pass.layer(&layer.layer_id, std::time::Instant::now()),
+        );
         assert!(
             matches!(outcome, manifold_core::WarmupOutcome::Quiescent),
             "edit-time warm of Plasma must quiesce; got {:?}",
