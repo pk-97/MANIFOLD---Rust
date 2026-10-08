@@ -32,11 +32,11 @@ NEXTTEST_GPU_FILTER = '''
 GPU_BACKEND_ROOT = 'crates/manifold-gpu/'
 OTHER_SHADER_ROOTS = ('crates/manifold-led/', 'crates/manifold-recording/', 'crates/manifold-spectral/')
 CATALOG_PACKAGE = 'manifold-nodes'
-CATALOG_PATHS = ('crates/manifold-nodes-scene/src/node_graph/primitives/',
-                 'crates/manifold-nodes-image/src/node_graph/primitives/',
-                 'crates/manifold-nodes/src/node_graph/primitives/',
-                 'crates/manifold-node-engine/src/primitives/',
-                 'crates/manifold-node-engine/src/water/primitives/',
+PRIMITIVE_PATHS = ('crates/manifold-nodes-scene/src/node_graph/primitives/',
+                   'crates/manifold-nodes-image/src/node_graph/primitives/',
+                   'crates/manifold-node-engine/src/primitives/',
+                   'crates/manifold-node-engine/src/water/primitives/')
+CATALOG_PATHS = (*PRIMITIVE_PATHS,
                  'crates/manifold-nodes/src/catalog_gen.rs',
                  'crates/manifold-node-engine/src/descriptor.rs',
                  'crates/manifold-nodes/src/registry.rs',
@@ -441,30 +441,24 @@ PREFIX_ROWS = [
     # Bundled preset JSON is compiled into the renderer.
     ("crates/manifold-nodes/assets/", ".json", "manifold-nodes",
      ["bundled_presets"], []),
-    # The layout proofs scan every primitive's uniform mirror and hand shader.
-    ("crates/manifold-nodes/src/node_graph/primitives/", ".rs", "manifold-nodes",
-     ["uniform_layout_proof", "uniform_layout_extended"], []),
-    ("crates/manifold-nodes/src/node_graph/primitives/", ".wgsl", "manifold-nodes",
-     ["uniform_layout_extended"], []),
-    ("crates/manifold-node-engine/src/primitives/", ".rs", "manifold-nodes",
-     ["uniform_layout_proof", "uniform_layout_extended"], []),
-    ("crates/manifold-node-engine/src/water/primitives/", ".rs", "manifold-nodes",
-     ["uniform_layout_proof", "uniform_layout_extended"], []),
     ("crates/manifold-node-engine/src/", ".wgsl", "manifold-nodes",
      ["uniform_layout_extended", "wgsl_validation"], []),
     # wgsl_validation parses every shader in the crate.
     ("crates/manifold-nodes/src/", ".wgsl", "manifold-nodes", ["wgsl_validation"], []),
 ]
 
+# Both catalog-side layout proofs cover primitive Rust mirrors and WGSL.
+PREFIX_ROWS += [(prefix, suffix, CATALOG_PACKAGE,
+                 ["uniform_layout_proof", "uniform_layout_extended"], [])
+                for prefix in PRIMITIVE_PATHS for suffix in (".rs", ".wgsl")]
+
 # manifold-nodes-image owns these source trees; ABI and WGSL contracts stay catalog-side.
 PREFIX_ROWS += [
-    ('crates/manifold-nodes-image/src/node_graph/primitives/', '.rs', "manifold-nodes", ['uniform_layout_proof', 'uniform_layout_extended'], []),
     ('crates/manifold-nodes-image/src/', '.wgsl', "manifold-nodes", ['uniform_layout_extended', 'wgsl_validation'], []),
 ]
 
 # manifold-nodes-scene owns these source trees; ABI and WGSL contracts stay catalog-side.
 PREFIX_ROWS += [
-    ('crates/manifold-nodes-scene/src/node_graph/primitives/', '.rs', "manifold-nodes", ['uniform_layout_proof', 'uniform_layout_extended'], []),
     ('crates/manifold-nodes-scene/src/', '.wgsl', "manifold-nodes", ['uniform_layout_extended', 'wgsl_validation'], []),
 ]
 

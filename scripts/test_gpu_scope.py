@@ -6,6 +6,8 @@ import unittest
 from unittest import mock
 from pathlib import Path
 import tempfile
+import shutil
+import subprocess
 
 import gpu_scope as g
 
@@ -57,6 +59,67 @@ def fixture_workspace(repo):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_every_primitive_directory_selects_both_catalog_layout_proofs(self):
+        import cpu_scope
+        from gate_policy import PRIMITIVE_PATHS, CATALOG_PATHS
+        root = Path(__file__).resolve().parents[1]
+        directories = {str(p.relative_to(root)) + '/'
+                       for p in (root / 'crates').rglob('primitives')
+                       if p.is_dir() and 'src' in p.relative_to(root).parts
+                       and any(p.rglob('*.rs'))}
+        self.assertEqual(set(PRIMITIVE_PATHS), directories)
+        workspace = fixture_workspace(Path('/nonexistent'))
+        for directory in sorted(directories):
+            self.assertIn(directory, CATALOG_PATHS)
+            for suffix in ('.rs', '.wgsl'):
+                source = next(p for p in sorted((root / directory).rglob('*' + suffix))
+                              if p.name != 'mod.rs')
+                with self.subTest(source=str(source.relative_to(root))):
+                    selected = cpu_scope.plan_for_paths(
+                        [source.relative_to(root).as_posix()], Path('/nonexistent'), workspace)
+                    for module in ('uniform_layout_proof', 'uniform_layout_extended'):
+                        self.assertIn(f'(package(=manifold-nodes) & test(/^{module}::/))', selected.filters)
+                        self.assertIn(f'mod {module};', (root / 'crates/manifold-nodes/tests/main.rs').read_text())
+
+    def test_whole_crate_deletion_keeps_base_ownership_in_nested_cpu_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            old = 'crates/retired-catalog'
+            deleted = [old + '/Cargo.toml', old + '/src/lib.rs',
+                       old + '/tests/gpu_proofs/proof.rs']
+            current = 'crates/manifold-app/tests/renderer_contracts/gpu_proofs/proof.rs'
+            contents = {
+                'Cargo.toml': '[workspace]\nmembers = ["crates/retired-catalog", "crates/manifold-app"]\n',
+                deleted[0]: '[package]\nname = "retired-catalog"\nversion = "0.1.0"\n',
+                deleted[1]: '', deleted[2]: '#[test]\nfn old_proof() {}\n',
+                'crates/manifold-app/Cargo.toml': '[package]\nname = "manifold-app"\nversion = "0.1.0"\n',
+            }
+            for path, text in contents.items():
+                file = repo / path
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(text)
+            def git(*args):
+                return subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Scope Test',
+                                       '-c', 'user.email=scope@example.invalid',
+                                       '-c', 'core.hooksPath=/dev/null', *args],
+                                      check=True, capture_output=True, text=True)
+            git('init', '-q')
+            git('add', '--', *contents)
+            git('commit', '-qm', 'Base workspace with catalog')
+            shutil.rmtree(repo / old)
+            (repo / 'Cargo.toml').write_text('[workspace]\nmembers = ["crates/manifold-app"]\n')
+            proof = repo / current
+            proof.parent.mkdir(parents=True, exist_ok=True)
+            proof.write_text('#[test]\nfn moved_proof() {}\n')
+            workspace = fixture_workspace(repo)
+            result = g.plan_for_paths(deleted + [current], repo, base='HEAD', workspace=workspace)
+            self.assertEqual(result.paths, [current])
+            self.assertFalse(result.unmapped)
+            self.assertTrue(any(run['package'] == 'manifold-app'
+                                and run['target'] == 'renderer_gpu_proofs' for run in result.runs()))
+            with self.assertRaisesRegex(ValueError, 'no current or base Cargo workspace owner'):
+                g.plan_for_paths(['crates/never-owned/src/lib.rs'], repo, base='HEAD', workspace=workspace)
+
     def test_moved_contract_harnesses_and_nested_proofs_keep_gpu_ownership(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
@@ -92,7 +155,8 @@ class ScopeTests(unittest.TestCase):
                 with self.subTest(deleted=bool(output)), mock.patch.object(
                     g.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout=output, stderr='')
                 ):
-                    result = g.plan_for_paths([path], repo, shader_users=lambda _: [], workspace=workspace)
+                    result = g.plan_for_paths([path], repo, shader_users=lambda _: [], workspace=workspace,
+                                              cpu_plan=None)
                     self.assertEqual([item[0] for item in result.unmapped], expected)
 
     def test_path_attr_filter_finds_testkit_visible_mount(self):

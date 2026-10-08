@@ -586,10 +586,10 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
     # Feature-gated integration targets selected by CPU ownership belong here.
     if cpu_plan is _CPU_PLAN_UNSET:
         import cpu_scope
-        # GPU callers that do not share readiness planning are commonly using
-        # synthetic repositories without origin/main; preserve the historical
-        # no-base CPU scope in that mode.
-        cpu_plan = cpu_scope.plan_for_paths(paths, repo, workspace)
+        # Nested CPU ownership must use the same base as GPU deletion scope.
+        # Metadata-only fixtures have no Git history to consult.
+        cpu_plan = cpu_scope.plan_for_paths(
+            paths, repo, workspace, base=base if (Path(repo) / '.git').exists() else None)
     if cpu_plan is not None:
         plan.required_binaries.update(cpu_plan.gpu_binaries)
     return plan

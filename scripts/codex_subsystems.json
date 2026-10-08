@@ -16,7 +16,7 @@
     },
     {
       "name": "metal",
-      "prefixes": ["crates/manifold-gpu/", "crates/manifold-nodes-image/", "crates/manifold-nodes-scene/", "crates/manifold-compositor/", "crates/manifold-nodes/src/node_graph/", "crates/manifold-node-engine/src/", "crates/manifold-nodes/tests/gpu_proofs/"],
+      "prefixes": ["crates/manifold-gpu/", "crates/manifold-nodes-image/", "crates/manifold-nodes-scene/", "crates/manifold-compositor/", "crates/manifold-nodes/tests/contracts/node_graph/", "crates/manifold-app/tests/contracts/node_graph/", "crates/manifold-node-engine/src/", "crates/manifold-nodes/tests/gpu_proofs/"],
       "entry_points": ["crates/manifold-gpu/src/lib.rs", "crates/manifold-gpu/src/metal/mod.rs"],
       "docs": ["docs/MANIFOLD_GPU_ARCHITECTURE.md"],
       "invariants": "GPU access goes through manifold-gpu and native Metal. Avoid per-frame allocations; run GPU proofs through cargo test, never nextest."
@@ -30,7 +30,7 @@
     },
     {
       "name": "generators-primitives",
-      "prefixes": ["crates/manifold-nodes/src/node_graph/primitives/", "crates/manifold-nodes-image/src/node_graph/primitives/", "crates/manifold-nodes-scene/src/node_graph/primitives/", "crates/manifold-node-engine/src/primitives/", "crates/manifold-node-engine/src/water/primitives/", "crates/manifold-core/src/generator.rs", "crates/manifold-core/src/generator_registration.rs", "crates/manifold-core/src/generator_metadata_submissions.rs"],
+      "prefixes": ["crates/manifold-nodes-image/src/node_graph/primitives/", "crates/manifold-nodes-scene/src/node_graph/primitives/", "crates/manifold-node-engine/src/primitives/", "crates/manifold-node-engine/src/water/primitives/", "crates/manifold-core/src/generator.rs", "crates/manifold-core/src/generator_registration.rs", "crates/manifold-core/src/generator_metadata_submissions.rs"],
       "entry_points": ["crates/manifold-core/src/generator.rs"],
       "docs": ["docs/DECOMPOSING_GENERATORS.md", "docs/ADDING_PRIMITIVES.md"],
       "invariants": "Read DECOMPOSING_GENERATORS in full, then ADDING_PRIMITIVES. Audit existing primitives before adding one; preserve composability and required fusion proofs."
