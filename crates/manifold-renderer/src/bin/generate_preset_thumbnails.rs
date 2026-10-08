@@ -34,19 +34,21 @@ use manifold_compositor::preset_thumbnail::{THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, f
 use sha2::Digest;
 
 const ASSET_SUBDIRS: &[(&str, PresetKind)] = &[
-    ("assets/effect-presets", PresetKind::Effect),
-    ("assets/generator-presets", PresetKind::Generator),
+    ("effect-presets", PresetKind::Effect),
+    ("generator-presets", PresetKind::Generator),
 ];
 
 const CONTACT_SHEET_COLUMNS: usize = 8;
 
 fn main() {
+    let assets_root = manifold_node_engine::load::preset_loader::registered_assets_root()
+        .expect("catalog must register its development assets");
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let selected: BTreeSet<String> = std::env::args().skip(1).collect();
     let mut pending = selected.clone();
     let mut jobs = Vec::new();
     for (subdir, kind) in ASSET_SUBDIRS {
-        let dir = manifest_dir.join(subdir);
+        let dir = assets_root.join(subdir);
         let entries = sorted_json_entries(&dir).unwrap_or_else(|e| {
             eprintln!("error: cannot read {}: {e}", dir.display());
             std::process::exit(2);
