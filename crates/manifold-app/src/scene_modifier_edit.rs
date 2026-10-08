@@ -8,7 +8,7 @@ use manifold_editing::commands::graph::{
     MoveSceneModifierCommand, RemoveSceneModifiersCommand, ReorderSceneModifiersCommand,
     SetSceneModifierPreparationParamCommand,
 };
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier};
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier};
 
 #[derive(Debug)]
 pub(crate) enum SceneModifierAction {
@@ -469,8 +469,8 @@ fn shatter_targets(
     graph: &manifold_core::effect_graph_def::EffectGraphDef,
     scene: &SceneNodeRef,
 ) -> Result<SceneTargetSelection, String> {
-    use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-    let choices = manifold_renderer::node_graph::scene_modifier_authoring::scene_modifier_objects(graph, scene)
+    use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    let choices = manifold_nodes_scene::node_graph::scene_modifier_authoring::scene_modifier_objects(graph, scene)
         .map_err(|e| e.to_string())?;
     let vm = SceneVm::from_def(graph).ok_or("Scene objects are unavailable")?;
     let objects: Vec<_> = vm.objects.iter().filter_map(|object| {
@@ -976,7 +976,7 @@ mod prepared_toggle_tests {
     fn imported_shatter_toggle_preserves_add_undo() {
         let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb"));
-        let (graph, _) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(path).unwrap();
+        let (graph, _) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(path).unwrap();
         let scene_id = graph.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
         let mut layer = Layer::new_generator("Scan".into(), PresetTypeId::new("PhotoscanBaseline"), 0);
         let layer_id = layer.layer_id.clone();
@@ -987,9 +987,9 @@ mod prepared_toggle_tests {
         let target = GraphTarget::Generator(layer_id.clone());
         let physics = manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
             target.clone(), scene_id, 0,
-            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
+            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
             graph,
-        ).with_world_metadata(manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"));
+        ).with_world_metadata(manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"));
         let mut editing = EditingService::new();
         editing.execute(with_admission(Box::new(physics)), &mut project);
         assert!(editing.take_rejection().is_none());

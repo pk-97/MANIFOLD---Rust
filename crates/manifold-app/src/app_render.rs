@@ -1648,7 +1648,7 @@ impl Application {
                     });
                     if let Some((current, r)) = font_pick {
                         let families =
-                            manifold_renderer::text_rasterizer::TextRasterizer::available_font_families();
+                            manifold_nodes_image::text_rasterizer::TextRasterizer::available_font_families();
                         let actions = families
                             .iter()
                             .map(|name| PanelAction::Params(ParamsAction::GenStringParamSelected(*sp_idx, name.clone())))
@@ -2959,9 +2959,9 @@ impl Application {
                             *render_scene_node_id,
                             *next_index,
                             *centroid,
-                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
-                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
-                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
+                            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
+                            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
+                            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
                             default.clone(),
                         );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
@@ -2984,7 +2984,7 @@ impl Application {
                             *render_scene_node_id,
                             *next_index,
                             *pos,
-                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.light"),
+                            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.light"),
                             default.clone(),
                         );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));

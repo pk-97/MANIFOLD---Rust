@@ -46,7 +46,7 @@ shadow).
 | Non-repeat invariant for cycling (`ClipTriggerCycle`) | `crates/manifold-node-engine/src/clip_trigger.rs` | exists renderer-side — the *invariant* moves into the step evaluator (D7); the type stays for graph consumers |
 | Discrete-param vocabulary (`whole_numbers`, `value_labels`) | `crates/manifold-core/src/effect_graph_def.rs:456-463` | exists — defines "discrete slider" |
 | Offline export feeds real analysis into the same tick ("param modulation, param triggers, and live clip triggers — deterministic audio reactivity") | `crates/manifold-app/src/content_export.rs:439-451` | exists — step actions inherit export support with no new work |
-| Clip-edge observation (renderer-side): `acquire_clip` + `clip_count`/`audio_count` | `crates/manifold-renderer/src/generator_renderer.rs:44-92,350-360` | exists — stays for gate cards; steps get an ENGINE-side edge (D5) |
+| Clip-edge observation (renderer-side): `acquire_clip` + `clip_count`/`audio_count` | `crates/manifold-compositor/src/generator_renderer.rs:44-92,350-360` | exists — stays for gate cards; steps get an ENGINE-side edge (D5) |
 | Drawer UI: standard audio-mod drawer + trailing Mode row; command family (`SetAudioModTriggerModeCommand`) | LIVE_AUDIO_TRIGGERS section 9.2 U-P2; `param_slider_shared.rs` (`build_toggle_trigger_row`) | exists — Action rows extend the same drawer (D8/P3) |
 
 Classification: the event sources, edge detection, config home, evaluator walk,
@@ -287,7 +287,7 @@ channel, no new thread, no shared state.
   **Content-thread work gate:** `MANIFOLD_RENDER_TRACE=1` run on the canonical
   fixture (53 layers) — no frame >20ms attributable to the new tracking
   (measured, not argued).
-- **Gate (negative):** `rg -n "trigger_pulse|TriggerPulse" crates/manifold-renderer/src/generator_renderer.rs`
+- **Gate (negative):** `rg -n "trigger_pulse|TriggerPulse" crates/manifold-compositor/src/generator_renderer.rs`
   unchanged vs main (proves no renderer backchannel was added).
 - **Demo:** none — L1 (surface still P3).
 - **Forbidden moves:** F5, F1.

@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_renderer::node_graph::gltf_import::ImportReport;
+use manifold_nodes_scene::node_graph::gltf_import::ImportReport;
 
 use crate::blender_import;
 use crate::user_prefs::UserPrefs;
@@ -159,7 +159,7 @@ pub(crate) fn run_import_worker(
         stage: ImportStage::Parsing,
     });
     let (graph, report) =
-        match manifold_renderer::node_graph::gltf_import::assemble_import_graph(&import_path) {
+        match manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&import_path) {
             Ok(pair) => pair,
             Err(e) => {
                 let _ = progress_tx.send(ImportProgress::Failed {

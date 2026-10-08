@@ -21,7 +21,7 @@ Snapshot: `9b419c32587f4370d1f2f216850d274900603273`. Paths below are repository
 | Original preset | `crates/manifold-renderer/assets/effect-presets/BlobTracking.json` | Exists, available. Detection/filtering/tracking and HUD are already separate graph groups. Preserve its ID, parameters, availability and appearance. |
 | Native detector | `assets/plugins/BlobDetector/BlobDetectorPlugin.cpp` (`BlobDetector_Process`) | Exists: equalization, blur, Canny, morphology, external contours, bounding boxes. Shape information is discarded. |
 | Native loading | `crates/manifold-native/src/ffi/blob_ffi.rs` (`FfiBlobDetector`); `ffi/mod.rs` (`resolve_bundle_path`) | Exists. Preserve original symbols and loader lifetime policy; add a versioned API in the same bundle. |
-| Analysis node | `crates/manifold-renderer/src/node_graph/primitives/blob_detect_ffi.rs` (`BlobDetectFfi`) | Exists, eight detections, downsample/readback/worker; allocating response and previous-image paths. Reuse architecture, not those allocations. |
+| Analysis node | `crates/manifold-nodes-image/src/node_graph/primitives/blob_detect_ffi.rs` (`BlobDetectFfi`) | Exists, eight detections, downsample/readback/worker; allocating response and previous-image paths. Reuse architecture, not those allocations. |
 | Tracking | same primitives directory, `track_persist.rs` (`assign_global`, `TrackPersist`) | Exists: best-first distance matching, grace counted on graph runs, compacted slots. Cannot carry reliable explicit identities through disappearances. |
 | Smoothing/filtering | `one_euro_filter.rs` (`OneEuroFilter`); `array_filter_detections.rs` (`ArrayFilterDetections`) | Existing four-float box ABI. Do not feed an extended record into these nodes. |
 | Worker/readback | `crates/manifold-node-engine/src/runtime/background_worker.rs` (`BackgroundWorker`); `gpu_readback.rs` (`ReadbackRequest::try_read_into`) | Reusable infrastructure exists. Enforce one request in flight and return owned storage on every result path. |
@@ -32,7 +32,7 @@ Snapshot: `9b419c32587f4370d1f2f216850d274900603273`. Paths below are repository
 | Mask composition/proofs | `MaskCircle.json`, `MaskImage.json`; `crates/manifold-renderer/src/engine_contract_tests/runtime_group_mask_tests.rs` | Existing invert/amount convention and dry-input, wet/dry, reload tests. Extend these tests. |
 | Native distribution | `assets/plugins/BlobDetector/build.sh` | Builds and embeds OpenCV dependencies in `assets/plugins/BlobDetector.bundle`; rebuilds the bundle directory. Run only in the implementation slot. |
 
-The primitive filenames above without a full directory are under `crates/manifold-renderer/src/node_graph/primitives/`; preset filenames are under `crates/manifold-renderer/assets/effect-presets/`.
+The primitive filenames above without a full directory are under `crates/manifold-nodes-image/src/node_graph/primitives/`; preset filenames are under `crates/manifold-renderer/assets/effect-presets/`.
 
 ## 2. Decisions
 
@@ -93,7 +93,7 @@ Mask output is `(coverage,coverage,coverage,1)`. Empty successful detection is a
 
 ## 4. Native and graph seams
 
-All types here are new unless explicitly named existing. No old signature changes. Native CPU records live in new `crates/manifold-native/src/region_detector.rs`; renderer wire/storage types live in new `crates/manifold-renderer/src/node_graph/primitives/region_types.rs`.
+All types here are new unless explicitly named existing. No old signature changes. Native CPU records live in new `crates/manifold-native/src/region_detector.rs`; renderer wire/storage types live in new `crates/manifold-nodes-image/src/node_graph/primitives/region_types.rs`.
 
 ```rust
 pub const MAX_REGIONS: usize = 32;

@@ -12,7 +12,7 @@ Shared gates and resource limits: [Validation V9](SCENE_MODIFIER_VALIDATION_PLAN
 
 ## 1. Audit — original source audit 2026-09-10; amendment 2026-09-12
 
-Existing array/state vocabulary is in `crates/manifold-renderer/src/node_graph/primitives/array_feedback.rs:32` (Particle-specific), `temporal`/`feedback` primitives and `StateStore` execution. These are lifecycle precedents, not proof of arbitrary transform history. Existing instance rendering shares mesh resources; `scene_object.rs:60` binds instance arrays. The current `InstanceTransform` is position/uniform-scale/Euler plus special marker, not a skeleton pose or deformed mesh snapshot.
+Existing array/state vocabulary is in `crates/manifold-nodes-image/src/node_graph/primitives/array_feedback.rs:32` (Particle-specific), `temporal`/`feedback` primitives and `StateStore` execution. These are lifecycle precedents, not proof of arbitrary transform history. Existing instance rendering shares mesh resources; `scene_object.rs:60` binds instance arrays. The current `InstanceTransform` is position/uniform-scale/Euler plus special marker, not a skeleton pose or deformed mesh snapshot.
 
 The shipped field precedents are `wave_field_3d`, `copy_positions` and `displace_copies`; the landed photoscan mesh precedents are `wave_shear_mesh` and `transform_mesh_patches`. Reuse their phase, capacity, identity and exact-bypass semantics where an echo composition needs them. No Gaussian splat renderer or generic transform-history primitive is shipped.
 

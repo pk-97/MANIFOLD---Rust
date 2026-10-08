@@ -377,7 +377,7 @@ fn drive_and_sample(
             .iter()
             .find_map(|r| {
                 r.as_any()
-                    .downcast_ref::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+                    .downcast_ref::<manifold_compositor::generator_renderer::GeneratorRenderer>()
                     .and_then(|gr| gr.get_clip_texture(clip_id))
             })
             .map(|tex| {
@@ -922,7 +922,7 @@ fn modifier_live_scrub_keeps_runtime_couplings_through_undo_redo() {
                 .iter()
                 .find_map(|r| {
                     r.as_any()
-                        .downcast_ref::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+                        .downcast_ref::<manifold_compositor::generator_renderer::GeneratorRenderer>()
                 })
                 .unwrap()
                 .live_node_params(&layer_id)

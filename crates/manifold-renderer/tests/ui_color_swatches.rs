@@ -9,13 +9,14 @@
 
 #![cfg(target_os = "macos")]
 
+use manifold_renderer as _;
 use std::ffi::c_void;
 use std::path::Path;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
-use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback};
-use manifold_renderer::presentation::UI_FORMAT;
+use manifold_compositor::display_capture::{AlphaInterpretation, LinearUiReadback};
+use manifold_compositor::presentation::UI_FORMAT;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::color;
@@ -51,7 +52,7 @@ fn browser_popup_thumbnails_paint() {
     // app's per-frame thumbnail pass does.
     let thumb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("assets/preset-thumbnails/generators/Lissajous.png");
-    let (tw, th, rgba) = manifold_renderer::preset_thumbnail::decode_png_rgba8(&thumb)
+    let (tw, th, rgba) = manifold_compositor::preset_thumbnail::decode_png_rgba8(&thumb)
         .expect("decode committed Lissajous thumbnail");
     let thumb_path = thumb.to_string_lossy().to_string();
     let handle = texture_handle_for_key(&thumb_path);
@@ -133,7 +134,7 @@ fn font_list_picker_paints() {
     let device = GpuDevice::new_queued("ui_color_swatches");
     let mut ui = UIRenderer::new(&device, FORMAT);
 
-    let families = manifold_renderer::text_rasterizer::TextRasterizer::available_font_families();
+    let families = manifold_nodes_image::text_rasterizer::TextRasterizer::available_font_families();
     let current = families.iter().position(|f| f == "Georgia");
     let items: Vec<PickerItem> = families
         .iter()
@@ -489,7 +490,7 @@ fn browser_popup_real_registry_p1_demo() {
                 category: reg.category.map(|c| c.to_string()),
                 search_text: None,
                 source: Some(Source::Factory),
-                thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
+                thumbnail: manifold_compositor::preset_thumbnail::factory_thumbnail_path(
                     kind,
                     reg.id.as_str(),
                 )
@@ -535,7 +536,7 @@ fn browser_popup_real_registry_p1_demo() {
             category: reg.category.map(|c| c.to_string()),
             search_text: None,
             source: Some(Source::Factory),
-            thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
+            thumbnail: manifold_compositor::preset_thumbnail::factory_thumbnail_path(
                 PresetKind::Generator,
                 reg.id.as_str(),
             )
@@ -646,7 +647,7 @@ fn browser_popup_real_registry_p3_demo() {
                 category: reg.category.map(|c| c.to_string()),
                 search_text: None,
                 source: Some(Source::Factory),
-                thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
+                thumbnail: manifold_compositor::preset_thumbnail::factory_thumbnail_path(
                     kind,
                     reg.id.as_str(),
                 )
@@ -670,7 +671,7 @@ fn browser_popup_real_registry_p3_demo() {
         category: reg.category.map(|c| c.to_string()),
         search_text: None,
         source: Some(Source::Factory),
-        thumbnail: manifold_renderer::preset_thumbnail::factory_thumbnail_path(
+        thumbnail: manifold_compositor::preset_thumbnail::factory_thumbnail_path(
             PresetKind::Generator,
             reg.id.as_str(),
         )
@@ -695,7 +696,7 @@ fn browser_popup_real_registry_p3_demo() {
             continue;
         }
         let (tw, th, rgba) =
-            manifold_renderer::preset_thumbnail::decode_png_rgba8(std::path::Path::new(path))
+            manifold_compositor::preset_thumbnail::decode_png_rgba8(std::path::Path::new(path))
                 .expect("decode committed factory thumbnail");
         assert!(
             ui.register_image(&device, handle, tw, th, &rgba),

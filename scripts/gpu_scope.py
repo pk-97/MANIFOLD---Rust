@@ -38,7 +38,7 @@ from gate_policy import (
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
-    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS,
+    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, is_inert_plan_path,
 )
 from gate_workspace import Workspace
 
@@ -101,12 +101,13 @@ def slow_tests(times=None):
                   key=lambda t: -t[1])
 
 
-PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
 _CPU_PLAN_UNSET = object()
 
 
 def is_gpu_path(path, workspace=None):
     """Paths that trigger the GPU-proofs leg (mirrors the context-nudge triggers)."""
+    if is_inert_plan_path(path):
+        return False
     if workspace:
         owner = workspace.owner(path)
         if (owner and 'gpu-proofs' in workspace.packages[owner]['features']
@@ -127,6 +128,36 @@ def is_gpu_path(path, workspace=None):
 
 def is_gltf_path(path):
     return any(path.startswith(p) for p in GLTF_PATHS)
+
+
+def glb_conformance_route(workspace):
+    """Discover the standalone target or its module in a folded GPU test root."""
+    from crate_move_replay import module_items
+    routes = set()
+    for package in workspace.feature_packages('gpu-proofs'):
+        for target in workspace.targets(package, 'test'):
+            if (target['name'] == 'glb_conformance'
+                    or Path(target['src_path']).name == 'glb_conformance.rs'):
+                routes.add((package, target['name'], ''))
+                continue
+            if 'gpu-proofs' not in target.get('required-features', []):
+                continue
+            source = Path(target['src_path'])
+            if not source.is_file():
+                continue
+            text = source.read_text()
+            for start, end, head, scope in module_items(text):
+                declaration = re.fullmatch(r'(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;', text[head:end])
+                if not declaration:
+                    continue
+                name = declaration[1]
+                attrs = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', text[start:head])
+                filename = Path(attrs[-1]).name if attrs else name + '.rs'
+                if filename == 'glb_conformance.rs':
+                    routes.add((package, target['name'], '::'.join((*scope, name)) + '::'))
+    if len(routes) > 1:
+        raise ValueError('ambiguous glb_conformance GPU target: ' + repr(sorted(routes)))
+    return next(iter(routes), None)
 
 
 @dataclass
@@ -163,27 +194,35 @@ class Plan:
             return []
         if self.workspace is None:
             raise ValueError('GPU plan has no Cargo ownership inventory')
+        route = glb_conformance_route(self.workspace)
+        if self.glb and route is None:
+            raise ValueError('no glb_conformance GPU target in Cargo inventory')
         runs = []
         for package in self.workspace.feature_packages('gpu-proofs'):
             filters = (UI_PAINT_FILTERS if self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
                        else self.final_filters())
             targets = [t['name'] for t in self.workspace.targets(package, 'test')
                        if 'gpu-proofs' in t.get('required-features', [])
-                       and t['name'] not in GLB_TESTS and t['name'] != 'glb_conformance']
+                       and t['name'] not in GLB_TESTS
+                       and not (route and route[:2] == (package, t['name']) and not route[2])]
             has_lib = bool(self.workspace.targets(package, 'lib'))
             if has_lib:
                 runs.append({'package': package, 'targets': [], 'lib': True, 'target': 'lib',
                              'filters': [] if package in self.whole_packages else filters,
                              'skips': self.final_skips(), 'budgeted': True})
             for target in targets:
+                whole = package in self.whole_packages or (package, target) in self.required_binaries
+                skips = [] if whole else self.final_skips()
+                if route and route[:2] == (package, target) and route[2]:
+                    # The folded sweep retains its separate, unbudgeted run.
+                    skips = sorted(set(skips) | {route[2]})
                 runs.append({'package': package, 'targets': [target], 'lib': False, 'target': target,
-                             'filters': [] if package in self.whole_packages or (package, target) in self.required_binaries else self.final_filters(),
-                             'skips': [] if package in self.whole_packages or (package, target) in self.required_binaries else self.final_skips(),
-                             'budgeted': True})
+                             'filters': [] if whole else self.final_filters(),
+                             'skips': skips, 'budgeted': True})
         if self.glb:
-            runs.append({'package': self.workspace.binary_owner('glb_conformance'),
-                         'targets': ['glb_conformance'], 'lib': False, 'target': 'glb_conformance',
-                         'filters': [], 'skips': [], 'budgeted': False})
+            package, target, prefix = route
+            runs.append({'package': package, 'targets': [target], 'lib': False, 'target': target,
+                         'filters': [prefix] if prefix else [], 'skips': [], 'budgeted': False})
         return runs
 
     def describe(self):
@@ -279,9 +318,12 @@ def path_attr_filters(path, repo):
         text = (Path(repo) / root / "/".join(dirs) / "mod.rs").read_text()
     except OSError:
         text = ""
-    for file_name, module in PATH_ATTR_MOD.findall(text):
-        if file_name == parts[-1]:
-            return ["::".join(dirs + [module]) + "::"]
+    from crate_move_replay import module_items
+    for start, end, head, scope in module_items(text):
+        declaration = re.fullmatch(r'(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;', text[head:end])
+        attrs = re.findall(r'#\[path\s*=\s*"tests/([^"\n]+)"\]', text[start:head])
+        if declaration and attrs and attrs[-1] == parts[-1]:
+            return ["::".join((*dirs, *scope, declaration[1])) + "::"]
     if path.startswith(PRESET_RUNTIME_DIR):
         return ["runtime::"]
     return None
@@ -334,6 +376,21 @@ def shader_index(repo, workspace):
     return resolve
 
 
+def proof_module_prefix(path, repo, root=None):
+    """Honor explicit catalog-proof mounts before deriving a path prefix."""
+    root = Path(root) if root is not None else Path(repo) / PROOFS_DIR / 'main.rs'
+    if root.is_file():
+        from crate_move_replay import module_items
+        text = root.read_text()
+        for start, end, head, scope in module_items(text):
+            declaration = re.fullmatch(r'(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;', text[head:end])
+            attrs = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', text[start:head])
+            if declaration and attrs and root.parent.joinpath(*scope, attrs[-1]).resolve() == (Path(repo) / path).resolve():
+                return '::'.join((*scope, declaration[1])) + '::'
+    parts = list((Path(repo) / path).resolve().relative_to(root.parent.resolve()).with_suffix('').parts)
+    return '::'.join(parts[:-1] if parts[-1] == 'mod' else parts) + '::'
+
+
 def changed_test_filters(path, repo, base, patch=None):
     """Promote changed test bodies; shared-helper edits retain module scope."""
     # Only renderer lib and proof paths have a derivable test-name prefix.
@@ -342,7 +399,8 @@ def changed_test_filters(path, repo, base, patch=None):
     source = Path(repo) / path
     if source.suffix != ".rs" or not source.exists():
         return set()
-    text = source.read_text()
+    from crate_move_replay import production_text
+    text = production_text(source.read_text())
     if "#[test]" not in text:
         return set()
     diff = None if patch is not None else subprocess.run(["git", "-C", str(repo), "diff", "--no-ext-diff",
@@ -354,8 +412,7 @@ def changed_test_filters(path, repo, base, patch=None):
     hunks = [(int(m[1]), max(1, int(m[2] or 1))) for m in re.finditer(
         r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", patch, re.M)]
     if path.startswith(PROOFS_DIR):
-        parts = list(Path(path[len(PROOFS_DIR):]).with_suffix("").parts)
-        prefix = "::".join(parts[:-1] if parts[-1] == "mod" else parts) + "::"
+        prefix = proof_module_prefix(path, repo)
     else:
         prefixes = path_attr_filters(path, repo) or module_filters(path)
         prefix = prefixes[0] if prefixes else ''
@@ -382,6 +439,7 @@ def changed_test_filters(path, repo, base, patch=None):
 def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace=None,
                    cpu_plan=_CPU_PLAN_UNSET):
     """Map touched `paths` to a Plan. Never returns an implicit 'everything'."""
+    paths = [path for path in paths if not is_inert_plan_path(path)]
     workspace = workspace or Workspace(repo)
     if shader_users is None:
         shader_users = shader_index(repo, workspace) if any(p.endswith('.wgsl') for p in paths) else lambda p: []
@@ -403,6 +461,9 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
     for path in sorted(set(paths)):
         if not is_gpu_path(path, workspace):
             continue
+        plan.filters.update("node_graph::catalog_tests::" + module + "::"
+                            for prefix, module, _ in CATALOG_TEST_ROWS
+                            if path.startswith(prefix) and path.endswith(".rs"))
         plan.paths.append(path)
         owner = workspace.owner(path)
         if owner and path == workspace.roots[owner] + '/Cargo.toml':
@@ -448,9 +509,26 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
             _map_wgsl(plan, path, repo, shader_users)
             continue
         if path.startswith(PROOFS_DIR) and path.endswith(".rs"):
-            rel = path[len(PROOFS_DIR):].split("/")
-            plan.filters.add(rel[0][:-3] + "::" if len(rel) == 1 else rel[0] + "::")
+            prefix = proof_module_prefix(path, repo)
+            plan.filters.add(prefix.split("::")[0] + "::")
             continue
+        # A moved proof target keeps its module scope under its Cargo owner.
+        if owner and path.endswith(".rs"):
+            proof_targets = [
+                target for target in workspace.targets(owner, "test")
+                if "gpu-proofs" in target.get("required-features", [])
+                and (Path(repo) / path).resolve().is_relative_to(Path(target["src_path"]).resolve().parent)
+                and Path(target["src_path"]).name == "main.rs"
+            ]
+            if proof_targets:
+                for target in proof_targets:
+                    root = Path(target["src_path"])
+                    if (Path(repo) / path).resolve() == root.resolve():
+                        plan.required_binaries.add((owner, target["name"]))
+                    else:
+                        prefix = proof_module_prefix(path, repo, root)
+                        plan.filters.add(prefix.split("::")[0] + "::")
+                continue
         if path.startswith(CPU_FLIP_FIXTURES_DIR):
             plan.filters.update(CPU_FLIP_REFERENCE_FILTERS)
             continue

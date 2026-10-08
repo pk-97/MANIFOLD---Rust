@@ -220,7 +220,7 @@ fn authored_vortex(viscosity: f32) -> (EffectGraphDef, NodeId, String) {
             .default_value = value;
     }
     let force =
-        manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+        manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
             owner,
             &recipe,
             NodeId::new("authored_vortex"),

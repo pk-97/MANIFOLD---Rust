@@ -49,8 +49,8 @@
     ],
     "crates/manifold-editing/src/commands/graph/scene/fluid": ["scene-fluid-authoring", "scene-fluid-template", "water-family-preset"],
     "crates/manifold-core/src/scene_exposure.rs": ["scene-fluid-dam-break-controls", "water-family-preset"],
-    "crates/manifold-renderer/src/node_graph/scene_exposure": ["scene-fluid-dam-break-controls", "water-family-preset"],
-    "crates/manifold-renderer/src/node_graph/scene_vm.rs": [
+    "crates/manifold-nodes-scene/src/node_graph/scene_exposure": ["scene-fluid-dam-break-controls", "water-family-preset"],
+    "crates/manifold-nodes-scene/src/node_graph/scene_vm.rs": [
       "scene-item-ownership",
       "scene-liquid-recognition",
       "water-family-preset"

@@ -16,7 +16,7 @@ Snapshot: `2a356c5b18966084245bd4d9885cd788f78b78cb`. Anchors are a dated invent
 
 | Piece | Evidence | Classification and consequence |
 |---|---|---|
-| Final mesh already feeds raster and RT | `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:5270` | Exists. `RtObjectGeometry` borrows the draw's final vertex buffer. No second deformation implementation is needed. |
+| Final mesh already feeds raster and RT | `crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs:5270` | Exists. `RtObjectGeometry` borrows the draw's final vertex buffer. No second deformation implementation is needed. |
 | Continuous changes deliberately do not rebuild | same file `:2834`, `:2960` | Existing limitation. The content-settle policy cannot represent dynamic geometry. Remove it when P5 engages the new path. |
 | Per-object BLAS + instance TLAS | `crates/manifold-gpu/src/metal/raytrace/accel.rs:49`, `:356`, `:777` | Exists. BLAS uses `Refit` usage but retains only its structure. Retained descriptor/scratch are currently TLAS resources. |
 | Structural guard | `accel.rs:139` | Exists. Identity, layout, count, index identity, alpha mode and instance capacity are checked. This does not detect in-place content/index changes. |
@@ -27,7 +27,7 @@ Snapshot: `2a356c5b18966084245bd4d9885cd788f78b78cb`. Anchors are a dated invent
 | Emissive geometry is CPU-cached | `raytrace/emissive.rs:147`, `:392` | New GPU preparation required. CPU mapped reads cannot observe this frame's queued modifier writes. Transforming old CPU copies is insufficient. |
 | Matrix motion and cut invalidation | `render_scene.rs:5788`, `:5911` | Exists, but not general vertex correspondence. Use conservative invalidation for deformation in this scope. |
 | Export has completion/error discipline | `crates/manifold-app/src/content_export.rs` | Exists. Reuse the production frame pipeline and final completion checks; details in the inventory. |
-| Numerical GPU proof infrastructure | `crates/manifold-renderer/tests/gpu_proofs/rt_instancing.rs`, `rt_emissive_light_table.rs`, `scene_modifier_legacy.rs` | Exists. Extend production helpers; do not use beauty-image similarity as the ray-hit oracle. |
+| Numerical GPU proof infrastructure | `crates/manifold-nodes-scene/tests/gpu_proofs/rt_instancing.rs`, `rt_emissive_light_table.rs`, `scene_modifier_legacy.rs` | Exists. Extend production helpers; do not use beauty-image similarity as the ray-hit oracle. |
 | Admission accounts current + candidate memory | `scene_modifier_expand/buffer_budget.rs:310`; `manifold-gpu/src/lib.rs:26` | Exists. Include acceleration and emissive scratch in the same aggregate policy. |
 
 Binding constraints: content-thread hot path, GPU command order, asynchronous source readiness, shared buffer lifetime, and memory at scene scale. No new thread, channel, lock, persistent project field, or UI switch is required. Beats remain authoritative; this work does not change frame-time evaluation.

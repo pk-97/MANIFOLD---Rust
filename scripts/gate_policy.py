@@ -3,8 +3,17 @@
 from pathlib import Path
 import re
 
+def is_inert_plan_path(path):
+    """Committed crate-move plans are replay data, never live build inputs."""
+    root = ".claude/orchestration/crate-split"
+    return path == root or path.startswith(root + "/")
+
+
 SHARED_ASSETS = ['crates/manifold-foundation/assets/fonts']
 GPU_DEFAULT_CPU_ONLY = {
+    "manifold-nodes-scene": "Device proofs require gpu-proofs; ungated imported-graph validation lives in the catalog",
+    "manifold-compositor": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
+    "manifold-nodes-image": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     'manifold-ui-paint': 'GPU test modules require gpu-proofs; default tests do not open devices',
     'manifold-editing': 'GPU graph construction is gated by gpu-proofs',
     'manifold-spectral': 'spectrogram device tests require gpu-proofs',
@@ -12,7 +21,7 @@ GPU_DEFAULT_CPU_ONLY = {
 NEXTTEST_GPU_FILTER = '''
     package(manifold-gpu)
   | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
-  | (binary_id(manifold-renderer) & test(/^node_graph::(gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
+  | (binary_id(manifold-renderer) & test(/^node_graph::(catalog_tests::gltf_import::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
   | (binary_id(manifold-node-engine) & test(/^(exec::execution::tests::aliased_output_assertion_fires_on_silent_primitive|load::graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan))$/))
   | binary_id(manifold-renderer::ableton_picker_scroll_proof)
   | binary_id(manifold-renderer::dropdown_clip_proof)
@@ -27,7 +36,9 @@ NEXTTEST_GPU_FILTER = '''
 GPU_BACKEND_ROOT = 'crates/manifold-gpu/'
 OTHER_SHADER_ROOTS = ('crates/manifold-led/', 'crates/manifold-recording/', 'crates/manifold-spectral/')
 CATALOG_PACKAGE = 'manifold-renderer'
-CATALOG_PATHS = ('crates/manifold-renderer/src/node_graph/primitives/',
+CATALOG_PATHS = ('crates/manifold-nodes-scene/src/node_graph/primitives/',
+                 'crates/manifold-nodes-image/src/node_graph/primitives/',
+                 'crates/manifold-renderer/src/node_graph/primitives/',
                  'crates/manifold-node-engine/src/primitives/',
                  'crates/manifold-node-engine/src/water/primitives/',
                  'crates/manifold-renderer/src/node_graph/catalog_gen.rs',
@@ -160,17 +171,17 @@ NARROW_ROWS = [
     ((ENGINE_SRC + "water/primitives/particle_identity",
       ENGINE_SRC + "water/primitives/particle_publication",
       RENDERER_SRC + "node_graph/primitives/particle_frame_blend_tests",
-      RENDERER_SRC + "node_graph/primitives/interpolate_particle_frames",
+      "crates/manifold-nodes-image/src/node_graph/primitives/interpolate_particle_frames",
       ENGINE_SRC + "water/primitives/push_out_of_solid",
-      RENDERER_SRC + "node_graph/primitives/mix_arrays",
+      "crates/manifold-nodes-image/src/node_graph/primitives/mix_arrays",
       ENGINE_SRC + "water/primitives/liquid_frame",
       ENGINE_SRC + "water/liquid/frame_ring",
       ENGINE_SRC + "water/liquid/frame_history",
       ENGINE_SRC + "water/primitives/shaders/particle_identity",
       ENGINE_SRC + "water/primitives/shaders/particle_publication",
-      RENDERER_SRC + "node_graph/primitives/shaders/interpolate_particle_frames",
+      "crates/manifold-nodes-image/src/node_graph/primitives/shaders/interpolate_particle_frames",
       ENGINE_SRC + "water/primitives/shaders/push_out_of_solid",
-      RENDERER_SRC + "node_graph/primitives/shaders/mix_arrays",
+      "crates/manifold-nodes-image/src/node_graph/primitives/shaders/mix_arrays",
       ENGINE_SRC + "water/primitives/shaders/liquid_frame_faces.wgsl"),
      (["particle_publication_gpu_tests::", "particle_frame_blend_tests::gpu_tests::",
        "interpolate_particle_frames::gpu_tests::", "push_out_of_solid::gpu_tests::",
@@ -205,6 +216,19 @@ NARROW_ROWS = [
 
 # Explicit rows: (path substrings, (filters, reporter-only skips)).
 EXPLICIT_ROWS = [
+    # The readback helper now serves scene and retained catalog proofs.
+    (("crates/manifold-nodes-scene/src/testkit/gpu_harness.rs",),
+     (["rt_t2b_temporal_wiring::", "rt_bug318_import_toggle::",
+       "rt_bugmajv_kernel_toggle::"], [])),
+
+    # Imported graph tails need image registrations, so these proofs stay catalog-side.
+    (("crates/manifold-nodes-scene/src/node_graph/gltf_import/",
+      "crates/manifold-nodes-scene/src/node_graph/gltf_load.rs",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/render_scene"),
+     (["render_scene_material_upgrade::", "rt_bug318_import_toggle::",
+       "rt_bug326_fix_gate::", "rt_bugmajv_kernel_toggle::",
+       "rt_normal_tangent_mirror::", "rt_r3_heldout_gltf::"], [])),
+
     # Blob bounds controls the sparse reach and dense particle field together.
     ((RENDERER_SRC + "node_graph/primitives/blob_bounds.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/blob_bounds.wgsl"),
@@ -217,8 +241,8 @@ EXPLICIT_ROWS = [
       ENGINE_SRC + "water/primitives/shaders/redistance_lattice"),
      (["fluid_fill_pits"], [])),
     (("crates/manifold-gpu/src/metal/raytrace.rs",
-      RENDERER_SRC + "node_graph/primitives/render_scene.rs",
-      RENDERER_SRC + "node_graph/primitives/shaders/render_scene.wgsl",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/shaders/render_scene.wgsl",
       PROOFS_DIR + "rt_"),
      (["rt_"], [])),
     ((ENGINE_SRC + "freeze/",), (["freeze::"], [])),
@@ -229,10 +253,10 @@ EXPLICIT_ROWS = [
       ENGINE_SRC + "exec/execution/substep_region.rs",
       ENGINE_SRC + "water/primitives/matter_",
       RENDERER_SRC + "node_graph/primitives/grid_to_matter",
-      RENDERER_SRC + "node_graph/primitives/zero_array",
+      "crates/manifold-nodes-image/src/node_graph/primitives/zero_array",
       ENGINE_SRC + "water/primitives/shaders/matter_",
       ENGINE_SRC + "water/primitives/shaders/grid_to_matter",
-      RENDERER_SRC + "node_graph/primitives/shaders/zero_array",
+      "crates/manifold-nodes-image/src/node_graph/primitives/shaders/zero_array",
       PROOFS_DIR + "matter_",
       PROOFS_DIR + "substeps"),
      (["matter_", "substeps_"], REPORTER_SKIPS)),
@@ -269,8 +293,8 @@ EXPLICIT_ROWS = [
     ((ENGINE_SRC + "water/primitives/count_surface_edges",
       ENGINE_SRC + "water/primitives/volume_surface_mesh",
       ENGINE_SRC + "water/primitives/relax_surface_mesh",
-      RENDERER_SRC + "node_graph/primitives/smooth_surface_mesh",
-      RENDERER_SRC + "node_graph/primitives/surface_mesh_normals",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/smooth_surface_mesh",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/surface_mesh_normals",
       ENGINE_SRC + "water/primitives/surface_mesh_parity",
       RENDERER_SRC + "node_graph/primitives/surface_mesh_freeze_tests",
       ENGINE_SRC + "water/primitives/shaders/count_surface_edges",
@@ -278,7 +302,7 @@ EXPLICIT_ROWS = [
       ENGINE_SRC + "water/primitives/shaders/volume_surface_mesh",
       ENGINE_SRC + "water/primitives/shaders/relax_surface_mesh",
       ENGINE_SRC + "water/primitives/shaders/surface_mesh_",
-      RENDERER_SRC + "node_graph/primitives/shaders/surface_mesh_",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/shaders/surface_mesh_",
       PROOFS_DIR + "liquid_indexed.rs"),
      (["count_surface_edges::gpu_tests::", "volume_surface_mesh::gpu_tests::", "surface_mesh_normals::gpu_tests::", "surface_mesh_freeze_tests::gpu_tests::", "fluid_indexed_", "liquid_indexed::"], [])),
     # Graph runtime.
@@ -304,15 +328,15 @@ BROAD_PATHS = (
     RENDERER_SRC + "node_graph/primitives/mod.rs",
     RENDERER_SRC + "node_graph/mod.rs",
     RENDERER_SRC + "lib.rs",
-    PROOFS_DIR + "harness.rs",
+    "crates/manifold-nodes-scene/src/testkit/gpu_harness.rs",
     PROOFS_DIR + "main.rs",
 )
 
 GLTF_PATHS = (
     "crates/manifold-renderer/tests/glb_conformance.rs",
     "tests/fixtures/gltf/",
-    RENDERER_SRC + "node_graph/gltf_",
-    RENDERER_SRC + "node_graph/primitives/gltf_",
+    "crates/manifold-nodes-scene/src/node_graph/gltf_",
+    "crates/manifold-nodes-scene/src/node_graph/primitives/gltf_",
 )
 
 DOC_SUFFIXES = (".md", ".txt")
@@ -322,6 +346,10 @@ DOC_SUFFIXES = (".md", ".txt")
 # in preset_runtime's tests, so its row names both modules.
 PRESET_RUNTIME_DIR = ENGINE_SRC + "runtime/"
 LIB_PROOF_ROWS = {
+    # Retained legacy shader; the owning primitive holds its proof coverage.
+    "crates/manifold-nodes-image/src/node_graph/primitives/shaders/heightfield_shadow.wgsl": [
+        "node_graph::primitives::heightfield_shadow::",
+    ],
     ENGINE_SRC + "runtime/layer_skin.rs": ["runtime::layer_skin::", "runtime::layer_skin_tests::"],
     # The whitewater step's proofs (across frames, the pool passes, the
     # handoff, the golden fingerprints that prove its output unchanged) live
@@ -393,6 +421,8 @@ def godfile_paths():
 INTEGRATION_ROWS = {
     "Cargo.toml": ("manifold-app", ["crate_layering"]),
     "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
+    "crates/manifold-nodes-image/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
+    "crates/manifold-nodes-scene/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
     "crates/manifold-node-engine/src/water/fluid.rs": ("manifold-renderer", ["gpu_proofs"]),
 }
 
@@ -427,3 +457,54 @@ PREFIX_ROWS = [
     # wgsl_validation parses every shader in the crate.
     ("crates/manifold-renderer/src/", ".wgsl", "manifold-renderer", [], ["wgsl_validation"]),
 ]
+
+# manifold-nodes-image owns these source trees; ABI and WGSL contracts stay catalog-side.
+PREFIX_ROWS += [
+    ('crates/manifold-nodes-image/src/node_graph/primitives/', '.rs', "manifold-renderer", [], ['uniform_layout_proof', 'uniform_layout_extended']),
+    ('crates/manifold-nodes-image/src/', '.wgsl', "manifold-renderer", [], ['uniform_layout_extended', 'wgsl_validation']),
+]
+
+# manifold-nodes-scene owns these source trees; ABI and WGSL contracts stay catalog-side.
+PREFIX_ROWS += [
+    ('crates/manifold-nodes-scene/src/node_graph/primitives/', '.rs', "manifold-renderer", [], ['uniform_layout_proof', 'uniform_layout_extended']),
+    ('crates/manifold-nodes-scene/src/', '.wgsl', "manifold-renderer", [], ['uniform_layout_extended', 'wgsl_validation']),
+]
+
+PREFIX_ROWS += [('crates/manifold-compositor/src/', ".wgsl", "manifold-renderer", [], ["wgsl_validation"])]
+
+# P2 extractions retain catalog ownership when their production source changes.
+# (source prefix, catalog module, has default-config CPU tests).
+CATALOG_TEST_ROWS = [
+    ("crates/manifold-compositor/src/layer_compositor", "layer_compositor", True),
+    ("crates/manifold-compositor/src/preset_thumbnail", "preset_thumbnail", True),
+    ("crates/manifold-compositor/src/generator_renderer", "generator_renderer_tests", False),
+    ("crates/manifold-compositor/src/generator_renderer", "generator_renderer_warmup_tests", False),
+    ("crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade", "loop_upgrade", True),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_import", True),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_card_precedence", True),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_upgrade", True),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/", "gltf_upgrade_project", True),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_load", "gltf_import", True),
+    ("crates/manifold-nodes-scene/src/node_graph/relight", "relight", True),
+    ("crates/manifold-nodes-scene/src/node_graph/scene_vm", "scene_vm", True),
+    ("crates/manifold-nodes-scene/src/node_graph/scene_exposure", "scene_exposure", True),
+    ("crates/manifold-nodes-scene/src/node_graph/scene_exposure", "fluid_objects", True),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/gltf_animation_source", "gltf_animation_source", True),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/surface_mesh_normals", "surface_mesh_normals", True),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/copy_positions", "copy_positions", False),
+    ("crates/manifold-nodes-image/src/node_graph/primitives/wave_field_3d", "copy_positions", False),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/nested_cubes_geometry", "nested_cubes_geometry", False),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/lerp_instance_fields", "image_fused", True),
+    ("crates/manifold-nodes-image/src/node_graph/primitives/neighbor_smooth", "image_fused", True),
+    ("crates/manifold-nodes-image/src/node_graph/primitives/bokeh_gather", "bokeh_gather", False),
+    ("crates/manifold-nodes-image/src/node_graph/primitives/seed_particles_from_texture", "seed_particles_from_texture", True),
+    ("crates/manifold-node-engine/src/water/primitives/blob_bounds", "blob_bounds", True),
+    ("crates/manifold-node-engine/src/water/primitives/face_grid_", "face_grid_scene_tests", False),
+    ("crates/manifold-nodes-image/src/node_graph/primitives/interpolate_particle_frames", "particle_frame_blend_tests", True),
+    ("crates/manifold-nodes-scene/src/node_graph/primitives/particles_to_copies", "particle_frame_blend_tests", True),
+    ("crates/manifold-node-engine/src/water/primitives/push_out_of_solid", "particle_frame_blend_tests", True),
+    ("crates/manifold-node-engine/src/water/primitives/particle_publication", "particle_publication_gpu_tests", False),
+]
+PREFIX_ROWS += [(prefix, ".rs", CATALOG_PACKAGE,
+                 ["node_graph::catalog_tests::" + module], [])
+                for prefix, module, cpu in CATALOG_TEST_ROWS if cpu]

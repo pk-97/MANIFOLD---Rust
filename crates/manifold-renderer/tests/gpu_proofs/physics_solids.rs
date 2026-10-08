@@ -33,12 +33,10 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
     use manifold_editing::command::Command;
     use manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand;
     use manifold_node_engine::persistence::PrimitiveRegistry;
-    use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
-    use manifold_renderer::node_graph::scene_modifier_authoring::{
-        prepare_new_scene_modifier, scene_modifier_objects,
-    };
+    use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+    use manifold_nodes_scene::node_graph::scene_modifier_authoring::{prepare_new_scene_modifier, scene_modifier_objects};
     use manifold_node_engine::load::expand::expand_scene_modifiers;
-    use manifold_renderer::node_graph::scene_vm::SceneVm;
+    use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
 
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
@@ -68,11 +66,11 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
         target.clone(),
         render.id,
         0,
-        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
+        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
         imported.clone(),
     )
     .with_world_metadata(
-        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"),
+        manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"),
     );
     enable.execute(&mut project);
     assert!(
@@ -335,7 +333,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
 
 #[test]
 fn imported_flower_empty_scene_clears_and_restores() {
-    use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+    use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
@@ -432,7 +430,7 @@ fn imported_flower_empty_scene_clears_and_restores() {
 #[test]
 fn imported_flower_submesh_controls_preserve_siblings_and_parent_visibility() {
     use manifold_core::effect_graph_def::BindingTarget;
-    use manifold_renderer::node_graph::{gltf_import::assemble_import_graph, scene_vm::{SceneVm, SceneObjectVm}};
+    use manifold_nodes_scene::node_graph::{gltf_import::assemble_import_graph, scene_vm::SceneVm, scene_vm::SceneObjectVm};
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
     let (imported, _) = assemble_import_graph(&fixture).unwrap();
@@ -488,8 +486,8 @@ fn imported_flower_physics_off_renders_authored_transform() {
     use manifold_editing::commands::graph::{
         EnableSceneObjectPhysicsCommand, SetGraphNodeParamCommand,
     };
-    use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
-    use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
+    use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+    use manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type;
 
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");

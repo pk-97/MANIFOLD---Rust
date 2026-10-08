@@ -6,7 +6,7 @@ use ahash::AHashMap;
     use manifold_node_engine::exec::execution_plan::compile;
 
     use manifold_node_engine::ports::PortType;
-    use {crate::node_graph::primitives::ArrayFeedback, crate::node_graph::primitives::ContainerBounds3D, crate::node_graph::primitives::GenerateCubeMesh, crate::node_graph::primitives::ResolveAccumulator, crate::node_graph::primitives::ScatterParticles, crate::node_graph::primitives::SceneObjectNode, crate::node_graph::primitives::SeedParticles, manifold_node_engine::primitives::value::Value, crate::node_graph::primitives::WaveShearMesh};
+    use {manifold_nodes_image::node_graph::primitives::array_feedback::ArrayFeedback, manifold_nodes_image::node_graph::primitives::container_bounds_3d::ContainerBounds3D, manifold_nodes_scene::node_graph::primitives::generate_cube_mesh::GenerateCubeMesh, manifold_nodes_image::node_graph::primitives::resolve_accumulator::ResolveAccumulator, manifold_nodes_image::node_graph::primitives::scatter_particles::ScatterParticles, manifold_nodes_scene::node_graph::primitives::scene_object::SceneObjectNode, manifold_nodes_image::node_graph::primitives::seed_particles::SeedParticles, manifold_node_engine::primitives::value::Value, manifold_nodes_scene::node_graph::primitives::wave_shear_mesh::WaveShearMesh};
     use manifold_node_engine::mesh::MeshVertex;
 
 
@@ -295,7 +295,7 @@ use ahash::AHashMap;
         let mut graph = Graph::new();
         let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
         let source = graph.add_node(registry.construct("system.mesh_input").unwrap());
-        let mask = graph.add_node(Box::new(crate::node_graph::primitives::MeshSpatialMask::new()));
+        let mask = graph.add_node(Box::new(manifold_nodes_scene::node_graph::primitives::mesh_spatial_mask::MeshSpatialMask::new()));
         graph.connect((source, "vertices"), (mask, "in")).unwrap();
         let output = graph.add_node(registry.construct("system.mesh_output").unwrap());
         graph.connect((source, "vertices"), (output, "vertices")).unwrap();

@@ -37,7 +37,7 @@ The per-frame value push (`sync_card_values`, same file) feeds the full manifest
 
 ## How keyed the two surfaces stay in sync
 
-`RENDER_SCENE_STAMPED_PARAMS` (`crates/manifold-renderer/src/node_graph/scene_exposure.rs`) defines which `node.render_scene` params get stamped. `card_visible_for` (`crates/manifold-core/src/scene_exposure.rs`) defines which stamped params appear on the curated card.
+`RENDER_SCENE_STAMPED_PARAMS` (`crates/manifold-nodes-scene/src/node_graph/scene_exposure.rs`) defines which `node.render_scene` params get stamped. `card_visible_for` (`crates/manifold-core/src/scene_exposure.rs`) defines which stamped params appear on the curated card.
 
 These are two separate tables in two crates. There is no mechanical coupling between them — the stamp writes `card_visible` by calling `card_visible_for`, so a param in the stamp list but NOT in `card_visible_for` gets stamped with `card_visible: false`.
 
@@ -45,7 +45,7 @@ These are two separate tables in two crates. There is no mechanical coupling bet
 
 For a scene-vocabulary param on an existing type:
 
-1. Add the param name to the type's arm in `card_visible_for` (`crates/manifold-core/src/scene_exposure.rs`). If it is on `node.render_scene`, also add it to `RENDER_SCENE_STAMPED_PARAMS` (`crates/manifold-renderer/src/node_graph/scene_exposure.rs`).
+1. Add the param name to the type's arm in `card_visible_for` (`crates/manifold-core/src/scene_exposure.rs`). If it is on `node.render_scene`, also add it to `RENDER_SCENE_STAMPED_PARAMS` (`crates/manifold-nodes-scene/src/node_graph/scene_exposure.rs`).
 
 2. If you skip step 1 (card_visible_for), the param will appear in the Scene Setup panel ONLY — it will be invisible on the inspector card. The Scene Setup panel uses `SurfaceVisibility::All` and filters by section, so it sees every stamped param regardless of `card_visible`.
 

@@ -28,7 +28,7 @@ pub(crate) fn library_baseline(
     let Some(recipe) = manifold_renderer::node_graph::bundled_preset_def(&metadata.id) else {
         return Ok(None);
     };
-    manifold_renderer::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(
+    manifold_nodes_scene::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(
         owner, recipe,
     )
     .map(Some)
@@ -129,7 +129,7 @@ mod tests {
         ] {
             let recipe =
                 manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new(id)).unwrap();
-            let local = manifold_renderer::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(&owner, recipe).unwrap();
+            let local = manifold_nodes_scene::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(&owner, recipe).unwrap();
             assert!(!has_graph_mod(&owner, &local), "fresh {id}");
             let mut edited = local.clone();
             edited.nodes[0].title = Some("Edited local graph".into());

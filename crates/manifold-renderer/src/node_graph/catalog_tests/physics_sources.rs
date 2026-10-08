@@ -43,7 +43,7 @@ fn prepared_uniform_force() -> (
     host.wires
         .push(wire(next_id + 1, "object", scene_id, "object_5"));
     let recipe: EffectGraphDef = serde_json::from_str(UNIFORM_FORCE).expect("force fixture");
-    let instance = crate::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+    let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
         &host,
         &recipe,
         NodeId::new("route_uniform"),

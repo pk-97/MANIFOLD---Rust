@@ -54,7 +54,7 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "volume_optics.rs",
+        source: "render_scene/volume_optics.rs",
         rust_struct: "Uniforms",
         shader: "shaders/volume_optics.wgsl",
         shader_struct: "Uniforms",
@@ -271,14 +271,14 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "live_draw_args.rs",
+        source: "render_scene/live_draw_args.rs",
         rust_struct: "LiveArgs",
         shader: "shaders/live_draw_args.wgsl",
         shader_struct: "LiveArgs",
         aliases: &[],
     },
     CustomAbiCase {
-        source: "live_draw_args.rs",
+        source: "render_scene/live_draw_args.rs",
         rust_struct: "TrimArgs",
         shader: "shaders/live_instances.wgsl",
         shader_struct: "TrimArgs",

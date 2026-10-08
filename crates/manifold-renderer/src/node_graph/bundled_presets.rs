@@ -31,7 +31,7 @@ use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
 
-use crate::node_graph::scene_exposure::migrate_scene_exposures;
+use manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures;
 use manifold_node_engine::load::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG, SCENE_MODIFIER_CATALOG, catalog_generation};
 
 inventory::submit! {
@@ -286,7 +286,7 @@ mod tests {
         for kind in [PresetKind::Generator, PresetKind::SceneModifier] {
             for type_id in bundled_preset_type_ids(kind) {
                 let def = bundled_preset_def(&type_id).expect("registered preset has a parsed def");
-                if kind == PresetKind::Generator && crate::node_graph::scene_vm::SceneVm::from_def(def).is_none() {
+                if kind == PresetKind::Generator && manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).is_none() {
                     continue;
                 }
                 scenes += 1;

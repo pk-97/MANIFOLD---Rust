@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod testkit_visibility;
+
 /// Build-time identity of core tempo sources used by recorded physics results.
 pub const SOURCE_IDENTITY: &str = env!("MANIFOLD_CORE_SOURCE_IDENTITY");
 

@@ -5,7 +5,7 @@
 use manifold_core::types::ClockAuthority;
 use manifold_core::{Beats, LayerId, NodeId, Seconds};
 use manifold_playback::transport_controller::TransportController;
-use manifold_renderer::generator_renderer::GeneratorRenderer;
+use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_playback::renderer::ClipRenderer;
 
 use crate::content_command::ContentCommand;
@@ -1933,7 +1933,7 @@ impl ContentThread {
                     let (renderers, _) = self.engine.split_renderer_project();
                     for renderer in renderers.iter_mut() {
                         if let Some(gen_renderer) = renderer.as_any_mut()
-                            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+                            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>()
                         {
                             gen_renderer.update_active_types_for_layer(&layer_id, new_type);
                             break;
@@ -1962,7 +1962,7 @@ impl ContentThread {
                         {
                             for renderer in renderers.iter_mut() {
                                 if let Some(gen_renderer) = renderer.as_any_mut()
-                                    .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+                                    .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>()
                                 {
                                     let _ = gen_renderer.prewarm_layer(
                                         layer,

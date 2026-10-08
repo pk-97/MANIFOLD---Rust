@@ -14,7 +14,7 @@
 // bindings, not here. Silence the unused-unsafe lint crate-wide.
 #![allow(unused_unsafe)]
 
-#[cfg(feature = "gpu-proofs")]
+#[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 
 pub mod queue;

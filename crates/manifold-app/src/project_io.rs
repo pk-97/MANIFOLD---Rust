@@ -485,7 +485,7 @@ fn append_legacy_math_view(
     // The carrier's calibrated frames carry the exact sample correspondence
     // the project's visuals were authored with; a fresh capture would also
     // reject non-glTF sources.
-    let created = manifold_renderer::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(
+    let created = manifold_nodes_scene::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(
         graph,
         recipe,
     )
@@ -514,7 +514,7 @@ fn append_legacy_math_view(
 /// fixtures. Unsupported legacy ownership remains intact with a visible notice.
 pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String> {
     let material_report =
-        manifold_renderer::node_graph::gltf_import::upgrade_project_materials(project);
+        manifold_nodes_scene::node_graph::gltf_import::upgrade_project_materials(project);
     let mut notices = material_report.notices;
     if material_report.changed_graphs > 0 {
         // Upgrade metadata before the existing scene migrations refresh their
@@ -530,8 +530,8 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         {
             let graph = host.graph.as_mut().expect("graph checked above");
             manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
-            manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(graph);
-            let report = manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
+            manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(graph);
+            let report = manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
             notices.extend(report.diagnostics);
         }
         // Borrows host.graph internally; the legacy-migration borrow above
@@ -741,7 +741,7 @@ impl ProjectIOService {
                 // the source GLB (JSON chunk only, cheap for photoscans), run
                 // the migration on the def, then refresh the overlay + manifests
                 // so layer instances pick up the repaired ranges.
-                let backfilled = manifold_renderer::node_graph::gltf_import::
+                let backfilled = manifold_nodes_scene::node_graph::gltf_import::
                     repair_project_embedded_scene_bounds(&mut project);
                 if backfilled > 0 {
                     install_project_preset_overlay(&project);

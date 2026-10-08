@@ -20,13 +20,13 @@ anchors carry re-derivation commands.
 
 | Piece | Where | State |
 |---|---|---|
-| Shadow maps re-render fully every frame, no dirty check | `render_scene.rs` ~2647–2708 (`shadow_caster_draws` rebuild + per-caster `draw_instanced_depth_only_batch`, encoder label `"node.render_scene shadow"`) — re-derive: `rg -n '"node.render_scene shadow"' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` | **waste (~4% measured — D1b; the headline moved to IBL)** |
+| Shadow maps re-render fully every frame, no dirty check | `render_scene.rs` ~2647–2708 (`shadow_caster_draws` rebuild + per-caster `draw_instanced_depth_only_batch`, encoder label `"node.render_scene shadow"`) — re-derive: `rg -n '"node.render_scene shadow"' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs` | **waste (~4% measured — D1b; the headline moved to IBL)** |
 | `shadow_view_proj()` is a pure function of the light alone | `node_graph/light.rs:333` | exists — static light ⇒ bit-identical map every frame |
 | Importer wires shadows on, 4096² | `node_graph/gltf_import.rs:765` (`cast_shadows`=1.0), `:778` (`shadow_resolution`=4096.0) | exists |
 | IBL re-convolves every frame envmap is wired | `run_ibl_convolution`, `render_scene.rs:1428`; its own doc comment (~1410–1427) states `bake_equirect_envmap.run()` rewrites its output in place every frame, so an identity-based skip would go stale — the exact hazard D5/D6 below resolve with a generation signal instead | **the headline waste (~41% measured — D1b), with a documented staleness trap** |
 | Build-once precedent | `brdf_lut_built` (`render_scene.rs` ~537, ~1410) — LUT built exactly once per device | exists — the pattern to generalize |
 | Identity-gating precedent | `gltf_texture_source.rs` `last_key` (~105, ~186) + `last_mip_identity` (~128, ~281): decode gated on param key, mip regen gated on output-texture identity — but the level-0 blit dispatch (~308–330) still runs every frame | exists, partial |
-| Static sources re-copy every frame | `gltf_mesh_source.rs` (module doc: staging "re-fills the output buffer every frame via a cheap blit"), `gltf_skinned_mesh_source.rs` ~199–219 (three `copy_buffer_to_buffer` per frame), `gltf_texture_source.rs` blit above; sweep: `rg -n 'copy_buffer_to_buffer|dispatch_compute' crates/manifold-renderer/src/node_graph/primitives/gltf_*_source.rs` | **waste (R1)** |
+| Static sources re-copy every frame | `gltf_mesh_source.rs` (module doc: staging "re-fills the output buffer every frame via a cheap blit"), `gltf_skinned_mesh_source.rs` ~199–219 (three `copy_buffer_to_buffer` per frame), `gltf_texture_source.rs` blit above; sweep: `rg -n 'copy_buffer_to_buffer|dispatch_compute' crates/manifold-nodes-scene/src/node_graph/primitives/gltf_*_source.rs` | **waste (R1)** |
 | Non-indexed geometry | `flatten_primitive`, `gltf_load.rs:462` — indices expanded to flat triangle lists at import; measured 3.84× vertex amplification on the AMG (236,428 unique verts vs 907,476 index entries), paid in main pass AND every shadow pass | exists (R4 — DEFERRED, see D2) |
 | CPU hot path | `render_scene.rs` `evaluate()` ~2264+ — ~22 `format!` allocations per object per frame (`rg -c 'format!' …/render_scene.rs` → 63 sites; the rebuild-time ones at ~705–743 are fine, the evaluate-time ones are not) + `bindings.rs:48–53` linear `iter().find` port scan ⇒ O(objects × wired_ports) ≈ O(objects²) | **waste (R5)** |
 | Executor slot mechanics | `execution.rs:66` `Executor` (typed write scratches lines 70–85); `Slot(pub u32)` `bindings.rs:31`; no per-slot generation anywhere: `rg -n 'generation' crates/manifold-node-engine/src/exec/execution.rs` → zero hits | generation signal **missing** (R2) |
@@ -268,7 +268,7 @@ Entry: P0 landed (its share numbers are this phase's before-anchor).
 Read-back: this doc D5 + I3; `gltf_texture_source.rs` whole file (the `last_key`/`last_mip_identity`
 pattern IS the template — ~105/128/186/281 and the blit at ~308–330); `gltf_mesh_source.rs` and
 `gltf_skinned_mesh_source.rs` whole files; `docs/EFFECT_CHAIN_LIFECYCLE.md` (state-cache eviction);
-sweep for further per-frame copies: `rg -n 'copy_buffer_to_buffer|dispatch_compute' crates/manifold-renderer/src/node_graph/primitives/gltf_*_source.rs`.
+sweep for further per-frame copies: `rg -n 'copy_buffer_to_buffer|dispatch_compute' crates/manifold-nodes-scene/src/node_graph/primitives/gltf_*_source.rs`.
 Deliverables: (1) `gltf_texture_source`: skip the level-0 blit dispatch AND mip regen when
 (decoded-content key unchanged AND output-texture identity unchanged) — extending the existing
 `last_mip_identity` discipline to the blit; (2) `gltf_mesh_source` + `gltf_skinned_mesh_source`
@@ -320,7 +320,7 @@ profiled runs show the `node.render_scene` row's `shadow` pass at <0.1 ms and <1
 measured ~4%); unprofiled perf-soak before/after on the AMG @4K is still run and recorded in the
 commit message as direction sanity, NOT a pass/fail threshold; negative: `rg -n 'Arc<(Mutex|RwLock)' crates/manifold-renderer/src/node_graph/`
 unchanged (I6); the cache key function provably includes the rebuild epoch
-(`rg -n 'epoch' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`).
+(`rg -n 'epoch' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs`).
 Demo: before/after unprofiled JSON + the three mutation tests green — L2. Forbidden moves:
 serving a cached map on ANY key-component mismatch (never serve a stale shadow map — I1 verbatim);
 skipping the epoch/rebuild-invalidation term; content-hashing vertex buffers (D6 rejected);
@@ -351,7 +351,7 @@ Gate — positive: gpu-proofs animated-envmap parity (the I2 test): change an en
 bit-identity across frames (I4 extension); unprofiled perf-soak before/after on the AMG @4K
 recorded, delta consistent with P0's measured IBL share — ~41% of render_scene GPU time (D1b), a
 multi-ms delta well above run noise (±30% tolerance stands); profiled sanity: `… ibl prefilter` /
-`… ibl irradiance` rows <2% on steady frames; negative: `rg -n 'go stale' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`
+`… ibl irradiance` rows <2% on steady frames; negative: `rg -n 'go stale' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs`
 → the old warning text is gone/rewritten.
 Demo: before/after JSON + the animated-envmap test green — L2. Forbidden moves: gating
 consumption before the producer stops in-place rewrites (D7's load-bearing order — within the
@@ -446,7 +446,7 @@ Gate — positive: output unchanged — the existing render_scene gpu-proofs sui
 readback bit-identity check before/after on the AMG frame 1; perf: perf-soak CPU encode wall time
 (the stats JSON reports it) on BrainStem AND the AMG, before/after in the commit message —
 BrainStem is the sensitive fixture (24 objects; if P0 measured the CPU side as material, this is
-where it shows); negative: `rg -n 'format!' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`
+where it shows); negative: `rg -n 'format!' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs`
 → remaining hits are rebuild-time or error paths only (annotate the gate output with the
 classification); `rg -n 'iter\(\)\s*\.find' crates/manifold-node-engine/src/bindings.rs`
 → the hot lookup no longer routes through it (either an indexed accessor beside it, or the scan

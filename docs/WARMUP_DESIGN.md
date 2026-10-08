@@ -324,7 +324,7 @@ driven by `ContentState.warmup`. The window is otherwise the normal load state
 
 ### P1 — Core pre-roll (one session)
 
-- **Entry state:** this doc approved; anchors re-verified (`rg -n "fn install_layer_generator" crates/manifold-renderer/src/generator_renderer.rs` → 1 hit; `rg -n "prewarm_project_chain_segments" crates/manifold-app/src/content_commands.rs` → 1 hit).
+- **Entry state:** this doc approved; anchors re-verified (`rg -n "fn install_layer_generator" crates/manifold-compositor/src/generator_renderer.rs` → 1 hit; `rg -n "prewarm_project_chain_segments" crates/manifold-app/src/content_commands.rs` → 1 hit).
 - **Read-back:** D1–D6, section 3 whole, the `acquire_clip`/`needs_create` path
   (`generator_renderer.rs:400-520`), the test render precedent
   (`bundled_generator_presets.rs:223-280`), the LoadProject handler

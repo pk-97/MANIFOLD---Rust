@@ -103,9 +103,9 @@ fn freeze_keeps_surface_stages_and_fuses_the_real_pointwise_tail() {
 #[cfg(feature = "gpu-proofs")]
 mod gpu_tests {
     use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
-    use super::super::rotate_3d::Rotate3D;
-    use super::super::smooth_surface_mesh::SmoothSurfaceMesh;
-    use super::super::surface_mesh_normals::SurfaceMeshNormals;
+    use manifold_nodes_scene::node_graph::primitives::rotate_3d::Rotate3D;
+    use manifold_nodes_scene::node_graph::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
+    use manifold_nodes_scene::node_graph::primitives::surface_mesh_normals::SurfaceMeshNormals;
     use manifold_node_engine::water::primitives::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
     use manifold_node_engine::mesh::MeshVertex;
     use manifold_node_engine::exec::effect_node::NodeInstanceId;

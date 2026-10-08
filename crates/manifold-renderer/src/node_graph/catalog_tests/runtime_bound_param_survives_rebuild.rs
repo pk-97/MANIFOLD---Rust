@@ -16,7 +16,7 @@
     };
     use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
-    use crate::node_graph::scene_exposure::metadata_for_node_type;
+    use manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type;
     use manifold_node_engine::{param_binding::BindingSource, load::graph_loader::BoundaryHandling, graph::Graph, load::graph_loader::HandleScope, exec::effect_node::NodeInstanceId, parameters::ParamValue, persistence::PrimitiveRegistry, param_binding::ResolvedBinding, param_binding::ResolvedTarget, load::graph_loader::instantiate_def};
 
     /// A single `node.bake_environment` node, its `intensity` param stamped

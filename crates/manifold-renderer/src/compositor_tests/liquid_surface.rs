@@ -21,7 +21,7 @@ fn fluid_clamp_scheduled_boundary_renders_like_unfrozen() {
     );
     let arc = device.arc();
     let render = |def: &EffectGraphDef| {
-        crate::preset_thumbnail::render_preset_thumbnail(&arc, PresetKind::Generator, def, 256, 144, false)
+        manifold_compositor::preset_thumbnail::render_preset_thumbnail(&arc, PresetKind::Generator, def, 256, 144, false)
             .expect("Still Pool renders")
     };
     let unfused = render(&canonical);

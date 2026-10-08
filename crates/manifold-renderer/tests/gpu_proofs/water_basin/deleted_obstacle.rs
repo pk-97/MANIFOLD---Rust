@@ -105,7 +105,7 @@ fn deleted_gpu_flip_dam_break_obstacle_leaves_the_solver() {
         "../../../assets/generator-presets/WaterDamBreakGpuFlip.json"
     ))
     .unwrap();
-    manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
+    manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
     assert_eq!(body_count_after_frames(&def, 4), 1.0, "the obstacle is a solver body");
     let after = remove_obstacle(&def);
     assert_eq!(

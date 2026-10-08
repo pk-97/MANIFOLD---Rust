@@ -202,7 +202,31 @@ class AcceptanceRunnerTests(unittest.TestCase):
         self.assertEqual(calls[0].count("--filter"), 3)
         self.assertEqual(metrics["passed"], 3)
         self.assertEqual(len(tests), 3)
-        self.assertEqual(len(commands), 2)  # listing + one batched gate
+        self.assertEqual(len(commands), 3)  # two owning inventories + one batched gate
+
+    def test_gpu_groups_refuse_zero_test_success(self):
+        for output in ("", "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n"):
+            with self.subTest(output=output), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                def run(cmd, cwd, log_path):
+                    log_path.write_text(output)
+                    return 0, 0.0
+                with patch.object(runner, "_list_gpu_tests", return_value=({"rt_dynamic_fusion::proof"}, 0, {})), \
+                     patch.object(runner, "run_streamed", side_effect=run):
+                    rc, tests, metrics, _ = runner._mode_gpu_groups(root, root / "Cargo.toml", root, ["rt_dynamic_fusion"])
+                self.assertEqual(rc, 1)
+                self.assertEqual(metrics["blocked"], 1)
+                self.assertEqual(tests[0]["status"], "blocked")
+
+    def test_gpu_inventory_lists_each_owner(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch.object(runner, "list_tests", return_value=({"proof"}, 0, 0.0)) as listing:
+                for package in ("manifold-renderer", "manifold-nodes-scene"):
+                    runner._list_gpu_tests(root, root, package=package)
+                    self.assertIn(package, listing.call_args.args[0])
+                runner._list_gpu_tests(root, root, release=True, feature="rt-perf-proofs")
+                self.assertIn("manifold-nodes-scene", listing.call_args.args[0])
 
     def test_missing_group_blocks_but_present_groups_still_batch(self):
         groups = ["rt_dynamic_oracle", "rt_dynamic_fusion"]

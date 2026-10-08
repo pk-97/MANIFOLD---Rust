@@ -35,7 +35,7 @@ fn scene_force_add_without_physics_keeps_controls_and_roundtrips_undo() {
     let saved = serde_json::to_vec(&added).unwrap();
     let loaded: EffectGraphDef = serde_json::from_slice(&saved).unwrap();
     assert_eq!(loaded, added);
-    manifold_renderer::node_graph::scene_modifier_authoring::validate_new_scene_modifier(
+    manifold_nodes_scene::node_graph::scene_modifier_authoring::validate_new_scene_modifier(
         &loaded,
         &loaded.scene_modifiers[0],
     )
@@ -54,7 +54,7 @@ fn scene_force_target_changes_and_duplicate_keep_independent_bindings() {
     let second = apply_stock(&mut editing, &mut project, &layer, "VortexForce");
     let graph = host_graph(&project, &layer);
     let scene = graph.scene_modifiers[0].scene.clone();
-    let target = manifold_renderer::node_graph::scene_modifier_authoring::scene_modifier_objects(
+    let target = manifold_nodes_scene::node_graph::scene_modifier_authoring::scene_modifier_objects(
         graph, &scene,
     )
     .unwrap()

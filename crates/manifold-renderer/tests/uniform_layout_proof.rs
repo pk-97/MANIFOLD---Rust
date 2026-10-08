@@ -14,9 +14,13 @@ use manifold_renderer as _;
 use std::path::{Path, PathBuf};
 
 use manifold_node_engine::freeze::codegen::standalone_for_node;
-use manifold_node_engine::{exec::effect_node::EffectNode, parameters::ParamType, ports::PortType, persistence::PrimitiveRegistry};
+use manifold_node_engine::{
+    exec::effect_node::EffectNode, parameters::ParamType, persistence::PrimitiveRegistry,
+    ports::PortType,
+};
 
 mod support {
+    pub mod rust_items;
     pub mod source_roots;
 }
 
@@ -116,25 +120,10 @@ fn expected_fields(node: &dyn EffectNode) -> Option<Vec<Field>> {
 struct HandStruct {
     name: String,
     fields: Vec<Field>,
-    line: usize,
     repr_c: bool,
 }
 
-/// Parse one source file for its top-level (brace-depth-0) structs whose field
-/// list contains `dispatch_count: u32`, and for every top-level
-/// `type_id: "..."` literal. Nested structs (inside fn bodies / tests) are
-/// ignored — the uniform mirror is always a module-level item.
-fn strip_visibility(text: &str) -> &str {
-    if let Some(rest) = text.strip_prefix("pub ") {
-        rest
-    } else if text.starts_with("pub(") {
-        text.split_once(')')
-            .map_or(text, |(_, rest)| rest.trim_start())
-    } else {
-        text
-    }
-}
-
+/// Read module-level production structs, including testkit visibility wrappers.
 fn parse_source(text: &str) -> (Vec<String>, Vec<HandStruct>) {
     // type_ids: whole-file scan — the literal appears inside the primitive!
     // macro (brace depth ≥ 1) and in inventory submits, never anywhere else.
@@ -151,97 +140,73 @@ fn parse_source(text: &str) -> (Vec<String>, Vec<HandStruct>) {
             }
         }
     }
-    let mut structs = Vec::new();
-    let mut depth: i32 = 0;
-    let mut lines = text.lines().enumerate().peekable();
-    while let Some((idx, line)) = lines.next() {
-        let trimmed = strip_visibility(line.trim());
-        if depth == 0
-            && (trimmed.starts_with("struct ") || trimmed.starts_with("pub struct "))
-            && trimmed.ends_with('{')
-            && !trimmed.contains('(')
-        {
-            let name = trimmed
-                .trim_start_matches("pub ")
-                .trim_start_matches("struct ")
-                .trim_end_matches('{')
-                .trim()
-                .to_string();
-            let mut fields = Vec::new();
-            let mut is_dispatch_family = false;
-            for (fidx, fline) in lines.by_ref() {
-                let ft = fline.trim();
-                if ft == "}" || ft == "};" {
-                    let _ = fidx;
-                    break;
+    fn scalar(ty: &syn::Type) -> &'static str {
+        if let syn::Type::Path(path) = ty {
+            for name in ["f32", "i32", "u32"] {
+                if path.path.is_ident(name) {
+                    return name;
                 }
-                if ft.is_empty() || ft.starts_with("//") {
-                    continue;
-                }
-                // `name: ty,` — anything more exotic (arrays, generics,
-                // pub fields) is outside the canonical hand-struct shape.
-                let canon = ft.trim_end_matches(',');
-                if let Some((fname, fty)) = canon.split_once(':') {
-                    let fname = strip_visibility(fname.trim());
-                    let fty = fty.trim();
-                    if fname == "dispatch_count" && fty == "u32" {
-                        is_dispatch_family = true;
-                    }
-                    fields.push(Field {
-                        name: fname.to_string(),
-                        ty: match fty {
-                            "f32" => "f32",
-                            "i32" => "i32",
-                            "u32" => "u32",
-                            other => Box::leak(other.to_string().into_boxed_str()),
-                        },
-                    });
-                } else {
-                    // Conditional fields and unsupported syntax cannot be
-                    // treated as comments: they change the actual ABI.
-                    fields.push(Field {
-                        name: ft.to_string(),
-                        ty: "unsupported",
-                    });
-                }
-                // depth stays 0 inside the struct for our purposes; struct
-                // literals don't appear in field position in these files.
             }
-            if is_dispatch_family {
-                let previous: Vec<_> = text.lines().take(idx).collect();
-                let attrs: Vec<_> = previous
-                    .iter()
-                    .rev()
-                    .map(|l| l.trim())
-                    .take_while(|l| l.starts_with("#[") || l.starts_with("//") || l.is_empty())
-                    .collect();
-                let repr_c = attrs.contains(&"#[repr(C)]")
-                    && attrs
-                        .iter()
-                        .all(|a| !a.starts_with("#[repr") || *a == "#[repr(C)]");
+        }
+        "unsupported"
+    }
+    fn collect(item: syn::Item, structs: &mut Vec<HandStruct>) {
+        match item {
+            syn::Item::Macro(item) => {
+                if let Some(item) =
+                    support::rust_items::testkit_item(&item).expect("valid testkit_visible item")
+                {
+                    collect(item, structs);
+                }
+            }
+            syn::Item::Struct(item) if !support::rust_items::test_only(&item.attrs) => {
+                if !item.fields.iter().any(|f| {
+                    f.ident.as_ref().is_some_and(|n| n == "dispatch_count")
+                        && scalar(&f.ty) == "u32"
+                }) {
+                    return;
+                }
+                let mut repr_c = false;
+                let mut supported_repr = true;
+                for attr in &item.attrs {
+                    if attr.path().is_ident("repr") {
+                        if attr
+                            .parse_args::<syn::Ident>()
+                            .is_ok_and(|repr| repr == "C")
+                        {
+                            repr_c = true;
+                        } else {
+                            supported_repr = false;
+                        }
+                    }
+                }
                 structs.push(HandStruct {
-                    name,
-                    fields,
-                    line: idx + 1,
-                    repr_c,
+                    name: item.ident.to_string(),
+                    fields: item
+                        .fields
+                        .iter()
+                        .map(|field| Field {
+                            name: field
+                                .ident
+                                .as_ref()
+                                .map(ToString::to_string)
+                                .unwrap_or_default(),
+                            ty: if field.attrs.iter().all(|a| a.path().is_ident("doc")) {
+                                scalar(&field.ty)
+                            } else {
+                                "unsupported"
+                            },
+                        })
+                        .collect(),
+                    repr_c: repr_c && supported_repr && item.generics.params.is_empty(),
                 });
             }
-            continue;
+            _ => {} // Function bodies and nested test modules are not production mirrors.
         }
-        // Crude but adequate brace tracking (runs only on lines not consumed
-        // by the struct reader). String/comment braces would fool it; the
-        // primitives' files are mechanically uniform, and a miscount fails
-        // loudly as a parse gap rather than silently passing.
-        for ch in trimmed.chars() {
-            match ch {
-                '{' => depth += 1,
-                '}' => depth -= 1,
-                _ => {}
-            }
-        }
-        if depth < 0 {
-            depth = 0;
-        }
+    }
+    let mut structs = Vec::new();
+    for item in syn::parse_file(text).expect("valid Rust source").items {
+        collect(item, &mut structs);
     }
     (type_ids, structs)
 }
@@ -356,9 +321,8 @@ fn hand_uniform_structs_match_codegen_layout() {
             struct_count += 1;
             if !hs.repr_c {
                 failures.push(format!(
-                    "{}:{}: {} needs plain repr(C)",
+                    "{}: {} needs plain repr(C)",
                     path.display(),
-                    hs.line,
                     hs.name
                 ));
                 continue;
@@ -403,14 +367,13 @@ fn hand_uniform_structs_match_codegen_layout() {
             match matches.len() {
                 1 => matched_type_ids.push(matches[0].clone()),
                 0 => failures.push(format!(
-                    "{file}:{} — struct {} matches NO type_id in its file (layout drift):\n{}",
-                    hs.line,
+                    "{file} — struct {} matches NO type_id in its file (layout drift):\n{}",
                     hs.name,
                     diffs.join("\n")
                 )),
                 n => failures.push(format!(
-                    "{file}:{} — struct {} matches {n} type_ids ({matches:?}); disambiguate",
-                    hs.line, hs.name
+                    "{file} — struct {} matches {n} type_ids ({matches:?}); disambiguate",
+                    hs.name
                 )),
             }
         }
@@ -507,9 +470,8 @@ fn generated_fields(registry: &PrimitiveRegistry, type_id: &str, raw: &[Field]) 
 fn surface_mesh_pass_uniforms_match_every_kernel_it_dispatches() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../manifold-node-engine/src/water/primitives/relax_surface_mesh.rs");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!("{}: {error}", path.display())
-    });
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let (_, structs) = parse_source(&text);
     let hand = structs
         .iter()
@@ -531,8 +493,13 @@ fn surface_mesh_pass_uniforms_match_every_kernel_it_dispatches() {
 #[test]
 fn whitewater_emitter_dispatch_packs_the_generated_params() {
     let registry = PrimitiveRegistry::with_builtin();
-    for type_id in ["node.whitewater_influence", "node.turbulence_emission_count"] {
-        let node = registry.construct(type_id).expect("registered emitter atom");
+    for type_id in [
+        "node.whitewater_influence",
+        "node.turbulence_emission_count",
+    ] {
+        let node = registry
+            .construct(type_id)
+            .expect("registered emitter atom");
         let mut packed: Vec<Field> = node
             .parameters()
             .iter()
@@ -711,4 +678,25 @@ fn reflection_detects_shader_alignment_size_and_type_drift() {
     assert!(!resized.is_packed_scalars());
     let retyped = reflect_shader(&shader("value: u32, dispatch_count: u32,")).unwrap();
     assert!(!layout_eq(&normal.fields, &retyped.fields));
+}
+
+#[test]
+fn parser_finds_testkit_visible_structs_in_both_arms() {
+    for name in ["testkit_visible", "manifold_core::testkit_visible"] {
+        for body in [
+            "#[repr(C)] struct U { dispatch_count: u32 }",
+            "testkit { pub struct U { wrong: f32 } } production { #[repr(C)] struct U { dispatch_count: u32 } }",
+        ] {
+            let (_, structs) = parse_source(&format!("{name}! {{ {body} }}"));
+            assert_eq!(structs.len(), 1);
+            assert!(structs[0].repr_c);
+            assert_eq!(
+                structs[0].fields,
+                vec![Field {
+                    name: "dispatch_count".into(),
+                    ty: "u32"
+                }]
+            );
+        }
+    }
 }

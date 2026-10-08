@@ -53,19 +53,19 @@ const CEILINGS: &[(&str, usize)] = &[
     // preset_runtime/core.rs (Peter-sanctioned ~2k) and codegen/fused.rs
     // (buffer+texture fused emission share the region model, no sub-split).
     // gltf_import/ (P3-G split + P3-D tables + P3-A ImportCtx/ObjectAssembly)
-    ("crates/manifold-renderer/src/node_graph/gltf_import/mod.rs", 100),
-    ("crates/manifold-renderer/src/node_graph/gltf_import/assembly.rs", 200),
-    ("crates/manifold-renderer/src/node_graph/gltf_import/animation.rs", 150),
-    ("crates/manifold-renderer/src/node_graph/gltf_import/materials.rs", 450),
-    ("crates/manifold-renderer/src/node_graph/gltf_import/cards.rs", 250),
-    ("crates/manifold-renderer/src/node_graph/gltf_import/object_group.rs", 1100),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/mod.rs", 100),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/assembly.rs", 200),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/animation.rs", 150),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/materials.rs", 450),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/cards.rs", 250),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/object_group.rs", 1100),
     // 2026-07-28 gltf import wave: lights/cameras/unlit/vertex-color/ssao
     // exposure blocks (scene.rs) + per-feature import tests (tests.rs);
     // decomposition follow-up in beads.
-    ("crates/manifold-renderer/src/node_graph/gltf_import/scene.rs", 950),
-    ("crates/manifold-renderer/src/node_graph/gltf_import/merge.rs", 450),
-    ("crates/manifold-renderer/src/node_graph/gltf_import/report.rs", 50),
-    ("crates/manifold-renderer/src/node_graph/gltf_import/tests.rs", 7000),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/scene.rs", 950),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/merge.rs", 450),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/report.rs", 50),
+    ("crates/manifold-nodes-scene/src/node_graph/gltf_import/tests.rs", 7000),
     // freeze/codegen/ (P3-C split + P3-A StandaloneKernelSpec)
     ("crates/manifold-node-engine/src/freeze/codegen/mod.rs", 50),
     ("crates/manifold-node-engine/src/freeze/codegen/types.rs", 550),

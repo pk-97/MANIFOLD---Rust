@@ -168,11 +168,11 @@ Peter's directives (2026-09-03, verbatim — these decide the MVP):
   unknown → `Video` fallback, `:135-154`). LED routing today is only the `blit_to_led`
   flag (`crates/manifold-core/src/layer.rs:73`).
 - **Generator render sizing is global — no per-layer size exists.** `GeneratorRenderer`
-  holds global `width/height` (`crates/manifold-renderer/src/generator_renderer.rs:143-144`);
+  holds global `width/height` (`crates/manifold-compositor/src/generator_renderer.rs:143-144`);
   `resize_gpu` resizes all render targets at one `render_w × render_h`
-  (`crates/manifold-renderer/src/generator_renderer.rs:867-884`, called
+  (`crates/manifold-compositor/src/generator_renderer.rs:867-884`, called
   `crates/manifold-app/src/content_pipeline.rs:3281`). Layer compositing into main-sized
-  `layer_bufs`: `generate_layers` (`crates/manifold-renderer/src/layer_compositor.rs:1705`,
+  `layer_bufs`: `generate_layers` (`crates/manifold-compositor/src/layer_compositor.rs:1705`,
   main dims `:1707-1708`).
 - **LED-res (8×120) compositing machinery already exists.** `led_main` PingPong at
   `frame.led_composite_size` (`layer_compositor.rs:504-512`, ensured `:2064-2073`);
@@ -210,7 +210,7 @@ Peter's directives (2026-09-03, verbatim — these decide the MVP):
   → `live_clip_manager.rs` (phantom clips, 5ms guard); layer matching via
   `Layer.midi_note/channel/device/trigger_mode` (`crates/manifold-core/src/layer.rs:146-155`).
   LED layers inherit all of it — zero new trigger work.
-- **Pattern atoms exist.** 254 primitives (`rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/`);
+- **Pattern atoms exist.** 254 primitives (`rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/`);
   beat gates/ramps, directional ramps, trigger cycling, texture combines all present.
   Per D3's prediction: the pack composes from existing atoms, no new primitives expected.
   Section 2.5 audit re-run at preset-authoring time regardless.
@@ -422,7 +422,7 @@ pub enum LayerType {
     Dmx = 4,   // serde: int 4 + strings "Dmx"|"Led"; unknown → Video (existing fallback)
 }
 
-// crates/manifold-renderer/src/layer_compositor.rs:377 — replaces LayerOutput.blit_to_led
+// crates/manifold-compositor/src/layer_compositor.rs:377 — replaces LayerOutput.blit_to_led
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedRoute { None, Mirror, Direct }
 // Built once at descriptor construction (:1851, :1958):
@@ -447,7 +447,7 @@ for LED-type layers per NIT below).
 
 - *Entry state:* main checkout at `origin/main`. Re-verify anchors:
   `rg -n "enum LayerType" crates/manifold-core/src/types.rs`,
-  `rg -n "blend_layers_to_led" crates/manifold-renderer/src/layer_compositor.rs`,
+  `rg -n "blend_layers_to_led" crates/manifold-compositor/src/layer_compositor.rs`,
   `rg -n "blit_to_led" crates/manifold-core/src/layer.rs`,
   `rg -n "PLASMA" crates/manifold-app/src/ui_bridge/editing.rs`. A moved/missing anchor is
   an escalation, not a guess.
@@ -498,7 +498,7 @@ for LED-type layers per NIT below).
   keeps type + preset, and a clip on it still drives the LED composite *after* reload.
   L3: a `scripts/ui-flows/` flow creates an LED layer via the real UI path and asserts it
   appears with the LED lane treatment.
-- *Gate (negative):* `rg -n "blit_to_led" crates/manifold-renderer/src/layer_compositor.rs`
+- *Gate (negative):* `rg -n "blit_to_led" crates/manifold-compositor/src/layer_compositor.rs`
   returns hits ONLY at the descriptor-construction lines (`:1851`,`:1958` field builds) —
   every other render-path site reads `LedRoute`; `rg -n "blit_to_led \\|\\||layer_type == LayerType::Led \\|\\|"`
   returns zero hits anywhere (no OR-ed predicates); `rg -n "blit_to_led\|LedRoute\|left_edge_width"

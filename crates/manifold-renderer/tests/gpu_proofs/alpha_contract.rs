@@ -47,7 +47,7 @@ use half::f16;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::primitives::RenderText;
+use manifold_nodes_image::node_graph::primitives::render_text::RenderText;
 use manifold_node_engine::{exec::backend::Backend, descriptor::Category, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, parameters::ParamValue, persistence::PrimitiveRegistry, bindings::Slot, exec::execution_plan::compile, descriptor::descriptor_for};
 
 use manifold_node_engine::testkit::gpu_harness::port_is_texture;

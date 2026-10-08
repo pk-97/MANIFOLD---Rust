@@ -364,8 +364,8 @@ impl<'d> RenderState<'d> {
     /// D8: scale factor 1.0 always, at the fixture's logical size (matches
     /// every other headless caller of the seam).
     fn new(device: &'d GpuDevice, tex_w: u32, tex_h: u32) -> Self {
-        let ui_renderer = UIRenderer::new(device, manifold_renderer::presentation::UI_FORMAT);
-        let mut cache = UICacheManager::new(manifold_renderer::presentation::UI_FORMAT, 1.0);
+        let ui_renderer = UIRenderer::new(device, manifold_compositor::presentation::UI_FORMAT);
+        let mut cache = UICacheManager::new(manifold_compositor::presentation::UI_FORMAT, 1.0);
         cache.set_scale_factor(1.0);
         cache.ensure_atlas(device, tex_w, tex_h);
         cache.invalidate_all();

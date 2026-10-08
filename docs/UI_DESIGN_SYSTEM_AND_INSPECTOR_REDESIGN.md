@@ -1098,7 +1098,7 @@ section 17 already wants.
 - **B — Content previews.**
   - *Audio* — done (`waveform_renderer`).
   - *Generator* — scaffolding exists:
-    [`preview_request`](../crates/manifold-renderer/src/layer_compositor.rs#L471) is an
+    [`preview_request`](../crates/manifold-compositor/src/layer_compositor.rs#L471) is an
     authoring-time node-output preview (editor), **not** wired to timeline clips. Reuse the
     render-to-texture, cache a small preview per generator clip.
   - *Video* — **no infrastructure today.** New: extract a representative decoded frame → downscale →

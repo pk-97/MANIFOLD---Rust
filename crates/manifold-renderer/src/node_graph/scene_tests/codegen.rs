@@ -19,7 +19,7 @@ use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNod
 #[test]
 fn fused_buffer_region_threads_element_registers() {
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use crate::node_graph::primitives::InstanceRotationJitter as J;
+    use manifold_nodes_scene::node_graph::primitives::instance_rotation_jitter::InstanceRotationJitter as J;
     let id = NodeInstanceId;
     let mk = |i: u32, src: InputSource| RegionNode {
         node_id: id(i),
@@ -84,7 +84,7 @@ fn fused_buffer_region_threads_element_registers() {
 #[test]
 fn fused_buffer_region_two_array_externals_bounds_count_by_min() {
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use crate::node_graph::primitives::LerpInstanceFields as L;
+    use manifold_nodes_scene::node_graph::primitives::lerp_instance_fields::LerpInstanceFields as L;
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![RegionNode {

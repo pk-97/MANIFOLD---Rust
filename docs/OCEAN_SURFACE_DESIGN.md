@@ -24,7 +24,7 @@ rules; `ADDING_PRIMITIVES.md` (codegen path, proofs); `MANIFOLD_GPU_ARCHITECTURE
 
 ## 1. Audit — what exists (verified 2026-10-06)
 
-Survey run: `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`,
+Survey run: `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`,
 plus `rg -il 'ocean|tessendorf|jonswap|phillips'` over code, presets and docs (zero hits:
 no ocean exists). Nearest reference preset read end to end: `MetallicGlass.json`
 (grid → push → make_triangles → render). Peter called that look dated; it is a wiring

@@ -32,7 +32,7 @@ pub fn cpu_flip_metadata() -> Vec<manifold_core::scene_exposure::SceneParamMetad
         "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z",
     ];
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_cpu_flip_reference();
-    crate::node_graph::scene_exposure::metadata_for_node_type_with_registry(
+    manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type_with_registry(
         &registry,
         manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,
         Some(CPU_FLIP_DIALS),

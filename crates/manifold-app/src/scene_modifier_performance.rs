@@ -24,7 +24,7 @@ use manifold_core::{
     Beats, Bpm, LayerId, NodeId, PresetTypeId,
     cold_touch::{ColdTouchKind, cold_touch_count, reset_cold_touch_counts},
 };
-use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 use serde::Serialize;
 
 use crate::content_command::ContentCommand;
@@ -192,7 +192,7 @@ fn enable_profiling(ct: &mut crate::content_thread::ContentThread) {
     for renderer in ct.engine.renderers_mut() {
         if let Some(generator) = renderer
             .as_any_mut()
-            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>(
+            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
         ) {
             generator.set_profiling(true);
         }

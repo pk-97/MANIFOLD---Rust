@@ -42,7 +42,7 @@ use manifold_node_engine::persistence::PrimitiveFactory;
         // Restates the invariant at the single known producer, so a
         // regression here fails loudly and specifically instead of only
         // showing up as a generic registry-walk failure.
-        let node = crate::node_graph::primitives::SceneObjectNode::new();
+        let node = manifold_nodes_scene::node_graph::primitives::scene_object::SceneObjectNode::new();
         assert!(
             !manifold_node_engine::exec::effect_node::EffectNode::inputs(&node)
                 .iter()

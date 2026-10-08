@@ -38,11 +38,11 @@ pub(crate) fn scene_node_ref_for_doc_id(
 
 /// Every liquid domain behind a scene object, named after its water.
 pub(crate) fn fluid_domains(
-    scene: &manifold_renderer::node_graph::scene_vm::SceneVm,
+    scene: &manifold_nodes_scene::node_graph::scene_vm::SceneVm,
 ) -> Vec<manifold_ui::panels::scene_setup_panel::FluidDomainOption> {
     let mut result: Vec<manifold_ui::panels::scene_setup_panel::FluidDomainOption> = Vec::new();
     for object in &scene.objects {
-        let manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row) = object else { continue; };
+        let manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) = object else { continue; };
         let Some(domain) = &row.liquid_domain else { continue; };
         if !result.iter().any(|option| option.node == domain.node) {
             result.push(manifold_ui::panels::scene_setup_panel::FluidDomainOption {
@@ -103,8 +103,8 @@ pub(crate) fn group_fluid_role_nodes(
 /// in scene order. Materials deliberately remain visible on every consumer.
 pub(crate) fn object_controls(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
-    row: &manifold_renderer::node_graph::scene_vm::SceneObjectKnownRow,
-    objects: &[manifold_renderer::node_graph::scene_vm::SceneObjectVm],
+    row: &manifold_nodes_scene::node_graph::scene_vm::SceneObjectKnownRow,
+    objects: &[manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm],
 ) -> Vec<manifold_core::NodeId> {
     let mut owned = vec![row.object.clone()];
     owned.extend_from_slice(&row.fluid_controls);
@@ -118,13 +118,13 @@ pub(crate) fn object_controls(
     if let Some(transform) = &row.transform {
         owned.push(transform.node.clone());
     }
-    if let manifold_renderer::node_graph::scene_vm::MaterialVm::Known(material) = &row.material {
+    if let manifold_nodes_scene::node_graph::scene_vm::MaterialVm::Known(material) = &row.material {
         owned.push(material.node.clone());
     }
     owned.extend(row.modifier_chain.iter().map(|modifier| modifier.node.clone()));
     owned.extend(row.transform_chain.iter().map(|modifier| modifier.node.clone()));
     for object in objects {
-        let manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(other) = object else { continue; };
+        let manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(other) = object else { continue; };
         if other.object == row.object && other.index == row.index { break; }
         for node in other.transform.iter().map(|transform| &transform.node)
             .chain(other.modifier_chain.iter().map(|modifier| &modifier.node))
@@ -140,7 +140,7 @@ pub(crate) fn object_controls(
 /// control per row. A child does not acquire scene-object rendering controls.
 pub(crate) fn filter_family_parameter_ids(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
-    row: &manifold_renderer::node_graph::scene_vm::SceneObjectKnownRow,
+    row: &manifold_nodes_scene::node_graph::scene_vm::SceneObjectKnownRow,
     ids: &mut Vec<String>,
 ) {
     let Some(metadata) = def.and_then(|def| def.preset_metadata.as_ref()) else { return; };
@@ -254,7 +254,7 @@ fn owned_specs<'a>(
 /// target elsewhere.
 pub(crate) fn filter_inactive_physics_parameter_ids(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
-    physics: Option<&manifold_renderer::node_graph::scene_vm::PhysicsVm>,
+    physics: Option<&manifold_nodes_scene::node_graph::scene_vm::PhysicsVm>,
     parameter_ids: &mut Vec<String>,
 ) {
     use manifold_core::effect_graph_def::BindingTarget;
@@ -386,7 +386,7 @@ mod ownership_tests {
         ParamSpecDef, PresetMetadata,
     };
     use manifold_core::effects::ParamConvert;
-    use manifold_renderer::node_graph::scene_vm::PhysicsVm;
+    use manifold_nodes_scene::node_graph::scene_vm::PhysicsVm;
     use std::collections::{BTreeMap, BTreeSet};
 
     /// World = envmap (doc id 1) [+ atmosphere, omitted — not needed to
@@ -546,7 +546,7 @@ mod ownership_tests {
     /// glTF object numbers its own level), so this fails the moment
     /// ownership reads them.
     fn assert_one_owner(name: &str, def: &EffectGraphDef) -> Vec<String> {
-        use manifold_renderer::node_graph::scene_vm::{MaterialVm, SceneLightVm, SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{MaterialVm, SceneLightVm, SceneObjectVm, SceneVm};
         let vm = SceneVm::from_def(def).unwrap_or_else(|| panic!("{name} is a scene"));
         // (item, its nodes, the material it may share)
         let mut items: Vec<(String, Vec<NodeId>, Option<NodeId>)> = Vec::new();
@@ -585,7 +585,7 @@ mod ownership_tests {
             manifold_core::preset_def::PresetKind::Generator,
         ) {
             let def = manifold_renderer::node_graph::bundled_preset_def(&preset).unwrap();
-            if manifold_renderer::node_graph::scene_vm::SceneVm::from_def(def).is_some() {
+            if manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).is_some() {
                 assert_one_owner(preset.as_str(), def);
                 scenes.push(preset.as_str().to_string());
             }
@@ -596,7 +596,7 @@ mod ownership_tests {
 
     #[test]
     fn shared_transform_and_modifier_controls_follow_the_first_scene_consumer() {
-        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
         let mut def = azalea_like_fixture();
         def.nodes = [
@@ -685,7 +685,7 @@ mod ownership_tests {
 
     #[test]
     fn the_matter_water_shows_no_camera_control() {
-        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
         let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakMatter")).unwrap();
         let camera = assert_one_owner("WaterDamBreakMatter", def);
         assert!(camera.iter().any(|id| id.ends_with("_distance")), "the orbit camera owns its dials: {camera:?}");
@@ -705,7 +705,7 @@ mod ownership_tests {
     /// two facts, not off the solver's type id.
     #[test]
     fn gpu_flip_water_is_a_liquid_object_without_physics() {
-        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
         let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
         let vm = SceneVm::from_def(def).expect("the GPU dam break is a scene");
         let water = vm.objects.iter().find_map(|object| match object {
@@ -726,7 +726,7 @@ mod ownership_tests {
     fn gpu_flip_obstacle_keeps_fluid_role_with_scene_modifier() {
         use manifold_core::{NodeId, SceneNodeRef};
         use manifold_core::scene_modifier_preset::SceneTargetSelection;
-        use manifold_renderer::node_graph::{scene_modifier_authoring, scene_vm::{SceneObjectVm, SceneVm}};
+        use manifold_nodes_scene::node_graph::{scene_modifier_authoring, scene_vm::SceneObjectVm, scene_vm::SceneVm};
         let mut def: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
             include_str!("../../../../manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json"),
         ).unwrap();
@@ -744,7 +744,7 @@ mod ownership_tests {
         ).unwrap();
         def = manifold_core::scene_modifier_edit::insert_scene_modifier(&def, 0, instance).unwrap().graph;
         assert_eq!(def.scene_modifiers.len(), 1);
-        assert!(manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
+        assert!(manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
         let vm = SceneVm::from_def(&def).unwrap();
         let obstacle = vm.objects.iter().find_map(|object| match object {
             SceneObjectVm::Known(row) if row.name == "Obstacle" => Some(row),
@@ -761,7 +761,7 @@ mod ownership_tests {
     /// budget under one Whitewater section (BUG-ejcb item 2).
     #[test]
     fn gpu_flip_water_owns_its_whitewater_controls() {
-        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
         let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
         assert_one_owner("WaterDamBreakGpuFlip", def);
         let vm = SceneVm::from_def(def).unwrap();
@@ -787,7 +787,7 @@ mod ownership_tests {
     #[test]
     fn water_family_projection_keeps_parent_and_look_ownership() {
         use manifold_core::effect_graph_def::BindingTarget;
-        use manifold_renderer::node_graph::scene_vm::{MaterialVm, SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{MaterialVm, SceneObjectVm, SceneVm};
 
         for preset in ["WaterDamBreakGpuFlip", "WaterDamBreakParticles"] {
             let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new(preset))
@@ -853,7 +853,7 @@ mod ownership_tests {
     #[test]
     fn gpu_flip_water_surface_shape_sliders_route_from_water_detail() {
         use manifold_core::effect_graph_def::BindingTarget;
-        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
         let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
         let vm = SceneVm::from_def(def).unwrap();
         let water = vm.objects.iter().find_map(|object| match object {
@@ -896,7 +896,7 @@ mod ownership_tests {
         for fixture in ["cc0__oomurasaki_azalea_r._x_pulchrum.glb", "cc0___mushroom.glb"] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../tests/fixtures/gltf").join(fixture);
-            let (def, _) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(&path)
+            let (def, _) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path)
                 .unwrap_or_else(|e| panic!("{fixture}: {e}"));
             let camera = assert_one_owner(fixture, &def);
             assert!(!camera.is_empty(), "{fixture}: the camera owns its dials");

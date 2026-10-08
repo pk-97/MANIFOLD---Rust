@@ -241,7 +241,7 @@ of states is deleted as a strategy, not improved.
 - **Read-back:** D2, section 3.2, INV3.
 - **Deliverables:** install-time pipeline creation for every data-gated lazy node —
   inventory by lazy-Option pipeline fields AND data-skip declarations, NOT the skip
-  query alone: `rg -n 'get_or_insert|OnceCell|LazyLock|OnceLock' crates/manifold-renderer/src/node_graph/primitives -t rust` plus `rg -n 'data-driven skip|Data-driven skip' crates/manifold-renderer/src -t rust`; the audit-named sites are
+  query alone: `rg -n 'get_or_insert|OnceCell|LazyLock|OnceLock' crates/manifold-node-engine/src/{primitives,water/primitives} crates/manifold-nodes-{image,scene}/src/node_graph/primitives -t rust` plus `rg -n 'data-driven skip|Data-driven skip' crates/manifold-renderer/src -t rust`; the audit-named sites are
   `render_value_overlay.rs:491-508`, `render_scene.rs:2797-2820` (IBL ×3), `:5907`,
   `:7042`, `blob_detect_ffi.rs:352-358,401-406`, `watercolor.rs:127-187`,
   `render_text.rs:369+`, `spawn_from_mesh.rs:187-208`, `hdri_source.rs:320-390`;

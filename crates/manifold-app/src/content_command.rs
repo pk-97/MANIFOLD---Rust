@@ -276,8 +276,8 @@ pub enum ContentCommand {
     // ── Display ───────────────────────────────────────────────────
     /// Update one destination after a screen or available-brightness change.
     UpdateDisplayCapabilities {
-        destination: manifold_renderer::presentation::DisplayDestination,
-        capabilities: manifold_renderer::presentation::DisplayCapabilities,
+        destination: manifold_compositor::presentation::DisplayDestination,
+        capabilities: manifold_compositor::presentation::DisplayCapabilities,
     },
 
     // ── Output surface (direct present from content thread) ─────

@@ -18,7 +18,7 @@ use manifold_node_engine::scene::mesh_change::*;
         use manifold_node_engine::freeze::classify::InputAccess;
         use manifold_node_engine::freeze::region::{ExternalRef, Region, RegionInput, RegionMember};
         use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency};
-        use crate::node_graph::primitives::{MorphMesh, NormalWaveMesh};
+        use manifold_nodes_scene::node_graph::primitives::{morph_mesh::MorphMesh, normal_wave_mesh::NormalWaveMesh};
         use std::borrow::Cow;
 
         // Buffer region (space None): scalar ports are not region ports, so

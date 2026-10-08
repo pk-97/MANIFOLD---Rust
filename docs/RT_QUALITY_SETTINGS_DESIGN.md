@@ -17,7 +17,7 @@ It must not inherit renderer defaults or the previous project/export column.
 
 | Piece | Where | State |
 |---|---|---|
-| spp constants | `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:225-284` | `AO=4`, `GI=4`, `REFL=8`, shadow mask `1` (render_scene.rs:5672) |
+| spp constants | `crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs:225-284` | `AO=4`, `GI=4`, `REFL=8`, shadow mask `1` (render_scene.rs:5672) |
 | spp GPU transport | `crates/manifold-gpu/src/metal/raytrace.rs:759-786` | runtime params struct (`shadow_spp`/`ao_spp`/`gi_spp`/`refl_spp` fields) — **uniforms, not codegen literals; per-frame change is safe** |
 | Per-scene on/off bools | `render_scene.rs:4111-4125` (`rt_enabled`, `rt_shadows`, `rt_ao`, `rt_gi`, `rt_reflections` node params) | stays — gates whether a feature runs at all |
 | Env probes to subsume | `MANIFOLD_RT_SWEEP_AO_SPP` / `_GI_SPP` / `_REFL_SPP` (render_scene.rs:5702-5711), `MANIFOLD_RT_NATIVE_TERMS` (render_scene.rs:1183-1191) | probe-only; this design replaces both |

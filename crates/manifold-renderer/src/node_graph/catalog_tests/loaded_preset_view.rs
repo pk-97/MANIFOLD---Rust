@@ -27,7 +27,7 @@ use manifold_core::PresetTypeId;
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/gltf/hostile/two_material_pbr.glb");
         assert!(path.exists(), "two_material_pbr.glb fixture missing at {}", path.display());
-        let (def, _report) = crate::node_graph::gltf_import::assemble_import_graph(&path)
+        let (def, _report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path)
             .expect("assemble two_material_pbr import graph");
 
         // Build the LoadedPresetView the pristine path builds — same

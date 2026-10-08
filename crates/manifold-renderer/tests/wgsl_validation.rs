@@ -71,10 +71,10 @@ const PARTIAL_SHADERS: &[&str] = &[
 ];
 
 const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;
-const PBR_BRDF: &str = include_str!("../src/node_graph/primitives/shaders/pbr_brdf.wgsl");
-const TONEMAP_COMMON: &str = include_str!("../src/effects/shaders/tonemap_common.wgsl");
+const PBR_BRDF: &str = include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/pbr_brdf.wgsl");
+const TONEMAP_COMMON: &str = include_str!("../../manifold-compositor/src/effects/shaders/tonemap_common.wgsl");
 const SAMPLE_FACE_COMMON: &str =
-    include_str!("../src/node_graph/primitives/shaders/sample_face_common.wgsl");
+    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/sample_face_common.wgsl");
 /// `node.gpu_flip_step`'s prelude: pose, collider sampling and the force
 /// field, in its `step_source` order.
 const GPU_FLIP_STEP_PRELUDE: &str = concat!(
@@ -123,6 +123,18 @@ fn is_partial(path: &std::path::Path) -> bool {
 #[test]
 fn all_wgsl_shaders_validate() {
     let mut files = find_wgsl_files(&shader_dir());
+    let leaf_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../manifold-compositor/src");
+    assert!(leaf_shaders.is_dir(), "manifold-compositor shader directory must exist");
+    files.extend(find_wgsl_files(&leaf_shaders));
+    let leaf_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../manifold-nodes-scene/src");
+    assert!(leaf_shaders.is_dir(), "manifold-nodes-scene shader directory must exist");
+    files.extend(find_wgsl_files(&leaf_shaders));
+    let leaf_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../manifold-nodes-image/src");
+    assert!(leaf_shaders.is_dir(), "manifold-nodes-image shader directory must exist");
+    files.extend(find_wgsl_files(&leaf_shaders));
     let shared_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../manifold-node-engine/src/gpu/shaders");
     assert!(shared_shaders.is_dir(), "engine shared shader directory must exist");

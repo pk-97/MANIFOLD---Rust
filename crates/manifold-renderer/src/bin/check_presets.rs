@@ -22,6 +22,7 @@
 //! rebuild needed. This is the same set the runtime preset loader scans
 //! as its dev stock root.
 
+use manifold_renderer as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,8 +32,8 @@ use manifold_core::scene_modifier_preset::{
     SceneNodeRef, SceneTargetSelection, validate_scene_modifier_schema,
 };
 use manifold_gpu::GpuDevice;
-use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
-use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
+use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::{persistence::PrimitiveRegistry, validate::ValidateKind, validate::ValidationReport, validate::validate_def};
 

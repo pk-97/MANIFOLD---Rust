@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -13,6 +14,59 @@ import crate_move_replay as replay
 
 
 class ReplayTests(unittest.TestCase):
+    def test_module_readers_see_both_testkit_visible_arms(self):
+        source = (
+            'manifold_core::testkit_visible! { mod plain; }\n'
+            'testkit_visible! {\n'
+            '    testkit { mod test_only; }\n'
+            '    production { mod production_only; }\n'
+            '}\n'
+        )
+        names = [re.search(r'\bmod\s+(\w+)', source[head:end])[1]
+                 for _start, end, head, scope in replay.module_items(source)
+                 if not scope]
+        self.assertEqual(names, ['plain', 'production_only'])
+
+    def test_production_expansion_preserves_lines_and_discards_nested_test_arm(self):
+        source = (
+            'testkit_visible ! {\n'
+            '    testkit { testkit_visible! { mod nested_test; } }\n'
+            '    production { manifold_core :: testkit_visible ! { mod kept; } }\n'
+            '}\n'
+        )
+        expanded = replay.production_text(source)
+        self.assertEqual(expanded.count("\n"), source.count("\n"))
+        self.assertNotIn("nested_test", expanded)
+        self.assertIn("kept", expanded)
+        self.assertEqual([re.search(r'\bmod\s+(\w+)', source[head:end])[1]
+                          for _start, end, head, scope in replay.module_items(source)
+                          if not scope], ['kept'])
+
+    def test_macro_reader_keeps_plain_struct_named_production_and_other_delimiters(self):
+        source = (
+            'testkit_visible! { struct production { value: u8 } }\n'
+            'testkit_visible ! ( ignored )\n'
+            'manifold_core :: testkit_visible ! [ ignored ]\n'
+        )
+        expanded = replay.production_text(source)
+        self.assertIn('struct production', expanded)
+        self.assertEqual(len(replay._testkit_calls(source)), 3)
+
+    def test_wrapped_module_mount_mutation_fails_closed(self):
+        source = 'testkit_visible! {\n    testkit { mod old; }\n    production { mod old; }\n}\n'
+        with self.assertRaisesRegex(ValueError, 'separate reviewed fix'):
+            replay.mount_items(source, 'old')
+
+    def test_path_modules_see_path_mount_inside_testkit_visible(self):
+        sources = {
+            'crates/a/src/lib.rs': 'testkit_visible! { #[path = "child.rs"] mod child; }\n',
+            'crates/a/src/child.rs': 'pub const VALUE: u8 = 1;\n',
+        }
+        self.assertEqual(
+            replay.path_modules(sources, {}, sources.__contains__),
+            {'crates/a/src/child.rs': 'a::child'},
+        )
+
     def test_shared_map_derivation_is_rooted_and_scoped(self):
         moves = {'crates/a/src/foo.rs': 'crates/b/src/bar.rs'}
         mapping = replay.mappings(moves, [], {})
@@ -117,6 +171,56 @@ class ReplayTests(unittest.TestCase):
         expected.update({'plans/p1/'+p:v for p,v in replay.files(self.plan).items()})
         self.assertEqual(actual, expected)
 
+    def test_directory_source_preserves_applied_residual(self):
+        source = self.repo / 'draft'
+        entries = dict(self.original)
+        entries['crates/manifold-renderer/src/foo.rs'] = ('100644', b'pub const X: u32 = 8;\n')
+        replay.write_files(source, entries)
+        dest = self.repo / 'directory-result'
+        self.assertEqual(self.run_tool('replay', '--source', str(source), '--dest', str(dest)), 0, self.output)
+        self.assertEqual(replay.files(dest)['crates/manifold-node-engine/src/foo.rs'],
+                         entries['crates/manifold-renderer/src/foo.rs'])
+        self.assertEqual(replay.files(source), entries)
+        self.assertEqual(self.run_tool('verify', str(source)), 1, self.output)
+
+    def test_directory_source_rejects_unsafe_paths(self):
+        for forbidden in ('.git', 'target'):
+            with self.subTest(forbidden=forbidden):
+                source = self.repo / ('draft-' + forbidden)
+                replay.write_files(source, self.original)
+                (source / forbidden).mkdir()
+                (source / forbidden / 'private').write_text('must not copy')
+                dest = self.repo / ('result-' + forbidden)
+                self.assertEqual(self.run_tool('replay', '--source', str(source), '--dest', str(dest)), 1)
+                self.assertFalse(dest.exists())
+
+    def test_directory_source_rejects_symlink_and_overlap(self):
+        source = self.repo / 'draft'
+        replay.write_files(source, self.original)
+        alias = self.repo / 'alias'
+        alias.symlink_to(source, target_is_directory=True)
+        for src, dest in ((alias, self.repo / 'result'), (source, source),
+                          (source, source / 'result'), (source, self.repo)):
+            with self.subTest(source=src, destination=dest):
+                self.assertEqual(self.run_tool('replay', '--source', str(src), '--dest', str(dest)), 1)
+        self.assertEqual(replay.files(source), self.original)
+
+    def test_residual_artifacts_are_inert_and_verified_as_metadata(self):
+        after = self.plan / 'after/crates/manifold-node-engine/src/foo.rs'
+        after.parent.mkdir(parents=True)
+        after.write_text('pub const X: u32 = 999;\n')
+        (self.plan / 'residual-files.txt').write_text('crates/manifold-node-engine/src/foo.rs\n')
+        (self.plan / 'residual-deleted.txt').write_text('binary\n')
+        self.pin()
+        moved = self.moved()
+        self.assertEqual(moved['crates/manifold-node-engine/src/foo.rs'],
+                         self.original['crates/manifold-renderer/src/foo.rs'])
+        self.assertEqual(moved['binary'], self.original['binary'])
+        self.assertEqual(self.run_tool('verify', self.commit(moved, self.base)), 0, self.output)
+        moved['plans/p1/residual-deleted.txt'] = ('100644', b'run\n')
+        self.assertEqual(self.run_tool('verify', self.commit(moved, self.base)), 1, self.output)
+        self.assertIn('move commit changes plan', self.output)
+
     def test_verify_pure_replay(self):
         moved = self.commit(self.moved(), self.base)
         self.assertEqual(self.run_tool('verify', moved), 0, self.output)
@@ -209,10 +313,10 @@ class ReplayTests(unittest.TestCase):
                  '    native_source_identity::emit_source_identity(\n'
                  '        &root, &["src/gltf.rs"], "FAMILY",\n'
                  '    )\n    .expect("family");\n}\n')
-        self.original['crates/manifold-renderer/build.rs'] = ('100644', build.encode())
+        self.original['crates/manifold-nodes-scene/build.rs'] = ('100644', build.encode())
         self.base = self.commit(self.original)
         config = json.loads((self.plan/'plan.json').read_text())
-        config['split_identity'] = {'renderer_build':'crates/manifold-renderer/build.rs',
+        config['split_identity'] = {'renderer_build':'crates/manifold-nodes-scene/build.rs',
                                     'integration_key':'INTEGRATION', 'family_source':'src/gltf.rs'}
         (self.plan/'plan.json').write_text(json.dumps(config))
         self.rejects_replay()
@@ -537,6 +641,40 @@ class ReplayTests(unittest.TestCase):
         self.pin()
         actual = self.moved()
         self.assertEqual(actual[new+'lib.rs'][1], b'#[doc = "mod foo;"]\npub(crate) mod bar;\n')
+
+    def test_complementary_mount_pair_moves_and_renames_together(self):
+        old = 'crates/manifold-renderer/src/'
+        new = 'crates/manifold-node-engine/src/'
+        first = '#[cfg(not(any(test, feature = "testkit")))]\nmod foo;\n'
+        second = '#[cfg(any(test, feature = "testkit"))]\npub mod foo;\n'
+        self.original[old+'lib.rs'] = ('100644', (first+'fn keep() {}\n'+second).encode())
+        (self.plan/'moves.tsv').write_text(old+'foo.rs\t'+new+'bar.rs\n')
+        self.template(new+'lib.rs', (first+second).replace('mod foo;', 'mod bar;'))
+        self.pin()
+        actual = self.moved()
+        self.assertEqual(actual[old+'lib.rs'][1], b'fn keep() {}\n')
+        self.assertEqual(actual[new+'lib.rs'][1], (first+second).replace('mod foo;', 'mod bar;').encode())
+        self.assertEqual(actual[new+'bar.rs'][1], self.original[old+'foo.rs'][1])
+
+    def test_noncomplementary_mount_pairs_rejected(self):
+        for second in ('#[cfg(feature = "other")]\npub mod foo;\n',
+                       '#[cfg(feature = "testkit")]\npub mod foo;\n',
+                       '#[cfg(not(feature = "other"))]\npub mod foo;\n',
+                       '#[cfg(not(feature = "testkit"))]\n#[cfg(any())]\npub mod foo;\n'):
+            with self.subTest(second=second):
+                source = '#[cfg(feature = "testkit")]\nmod foo;\n'+second
+                self.original['crates/manifold-renderer/src/lib.rs'] = ('100644', source.encode())
+                self.pin()
+                self.rejects_replay()
+
+    def test_complementary_mount_pair_with_different_files_rejected(self):
+        source = ('#[cfg(test)]\n#[path = "foo.rs"]\nmod foo;\n'
+                  '#[cfg(not(test))]\n#[path = "other.rs"]\nmod foo;\n')
+        self.original['crates/manifold-renderer/src/lib.rs'] = ('100644', source.encode())
+        self.original['crates/manifold-renderer/src/other.rs'] = ('100644', b'pub const X: u32 = 8;\n')
+        self.pin()
+        self.rejects_replay()
+        self.assertIn('path/include module mounts are forbidden', self.output)
 
     def test_derived_mount_rejects_unproven_source(self):
         for source in ('fn keep() {}\n', 'mod foo {}\n', 'mod foo;\nmod foo;\n',

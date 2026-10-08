@@ -1,0 +1,4327 @@
+use manifold_node_engine::runtime::chain_dispatch::{clear_chain_state, dispatch_chain, dispatch_chain_with_scene_viewport};
+use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+use manifold_node_engine::runtime::effect::PostProcessEffect;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::gpu::render_target::RenderTarget;
+use crate::tonemap::TonemapPipeline;
+use manifold_node_engine::gpu::uniform_arena::UniformArena;
+use ahash::AHashMap;
+use manifold_core::effects::{EffectContainer, EffectGroup, PresetInstance};
+use manifold_core::{BlendMode, EffectId, LayerId, NodeId, PresetTypeId, WarmupCap, WarmupOutcome, WarmupPass, WarmupRun};
+use manifold_gpu::{
+    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::time::Instant;
+
+// Catalog tests call the same compositor helpers through testkit after P2c.
+// Keep every production item at its original visibility.
+
+/// Descriptor for a single clip to composite.
+pub struct CompositeClipDescriptor<'a> {
+    pub clip_id: &'a str,
+    pub texture: &'a GpuTexture,
+    pub layer_index: i32,
+    pub blend_mode: BlendMode,
+    pub opacity: f32,
+    /// True when this clip is muted. Mute is presentational (P2): the clip
+    /// stays scheduled and modulating but contributes no pixels.
+    pub is_muted: bool,
+    pub effects: &'a [PresetInstance],
+    pub effect_groups: &'a [EffectGroup],
+}
+
+impl CompositeClipDescriptor<'_> {
+    /// The one clip-visibility predicate — mirrors `TimelineClip::is_visible`.
+    /// Blend sites must call this, never read `is_muted` directly.
+    #[inline]
+    pub fn is_visible(&self) -> bool {
+        !self.is_muted
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BlendUniforms {
+    blend_mode: u32,
+    opacity: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<BlendUniforms>() == 16);
+
+/// Blend WGSL source — shared across all specialized blend mode variants.
+const BLEND_WGSL: &str = include_str!("generators/shaders/compositor_blend_compute.wgsl");
+
+/// Number of blend modes (Normal=0 through Darken=12).
+const BLEND_MODE_COUNT: u32 = 13;
+
+/// GPU resources for blend operations using native Metal compute.
+///
+/// One specialized pipeline per blend mode — the Metal compiler dead-code
+/// eliminates inactive switch branches in each variant.
+/// Opaque (mode 6) further eliminates the base texture read.
+struct BlendResources {
+    /// Specialized pipelines indexed by blend mode.
+    pipelines: AHashMap<u32, manifold_gpu::GpuComputePipeline>,
+    sampler: manifold_gpu::GpuSampler,
+    /// Compositor width/height — needed for dispatch_workgroups.
+    width: u32,
+    height: u32,
+}
+
+impl BlendResources {
+    fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
+        let mut pipelines = AHashMap::with_capacity(BLEND_MODE_COUNT as usize);
+        for mode in 0..BLEND_MODE_COUNT {
+            let label = format!("Blend Mode {mode}");
+            let mode_str = format!("{mode}u");
+            let pipeline = device.create_specialized_compute_pipeline(
+                BLEND_WGSL,
+                "cs_main",
+                &[("u.blend_mode", &mode_str)],
+                &label,
+            );
+            pipelines.insert(mode, pipeline);
+        }
+
+        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: manifold_gpu::GpuFilterMode::Nearest,
+            address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
+            address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
+            address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
+            compare: None,
+            ..Default::default()
+        });
+
+        Self {
+            pipelines,
+            sampler,
+            width,
+            height,
+        }
+    }
+
+    /// Execute a compute blend. Selects the specialized pipeline for the blend mode.
+    fn blend_pass(
+        &self,
+        gpu: &mut GpuEncoder,
+        arena: &mut UniformArena,
+        source_texture: &GpuTexture,
+        blend_texture: &GpuTexture,
+        target_texture: &GpuTexture,
+        uniforms: &BlendUniforms,
+    ) {
+        let _offset = arena.push(uniforms);
+
+        let pipeline = self
+            .pipelines
+            .get(&uniforms.blend_mode)
+            .or_else(|| self.pipelines.get(&0))
+            .unwrap();
+
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                manifold_gpu::GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(uniforms),
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 1,
+                    texture: source_texture,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 2,
+                    texture: blend_texture,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 3,
+                    sampler: &self.sampler,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 4,
+                    texture: target_texture,
+                },
+            ],
+            [self.width.div_ceil(16), self.height.div_ceil(16), 1],
+            "Blend Pass",
+        );
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+    }
+}
+
+/// Standalone ping-pong buffer pair. Can be borrowed independently
+/// from other compositor state (avoids borrow conflicts).
+struct PingPong {
+    ping: RenderTarget,
+    pong: RenderTarget,
+    use_ping_as_source: bool,
+}
+
+impl PingPong {
+    fn try_new(device: &GpuDevice, width: u32, height: u32) -> Result<Self, String> {
+        Ok(Self {
+            ping: RenderTarget::try_new(device, width, height, GpuTextureFormat::Rgba16Float, "resize-ping")?,
+            pong: RenderTarget::try_new(device, width, height, GpuTextureFormat::Rgba16Float, "resize-pong")?,
+            use_ping_as_source: true,
+        })
+    }
+
+    fn new(
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        width: u32,
+        height: u32,
+        label_prefix: &str,
+    ) -> Self {
+        let format = GpuTextureFormat::Rgba16Float;
+        let ping = if let Some(p) = pool {
+            RenderTarget::new_pooled(p, width, height, format, &format!("{label_prefix} Ping"))
+        } else {
+            RenderTarget::new(
+                device,
+                width,
+                height,
+                format,
+                &format!("{label_prefix} Ping"),
+            )
+        };
+        let pong = if let Some(p) = pool {
+            RenderTarget::new_pooled(p, width, height, format, &format!("{label_prefix} Pong"))
+        } else {
+            RenderTarget::new(
+                device,
+                width,
+                height,
+                format,
+                &format!("{label_prefix} Pong"),
+            )
+        };
+        Self {
+            ping,
+            pong,
+            use_ping_as_source: true,
+        }
+    }
+
+    fn source_texture(&self) -> &GpuTexture {
+        if self.use_ping_as_source {
+            &self.ping.texture
+        } else {
+            &self.pong.texture
+        }
+    }
+
+    fn target_texture(&self) -> &GpuTexture {
+        if self.use_ping_as_source {
+            &self.pong.texture
+        } else {
+            &self.ping.texture
+        }
+    }
+
+    fn swap(&mut self) {
+        self.use_ping_as_source = !self.use_ping_as_source;
+    }
+
+    fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
+        self.ping.resize(device, width, height);
+        self.pong.resize(device, width, height);
+    }
+
+    fn width(&self) -> u32 {
+        self.ping.width
+    }
+    fn height(&self) -> u32 {
+        self.ping.height
+    }
+
+    /// Clear source buffer via native encoder.
+    /// `opaque` = true clears to opaque black (a=1), false clears to transparent black (a=0).
+    fn clear_source(&self, gpu: &mut GpuEncoder, opaque: bool) {
+        if opaque {
+            gpu.clear_texture(self.source_texture(), 0.0, 0.0, 0.0, 1.0);
+        } else {
+            gpu.clear_texture(self.source_texture(), 0.0, 0.0, 0.0, 0.0);
+        }
+    }
+}
+
+fn layer_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
+    let mut hasher = DefaultHasher::new();
+    layer_id.hash(&mut hasher);
+    // Ensure non-zero and distinct from clip keys by setting high bit
+    (hasher.finish() | (1 << 63)) as i64
+}
+
+fn group_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
+    let mut hasher = DefaultHasher::new();
+    layer_id.hash(&mut hasher);
+    // Bit 62 for groups (bit 63 is used for layers)
+    (hasher.finish() | (1 << 62)) as i64
+}
+
+/// Check if an effect slice has any enabled effects with non-zero amount.
+/// Unity ref: CompositorStack.cs lines 965-974 — checks enabled && GetParam(0) > 0.
+fn has_enabled_effects(effects: &[PresetInstance]) -> bool {
+    for fx in effects {
+        if fx.enabled
+            && *fx.effect_type() != PresetTypeId::UNKNOWN
+            && fx.params.iter().next().map(|p| p.value).unwrap_or(0.0) > 0.0
+        {
+            return true;
+        }
+    }
+    false
+}
+
+manifold_core::testkit_visible! {
+/// One unique per-clip chain topology (WARMUP_DESIGN P7 D17): a clip's
+/// effective post-fx set — the layer's effects followed by the clip's own
+/// (`TimelineClip::effects`, the legacy per-clip field; empty in projects
+/// saved since per-clip effects moved to the layer) — plus the layer's
+/// groups and owning layer. Deduped by the production
+/// [`PresetRuntime::is_compatible`] topology hash, so a warmed topology is
+/// exactly one the stage dispatch reuses.
+pub(crate) struct ClipChainTopology {
+    pub effects: Vec<PresetInstance>,
+    pub groups: Vec<EffectGroup>,
+    pub layer_id: LayerId,
+}
+}
+
+manifold_core::testkit_visible! {
+/// Walk every clip on every visual layer and collect the UNIQUE effective
+/// chain topologies, deduped by the production topology hash (WARMUP_DESIGN
+/// P7 D17). Bounded by unique topology, not clip count — the design's point:
+/// a show with a thousand clips carries a handful of distinct chains. Group
+/// and audio layers are skipped (group chains warm via
+/// `prewarm_group_chains`, audio layers never enter the compositor).
+pub(crate) fn unique_clip_chain_topologies(
+    layers: &[manifold_core::layer::Layer],
+    width: u32,
+    height: u32,
+) -> Vec<ClipChainTopology> {
+    let mut seen: ahash::AHashSet<u64> = ahash::AHashSet::default();
+    let mut out = Vec::new();
+    for layer in layers {
+        if layer.is_group() || layer.is_audio() {
+            continue;
+        }
+        let layer_effects = layer.effects();
+        let groups = layer.effect_groups();
+
+        // Fast path: no clip carries legacy post-fx, so every clip's
+        // effective set IS the layer's — one hash for the whole layer
+        // instead of one per clip (Corrosion: 1496 clips, ~10 hashes).
+        if !layer.clips.iter().any(|c| !c.effects.is_empty()) {
+            if !has_enabled_effects(layer_effects) {
+                continue;
+            }
+            let hash = manifold_node_engine::runtime::chain_topology_hash(
+                layer_effects,
+                groups,
+                width,
+                height,
+                None,
+            );
+            if seen.insert(hash) {
+                out.push(ClipChainTopology {
+                    effects: layer_effects.to_vec(),
+                    groups: groups.to_vec(),
+                    layer_id: layer.layer_id.clone(),
+                });
+            }
+            continue;
+        }
+
+        for clip in &layer.clips {
+            let mut effects = layer_effects.to_vec();
+            effects.extend(clip.effects.iter().cloned());
+            if !has_enabled_effects(&effects) {
+                continue;
+            }
+            let hash = manifold_node_engine::runtime::chain_topology_hash(
+                &effects,
+                groups,
+                width,
+                height,
+                None,
+            );
+            if seen.insert(hash) {
+                out.push(ClipChainTopology {
+                    effects,
+                    groups: groups.to_vec(),
+                    layer_id: layer.layer_id.clone(),
+                });
+            }
+        }
+    }
+    out
+}
+}
+
+/// LED routing for a layer this frame (LED_STRIPS_DESIGN.md section 5b D11).
+/// Derived ONCE at `LayerOutput` construction from the descriptor's
+/// `layer_type` + `blit_to_led`; every downstream site reads this enum —
+/// no site re-derives the route from the raw fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LedRoute {
+    None,
+    /// Persisted mirror flag (`blit_to_led`): layer shows on screen and
+    /// mirrors into the LED composite.
+    Mirror,
+    /// LED-type layer: routes ONLY to the LED composite (screen-invisible).
+    Direct,
+}
+
+impl LedRoute {
+    /// The single route derivation point (D11).
+    fn from_layer(layer_type: manifold_core::LayerType, blit_to_led: bool) -> Self {
+        match layer_type {
+            manifold_core::LayerType::Dmx => Self::Direct,
+            _ if blit_to_led => Self::Mirror,
+            _ => Self::None,
+        }
+    }
+}
+
+manifold_core::testkit_visible! {
+/// Output descriptor for a single processed layer, ready for the blend pass.
+///
+/// Uses a raw pointer for the texture reference to avoid borrow checker conflicts
+/// between `generate_layers()` (which borrows effect chain / layer buf textures)
+/// and `blend_layers()` (which needs `&mut self` for the main ping-pong).
+/// Safety: the texture pointer is valid for the duration of the frame — textures
+/// are owned by effect chains, layer bufs, or clip render targets, none of which
+/// are reallocated between generate and blend.
+pub(crate) struct LayerOutput {
+    /// Final texture for this layer (post-effects). Raw pointer to avoid lifetime.
+    texture: *const GpuTexture,
+    /// Layer blend mode.
+    blend_mode: BlendMode,
+    /// Layer opacity (includes per-clip opacity for single-clip layers).
+    opacity: f32,
+    /// Source layer index (for group folding — correlates with layer descriptors).
+    layer_index: i32,
+    /// How this layer routes to the LED composite this frame.
+    led_route: LedRoute,
+}
+}
+
+// Safety: LayerOutput is only used within the compositor on the content thread.
+// The raw pointer points to GpuTexture owned by effect chains, layer bufs, or
+// clip render targets that are valid for the frame duration. The Vec<LayerOutput>
+// field on LayerCompositor makes the struct non-Send without this impl.
+unsafe impl Send for LayerOutput {}
+
+/// section 24 5c with-effects thumbnails: a single-clip layer's post-effect output,
+/// keyed by clip id. Unlike `LayerOutput`, this is consumed LATER in the frame
+/// by the clip-thumbnail snapshot, by which time the layer/effect render target
+/// it came from may have been recycled. So it owns a `GpuTexture` clone (one
+/// atomic retain on the underlying Metal texture — no GPU allocation) to keep
+/// that texture alive until the snapshot reads it. A raw pointer here was the
+/// cause of a hard AGX crash when the target was freed before the blit.
+pub(crate) struct ClipPostFx {
+    clip_id: String,
+    texture: GpuTexture,
+}
+
+impl LayerOutput {
+    fn texture(&self) -> &GpuTexture {
+        // Safety: pointer is valid for the frame duration (see struct doc).
+        unsafe { &*self.texture }
+    }
+}
+
+/// Layer-aware compositor with per-layer ping-pong blending.
+///
+/// Compositing flow (two-phase):
+/// 1. **generate_layers**: process each layer's clips + effects independently
+/// 2. **blend_layers**: serial blend of all layer outputs into main accumulator
+pub struct PreparedCompositorResize {
+    main: PingPong,
+    layers: AHashMap<LayerId, PingPong>,
+    groups: AHashMap<LayerId, PingPong>,
+    tonemap: RenderTarget,
+    layer_chains: Vec<(LayerId, manifold_node_engine::runtime::PreparedRuntimeResize)>,
+    group_chains: Vec<(LayerId, manifold_node_engine::runtime::PreparedRuntimeResize)>,
+    master_chain: Option<manifold_node_engine::runtime::PreparedRuntimeResize>,
+}
+
+pub struct LayerCompositor {
+    /// Main accumulation ping-pong (opaque black init).
+    main: PingPong,
+    /// Per-layer scratch buffers (lazy, transparent black init),
+    /// keyed by `LayerId`. One per active multi-clip-or-effects
+    /// layer; reused across frames AND across layer reorders.
+    /// PingPongs are cleared at the start of each layer's use, so
+    /// no state can contaminate across layers within a frame —
+    /// the keying is purely for consistency with the chain pools.
+    layer_bufs: AHashMap<LayerId, PingPong>,
+    /// Per-layer-buf last-used frame counter for time-based pruning.
+    layer_buf_last_used_frame: AHashMap<LayerId, u64>,
+    /// GPU resources for blend operations (pipeline, sampler).
+    blend: BlendResources,
+    /// Per-frame uniform sub-allocator — batches all blend uniform writes into
+    /// a single buffer. On native path, arena buffer is not read (uses inline
+    /// set_bytes), but offset tracking is preserved.
+    uniform_arena: UniformArena,
+    /// Per-layer effect chain processors, keyed by `LayerId`. Each
+    /// chain stays bound to its layer for the lifetime of the project,
+    /// so its cached `PresetRuntime` (primitive instances + state)
+    /// survives across frames even as clips fire/end AND across layer
+    /// reorders (LayerId is stable; `layer_index` is not). Inactive
+    /// layers' chains are dropped after `CHAIN_GRACE_FRAMES` of disuse.
+    /// Type-level invariant: the key is `LayerId`, not `usize`, so
+    /// iteration-counter indexing won't compile.
+    #[cfg(not(any(test, feature = "testkit")))]
+    effect_chains: AHashMap<LayerId, Option<PresetRuntime>>,
+    #[cfg(any(test, feature = "testkit"))]
+    pub effect_chains: AHashMap<LayerId, Option<PresetRuntime>>,
+    /// Per-chain last-used frame counter. Parallel to `effect_chains`;
+    /// updated each frame the chain is touched. Trimmed once stale.
+    #[cfg(not(any(test, feature = "testkit")))]
+    chain_last_used_frame: AHashMap<LayerId, u64>,
+    #[cfg(any(test, feature = "testkit"))]
+    pub chain_last_used_frame: AHashMap<LayerId, u64>,
+    /// Monotonic frame counter for chain liveness tracking. Wraps at
+    /// u64 (~10⁹ years at 60 fps — i.e., never).
+    #[cfg(not(any(test, feature = "testkit")))]
+    frame_counter: u64,
+    #[cfg(any(test, feature = "testkit"))]
+    pub frame_counter: u64,
+    /// Scratch buffer reused each frame to collect active layer IDs
+    /// during pre-scan. Stored on `self` to avoid per-frame allocation.
+    active_layer_ids_scratch: Vec<LayerId>,
+    /// Subset of `active_layer_ids_scratch` whose layers also need a
+    /// layer scratch buffer (multi-clip or has-layer-effects).
+    /// Pre-scanned so `ensure_layer_buf` can run before the main loop
+    /// (no insertions mid-iteration → safe `get_mut`).
+    active_layer_buf_ids_scratch: Vec<LayerId>,
+    /// Dedicated effect chain for the post-blend master FX pass.
+    /// Kept SEPARATE from `effect_chains` because the master pass
+    /// has no natural `LayerId` to key by — it operates on the
+    /// composited scene, not a layer. A dedicated field makes the
+    /// distinction structural (different type, different field)
+    /// so master FX and layer FX cannot share a chain. Costs ~56
+    /// bytes of idle struct space when unused and zero CPU when
+    /// no master effects are present.
+    #[cfg(not(any(test, feature = "testkit")))]
+    master_effect_chain: Option<PresetRuntime>,
+    #[cfg(any(test, feature = "testkit"))]
+    pub master_effect_chain: Option<PresetRuntime>,
+    /// Plugin warmup processors — held for the process lifetime so
+    /// background FFI workers (BlobDetector, DepthEstimator,
+    /// WireframeDepth) stay alive. The compositor forwards `resize`
+    /// and `flush_background_work` through them; chain dispatch goes
+    /// through the primitive registry, not these handles. See
+    /// [`crate::plugin_prewarm`].
+    plugin_warmups: Vec<Box<dyn PostProcessEffect>>,
+    /// Scene transform pipeline. The compositor keeps this output SceneLinear
+    /// so master effects receive the full HDR image; presentation maps it per
+    /// destination after the shared master result.
+    tonemap: TonemapPipeline,
+    /// Pre-allocated scratch buffer for per-layer output descriptors.
+    /// Cleared and populated each frame by generate_layers
+    /// to avoid per-frame heap allocation.
+    #[cfg(not(any(test, feature = "testkit")))]
+    layer_outputs_scratch: Vec<LayerOutput>,
+    #[cfg(any(test, feature = "testkit"))]
+    pub layer_outputs_scratch: Vec<LayerOutput>,
+    // Retain leaf outputs before group folding removes their descriptors.
+    source_outputs_scratch: Vec<(i32, GpuTexture)>,
+    /// section 24 5c with-effects thumbnails: `clip_id → that layer's post-effect output
+    /// texture`, populated only for SINGLE-clip layers (where the layer output IS
+    /// that clip's full look — generator/video + layer effects). Multi-clip layers
+    /// can't isolate one clip, so they're absent and the thumbnail uses the raw
+    /// clip texture. Raw pointers valid for the frame (like `LayerOutput`); read
+    /// only on the content thread, same frame. Cleared each `generate_layers`.
+    clip_post_fx_scratch: Vec<ClipPostFx>,
+    /// Per-group scratch buffers (lazy, transparent black init),
+    /// keyed by the group container's `LayerId`. One per active
+    /// group — each group needs its own buffer because LayerOutput
+    /// raw pointers must remain valid until blend_layers.
+    group_bufs: AHashMap<LayerId, PingPong>,
+    /// Per-group-buf last-used frame counter for time-based pruning.
+    group_buf_last_used_frame: AHashMap<LayerId, u64>,
+    /// Per-group effect chains, keyed by the group container's
+    /// `LayerId`. Same structural invariant as `effect_chains`:
+    /// the key is stable, iteration-counter indexing won't compile.
+    group_effect_chains: AHashMap<LayerId, Option<PresetRuntime>>,
+    /// Per-group-chain last-used frame counter for time-based pruning.
+    group_chain_last_used_frame: AHashMap<LayerId, u64>,
+    /// Pre-allocated scratch for child layer indices during group folding.
+    group_child_indices: Vec<i32>,
+    /// Pre-allocated scratch for child output positions during group folding.
+    group_child_positions: Vec<usize>,
+
+    // ── LED per-layer routing ──
+    /// Accumulation buffer for LED-routed layers. Lazily allocated on
+    /// the first frame any LED layer is active; persistent across frames.
+    /// The LED path runs raw HDR end-to-end — no dedicated tonemap stage. The
+    /// screen tonemap is wrong for LEDs (its peak target is the TV's display
+    /// nits, far below the LEDs' headroom) and its per-channel soft-clip
+    /// washed colored bright peaks toward white. The LED slicer applies
+    /// `led_gain` and a chroma-preserving clip in linear space before the
+    /// 8-bit DMX clamp instead.
+    led_main: Option<PingPong>,
+    /// Dedicated effect chain for LED master FX. Stored as a standalone field
+    /// (not in `effect_chains` Vec) so the shared resize path doesn't force it
+    /// to full resolution — the LED chain auto-allocates at half-res via
+    /// `ensure_buffers` driven by the LED PresetContext.
+    /// Uses owner_key `LED_MASTER_OWNER_KEY` to keep temporal state separate
+    /// from the main master chain.
+    #[cfg(not(any(test, feature = "testkit")))]
+    led_master_ec: Option<Option<PresetRuntime>>,
+    #[cfg(any(test, feature = "testkit"))]
+    pub led_master_ec: Option<Option<PresetRuntime>>,
+
+    /// Per-group LED scratch buffers at LED grid resolution, keyed
+    /// by the group container's `LayerId`. One per group whose
+    /// LED-flagged children need to flow through that group's
+    /// effects on the LED path. Reused across frames; reallocated
+    /// only on LED-grid dimension changes.
+    led_group_bufs: AHashMap<LayerId, PingPong>,
+    /// Per-LED-group-buf last-used frame counter for time-based pruning.
+    led_group_buf_last_used_frame: AHashMap<LayerId, u64>,
+    /// Per-group LED effect chains, keyed by the group container's
+    /// `LayerId`. Distinct field from `group_effect_chains` so
+    /// temporal state on the LED path doesn't bleed into the screen
+    /// path (and vice versa) — physically impossible because they
+    /// are different fields, even though both use `LayerId` keys.
+    /// Lazy-allocates at LED grid resolution via the `PresetContext`
+    /// passed to `apply_effects`.
+    led_group_effect_chains: AHashMap<LayerId, Option<PresetRuntime>>,
+    /// Per-LED-group-chain last-used frame counter for time-based pruning.
+    led_group_chain_last_used_frame: AHashMap<LayerId, u64>,
+
+    /// 1×1 opaque-black Rgba16Float texture used as a stand-in source when
+    /// compositing **non-LED** layers into the LED stack. The non-L layer's
+    /// own blend mode + opacity still apply, so an opaque Normal-blend layer
+    /// substitutes black-on-black → covers what's below = matches the screen
+    /// "blocked" semantic. Lazy-initialised on first frame any LED layer is
+    /// active; cleared once on creation, then reused indefinitely.
+    led_black_tex: Option<GpuTexture>,
+
+    /// Authoring-time node-output preview request: `(watched effect, optional
+    /// selected node)`. Applied to every chain before `render` so the chain
+    /// holding the watched effect preserves the selected node's output for the
+    /// editor to sample; all other chains clear. `None` = no preview active.
+    /// Set via [`Self::set_preview_request`]; read back via
+    /// [`Self::preview_texture`].
+    preview_request: Option<(EffectId, Option<NodeId>)>,
+
+    /// Dump request applied to the watched effect's chain before the next
+    /// `render` — either the Cmd+D whole-graph disk dump or the editor's
+    /// visible-only thumbnail atlas. The content layer reads
+    /// [`Self::dump_textures`] after that frame. `None` = no dump pending.
+    dump_request: Option<crate::compositor::DumpRequest>,
+
+    /// Per-step GPU/CPU attribution profiling on/off for every chain this
+    /// compositor owns (PERF_BUDGET_GATE_DESIGN P2 / D6). Fanned out to each
+    /// chain's executor at dispatch time (see `fx_scope`/`led_scope`
+    /// helpers) — `false` costs one `bool` set per dispatch, zero GPU/CPU
+    /// timing. Set via [`Self::set_profiling`].
+    profiling_enabled: bool,
+    /// Render-only scene viewport request routed to the one screen chain
+    /// holding the selected effect. All other chains clear their capture.
+    scene_viewport_request: Option<(
+        EffectId,
+        NodeId,
+        manifold_node_engine::scene::scene_viewport::SceneViewportConfig,
+    )>,
+    scene_viewport_error: Option<manifold_node_engine::scene::scene_viewport::SceneViewportHostError>,
+    /// RT_QUALITY_SETTINGS_DESIGN.md D5 — per-frame RT quality values from the
+    /// active column (realtime vs export). Set per frame via [`set_rt_quality`];
+    /// forwarded to every chain's executor through dispatch_chain. Default = live
+    /// constants so tests and non-RT graphs run unchanged.
+    rt_quality: manifold_node_engine::exec::effect_node::RtQuality,
+    /// SCENE_FX P4a — registry of previous-frame layer composited outputs,
+    /// published after all layer renders and read by graph execution next frame.
+    layer_skin_registry: manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
+}
+
+/// This chain's profiled-tag scope for a screen/LED per-layer effect chain:
+/// `fx:{layer_id}`.
+fn fx_scope(layer_id: &LayerId) -> String {
+    format!("fx:{layer_id}")
+}
+
+/// This chain's profiled-tag scope for a per-group-on-the-LED-path effect
+/// chain: `led:{group_id}`.
+fn led_scope(group_id: &LayerId) -> String {
+    format!("led:{group_id}")
+}
+
+/// Distinct owner_key for the LED master effect chain — must not collide with
+/// owner_key 0 (main master) or any layer/clip hash.
+const LED_MASTER_OWNER_KEY: i64 = i64::MIN + 1;
+
+manifold_core::testkit_visible! {
+/// How many render() calls a per-layer effect chain may stay unused before
+/// it's dropped as a memory-hygiene safety net. Acts ALONGSIDE the
+/// event-based eviction in `trim_excess_buffers` (which drops a chain
+/// the moment its `LayerId` disappears from `frame.layers`). The timer
+/// is the catch for the "this layer hasn't been used in ages and the
+/// operator has clearly moved on" case in multi-hour live shows — frees
+/// memory for sections that won't be revisited without waiting for the
+/// project to be edited.
+///
+/// 18000 = 5 minutes at 60 fps. Frame-count, not wall time, so a 30-fps
+/// project effectively gets 10 min, a 120-fps project 2.5 min. Comfortable
+/// margin around typical mid-song mutes / song-to-song transitions
+/// (sub-minute) while still freeing memory inside a long show.
+const CHAIN_GRACE_FRAMES: u64 = 18000;
+}
+
+/// Returns true when blending an opaque-black source with this mode is a
+/// mathematical no-op on the destination RGB.
+///
+/// Used by the LED path to skip dispatches for non-L layers that don't
+/// actually block (these modes produce `out = base` when the foreground is
+/// black). The non-skippable modes — Normal, Multiply, Overlay, Opaque,
+/// Darken — *do* change the output and must run for correct screen-equivalent
+/// blocking semantics.
+///
+/// Note: only safe to skip when the destination's alpha is already 1 (no
+/// downstream blend reads a partial alpha channel). This holds for the
+/// top-level led_main composite (cleared opaque) and blocker-group blends,
+/// but **not** inside a per-group LED scratch (which is cleared transparent
+/// and feeds group FX that may read alpha) — those keep running.
+#[inline]
+fn is_identity_for_black(mode: BlendMode) -> bool {
+    matches!(
+        mode,
+        BlendMode::Additive
+            | BlendMode::Screen
+            | BlendMode::Stencil
+            | BlendMode::Difference
+            | BlendMode::Exclusion
+            | BlendMode::Subtract
+            | BlendMode::ColorDodge
+            | BlendMode::Lighten
+    )
+}
+
+/// Distinct owner_key for the LED group effect chain. Mirrors
+/// `layer_id_owner_key` but mixes in a discriminator so temporal state on the
+/// LED path doesn't collide with the same group's screen-path effect chain.
+fn led_group_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
+    let mut hasher = DefaultHasher::new();
+    layer_id.hash(&mut hasher);
+    "led_group".hash(&mut hasher);
+    (hasher.finish() | (1 << 63)) as i64
+}
+
+impl LayerCompositor {
+    pub fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
+        Self {
+            main: PingPong::new(device, None, width, height, "Compositor"),
+            layer_bufs: AHashMap::default(),
+            layer_buf_last_used_frame: AHashMap::default(),
+            blend: BlendResources::new(device, width, height),
+            uniform_arena: UniformArena::new(device),
+            effect_chains: AHashMap::default(),
+            chain_last_used_frame: AHashMap::default(),
+            frame_counter: 0,
+            active_layer_ids_scratch: Vec::new(),
+            active_layer_buf_ids_scratch: Vec::new(),
+            master_effect_chain: None,
+            plugin_warmups: manifold_node_engine::runtime::plugin_prewarm::prewarm_all(device),
+            tonemap: TonemapPipeline::new(device, width, height),
+            layer_outputs_scratch: Vec::new(),
+            source_outputs_scratch: Vec::new(),
+            clip_post_fx_scratch: Vec::new(),
+            group_bufs: AHashMap::default(),
+            group_buf_last_used_frame: AHashMap::default(),
+            group_effect_chains: AHashMap::default(),
+            group_chain_last_used_frame: AHashMap::default(),
+            group_child_indices: Vec::new(),
+            group_child_positions: Vec::new(),
+            led_main: None,
+            led_master_ec: None,
+            led_group_bufs: AHashMap::default(),
+            led_group_buf_last_used_frame: AHashMap::default(),
+            led_group_effect_chains: AHashMap::default(),
+            led_group_chain_last_used_frame: AHashMap::default(),
+            led_black_tex: None,
+            preview_request: None,
+            dump_request: None,
+            profiling_enabled: false,
+            scene_viewport_request: None,
+            scene_viewport_error: None,
+            rt_quality: manifold_node_engine::exec::effect_node::RtQuality::default(),
+            layer_skin_registry: manifold_node_engine::runtime::layer_skin::LayerSkinRegistry::new(
+                device,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+            ),
+        }
+    }
+
+    /// Apply the current preview request to every screen-effect chain: the one
+    /// holding the watched effect aims its capture at the selected node, all
+    /// others clear. Called once per frame before compositing so a freshly
+    /// rebuilt chain re-acquires its target. LED chains are excluded — preview
+    /// is a screen-authoring aid.
+    fn apply_preview_targets(&mut self) {
+        let request = self.preview_request.clone();
+        let dump = self.dump_request.clone();
+        let viewport_request = self.scene_viewport_request.clone();
+        let mut viewport_applied = false;
+        let mut viewport_error = None;
+        let mut apply = |chain: &mut Option<PresetRuntime>| {
+            if let Some(cg) = chain.as_mut() {
+                if let Some((effect_id, node_id, config)) = &viewport_request {
+                    match cg.set_scene_viewport(effect_id, node_id, *config) {
+                        Ok(()) => viewport_applied = true,
+                        Err(error) => match error {
+                            manifold_node_engine::scene::scene_viewport::SceneViewportError::TargetNotFound => {}
+                            other => viewport_error = Some(
+                                manifold_node_engine::scene::scene_viewport::SceneViewportHostError::InvalidTarget(other),
+                            ),
+                        },
+                    }
+                } else {
+                    cg.clear_scene_viewport();
+                }
+                match &request {
+                    Some((effect_id, node_id)) => {
+                        cg.set_preview_target(effect_id, node_id.as_ref())
+                    }
+                    None => cg.clear_preview_target(),
+                }
+                // Enable the dump only on the chain holding the requested
+                // effect. Cmd+D dumps the whole graph; the editor atlas dumps
+                // only the visible nodes. The two modes are mutually exclusive,
+                // so each clears the other.
+                match &dump {
+                    Some(crate::compositor::DumpRequest::All(eid)) => {
+                        cg.set_dump(Some(eid));
+                        cg.clear_dump_set();
+                    }
+                    Some(crate::compositor::DumpRequest::Visible(eid, nodes)) => {
+                        cg.set_dump(None);
+                        cg.set_dump_visible(Some(eid), nodes);
+                    }
+                    None => {
+                        cg.set_dump(None);
+                        cg.clear_dump_set();
+                    }
+                }
+            }
+        };
+        apply(&mut self.master_effect_chain);
+        for chain in self.effect_chains.values_mut() {
+            apply(chain);
+        }
+        for chain in self.group_effect_chains.values_mut() {
+            apply(chain);
+        }
+        self.scene_viewport_error = viewport_error.or_else(|| {
+            viewport_request.as_ref().and_then(|_| {
+                (!viewport_applied).then_some(
+                    manifold_node_engine::scene::scene_viewport::SceneViewportHostError::MissingRuntime,
+                )
+            })
+        });
+    }
+
+    /// Ensure a layer scratch buffer exists for the given `LayerId`,
+    /// allocating at the current main compositor resolution if missing.
+    /// Stamps last-used so trim keeps it alive. Resolution changes are
+    /// handled in `resize`, which walks all bufs.
+    fn ensure_layer_buf(
+        &mut self,
+        layer_id: &LayerId,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+    ) {
+        let w = self.main.width();
+        let h = self.main.height();
+        if !self.layer_bufs.contains_key(layer_id) {
+            self.layer_bufs.insert(
+                layer_id.clone(),
+                PingPong::new(device, pool, w, h, "Layer Scratch"),
+            );
+        }
+        self.layer_buf_last_used_frame
+            .insert(layer_id.clone(), self.frame_counter);
+    }
+
+    manifold_core::testkit_visible! {
+    /// Ensure a chain exists for the given `LayerId`. Stable across frames and
+    /// layer reorders — the chain's cached `PresetRuntime` (with primitive state)
+    /// is preserved as long as the layer is touched within `CHAIN_GRACE_FRAMES`.
+    /// Also marks the chain as used this frame so it survives trimming.
+    fn ensure_chain_for_layer(&mut self, layer_id: &LayerId) {
+        self.effect_chains.entry(layer_id.clone()).or_default();
+        self.chain_last_used_frame
+            .insert(layer_id.clone(), self.frame_counter);
+    }
+    }
+
+    /// Same contract as `ensure_chain_for_layer`, but for the group-effect-chain
+    /// pool keyed by the group container's `LayerId`.
+    fn ensure_group_chain(&mut self, group_id: &LayerId) {
+        self.group_effect_chains
+            .entry(group_id.clone())
+            .or_default();
+        self.group_chain_last_used_frame
+            .insert(group_id.clone(), self.frame_counter);
+    }
+
+    /// Ensure a group scratch buffer exists for the given group's `LayerId`,
+    /// allocating at the current main compositor resolution if missing.
+    fn ensure_group_buf(
+        &mut self,
+        group_id: &LayerId,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+    ) {
+        let w = self.main.width();
+        let h = self.main.height();
+        if !self.group_bufs.contains_key(group_id) {
+            self.group_bufs.insert(
+                group_id.clone(),
+                PingPong::new(device, pool, w, h, "Group Scratch"),
+            );
+        }
+        self.group_buf_last_used_frame
+            .insert(group_id.clone(), self.frame_counter);
+    }
+
+    /// Ensure an LED group scratch buffer exists for the given group's
+    /// `LayerId` at the supplied LED grid resolution. Resizes the buffer
+    /// (and all other LED group bufs) if the resolution changed since
+    /// the previous frame. Stamps last-used for trim.
+    fn ensure_led_group_buf(
+        &mut self,
+        group_id: &LayerId,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        width: u32,
+        height: u32,
+    ) {
+        if !self.led_group_bufs.contains_key(group_id) {
+            self.led_group_bufs.insert(
+                group_id.clone(),
+                PingPong::new(device, pool, width, height, "LED Group Scratch"),
+            );
+        }
+        // If the LED grid changed since last frame, resize every entry
+        // (cheap if size already matches).
+        for buf in self.led_group_bufs.values_mut() {
+            if buf.width() != width || buf.height() != height {
+                buf.resize(device, width, height);
+            }
+        }
+        self.led_group_buf_last_used_frame
+            .insert(group_id.clone(), self.frame_counter);
+    }
+
+    /// Ensure an LED group chain exists for the given `LayerId`.
+    /// Internal effect-chain buffers lazy-allocate at LED grid resolution
+    /// via the `PresetContext` passed to `apply_effects`.
+    fn ensure_led_group_chain(&mut self, group_id: &LayerId) {
+        self.led_group_effect_chains
+            .entry(group_id.clone())
+            .or_default();
+        self.led_group_chain_last_used_frame
+            .insert(group_id.clone(), self.frame_counter);
+    }
+
+    /// Warm up the per-layer post-fx chain for `layer`. Builds the chain via
+    /// the production `dispatch_chain` path against a cleared scratch input,
+    /// then pumps frames until `warmup_pending()` reports quiescent or either
+    /// the per-layer wall-clock cap or the per-layer frame cap is exhausted.
+    ///
+    /// Mirrors `GeneratorRenderer::prewarm_layer`: the chain slot is inserted
+    /// into `effect_chains`, rendered offscreen, and left resident so the
+    /// first active frame hits the cached `PresetRuntime` instead of building
+    /// it on stage.
+    pub fn prewarm_layer_chains(
+        &mut self,
+        layer: &manifold_core::layer::Layer,
+        pass: &mut WarmupPass,
+        device: &GpuDevice,
+    ) -> WarmupOutcome {
+        let output_dims = (self.main.width(), self.main.height());
+        self.prewarm_layer_chains_with_output(layer, pass, device, output_dims)
+    }
+
+    /// Warm up the per-layer post-fx chain for `layer`, using the supplied
+    /// output dimensions instead of assuming they match the render dimensions.
+    /// Some chains size intermediate targets from `output_width`/`output_height`,
+    /// so warming with the real output dims prevents a rebuild on the first frame.
+    pub fn prewarm_layer_chains_with_output(
+        &mut self,
+        layer: &manifold_core::layer::Layer,
+        pass: &mut WarmupPass,
+        device: &GpuDevice,
+        output_dims: (u32, u32),
+    ) -> WarmupOutcome {
+        let effects = layer.effects();
+        if !has_enabled_effects(effects) {
+            return WarmupOutcome::Quiescent;
+        }
+
+        let run = pass.layer(&layer.layer_id, Instant::now());
+        if let Some(outcome) = run.exhausted(Instant::now(), 0) {
+            return outcome;
+        }
+
+        // Pre-insert the chain slot and mark it used so the first render's
+        // `trim_excess_buffers` / `clear_idle_chain_state` doesn't evict the
+        // freshly warmed runtime before it can be exercised.
+        self.effect_chains
+            .entry(layer.layer_id.clone())
+            .or_default();
+        self.chain_last_used_frame
+            .insert(layer.layer_id.clone(), self.frame_counter);
+
+        let width = self.main.width();
+        let height = self.main.height();
+        let (output_width, output_height) = output_dims;
+        let mut scratch = RenderTarget::new(
+            device,
+            width,
+            height,
+            GpuTextureFormat::Rgba16Float,
+            "warmup chain scratch",
+        );
+
+        const DT: f64 = 1.0 / 60.0;
+        let mut outcome = WarmupOutcome::BudgetExhausted {
+            cap: manifold_core::WarmupCap::PerLayerFrames,
+            elapsed: std::time::Duration::ZERO,
+        };
+        let group_id = layer.layer_id.clone();
+        let mut warmup_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+        for frame in 0..run.budget.per_layer_frames {
+            // Wall-clock is the primary per-layer cap; the frame cap is only
+            // a safety bound for runaway spin loops.
+            let pump_start = std::time::Instant::now();
+            let now = Instant::now();
+            if let Some(exhausted) = run.exhausted(now, frame) {
+                outcome = exhausted;
+                break;
+            }
+
+            self.uniform_arena.reset();
+            let mut native_enc = device.create_encoder("warmup chain");
+            {
+                let mut gpu = GpuEncoder::new(&mut native_enc, device);
+                gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
+                gpu.clear_texture(&scratch.texture, 0.0, 0.0, 0.0, 0.0);
+                let ctx = PresetContext {
+                    time: frame as f64 * DT,
+                    beat: 0.0,
+                    dt: DT as f32,
+                    width,
+                    height,
+                    output_width,
+                    output_height,
+                    aspect: if height > 0 {
+                        width as f32 / height as f32
+                    } else {
+                        1.0
+                    },
+                    owner_key: layer_id_owner_key(&group_id),
+                    is_clip_level: false,
+                    frame_count: frame as i64,
+                    anim_progress: 0.0,
+                    trigger_count: 0,
+                };
+                let scope = fx_scope(&group_id);
+                let chain = self
+                    .effect_chains
+                    .get_mut(&group_id)
+                    .expect("chain slot inserted above");
+                Self::apply_effects(
+                    chain,
+                    &mut gpu,
+                    &scratch.texture,
+                    effects,
+                    layer.effect_groups(),
+                    &ctx,
+                    None,
+                    &scope,
+                    false,
+                    manifold_node_engine::exec::effect_node::RtQuality::default(),
+                    &self.layer_skin_registry,
+                    None,
+                );
+                // §5.4: pending geometry is incomplete preparation — the
+                // wrapper's status gates quiescence below.
+                warmup_frame_status = gpu.frame_status();
+            }
+            if let Err(err) = native_enc.try_commit_and_wait_completed() {
+                log::error!("Effect-chain warmup GPU failure: {err}");
+                return WarmupOutcome::GpuFailed;
+            }
+            self.uniform_arena.flush(device);
+
+            let pending = self
+                .effect_chains
+                .get(&group_id)
+                .and_then(|chain| chain.as_ref())
+                .is_some_and(|cg| cg.warmup_pending());
+            let installed = self
+                .effect_chains
+                .get(&group_id)
+                .is_some_and(|chain| chain.is_some());
+            if let Some(next) = run.pending_outcome(
+                pending,
+                warmup_frame_status.presentable(),
+                installed,
+            ) {
+                outcome = next;
+                break;
+            }
+
+            if pending {
+                let now = Instant::now();
+                let delay = run.pending_pump_delay(now, pump_start.elapsed());
+                if !delay.is_zero() {
+                    std::thread::sleep(delay);
+                }
+            }
+        }
+
+        // Recycle the scratch target at the current canvas size.
+        scratch.resize(device, width, height);
+        // A warmed chain's output target is owned by the cached PresetRuntime;
+        // the scratch is only an input stand-in.
+        if matches!(outcome, WarmupOutcome::BudgetExhausted { .. }) {
+            outcome = run
+                .exhausted(Instant::now(), run.budget.per_layer_frames)
+                .unwrap();
+        }
+        outcome
+    }
+
+    /// P7 D17 (WARMUP_DESIGN section 5): build every unique per-clip chain
+    /// topology through the production `dispatch_chain` path. The per-layer
+    /// warm above leaves each layer's FIRST clip's topology resident (D11);
+    /// any other clip whose effective post-fx set differs is a topology the
+    /// stage would build — and compile fused kernels for — at that clip's
+    /// boundary. Topologies already resident in their layer's slot are
+    /// skipped via the production `is_compatible` check; the rest build
+    /// into a scratch slot whose kernels and fused views land in the
+    /// shared device/fusion caches — the warmth that survives the scratch
+    /// runtime being dropped. Budget-bounded per D6: exhaustion logs
+    /// loudly, never silently truncates.
+    pub fn prewarm_clip_chain_topologies(
+        &mut self,
+        project: &manifold_core::project::Project,
+        pass: &mut WarmupPass,
+        device: &GpuDevice,
+    ) -> WarmupOutcome {
+        let pass_run = pass.run();
+        if let Some(outcome) = pass_run.exhausted(Instant::now(), 0) {
+            pass.record_outcome(outcome);
+            return outcome;
+        }
+        let width = self.main.width();
+        let height = self.main.height();
+        let topologies = unique_clip_chain_topologies(&project.timeline.layers, width, height);
+        if topologies.is_empty() {
+            return WarmupOutcome::Quiescent;
+        }
+
+        let mut scratch: Option<RenderTarget> = None;
+        // One scratch slot for every topology: `dispatch_chain` hands the
+        // outgoing runtime to the next build as the state-harvest donor, so
+        // reuse here matches production's rebuild handoff.
+        let mut slot: Option<PresetRuntime> = None;
+        let mut any_failure: Option<WarmupOutcome> = None;
+        let mut covered = 0usize;
+
+        for t in &topologies {
+            let run = pass.layer(&t.layer_id, Instant::now());
+            if let Some(outcome) = run.exhausted(Instant::now(), 0) {
+                pass.record_outcome(outcome);
+                match outcome {
+                    WarmupOutcome::BudgetExhausted {
+                        cap: WarmupCap::TotalWallClock,
+                        ..
+                    } => {
+                        log::warn!(
+                            "[LayerCompositor] Clip-topology warmup total budget exhausted \
+                             after {covered}/{} unique topologies; later clips' chains may \
+                             first-touch once at play",
+                            topologies.len(),
+                        );
+                        any_failure = Some(outcome);
+                        break;
+                    }
+                    _ => {
+                        log::warn!(
+                            "[LayerCompositor] Clip-topology warmup layer '{}' budget \
+                             exhausted; continuing with later topologies",
+                            t.layer_id.as_str(),
+                        );
+                        any_failure = Some(outcome);
+                        continue;
+                    }
+                }
+            }
+
+            if scratch.is_none() {
+                scratch = Some(RenderTarget::new(
+                    device,
+                    width,
+                    height,
+                    GpuTextureFormat::Rgba16Float,
+                    "warmup clip-topology scratch",
+                ));
+            }
+            let scratch_target = scratch
+                .as_ref()
+                .expect("clip-topology scratch initialized after layer deadline check");
+
+            // The layer's resident chain (warmed above with the first
+            // clip's topology) already covers this topology when the
+            // production reuse check passes.
+            let already_resident = self
+                .effect_chains
+                .get(&t.layer_id)
+                .and_then(|c| c.as_ref())
+                .is_some_and(|c| c.is_compatible(&t.effects, &t.groups, width, height, None));
+            if already_resident {
+                covered += 1;
+                continue;
+            }
+
+            let ctx = PresetContext {
+                time: 0.0,
+                beat: 0.0,
+                dt: 1.0 / 60.0,
+                width,
+                height,
+                output_width: width,
+                output_height: height,
+                aspect: if height > 0 {
+                    width as f32 / height as f32
+                } else {
+                    1.0
+                },
+                owner_key: layer_id_owner_key(&t.layer_id),
+                is_clip_level: false,
+                frame_count: 0,
+                anim_progress: 0.0,
+                trigger_count: 0,
+            };
+            let scope = fx_scope(&t.layer_id);
+            let mut outcome = WarmupOutcome::Quiescent;
+            for attempt in 0..3 {
+                let run = pass.layer(&t.layer_id, Instant::now());
+                if let Some(exhausted) = run.exhausted(Instant::now(), 0) {
+                    outcome = exhausted;
+                    break;
+                }
+                outcome = Self::pump_chain_warmup(
+                    &mut self.uniform_arena,
+                    &mut slot,
+                    device,
+                    &scratch_target.texture,
+                    &t.effects,
+                    &t.groups,
+                    &ctx,
+                    &scope,
+                    run,
+                    &self.layer_skin_registry,
+                );
+                if outcome != WarmupOutcome::Quiescent {
+                    break;
+                }
+                let had_pending =
+                    manifold_node_engine::runtime::prewarm_worker_pending_count() > 0;
+                if !had_pending {
+                    break;
+                }
+                if let Some(exhausted) = Self::drain_fusion_warmup(
+                    pass.layer(&t.layer_id, Instant::now()),
+                ) {
+                    outcome = exhausted;
+                    break;
+                }
+                if attempt == 2 {
+                    break;
+                }
+            }
+            pass.record_outcome(outcome);
+            match outcome {
+                WarmupOutcome::GpuFailed => return WarmupOutcome::GpuFailed,
+                WarmupOutcome::Quiescent => {}
+                WarmupOutcome::BudgetExhausted { cap, elapsed } => {
+                    log::warn!(
+                        "[LayerCompositor] Clip-topology warmup budget exhausted ({cap:?}) \
+                         on a topology of layer '{}' after {elapsed:.1?}; that topology \
+                         may first-touch once at play",
+                        t.layer_id.as_str(),
+                    );
+                    any_failure = Some(outcome);
+                }
+                WarmupOutcome::InstallFailed => {
+                    log::error!(
+                        "[LayerCompositor] Clip-topology warmup install failed on a \
+                         topology of layer '{}'; that topology will be cold on stage",
+                        t.layer_id.as_str(),
+                    );
+                    any_failure = Some(outcome);
+                }
+                WarmupOutcome::PreparationFailed => {
+                    log::error!(
+                        "[LayerCompositor] Clip-topology warmup preparation failed on a \
+                         topology of layer '{}'; that topology will be cold on stage",
+                        t.layer_id.as_str(),
+                    );
+                    any_failure = Some(outcome);
+                }
+            }
+            covered += 1;
+        }
+
+        if topologies.len() > 1 {
+            log::info!(
+                "[LayerCompositor] Clip-topology warmup covered {covered}/{} unique topologies",
+                topologies.len(),
+            );
+        }
+
+        // Recycle the scratch target at the current canvas size.
+        if let Some(scratch) = scratch.as_mut() {
+            scratch.resize(device, width, height);
+        }
+        any_failure.unwrap_or(WarmupOutcome::Quiescent)
+    }
+
+    /// Drain fusion results while the owning warmup run is still live. A
+    /// topology's fused view is global, but its wait must consume the same
+    /// per-layer deadline as the topology that queued it.
+    fn drain_fusion_warmup(run: WarmupRun) -> Option<WarmupOutcome> {
+        while manifold_node_engine::runtime::prewarm_worker_pending_count() > 0 {
+            let now = Instant::now();
+            if let Some(outcome) = run.exhausted(now, 0) {
+                return Some(outcome);
+            }
+            manifold_node_engine::freeze::install::pump_segment_results();
+            if manifold_node_engine::runtime::prewarm_worker_pending_count() == 0 {
+                break;
+            }
+            let delay = run.clamp_wait(Instant::now(), std::time::Duration::from_millis(2));
+            if !delay.is_zero() {
+                std::thread::sleep(delay);
+            }
+        }
+        None
+    }
+
+    /// Pump a single effect-chain slot against a cleared stand-in input until
+    /// its async work quiesces or the per-layer budget is exhausted.
+    fn pump_chain_warmup(
+        uniform_arena: &mut UniformArena,
+        chain: &mut Option<PresetRuntime>,
+        device: &GpuDevice,
+        input_texture: &GpuTexture,
+        effects: &[PresetInstance],
+        groups: &[EffectGroup],
+        ctx: &PresetContext,
+        scope: &str,
+        run: WarmupRun,
+        layer_sources: &manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
+    ) -> WarmupOutcome {
+        let mut outcome = WarmupOutcome::BudgetExhausted {
+            cap: WarmupCap::PerLayerFrames,
+            elapsed: std::time::Duration::ZERO,
+        };
+        let mut warmup_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+
+        for frame in 0..run.budget.per_layer_frames {
+            let pump_start = std::time::Instant::now();
+            if let Some(exhausted) = run.exhausted(Instant::now(), frame) {
+                outcome = exhausted;
+                break;
+            }
+
+            uniform_arena.reset();
+            let mut native_enc = device.create_encoder("warmup chain");
+            {
+                let mut gpu = GpuEncoder::new(&mut native_enc, device);
+                gpu.uniform_arena = Some(uniform_arena as *mut UniformArena);
+                gpu.clear_texture(input_texture, 0.0, 0.0, 0.0, 0.0);
+                Self::apply_effects(
+                    chain,
+                    &mut gpu,
+                    input_texture,
+                    effects,
+                    groups,
+                    ctx,
+                    None,
+                    scope,
+                    false,
+                    manifold_node_engine::exec::effect_node::RtQuality::default(),
+                    layer_sources,
+                    None,
+                );
+                // §5.4: pending geometry is incomplete preparation — the
+                // wrapper's status gates quiescence below.
+                warmup_frame_status = gpu.frame_status();
+            }
+            if let Err(err) = native_enc.try_commit_and_wait_completed() {
+                log::error!("Effect-chain warmup GPU failure: {err}");
+                return WarmupOutcome::GpuFailed;
+            }
+            uniform_arena.flush(device);
+
+            let pending = chain.as_ref().is_some_and(|cg| cg.warmup_pending());
+            let installed = chain.is_some();
+            if let Some(next) = run.pending_outcome(
+                pending,
+                warmup_frame_status.presentable(),
+                installed,
+            ) {
+                outcome = next;
+                break;
+            }
+
+            if pending {
+                let now = Instant::now();
+                let delay = run.pending_pump_delay(now, pump_start.elapsed());
+                if !delay.is_zero() {
+                    std::thread::sleep(delay);
+                }
+            }
+        }
+
+        if matches!(outcome, WarmupOutcome::BudgetExhausted { .. }) {
+            outcome = run
+                .exhausted(Instant::now(), run.budget.per_layer_frames)
+                .unwrap();
+        }
+        outcome
+    }
+
+    /// Warm up the master effect chain so the first frame with master FX
+    /// doesn't pay chain construction on stage. Also warms the LED master
+    /// chain when the project routes layers to LEDs.
+    pub fn prewarm_master_chain(
+        &mut self,
+        project: &manifold_core::project::Project,
+        pass: &mut WarmupPass,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+    ) -> WarmupOutcome {
+        let effects = &project.settings.master_effects;
+        if !has_enabled_effects(effects) {
+            return WarmupOutcome::Quiescent;
+        }
+        let run = pass.master(Instant::now());
+        if let Some(outcome) = run.exhausted(Instant::now(), 0) {
+            return outcome;
+        }
+        let groups = project.settings.master_effect_groups.as_deref().unwrap_or(&[]);
+
+        let width = self.main.width();
+        let height = self.main.height();
+        let mut scratch = RenderTarget::new(
+            device,
+            width,
+            height,
+            GpuTextureFormat::Rgba16Float,
+            "warmup master scratch",
+        );
+        let ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width,
+            height,
+            output_width: width,
+            output_height: height,
+            aspect: if height > 0 {
+                width as f32 / height as f32
+            } else {
+                1.0
+            },
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let outcome = Self::pump_chain_warmup(
+            &mut self.uniform_arena,
+            &mut self.master_effect_chain,
+            device,
+            &scratch.texture,
+            effects,
+            groups,
+            &ctx,
+            "master",
+            run,
+            &self.layer_skin_registry,
+        );
+
+        if outcome != WarmupOutcome::Quiescent {
+            scratch.resize(device, width, height);
+            return outcome;
+        }
+
+        let has_led_layers = project.timeline.layers.iter().any(|l| l.routes_to_led());
+        if !has_led_layers {
+            scratch.resize(device, width, height);
+            return outcome;
+        }
+
+        let led_run = pass.master(Instant::now());
+        if let Some(outcome) = led_run.exhausted(Instant::now(), 0) {
+            scratch.resize(device, width, height);
+            return outcome;
+        }
+        let (led_w, led_h) = (led_grid_size.0.max(1), led_grid_size.1.max(1));
+        if self.led_main.as_ref().is_none_or(|l| l.width() != led_w || l.height() != led_h) {
+            self.led_main = Some(PingPong::new(device, pool, led_w, led_h, "LED Composite"));
+        }
+        if self.led_master_ec.is_none() {
+            self.led_master_ec = Some(None);
+        }
+
+        let led_ec = self.led_master_ec.as_mut().expect("inserted above");
+        let led_main = self.led_main.as_mut().expect("inserted above");
+        let led_ctx = PresetContext {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            width: led_w,
+            height: led_h,
+            output_width: led_w,
+            output_height: led_h,
+            aspect: if led_h > 0 {
+                led_w as f32 / led_h as f32
+            } else {
+                1.0
+            },
+            owner_key: LED_MASTER_OWNER_KEY,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let led_outcome = Self::pump_chain_warmup(
+            &mut self.uniform_arena,
+            led_ec,
+            device,
+            led_main.source_texture(),
+            effects,
+            groups,
+            &led_ctx,
+            "led:master",
+            led_run,
+            &self.layer_skin_registry,
+        );
+
+        scratch.resize(device, width, height);
+        led_outcome
+    }
+
+    /// Warm up every group-level effect chain that carries enabled effects.
+    /// Groups fold child layers before the final blend; warming here removes
+    /// the first group-FX build from the first frame. Also warms the LED group
+    /// chains when the project routes layers to LEDs.
+    pub fn prewarm_group_chains(
+        &mut self,
+        project: &manifold_core::project::Project,
+        pass: &mut WarmupPass,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+        output_dims: (u32, u32),
+    ) -> WarmupOutcome {
+        let group_layers: Vec<&manifold_core::layer::Layer> = project
+            .timeline
+            .layers
+            .iter()
+            .filter(|l| l.is_group() && has_enabled_effects(l.effects()))
+            .collect();
+        if group_layers.is_empty() {
+            return WarmupOutcome::Quiescent;
+        }
+
+        let has_led_layers = project.timeline.layers.iter().any(|l| l.routes_to_led());
+        let (led_w, led_h) = (led_grid_size.0.max(1), led_grid_size.1.max(1));
+        let (width, height) = (self.main.width(), self.main.height());
+        let (output_width, output_height) = output_dims;
+        let mut any_exhausted = false;
+        let mut last_outcome = WarmupOutcome::Quiescent;
+
+        for group in group_layers {
+            let group_run = pass.layer(&group.layer_id, Instant::now());
+            if let Some(outcome) = group_run.exhausted(Instant::now(), 0) {
+                pass.record_outcome(outcome);
+                any_exhausted = true;
+                last_outcome = outcome;
+                continue;
+            }
+            self.ensure_group_buf(&group.layer_id, device, pool);
+            self.ensure_group_chain(&group.layer_id);
+            let ctx = PresetContext {
+                time: 0.0,
+                beat: 0.0,
+                dt: 1.0 / 60.0,
+                width,
+                height,
+                output_width,
+                output_height,
+                aspect: if height > 0 {
+                    width as f32 / height as f32
+                } else {
+                    1.0
+                },
+                owner_key: group_id_owner_key(&group.layer_id),
+                is_clip_level: false,
+                frame_count: 0,
+                anim_progress: 0.0,
+                trigger_count: 0,
+            };
+            let scope = fx_scope(&group.layer_id);
+            let mut outcome = WarmupOutcome::Quiescent;
+            loop {
+                let run = pass.layer(&group.layer_id, Instant::now());
+                if let Some(exhausted) = run.exhausted(Instant::now(), 0) {
+                    outcome = exhausted;
+                    break;
+                }
+                let Some(group_buf) = self.group_bufs.get_mut(&group.layer_id) else {
+                    break;
+                };
+                let Some(group_chain) = self.group_effect_chains.get_mut(&group.layer_id) else {
+                    break;
+                };
+                outcome = Self::pump_chain_warmup(
+                    &mut self.uniform_arena,
+                    group_chain,
+                    device,
+                    group_buf.source_texture(),
+                    group.effects(),
+                    group.effect_groups(),
+                    &ctx,
+                    &scope,
+                    run,
+                    &self.layer_skin_registry,
+                );
+                if outcome != WarmupOutcome::Quiescent {
+                    break;
+                }
+                if manifold_node_engine::runtime::prewarm_worker_pending_count() == 0 {
+                    break;
+                }
+                if let Some(exhausted) = Self::drain_fusion_warmup(
+                    pass.layer(&group.layer_id, Instant::now()),
+                ) {
+                    outcome = exhausted;
+                    break;
+                }
+            }
+            if outcome != WarmupOutcome::Quiescent {
+                if outcome == WarmupOutcome::GpuFailed {
+                    return WarmupOutcome::GpuFailed;
+                }
+                pass.record_outcome(outcome);
+                any_exhausted = true;
+                last_outcome = outcome;
+                continue;
+            }
+
+            if !has_led_layers {
+                continue;
+            }
+            let led_run = pass.layer(&group.layer_id, Instant::now());
+            if let Some(outcome) = led_run.exhausted(Instant::now(), 0) {
+                pass.record_outcome(outcome);
+                any_exhausted = true;
+                last_outcome = outcome;
+                continue;
+            }
+            self.ensure_led_group_buf(&group.layer_id, device, pool, led_w, led_h);
+            self.ensure_led_group_chain(&group.layer_id);
+            let led_ctx = PresetContext {
+                time: 0.0,
+                beat: 0.0,
+                dt: 1.0 / 60.0,
+                width: led_w,
+                height: led_h,
+                output_width: led_w,
+                output_height: led_h,
+                aspect: if led_h > 0 {
+                    led_w as f32 / led_h as f32
+                } else {
+                    1.0
+                },
+                owner_key: group_id_owner_key(&group.layer_id),
+                is_clip_level: false,
+                frame_count: 0,
+                anim_progress: 0.0,
+                trigger_count: 0,
+            };
+            let led_scope = led_scope(&group.layer_id);
+            let mut led_outcome = WarmupOutcome::Quiescent;
+            loop {
+                let run = pass.layer(&group.layer_id, Instant::now());
+                if let Some(exhausted) = run.exhausted(Instant::now(), 0) {
+                    led_outcome = exhausted;
+                    break;
+                }
+                let Some(led_group_buf) = self.led_group_bufs.get_mut(&group.layer_id) else {
+                    break;
+                };
+                let Some(led_group_chain) = self.led_group_effect_chains.get_mut(&group.layer_id) else {
+                    break;
+                };
+                led_outcome = Self::pump_chain_warmup(
+                    &mut self.uniform_arena,
+                    led_group_chain,
+                    device,
+                    led_group_buf.source_texture(),
+                    group.effects(),
+                    group.effect_groups(),
+                    &led_ctx,
+                    &led_scope,
+                    run,
+                    &self.layer_skin_registry,
+                );
+                if led_outcome != WarmupOutcome::Quiescent {
+                    break;
+                }
+                if manifold_node_engine::runtime::prewarm_worker_pending_count() == 0 {
+                    break;
+                }
+                if let Some(exhausted) = Self::drain_fusion_warmup(
+                    pass.layer(&group.layer_id, Instant::now()),
+                ) {
+                    led_outcome = exhausted;
+                    break;
+                }
+            }
+            if led_outcome != WarmupOutcome::Quiescent {
+                if led_outcome == WarmupOutcome::GpuFailed {
+                    return WarmupOutcome::GpuFailed;
+                }
+                pass.record_outcome(led_outcome);
+                any_exhausted = true;
+                last_outcome = led_outcome;
+            }
+        }
+
+        if any_exhausted {
+            last_outcome
+        } else {
+            WarmupOutcome::Quiescent
+        }
+    }
+
+    /// Pre-create LED tap / composite resources when the loaded project routes
+    /// layers to LEDs. Mirrors the lazy construction in `render()` so the first
+    /// LED-enabled frame does not allocate on stage. Safe to call before LED
+    /// output is initialized: default grid size is used for `led_main`.
+    pub fn prewarm_led_resources(
+        &mut self,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+        project: &manifold_core::project::Project,
+    ) -> WarmupOutcome {
+        let has_led_layers = project.timeline.layers.iter().any(|l| l.routes_to_led());
+        if !has_led_layers {
+            return WarmupOutcome::Quiescent;
+        }
+
+        let (led_w, led_h) = (led_grid_size.0.max(1), led_grid_size.1.max(1));
+        if self.led_main.as_ref().is_none_or(|l| l.width() != led_w || l.height() != led_h) {
+            self.led_main = Some(PingPong::new(device, pool, led_w, led_h, "LED Composite"));
+        }
+
+        if self.led_black_tex.is_none() {
+            self.led_black_tex = Some(device.create_texture(&GpuTextureDesc {
+                width: 1,
+                height: 1,
+                depth: 1,
+                mip_levels: 1,
+                format: GpuTextureFormat::Rgba16Float,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "LED Black 1x1",
+            }));
+        }
+
+        if has_enabled_effects(&project.settings.master_effects) && self.led_master_ec.is_none() {
+            self.led_master_ec = Some(None);
+        }
+
+        WarmupOutcome::Quiescent
+    }
+
+    manifold_core::testkit_visible! {
+    /// Hybrid pool eviction policy:
+    ///
+    /// 1. **Event-based (immediate)**: drop any pool entry whose `LayerId`
+    ///    is no longer in `current_layers`. Fires the moment a layer is
+    ///    removed from the project — deterministic, no waiting.
+    /// 2. **Time-based (safety net)**: drop entries unused for more than
+    ///    `CHAIN_GRACE_FRAMES`. Catches "operator has clearly moved on
+    ///    from this section" in multi-hour shows where layers technically
+    ///    still exist in the project but won't be revisited.
+    ///
+    /// Together: brief mutes / clip gaps preserve feedback state for
+    /// visual continuity; long idle / layer deletion reclaims memory.
+    fn trim_excess_buffers(&mut self, current_layers: &[CompositeLayerDescriptor]) {
+        // Build a set of LayerIds present in the project this frame.
+        // Group layers are also `CompositeLayerDescriptor`s, so this set
+        // covers both per-layer and per-group pool keys uniformly.
+        let mut alive: ahash::AHashSet<&LayerId> =
+            ahash::AHashSet::with_capacity(current_layers.len());
+        for l in current_layers {
+            alive.insert(l.layer_id);
+        }
+
+        let now = self.frame_counter;
+        Self::prune_pool(
+            now,
+            &alive,
+            &mut self.effect_chains,
+            &mut self.chain_last_used_frame,
+        );
+        Self::prune_pool(
+            now,
+            &alive,
+            &mut self.group_effect_chains,
+            &mut self.group_chain_last_used_frame,
+        );
+        Self::prune_pool(
+            now,
+            &alive,
+            &mut self.led_group_effect_chains,
+            &mut self.led_group_chain_last_used_frame,
+        );
+        Self::prune_pool(
+            now,
+            &alive,
+            &mut self.layer_bufs,
+            &mut self.layer_buf_last_used_frame,
+        );
+        Self::prune_pool(
+            now,
+            &alive,
+            &mut self.group_bufs,
+            &mut self.group_buf_last_used_frame,
+        );
+        Self::prune_pool(
+            now,
+            &alive,
+            &mut self.led_group_bufs,
+            &mut self.led_group_buf_last_used_frame,
+        );
+    }
+    }
+
+    /// Hybrid pool pruner shared by every chain / buf map.
+    /// Drops entries where the `LayerId` is no longer alive in the
+    /// project, OR `last_used` is older than `CHAIN_GRACE_FRAMES`.
+    /// The stale list `Vec` allocates zero bytes when nothing is stale.
+    fn prune_pool<V>(
+        now: u64,
+        alive: &ahash::AHashSet<&LayerId>,
+        pool: &mut AHashMap<LayerId, V>,
+        last_used: &mut AHashMap<LayerId, u64>,
+    ) {
+        let stale: Vec<LayerId> = last_used
+            .iter()
+            .filter(|(id, last)| {
+                !alive.contains(id) || now.saturating_sub(**last) > CHAIN_GRACE_FRAMES
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if !stale.is_empty() && std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok() {
+            for id in &stale {
+                let why = if !alive.contains(id) {
+                    "layer-not-in-frame"
+                } else {
+                    "grace-expired"
+                };
+                eprintln!("[rebuild] scope=pool-evict reason={why} layer={id}");
+            }
+        }
+        for id in stale {
+            pool.remove(&id);
+            last_used.remove(&id);
+        }
+    }
+
+    manifold_core::testkit_visible! {
+    /// Release cached runtimes whose authored effect owner has been removed.
+    ///
+    /// A layer can remain in the project, and therefore inside the grace pool,
+    /// after its effects are edited away. The layer entry is still useful for
+    /// future effects, but the cached runtime is no longer compatible with the
+    /// authored graph. Keep the map slot so the LayerId pool invariant stays
+    /// intact; only drop the runtime. The liveness stamps remain paired with
+    /// the map slots so the existing project-deletion and grace pruner can
+    /// still retire those slots. Disabled and amount-zero effects intentionally
+    /// do not enter this path.
+    fn clear_obsolete_effect_chains(
+        &mut self,
+        layers: &[CompositeLayerDescriptor],
+        master_effects: &[PresetInstance],
+    ) {
+        for layer in layers {
+            if !layer.effects.is_empty() {
+                continue;
+            }
+
+            // A layer can change between leaf/group ownership. Clear every
+            // same-id pool slot so an old owner cannot retain an obsolete
+            // runtime after the authored effect slice is removed.
+            if let Some(chain) = self.effect_chains.get_mut(layer.layer_id) {
+                *chain = None;
+            }
+            if let Some(chain) = self.group_effect_chains.get_mut(layer.layer_id) {
+                *chain = None;
+            }
+            if let Some(chain) = self.led_group_effect_chains.get_mut(layer.layer_id) {
+                *chain = None;
+            }
+        }
+
+        if master_effects.is_empty() {
+            self.master_effect_chain = None;
+            self.led_master_ec = None;
+        }
+    }
+    }
+
+    /// For every effect chain whose layer / group did NOT dispatch this
+    /// frame (no active clips, layer muted, or layer outside the solo
+    /// set), wipe persistent primitive state — Watercolor feedback,
+    /// Bloom mip pyramids, Halation buffers, the legacy adapter's inner
+    /// effect's per-owner state, the chain's `StateStore`, etc. The
+    /// chain INSTANCE stays alive (managed by `trim_excess_buffers` /
+    /// `CHAIN_GRACE_FRAMES`) so reactivation has no rebuild cost — only
+    /// the cached state on each node is dropped.
+    ///
+    /// Matches the live-performance intuition: "if nothing is playing
+    /// on this layer right now, the next clip that fires should start
+    /// from a clean slate." Idempotent — `EffectNode::clear_state` is a
+    /// no-op when state is already cleared.
+    ///
+    /// Contract for new stateful primitives: override `clear_state` so
+    /// it drops every persistent texture / accumulator / mip pyramid
+    /// the node owns. The `clear_state` hook is the single integration
+    /// point for this policy — implementing it once on the primitive
+    /// makes the primitive automatically reset on every layer-idle
+    /// transition.
+    fn clear_idle_chain_state(&mut self) {
+        let now = self.frame_counter;
+
+        // Layer-level chains.
+        let last_used = &self.chain_last_used_frame;
+        for (id, chain) in self.effect_chains.iter_mut() {
+            if last_used.get(id) != Some(&now) {
+                clear_chain_state(chain);
+            }
+        }
+
+        // Group-level chains.
+        let last_used = &self.group_chain_last_used_frame;
+        for (id, chain) in self.group_effect_chains.iter_mut() {
+            if last_used.get(id) != Some(&now) {
+                clear_chain_state(chain);
+            }
+        }
+
+        // LED group chains — separate from screen-path groups so LED-
+        // path state can't bleed across pause / mute either.
+        let last_used = &self.led_group_chain_last_used_frame;
+        for (id, chain) in self.led_group_effect_chains.iter_mut() {
+            if last_used.get(id) != Some(&now) {
+                clear_chain_state(chain);
+            }
+        }
+    }
+
+    /// Apply effect chain to the given input texture, returning the processed texture
+    /// if any effects were applied, or None if the input should be used as-is.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_effects<'a>(
+        effect_chain: &'a mut Option<PresetRuntime>,
+        gpu: &mut GpuEncoder,
+        input_texture: &'a GpuTexture,
+        effects: &[PresetInstance],
+        groups: &[EffectGroup],
+        ctx: &PresetContext,
+        preview_effect: Option<&EffectId>,
+        scope: &str,
+        profiling: bool,
+        rt_quality: manifold_node_engine::exec::effect_node::RtQuality,
+        layer_sources: &manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
+        project_tempo: Option<&manifold_node_engine::runtime::preset_context::ProjectTempo>,
+    ) -> Option<&'a GpuTexture> {
+        dispatch_chain(
+            effect_chain,
+            gpu,
+            input_texture,
+            effects,
+            groups,
+            ctx,
+            preview_effect,
+            scope,
+            profiling,
+            rt_quality,
+            layer_sources,
+            project_tempo,
+        )
+    }
+
+    /// Apply an effect chain and, when requested, install the render-only
+    /// viewport immediately before its first run. This keeps a rebuilt chain
+    /// from missing the request on the frame it is created.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_effects_with_scene_viewport<'a>(
+        effect_chain: &'a mut Option<PresetRuntime>,
+        gpu: &mut GpuEncoder,
+        input_texture: &'a GpuTexture,
+        effects: &[PresetInstance],
+        groups: &[EffectGroup],
+        ctx: &PresetContext,
+        preview_effect: Option<&EffectId>,
+        scope: &str,
+        profiling: bool,
+        rt_quality: manifold_node_engine::exec::effect_node::RtQuality,
+        layer_sources: &manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
+        scene_viewport: Option<(
+            &EffectId,
+            &NodeId,
+            manifold_node_engine::scene::scene_viewport::SceneViewportConfig,
+        )>,
+        scene_viewport_error: &mut Option<
+            manifold_node_engine::scene::scene_viewport::SceneViewportHostError,
+        >,
+        project_tempo: Option<&manifold_node_engine::runtime::preset_context::ProjectTempo>,
+    ) -> Option<&'a GpuTexture> {
+        dispatch_chain_with_scene_viewport(
+            effect_chain,
+            gpu,
+            input_texture,
+            effects,
+            groups,
+            ctx,
+            preview_effect,
+            scope,
+            profiling,
+            rt_quality,
+            layer_sources,
+            scene_viewport,
+            scene_viewport_error,
+            project_tempo,
+        )
+    }
+
+    /// Clean up per-owner effect state for a stopped clip.
+    ///
+    /// Per-clip state in the graph-runtime path lives inside each chain's
+    /// `StateStore`, keyed by `(NodeInstanceId, OwnerKey)`. Today every
+    /// chain uses a layer-level owner_key for the chain it owns; clip-
+    /// keyed state only exists for short-circuit per-clip stateful nodes
+    /// (none today). The legacy `EffectRegistry::cleanup_clip_owner`
+    /// call site was deleted along with the legacy dispatcher.
+    pub fn cleanup_clip_owner_internal(&mut self, _clip_id: &str) {
+        // No-op until a graph-runtime primitive declares per-clip state.
+        // See `docs/EFFECT_CHAIN_LIFECYCLE.md`.
+    }
+
+    /// Read-back accessor: the layer scratch buffer's current source texture.
+    /// Returns `None` if the layer has no scratch buffer allocated.
+    #[cfg(test)]
+    pub fn layer_scratch_texture(&self, layer_id: &LayerId) -> Option<&GpuTexture> {
+        self.layer_bufs.get(layer_id).map(|pp| pp.source_texture())
+    }
+
+    /// Read-back accessor: the effect chain's output texture for a layer.
+    /// Returns `None` if the layer has no chain or the chain has no output.
+    #[cfg(test)]
+    pub fn chain_output_texture(&self, layer_id: &LayerId) -> Option<&GpuTexture> {
+        self.effect_chains
+            .get(layer_id)
+            .and_then(|opt| opt.as_ref())
+            .and_then(|rt| rt.output_texture())
+    }
+
+    /// Debug readback: full chain intermediate texture state for a layer.
+    /// Returns source, step outputs, and output_slot textures.
+    pub fn chain_debug_info(
+        &self,
+        layer_id: &LayerId,
+    ) -> Option<manifold_node_engine::runtime::ChainDebugInfo<'_>> {
+        self.effect_chains
+            .get(layer_id)
+            .and_then(|opt| opt.as_ref())
+            .and_then(|rt| rt.chain_debug_info())
+    }
+
+    manifold_core::testkit_visible! {
+    /// Phase A: Process each layer's clips + effects into per-layer output textures.
+    ///
+    /// For single-clip layers without layer effects, the output is the clip texture
+    /// (possibly post-clip-effects via the layer's effect chain).
+    /// For multi-clip layers or layers with effects, clips are composited into a
+    /// per-layer scratch buffer and layer effects are applied.
+    ///
+    /// Each layer uses its own effect chain (no shared state between layers).
+    /// Populates `self.layer_outputs_scratch` for the blend pass.
+    fn generate_layers(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+        let clips = frame.clips;
+        let width = self.main.width();
+        let height = self.main.height();
+        // Watched effect (if any) — forces its chain unfused so preview can
+        // sample inner node outputs. Owned clone so it survives the raw-pointer
+        // borrows of `self.effect_chains` below. Cheap; `None` when no preview.
+        let preview_fx = self.preview_request.as_ref().map(|(e, _)| e.clone());
+        let scene_viewport_request = self.scene_viewport_request.clone();
+        let mut scene_viewport_error = self.scene_viewport_error;
+
+        // Pre-scan: count multi-clip layers and collect the set of
+        // active `LayerId`s that need a chain this frame. Effect
+        // chains are keyed by `LayerId` (a stable Arc<str> per
+        // layer), NOT by iteration order or `layer_index`. This
+        // makes the bug class structurally impossible:
+        //   - Iteration order changing → still the same key → still
+        //     the same EffectChain instance → cached PresetRuntime
+        //     survives.
+        //   - Layer reordered in timeline (drag-drop) → `layer_index`
+        //     shifts but `LayerId` doesn't → same EffectChain → state
+        //     preserved.
+        //   - Iteration-counter indexing (`chains[counter]`) won't
+        //     compile because `Index<usize>` isn't on AHashMap.
+        // Pre-scan: collect the set of active `LayerId`s needing a
+        // chain this frame, AND the subset needing a layer scratch
+        // buf (multi-clip OR has-layer-effects). Both pools are
+        // keyed by `LayerId` (a stable Arc<str> per layer), NOT by
+        // iteration order or `layer_index`. This makes the
+        // positional-indexing bug class structurally impossible:
+        //   - Iteration order changing → still the same key → still
+        //     the same EffectChain instance → cached PresetRuntime
+        //     survives.
+        //   - Layer reordered in timeline (drag-drop) → `layer_index`
+        //     shifts but `LayerId` doesn't → same EffectChain → state
+        //     preserved.
+        //   - Iteration-counter indexing (`chains[counter]`) won't
+        //     compile because `Index<usize>` isn't on AHashMap.
+        self.active_layer_ids_scratch.clear();
+        self.active_layer_buf_ids_scratch.clear();
+        {
+            let mut ci = 0;
+            while ci < clips.len() {
+                let layer_idx = clips[ci].layer_index;
+                let layer_desc = frame.find_layer(layer_idx);
+                let start = ci;
+                while ci < clips.len() && clips[ci].layer_index == layer_idx {
+                    ci += 1;
+                }
+                if let Some(ld) = layer_desc && ld.hidden {
+                    continue;
+                }
+                let clip_count = ci - start;
+                let has_layer_effects =
+                    layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
+                if let Some(ld) = layer_desc {
+                    self.active_layer_ids_scratch.push(ld.layer_id.clone());
+                    if clip_count > 1 || has_layer_effects {
+                        self.active_layer_buf_ids_scratch.push(ld.layer_id.clone());
+                    }
+                }
+            }
+        }
+
+        // Pre-insert chain entries for every active layer, and buf
+        // entries for every multi-clip / has-effects layer. Doing
+        // both before the main loop keeps `get_mut` safe inside the
+        // loop (no insertions mid-iteration → no rehash).
+        for i in 0..self.active_layer_ids_scratch.len() {
+            let id = self.active_layer_ids_scratch[i].clone();
+            self.ensure_chain_for_layer(&id);
+        }
+        for i in 0..self.active_layer_buf_ids_scratch.len() {
+            let id = self.active_layer_buf_ids_scratch[i].clone();
+            self.ensure_layer_buf(&id, gpu.device, gpu.pool);
+        }
+
+        self.layer_outputs_scratch.clear();
+        self.clip_post_fx_scratch.clear();
+
+        // Split-borrow: take disjoint &muts so safe `get_mut` on
+        // each map can coexist with `self.blend.blend_pass` /
+        // `apply_effects` calls below — the borrow checker sees
+        // these as disjoint field accesses.
+        let chains = &mut self.effect_chains;
+        let layer_bufs = &mut self.layer_bufs;
+
+        // Group clips by layer_index. Clips are sorted by layer_index descending
+        // (higher index = bottom of timeline = rendered first as base).
+        let mut i = 0;
+        while i < clips.len() {
+            let layer_idx = clips[i].layer_index;
+
+            // Find layer descriptor
+            let layer_desc = frame.find_layer(layer_idx);
+
+            // Check hidden
+            if let Some(ld) = layer_desc && ld.hidden {
+                while i < clips.len() && clips[i].layer_index == layer_idx {
+                    i += 1;
+                }
+                continue;
+            }
+
+            // Count clips in this layer group
+            let group_start = i;
+            while i < clips.len() && clips[i].layer_index == layer_idx {
+                i += 1;
+            }
+            let group = &clips[group_start..i];
+
+            // Get layer blend mode and opacity
+            let layer_blend = layer_desc.map_or(BlendMode::Normal, |l| l.blend_mode);
+            let layer_opacity = layer_desc.map_or(1.0, |l| l.opacity);
+
+            // Skip fully transparent layers — no GPU work needed
+            if layer_opacity <= 0.0 {
+                continue;
+            }
+
+            // Render-skip: hidden behind a full-opacity Opaque layer and safe
+            // to not render at all (content pipeline's render_skip set). Push
+            // no LayerOutput — the layer is neither rendered nor blended. Only
+            // plain top-level non-LED leaves land here, so groups/LED are
+            // unaffected (they stay on the blend-skip-only path).
+            if frame.render_skip.contains(&layer_idx) {
+                continue;
+            }
+
+            // Check if this layer has layer-level effects
+            let has_layer_effects = layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
+
+            if group.len() == 1 && !has_layer_effects {
+                // Single clip with NO layer effects — pass texture straight through.
+                // No chain access needed.
+                let clip = &group[0];
+
+                // Clip-level mute is presentational: the clip stays active
+                // (scheduled, modulating) but contributes no pixels.
+                if !clip.is_visible() {
+                    continue;
+                }
+
+                self.layer_outputs_scratch.push(LayerOutput {
+                    texture: clip.texture,
+                    blend_mode: layer_blend,
+                    opacity: layer_opacity * clip.opacity,
+                    layer_index: layer_idx,
+                    led_route: layer_desc.map_or(LedRoute::None, |ld| {
+                        LedRoute::from_layer(ld.layer_type, ld.blit_to_led)
+                    }),
+                });
+            } else {
+                // Every clip in the group muted → the layer draws nothing,
+                // so it must emit NO output. Pushing the empty (transparent)
+                // buffer here is catastrophic under Opaque blend, which
+                // replaces every pixel regardless of alpha: an all-muted
+                // Opaque layer would black out the whole frame. Skipping
+                // matches a clip gap exactly — the pooled chain sleeps and
+                // resumes when a visible clip returns.
+                if !group.iter().any(|c| c.is_visible()) {
+                    continue;
+                }
+                // Multi-clip or layer-effects: composite into layer buffer.
+                // Pools are keyed by LayerId, so a layer without a
+                // descriptor (degenerate state — clips referencing a
+                // layer_index that doesn't exist in `frame.layers`)
+                // is skipped here. In the previous Vec-keyed scheme
+                // such layers got a default-blend composite; now
+                // there's no LayerId to key the buf, so we drop the
+                // output entirely. In practice `frame.layers` is the
+                // authoritative source, so this branch is unreachable.
+                let Some(ld) = layer_desc else {
+                    continue;
+                };
+                let layer_id = ld.layer_id;
+                let layer_buf = layer_bufs
+                    .get_mut(layer_id)
+                    .expect("buf pre-inserted in active scan");
+
+                // Clear layer buffer to transparent
+                layer_buf.clear_source(gpu, false);
+
+                // Composite each clip into layer buffer with Normal blend.
+                // Clip-level mute is presentational: skip the muted clip but
+                // keep the layer (and its effects) active for unmuted clips.
+                for clip in group {
+                    if !clip.is_visible() {
+                        continue;
+                    }
+                    let uniforms = BlendUniforms {
+                        blend_mode: BlendMode::Normal as u32,
+                        opacity: clip.opacity,
+                        _pad0: 0,
+                        _pad1: 0,
+                    };
+                    self.blend.blend_pass(
+                        gpu,
+                        &mut self.uniform_arena,
+                        layer_buf.source_texture(),
+                        clip.texture,
+                        layer_buf.target_texture(),
+                        &uniforms,
+                    );
+                    layer_buf.swap();
+                }
+
+                // Apply layer-level effects to composited layer buffer
+                let layer_source = if let Some(ld) = layer_desc
+                    && has_enabled_effects(ld.effects)
+                {
+                    let effect_chain = chains
+                        .get_mut(ld.layer_id)
+                        .expect("chain pre-inserted in active scan");
+                    let ctx = PresetContext {
+                        time: frame.time,
+                        beat: frame.beat,
+                        dt: frame.dt,
+                        width,
+                        height,
+                        output_width: frame.output_width,
+                        output_height: frame.output_height,
+                        aspect: if height > 0 {
+                            width as f32 / height as f32
+                        } else {
+                            1.0
+                        },
+                        owner_key: layer_id_owner_key(ld.layer_id),
+                        is_clip_level: false,
+                        frame_count: frame.frame_count as i64,
+                        anim_progress: 0.0,
+                        trigger_count: ld.trigger_count,
+                    };
+                    Self::apply_effects_with_scene_viewport(
+                        effect_chain,
+                        gpu,
+                        layer_buf.source_texture(),
+                        ld.effects,
+                        ld.effect_groups,
+                        &ctx,
+                        preview_fx.as_ref(),
+                        &fx_scope(ld.layer_id),
+                        self.profiling_enabled,
+                        self.rt_quality,
+                        &self.layer_skin_registry,
+                        scene_viewport_request
+                            .as_ref()
+                            .map(|(effect_id, node_id, config)| (effect_id, node_id, *config)),
+                        &mut scene_viewport_error,
+                        frame.project_tempo,
+                    )
+                } else {
+                    None
+                };
+
+                let effective_layer_tex: *const GpuTexture =
+                    layer_source.unwrap_or(layer_buf.source_texture());
+
+                self.layer_outputs_scratch.push(LayerOutput {
+                    texture: effective_layer_tex,
+                    blend_mode: layer_blend,
+                    opacity: layer_opacity,
+                    layer_index: layer_idx,
+                    led_route: layer_desc.map_or(LedRoute::None, |ld| {
+                        LedRoute::from_layer(ld.layer_type, ld.blit_to_led)
+                    }),
+                });
+                // section 24 5c: for a SINGLE-clip layer, this post-effect output IS that
+                // clip's full look — expose it for a with-effects thumbnail. Clone
+                // (cheap retain) now, while the target is provably alive, so the
+                // snapshot later in the frame binds a live texture even if the pool
+                // recycled the original.
+                if group.len() == 1 {
+                    // Safety: `effective_layer_tex` was just produced this iteration
+                    // and is alive here; we clone immediately rather than store the
+                    // pointer for later deref.
+                    let texture = unsafe { (*effective_layer_tex).clone() };
+                    self.clip_post_fx_scratch.push(ClipPostFx {
+                        clip_id: group[0].clip_id.to_string(),
+                        texture,
+                    });
+                }
+            }
+        }
+        self.scene_viewport_error = scene_viewport_error;
+    }
+    }
+
+    /// Phase B: Blend all layer outputs into main in order.
+    ///
+    /// Layers are blended bottom-to-top (order preserved from generate_layers).
+    /// This pass is always serial — each blend reads the previous blend's result.
+    ///
+    /// `occluded_layers` (from `CompositorFrame`) lists layers hidden by a
+    /// fully-opaque layer above them: their blend dispatch is skipped because
+    /// the opaque blend overwrites every pixel anyway. Strictly an elision of
+    /// redundant math — the layers themselves rendered normally upstream.
+    fn blend_layers(
+        &mut self,
+        gpu: &mut GpuEncoder,
+        layer_outputs: &[LayerOutput],
+        occluded_layers: &[i32],
+    ) {
+        // Clear main to opaque black
+        self.main.clear_source(gpu, true);
+
+        for output in layer_outputs {
+            if occluded_layers.contains(&output.layer_index) {
+                continue;
+            }
+            let uniforms = BlendUniforms {
+                blend_mode: output.blend_mode as u32,
+                opacity: output.opacity,
+                _pad0: 0,
+                _pad1: 0,
+            };
+            self.blend.blend_pass(
+                gpu,
+                &mut self.uniform_arena,
+                self.main.source_texture(),
+                output.texture(),
+                self.main.target_texture(),
+                &uniforms,
+            );
+            self.main.swap();
+        }
+    }
+
+    /// Blend layers into the LED composite buffer with screen-equivalent
+    /// blocking semantics, partitioned by the D10 route switch.
+    ///
+    /// **Route switch (D10):** when at least one Direct-route (LED-type)
+    /// layer has visible content this frame, the composite carries Direct
+    /// layers ONLY — mirror layers contribute nothing, and mirror children
+    /// inside mixed groups are skipped entirely (no content, no black-block,
+    /// recursively through nested groups). Otherwise the mirror route runs
+    /// as before.
+    ///
+    /// **L (active-route) layers** contribute their actual texture with Normal
+    /// blend + opacity (so multiple L layers stack predictably).
+    ///
+    /// **Non-L layers** (mirror route only) are composited too — but with
+    /// their texture replaced by a 1×1 opaque-black stand-in. Their actual
+    /// blend mode + opacity still apply, so an opaque Normal-blend non-L
+    /// layer above an L layer covers the L on the LED frame the same way it
+    /// covers it on screen. Without this, a non-L layer that visually blocks
+    /// an L layer on screen would still leak through to the LEDs.
+    ///
+    /// **Groups with at least one L child** ("L groups") fold all their
+    /// children (with the L/non-L substitution above) into one per-group LED
+    /// scratch buffer, apply group effects at LED resolution, then blend the
+    /// result into `led_main` with Normal + group opacity. Group FX always
+    /// run on the LED path so group-level colouring (hue shifts, grades) is
+    /// preserved. **Groups with no L children** ("blocker groups") skip the
+    /// inner composite (children would all be black anyway) and contribute a
+    /// single black blend with the group's actual blend mode + opacity into
+    /// `led_main`.
+    ///
+    /// **Optimisation:** layers entirely below the bottom-most L contribute
+    /// nothing to the final LED frame (they'd be overwritten). Iteration
+    /// starts at the lowest LayerOutput that is L-flagged or part of an L
+    /// group, skipping the rest.
+    ///
+    /// Runs **before** `fold_groups` so child layers inside groups route via
+    /// their own `LedRoute`, independent of the parent group's route.
+    /// Composite resolution is `frame.led_composite_size` — the native LED
+    /// grid (e.g. 8×120), so master FX and group FX cost are negligible.
+    fn blend_layers_to_led(
+        &mut self,
+        gpu: &mut GpuEncoder,
+        layer_outputs: &[LayerOutput],
+        frame: &CompositorFrame,
+    ) {
+        let any_led = layer_outputs
+            .iter()
+            .any(|o| o.led_route != LedRoute::None);
+        if !any_led {
+            // No LED routing this frame — release resources.
+            self.led_main = None;
+            return;
+        }
+
+        // D10 switch: an active Direct-route clip (an LED-type layer with
+        // visible content — LayerOutputs only exist for layers that rendered
+        // some this frame) makes the LED composite carry Direct layers ONLY.
+        // Mirror layers contribute nothing; in mixed groups mirror children
+        // are skipped entirely (no content, no black-block), recursively
+        // through nested groups. Without an active Direct clip the mirror
+        // route runs exactly as before.
+        let direct_mode = layer_outputs
+            .iter()
+            .any(|o| o.led_route == LedRoute::Direct);
+        // Whether an output carries LED content on the active route.
+        let route_is_led = |o: &LayerOutput| {
+            if direct_mode {
+                o.led_route == LedRoute::Direct
+            } else {
+                o.led_route == LedRoute::Mirror
+            }
+        };
+
+        let (w, h) = (
+            frame.led_composite_size.0.max(1),
+            frame.led_composite_size.1.max(1),
+        );
+        let needs_new = self
+            .led_main
+            .as_ref()
+            .is_none_or(|l| l.width() != w || l.height() != h);
+        if needs_new {
+            self.led_main = Some(PingPong::new(gpu.device, gpu.pool, w, h, "LED Composite"));
+        }
+
+        // Lazy-create the 1×1 opaque-black stand-in texture used for non-L
+        // layers' blocking blends. Cleared on the first frame; never modified
+        // afterwards (no per-frame work).
+        let black_tex_freshly_created = self.led_black_tex.is_none();
+        if black_tex_freshly_created {
+            self.led_black_tex = Some(gpu.device.create_texture(&GpuTextureDesc {
+                width: 1,
+                height: 1,
+                depth: 1,
+                mip_levels: 1,
+                format: GpuTextureFormat::Rgba16Float,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "LED Black 1x1",
+            }));
+        }
+        // Raw pointers for disjoint borrows. Safety: this function is the sole
+        // writer to led_main / led_group_bufs / led_black_tex during its
+        // scope; pointers are valid until the function returns.
+        let led_main_ptr = self.led_main.as_mut().unwrap() as *mut PingPong;
+        let led_main = unsafe { &mut *led_main_ptr };
+        led_main.clear_source(gpu, true);
+
+        let black_tex_ref: &GpuTexture = self.led_black_tex.as_ref().unwrap();
+        let black_tex_ptr: *const GpuTexture = black_tex_ref;
+        if black_tex_freshly_created {
+            // Initialise once to opaque black.
+            gpu.clear_texture(black_tex_ref, 0.0, 0.0, 0.0, 1.0);
+        }
+
+        // Resolve each LayerOutput's parent group_id once (avoids repeated
+        // O(N) lookups in the inner loop).
+        let parent_ids: Vec<Option<&LayerId>> = layer_outputs
+            .iter()
+            .map(|o| {
+                frame
+                    .find_layer(o.layer_index)
+                    .and_then(|ld| ld.parent_layer_id)
+            })
+            .collect();
+
+        // Determine which group ids contain at least one L child — these are
+        // "L groups" that need a per-group fold + group FX. Other groups are
+        // "blocker groups" handled inline as a single black blend.
+        let mut l_group_ids: Vec<&LayerId> = Vec::new();
+        for (idx, output) in layer_outputs.iter().enumerate() {
+            if route_is_led(output)
+                && let Some(pid) = parent_ids[idx]
+                && !l_group_ids.contains(&pid)
+            {
+                l_group_ids.push(pid);
+            }
+        }
+        let is_l_group = |pid: &LayerId| l_group_ids.iter().any(|id| **id == *pid);
+
+        // Find the bottom-most LayerOutput that's LED-routed on the active
+        // route or part of an L group. Anything before this position can be
+        // skipped (would be overwritten).
+        let start_idx = layer_outputs
+            .iter()
+            .enumerate()
+            .position(|(idx, output)| {
+                route_is_led(output) || parent_ids[idx].is_some_and(&is_l_group)
+            })
+            .unwrap_or(layer_outputs.len());
+
+        let mut processed = vec![false; layer_outputs.len()];
+
+        for i in start_idx..layer_outputs.len() {
+            if processed[i] {
+                continue;
+            }
+
+            let parent_id = parent_ids[i];
+
+            if let Some(pid) = parent_id {
+                // Group child — handle the whole group once on first encounter.
+                let group_desc = frame.layers.iter().find(|l| l.layer_id == pid);
+
+                if is_l_group(pid) {
+                    // L group: fold all children (L with own texture + Normal,
+                    // non-L with black + actual blend mode), apply group FX,
+                    // blend into led_main with Normal + group opacity.
+                    if let Some(group) = group_desc {
+                        // Both pools keyed by the group's own LayerId —
+                        // stable across iteration order and timeline reorders.
+                        self.ensure_led_group_buf(group.layer_id, gpu.device, gpu.pool, w, h);
+                        self.ensure_led_group_chain(group.layer_id);
+                        let group_buf_ptr = self
+                            .led_group_bufs
+                            .get_mut(group.layer_id)
+                            .expect("ensured above")
+                            as *mut PingPong;
+                        let group_ec_ptr = self
+                            .led_group_effect_chains
+                            .get_mut(group.layer_id)
+                            .expect("ensured above")
+                            as *mut Option<PresetRuntime>;
+                        let group_buf = unsafe { &mut *group_buf_ptr };
+                        let group_ec = unsafe { &mut *group_ec_ptr };
+
+                        // Transparent initial state matches screen-path
+                        // fold_groups so partial-opacity within group works.
+                        group_buf.clear_source(gpu, false);
+
+                        // Composite EVERY child of this group (L and non-L)
+                        // in iteration order (bottom→top).
+                        for j in i..layer_outputs.len() {
+                            if processed[j] {
+                                continue;
+                            }
+                            if parent_ids[j] != Some(pid) {
+                                continue;
+                            }
+                            let (blend_mode, src_tex) = if route_is_led(&layer_outputs[j]) {
+                                (BlendMode::Normal, layer_outputs[j].texture())
+                            } else if direct_mode {
+                                // D10: under the direct route a mirror child
+                                // contributes nothing — no content and no
+                                // black-block.
+                                processed[j] = true;
+                                continue;
+                            } else {
+                                (
+                                    layer_outputs[j].blend_mode,
+                                    // Safety: ptr targets the persistent
+                                    // led_black_tex created above.
+                                    unsafe { &*black_tex_ptr },
+                                )
+                            };
+                            let child_uniforms = BlendUniforms {
+                                blend_mode: blend_mode as u32,
+                                opacity: layer_outputs[j].opacity,
+                                _pad0: 0,
+                                _pad1: 0,
+                            };
+                            self.blend.blend_pass(
+                                gpu,
+                                &mut self.uniform_arena,
+                                group_buf.source_texture(),
+                                src_tex,
+                                group_buf.target_texture(),
+                                &child_uniforms,
+                            );
+                            group_buf.swap();
+                            processed[j] = true;
+                        }
+
+                        // Apply group effects (if any) at LED resolution.
+                        let group_source: *const GpuTexture = if has_enabled_effects(group.effects)
+                        {
+                            let ctx = PresetContext {
+                                time: frame.time,
+                                beat: frame.beat,
+                                dt: frame.dt,
+                                width: w,
+                                height: h,
+                                output_width: frame.output_width,
+                                output_height: frame.output_height,
+                                aspect: if h > 0 { w as f32 / h as f32 } else { 1.0 },
+                                owner_key: led_group_owner_key(group.layer_id),
+                                is_clip_level: false,
+                                frame_count: frame.frame_count as i64,
+                                anim_progress: 0.0,
+                                trigger_count: 0,
+                            };
+                            match Self::apply_effects(
+                                group_ec,
+                                gpu,
+                                group_buf.source_texture(),
+                                group.effects,
+                                group.effect_groups,
+                                &ctx,
+                                // LED path is not a preview surface — never unfuse for it.
+                                None,
+                                &led_scope(group.layer_id),
+                                self.profiling_enabled,
+                                self.rt_quality,
+                                &self.layer_skin_registry,
+                                frame.project_tempo,
+                            ) {
+                                Some(t) => t,
+                                None => group_buf.source_texture() as *const _,
+                            }
+                        } else {
+                            group_buf.source_texture() as *const _
+                        };
+
+                        // Blend group result into led_main with Normal +
+                        // group opacity (Normal everywhere on LED path).
+                        let final_uniforms = BlendUniforms {
+                            blend_mode: BlendMode::Normal as u32,
+                            opacity: group.opacity,
+                            _pad0: 0,
+                            _pad1: 0,
+                        };
+                        self.blend.blend_pass(
+                            gpu,
+                            &mut self.uniform_arena,
+                            led_main.source_texture(),
+                            unsafe { &*group_source },
+                            led_main.target_texture(),
+                            &final_uniforms,
+                        );
+                        led_main.swap();
+                    }
+                } else {
+                    // Blocker group (no LED children on the active route).
+                    // Under the direct route (D10) it contributes nothing at
+                    // all — no black-block. Under the mirror route, a single
+                    // BLACK blend with the group's actual blend mode +
+                    // opacity. Skip the dispatch entirely if the blend mode
+                    // is identity-for-black (Add / Screen / etc.) — the group
+                    // can't change led_main with a black source. Then mark
+                    // all the group's children processed regardless.
+                    if !direct_mode
+                        && let Some(group) = group_desc
+                        && !is_identity_for_black(group.blend_mode)
+                    {
+                        let uniforms = BlendUniforms {
+                            blend_mode: group.blend_mode as u32,
+                            opacity: group.opacity,
+                            _pad0: 0,
+                            _pad1: 0,
+                        };
+                        self.blend.blend_pass(
+                            gpu,
+                            &mut self.uniform_arena,
+                            led_main.source_texture(),
+                            unsafe { &*black_tex_ptr },
+                            led_main.target_texture(),
+                            &uniforms,
+                        );
+                        led_main.swap();
+                    }
+                    for j in i..layer_outputs.len() {
+                        if parent_ids[j] == Some(pid) {
+                            processed[j] = true;
+                        }
+                    }
+                }
+            } else {
+                // Top-level layer.
+                let is_l = route_is_led(&layer_outputs[i]);
+                if !is_l && direct_mode {
+                    // D10: under the direct route a mirror layer contributes
+                    // nothing — skipped entirely, no black-block.
+                    processed[i] = true;
+                    continue;
+                }
+                // Skip non-L blends with identity-for-black blend modes —
+                // they can't change led_main with a black source.
+                if !is_l && is_identity_for_black(layer_outputs[i].blend_mode) {
+                    processed[i] = true;
+                    continue;
+                }
+                let (blend_mode, src_tex) = if is_l {
+                    (BlendMode::Normal, layer_outputs[i].texture())
+                } else {
+                    (layer_outputs[i].blend_mode, unsafe { &*black_tex_ptr })
+                };
+                let uniforms = BlendUniforms {
+                    blend_mode: blend_mode as u32,
+                    opacity: layer_outputs[i].opacity,
+                    _pad0: 0,
+                    _pad1: 0,
+                };
+                self.blend.blend_pass(
+                    gpu,
+                    &mut self.uniform_arena,
+                    led_main.source_texture(),
+                    src_tex,
+                    led_main.target_texture(),
+                    &uniforms,
+                );
+                led_main.swap();
+                processed[i] = true;
+            }
+        }
+    }
+
+    /// Fold group children into single LayerOutputs.
+    ///
+    /// For each group layer that has children in layer_outputs_scratch:
+    /// 1. Composite child outputs into a group scratch buffer
+    /// 2. Apply group-level effects
+    /// 3. Replace child entries with a single output carrying the group's blend/opacity
+    ///
+    /// No-op when no groups exist (single boolean check).
+    fn fold_groups(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+        // Watched effect id for the group-FX build gate (forces it unfused so
+        // preview can sample inner outputs). Owned clone to avoid re-borrowing
+        // `self` inside the group loop. `None` when no preview is active.
+        let preview_fx = self.preview_request.as_ref().map(|(e, _)| e.clone());
+        let scene_viewport_request = self.scene_viewport_request.clone();
+        let mut scene_viewport_error = self.scene_viewport_error;
+        // Early exit: no groups → nothing to fold
+        if !frame.layers.iter().any(|l| l.is_group) {
+            return;
+        }
+
+        // Process each group. Groups are processed in the order they appear in
+        // frame.layers (which matches timeline order). Since outputs are sorted
+        // descending by layer_index, children of a group are contiguous.
+        for group_desc in frame.layers.iter().filter(|l| l.is_group) {
+            // Find child layer_indices for this group (reuse scratch buffer).
+            self.group_child_indices.clear();
+            for l in frame.layers {
+                if l.parent_layer_id.as_ref() == Some(&group_desc.layer_id) {
+                    self.group_child_indices.push(l.layer_index);
+                }
+            }
+
+            if self.group_child_indices.is_empty() {
+                continue;
+            }
+
+            // Find which outputs belong to children of this group.
+            self.group_child_positions.clear();
+            for (i, o) in self.layer_outputs_scratch.iter().enumerate() {
+                if self.group_child_indices.contains(&o.layer_index) {
+                    self.group_child_positions.push(i);
+                }
+            }
+
+            if self.group_child_positions.is_empty() {
+                continue;
+            }
+
+            // Allocate this group's buf keyed by its LayerId.
+            self.ensure_group_buf(group_desc.layer_id, gpu.device, gpu.pool);
+            let group_id = group_desc.layer_id;
+            // Take a raw pointer so we can hold &mut group_buf across
+            // the inner call to `self.ensure_group_chain` (which
+            // would otherwise conflict with a live mut borrow on
+            // self.group_bufs). Safety: the pool isn't resized
+            // again within this iteration body.
+            let group_buf_ptr =
+                self.group_bufs.get_mut(group_id).expect("ensured above") as *mut PingPong;
+            let group_buf = unsafe { &mut *group_buf_ptr };
+
+            // Clear to transparent
+            group_buf.clear_source(gpu, false);
+
+            // Blend children into group buffer (using each child's own blend/opacity)
+            for &pos in &self.group_child_positions {
+                let output = &self.layer_outputs_scratch[pos];
+                // D14: a Direct-route (LED-type) child never contributes to
+                // the screen composite. The content pipeline also marks it
+                // occluded, but that blend-skip only applies to top-level
+                // blends — a grouped child's pixels would leak to the screen
+                // through the group fold without this skip.
+                if output.led_route == LedRoute::Direct {
+                    continue;
+                }
+                let uniforms = BlendUniforms {
+                    blend_mode: output.blend_mode as u32,
+                    opacity: output.opacity,
+                    _pad0: 0,
+                    _pad1: 0,
+                };
+                self.blend.blend_pass(
+                    gpu,
+                    &mut self.uniform_arena,
+                    group_buf.source_texture(),
+                    output.texture(),
+                    group_buf.target_texture(),
+                    &uniforms,
+                );
+                group_buf.swap();
+            }
+
+            // Apply group-level effects (if any)
+            let group_texture: *const GpuTexture = if has_enabled_effects(group_desc.effects) {
+                // Each group's chain is keyed by its own LayerId —
+                // stable across iteration order and timeline reorders.
+                self.ensure_group_chain(group_id);
+                let effect_chain = self
+                    .group_effect_chains
+                    .get_mut(group_id)
+                    .expect("ensured above");
+                let main_w = self.main.width();
+                let main_h = self.main.height();
+                let ctx = PresetContext {
+                    time: frame.time,
+                    beat: frame.beat,
+                    dt: frame.dt,
+                    width: main_w,
+                    height: main_h,
+                    output_width: frame.output_width,
+                    output_height: frame.output_height,
+                    aspect: if main_h > 0 {
+                        main_w as f32 / main_h as f32
+                    } else {
+                        1.0
+                    },
+                    owner_key: group_id_owner_key(group_id),
+                    is_clip_level: false,
+                    frame_count: frame.frame_count as i64,
+                    anim_progress: 0.0,
+                    trigger_count: 0,
+                };
+                let result = Self::apply_effects_with_scene_viewport(
+                    effect_chain,
+                    gpu,
+                    group_buf.source_texture(),
+                    group_desc.effects,
+                    group_desc.effect_groups,
+                    &ctx,
+                    preview_fx.as_ref(),
+                    &fx_scope(group_id),
+                    self.profiling_enabled,
+                    self.rt_quality,
+                    &self.layer_skin_registry,
+                    scene_viewport_request
+                        .as_ref()
+                        .map(|(effect_id, node_id, config)| (effect_id, node_id, *config)),
+                    &mut scene_viewport_error,
+                    frame.project_tempo,
+                );
+                result.map_or(group_buf.source_texture() as *const _, |t| t as *const _)
+            } else {
+                group_buf.source_texture() as *const _
+            };
+
+            // Replace child outputs with a single group output.
+            // Insert group output at the first child's position, remove the rest.
+            let first_pos = self.group_child_positions[0];
+            self.layer_outputs_scratch[first_pos] = LayerOutput {
+                texture: group_texture,
+                blend_mode: group_desc.blend_mode,
+                opacity: group_desc.opacity,
+                layer_index: group_desc.layer_index,
+                // Screen-only: LED routing of the children was already
+                // resolved pre-fold by blend_layers_to_led, which runs
+                // before fold_groups. A group output never enters the
+                // LED fold.
+                led_route: LedRoute::None,
+            };
+
+            // Remove remaining child entries (iterate in reverse to preserve indices)
+            for &pos in self.group_child_positions[1..].iter().rev() {
+                self.layer_outputs_scratch.remove(pos);
+            }
+        }
+        self.scene_viewport_error = scene_viewport_error;
+    }
+
+    /// Snapshot outputs after all frame readers, including master effects.
+    /// Leaf references are retained before folding removes grouped children.
+    /// Only layers read as a layer source since the last publish are
+    /// snapshotted — unreferenced layers cost nothing.
+    fn publish_layer_skins(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+        self.layer_skin_registry.ensure_fallback_cleared(gpu);
+        self.layer_skin_registry.begin_snapshots();
+        for (layer_index, texture) in &self.source_outputs_scratch {
+            if let Some(desc) = frame.find_layer(*layer_index)
+                && self.layer_skin_registry.was_read(desc.layer_id)
+            {
+                self.layer_skin_registry.publish_snapshot(gpu, desc.layer_id, texture);
+            }
+        }
+        for output in &self.layer_outputs_scratch {
+            let Some(desc) = frame.find_layer(output.layer_index) else {
+                continue;
+            };
+            if desc.is_group && self.layer_skin_registry.was_read(desc.layer_id) {
+                self.layer_skin_registry.publish_snapshot(gpu, desc.layer_id, output.texture());
+            }
+        }
+        self.layer_skin_registry.finish_snapshots();
+    }
+
+    /// Serial composite path: single encoder for all work.
+    /// Used when only 1 active layer (no parallel benefit).
+    fn composite_serial(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+        self.uniform_arena.reset();
+        self.generate_layers(gpu, frame);
+        gpu.checkpoint();
+        // Route LED-routed layers BEFORE folding groups so child layers inside
+        // a group route via their own LedRoute (the group's route controls
+        // only the screen-output blend, not LED routing).
+        // Safety: same lifetime guarantees as the blend_layers call below.
+        let pre_fold_outputs_ptr = self.layer_outputs_scratch.as_ptr();
+        let pre_fold_outputs_len = self.layer_outputs_scratch.len();
+        let pre_fold_outputs =
+            unsafe { std::slice::from_raw_parts(pre_fold_outputs_ptr, pre_fold_outputs_len) };
+        self.blend_layers_to_led(gpu, pre_fold_outputs, frame);
+
+        self.source_outputs_scratch.clear();
+        self.source_outputs_scratch.extend(
+            self.layer_outputs_scratch.iter().map(|output| (output.layer_index, output.texture().clone())),
+        );
+        self.fold_groups(gpu, frame);
+        gpu.checkpoint();
+        // Safety: layer_outputs_scratch contains raw pointers to textures owned
+        // by effect chains, layer bufs, or clip render targets — all valid for
+        // the frame duration. Using a raw pointer avoids a split-borrow conflict
+        // with blend_layers (which also needs &mut self for main ping-pong).
+        let outputs_ptr = self.layer_outputs_scratch.as_ptr();
+        let outputs_len = self.layer_outputs_scratch.len();
+        let outputs = unsafe { std::slice::from_raw_parts(outputs_ptr, outputs_len) };
+        self.blend_layers(gpu, outputs, frame.occluded_layers);
+    }
+}
+
+impl Compositor for LayerCompositor {
+    /// section 24 5c with-effects thumbnails — the post-effect output for a sole-clip
+    /// layer (that clip's full look). `None` for multi-clip layers; valid only for
+    /// the frame just rendered. See the trait default for the contract.
+    fn clip_post_fx_texture(&self, clip_id: &str) -> Option<&GpuTexture> {
+        self.clip_post_fx_scratch
+            .iter()
+            .find(|c| c.clip_id == clip_id)
+            // Owns a live clone of the post-fx target (see `ClipPostFx` doc), so no
+            // raw-pointer deref and no risk of the target being recycled first.
+            .map(|c| &c.texture)
+    }
+
+    /// Set (or clear) the authoring-time node-output preview request. Cheap;
+    /// applied to every screen chain by `apply_preview_targets` each frame.
+    fn set_preview_request(&mut self, request: Option<(EffectId, Option<NodeId>)>) {
+        self.preview_request = request;
+    }
+
+    fn set_scene_viewport_request(
+        &mut self,
+        request: Option<(
+            EffectId,
+            NodeId,
+            manifold_node_engine::scene::scene_viewport::SceneViewportConfig,
+        )>,
+    ) {
+        self.scene_viewport_request = request;
+        self.scene_viewport_error = None;
+        self.apply_preview_targets();
+    }
+
+    fn scene_viewport_texture(&self) -> Option<&GpuTexture> {
+        if self.scene_viewport_error.is_some() {
+            return None;
+        }
+        self.scene_viewport_request.as_ref()?;
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        chains
+            .filter_map(|chain| chain.as_ref())
+            .find_map(|chain| {
+                chain
+                    .scene_viewport_status()
+                    .and_then(|_| chain.scene_viewport_texture())
+            })
+    }
+
+    fn scene_viewport_status(
+        &self,
+    ) -> Result<
+        manifold_node_engine::runtime::frame_status::FrameRenderStatus,
+        manifold_node_engine::scene::scene_viewport::SceneViewportHostError,
+    > {
+        if let Some(error) = self.scene_viewport_error {
+            return Err(error);
+        }
+        let Some((_effect_id, _, _)) = self.scene_viewport_request.as_ref() else {
+            return Err(manifold_node_engine::scene::scene_viewport::SceneViewportHostError::MissingRuntime);
+        };
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        for chain in chains.filter_map(|chain| chain.as_ref()) {
+            if let Some(status) = chain.scene_viewport_status() {
+                return Ok(status);
+            }
+        }
+        Err(manifold_node_engine::scene::scene_viewport::SceneViewportHostError::MissingRuntime)
+    }
+
+    fn write_scene_viewport_fluid_domains(
+        &self,
+        output: &mut Vec<(
+            NodeId,
+            manifold_node_engine::water::fluid::FluidDomainSnapshot,
+        )>,
+    ) {
+        if self.scene_viewport_error.is_some() {
+            return;
+        }
+        let Some((effect_id, _, _)) = self.scene_viewport_request.as_ref() else {
+            return;
+        };
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        for chain in chains.filter_map(|chain| chain.as_ref()) {
+            if chain.scene_viewport_status().is_some() {
+                chain.write_fluid_domains(effect_id, output);
+            }
+        }
+    }
+
+    /// The captured preview texture for this frame, if a preview is active and
+    /// its node produced one. Scans the screen-effect chains and returns the
+    /// first match (only the chain holding the watched effect captures).
+    fn preview_texture(&self) -> Option<&GpuTexture> {
+        // No preview active → nothing to read.
+        self.preview_request.as_ref()?;
+        self.master_effect_chain
+            .as_ref()
+            .and_then(|cg| cg.preview_texture())
+            .or_else(|| {
+                self.effect_chains
+                    .values()
+                    .filter_map(|c| c.as_ref().and_then(|cg| cg.preview_texture()))
+                    .next()
+            })
+            .or_else(|| {
+                self.group_effect_chains
+                    .values()
+                    .filter_map(|c| c.as_ref().and_then(|cg| cg.preview_texture()))
+                    .next()
+            })
+    }
+
+    /// Encoding for this frame's previewed node. Walks the same chains as
+    /// [`Self::preview_texture`] and returns the watched chain's encoding.
+    fn preview_encoding(&self) -> manifold_node_engine::preview_encoding::PreviewEncoding {
+        if self.preview_request.is_none() {
+            return manifold_node_engine::preview_encoding::PreviewEncoding::Color;
+        }
+        if let Some(cg) = self
+            .master_effect_chain
+            .as_ref()
+            .filter(|cg| cg.preview_texture().is_some())
+        {
+            return cg.preview_encoding();
+        }
+        for chain in self
+            .effect_chains
+            .values()
+            .chain(self.group_effect_chains.values())
+        {
+            if let Some(cg) = chain.as_ref().filter(|cg| cg.preview_texture().is_some()) {
+                return cg.preview_encoding();
+            }
+        }
+        manifold_node_engine::preview_encoding::PreviewEncoding::Color
+    }
+
+    /// Live scalar I/O of this frame's previewed node, for the value inspector.
+    /// Walks the watched chain regardless of whether it captured a texture —
+    /// the inspector is exactly the no-texture case.
+    fn preview_scalar_io(&self) -> manifold_node_engine::preview_encoding::PreviewScalarIo {
+        if self.preview_request.is_none() {
+            return (Vec::new(), Vec::new());
+        }
+        if let Some(cg) = self.master_effect_chain.as_ref() {
+            let io = cg.preview_scalar_io();
+            if !io.0.is_empty() || !io.1.is_empty() {
+                return io;
+            }
+        }
+        for chain in self
+            .effect_chains
+            .values()
+            .chain(self.group_effect_chains.values())
+        {
+            if let Some(cg) = chain.as_ref() {
+                let io = cg.preview_scalar_io();
+                if !io.0.is_empty() || !io.1.is_empty() {
+                    return io;
+                }
+            }
+        }
+        (Vec::new(), Vec::new())
+    }
+
+    /// Live param values for every node of the watched effect. The watched id
+    /// comes from `preview_request`; we ask each chain for that effect's nodes
+    /// and return the first non-empty (only the chain holding the effect has a
+    /// matching slot, so at most one answers). Same chain set as
+    /// [`Self::preview_scalar_io`] — master, then layer, then group chains.
+    fn live_node_params(&self) -> manifold_node_engine::preview_encoding::LiveNodeParams {
+        let Some((effect_id, _)) = self.preview_request.as_ref() else {
+            return Vec::new();
+        };
+        if let Some(cg) = self.master_effect_chain.as_ref() {
+            let params = cg.live_node_params(effect_id);
+            if !params.is_empty() {
+                return params;
+            }
+        }
+        for chain in self
+            .effect_chains
+            .values()
+            .chain(self.group_effect_chains.values())
+        {
+            if let Some(cg) = chain.as_ref() {
+                let params = cg.live_node_params(effect_id);
+                if !params.is_empty() {
+                    return params;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn set_dump_request(&mut self, request: Option<crate::compositor::DumpRequest>) {
+        self.dump_request = request;
+    }
+
+    /// PERF_BUDGET_GATE_DESIGN P2 / D6: fan out to every chain this
+    /// compositor currently owns (screen, group, LED-group, master, LED
+    /// master), applying the profiling flag + this chain's instance-identity
+    /// scope. New chains built later this frame (or on a future frame) get
+    /// the same treatment at dispatch time via `apply_effects`'s `scope`/
+    /// `profiling` args (chain_dispatch.rs) — this walker only needs to
+    /// reach chains that already exist so a mid-run toggle doesn't skip them.
+    fn set_profiling(&mut self, on: bool) {
+        self.profiling_enabled = on;
+        for (id, chain) in self.effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_profiling(on);
+                cg.set_profile_scope(&fx_scope(id));
+            }
+        }
+        for (id, chain) in self.group_effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_profiling(on);
+                cg.set_profile_scope(&fx_scope(id));
+            }
+        }
+        for (id, chain) in self.led_group_effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_profiling(on);
+                cg.set_profile_scope(&led_scope(id));
+            }
+        }
+        if let Some(cg) = self.master_effect_chain.as_mut() {
+            cg.set_profiling(on);
+            cg.set_profile_scope("master");
+        }
+        if let Some(Some(cg)) = self.led_master_ec.as_mut() {
+            cg.set_profiling(on);
+            cg.set_profile_scope("led:master");
+        }
+    }
+
+    fn take_step_profiles(&mut self) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
+        let mut out = Vec::new();
+        for chain in self.effect_chains.values_mut().flatten() {
+            out.extend(chain.take_step_profiles());
+        }
+        for chain in self.group_effect_chains.values_mut().flatten() {
+            out.extend(chain.take_step_profiles());
+        }
+        for chain in self.led_group_effect_chains.values_mut().flatten() {
+            out.extend(chain.take_step_profiles());
+        }
+        if let Some(cg) = self.master_effect_chain.as_mut() {
+            out.extend(cg.take_step_profiles());
+        }
+        if let Some(Some(cg)) = self.led_master_ec.as_mut() {
+            out.extend(cg.take_step_profiles());
+        }
+        out
+    }
+
+    fn dump_textures(&self) -> Vec<crate::compositor::DumpTextureRef<'_>> {
+        let Some(effect_id) = self.dump_request.as_ref().map(|r| r.effect_id()) else {
+            return Vec::new();
+        };
+        // The watched effect lives in exactly one screen chain; find it and
+        // pull that effect's captured node outputs.
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        for chain in chains {
+            if let Some(cg) = chain.as_ref() {
+                let dumped = cg.dump_textures(effect_id);
+                if !dumped.is_empty() {
+                    return dumped;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn dump_arrays(&self) -> Vec<manifold_node_engine::runtime::instrumentation::ArrayDump<'_>> {
+        let Some(effect_id) = self.dump_request.as_ref().map(|r| r.effect_id()) else {
+            return Vec::new();
+        };
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        for chain in chains {
+            if let Some(cg) = chain.as_ref() {
+                let dumped = cg.dump_arrays(effect_id);
+                if !dumped.is_empty() {
+                    return dumped;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn prewarm_layer_chains(
+        &mut self,
+        layer: &manifold_core::layer::Layer,
+        pass: &mut WarmupPass,
+        device: &GpuDevice,
+    ) -> WarmupOutcome {
+        self.prewarm_layer_chains(layer, pass, device)
+    }
+
+    fn prewarm_layer_chains_with_output(
+        &mut self,
+        layer: &manifold_core::layer::Layer,
+        pass: &mut WarmupPass,
+        device: &GpuDevice,
+        output_dims: (u32, u32),
+    ) -> WarmupOutcome {
+        self.prewarm_layer_chains_with_output(layer, pass, device, output_dims)
+    }
+
+    fn prewarm_led_resources(
+        &mut self,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+        project: &manifold_core::project::Project,
+    ) -> WarmupOutcome {
+        self.prewarm_led_resources(device, pool, led_grid_size, project)
+    }
+
+    fn prewarm_master_chain(
+        &mut self,
+        project: &manifold_core::project::Project,
+        pass: &mut WarmupPass,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+    ) -> WarmupOutcome {
+        self.prewarm_master_chain(project, pass, device, pool, led_grid_size)
+    }
+
+    fn prewarm_clip_chain_topologies(
+        &mut self,
+        project: &manifold_core::project::Project,
+        pass: &mut WarmupPass,
+        device: &GpuDevice,
+    ) -> WarmupOutcome {
+        self.prewarm_clip_chain_topologies(project, pass, device)
+    }
+
+    fn prewarm_group_chains(
+        &mut self,
+        project: &manifold_core::project::Project,
+        pass: &mut WarmupPass,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        led_grid_size: (u32, u32),
+        output_dims: (u32, u32),
+    ) -> WarmupOutcome {
+        self.prewarm_group_chains(project, pass, device, pool, led_grid_size, output_dims)
+    }
+
+    fn render(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) -> &GpuTexture {
+        // Drop runtimes whose authored effect owner was edited away before
+        // either render path, including the empty-playback early return.
+        self.clear_obsolete_effect_chains(frame.layers, frame.master_effects);
+        // Aim the authoring-time output preview at the watched node (or clear)
+        // before any chain runs, so a freshly rebuilt chain re-acquires it.
+        self.apply_preview_targets();
+        // Owned clone of the watched effect id for the master-FX build gate
+        // below (forces it unfused). Computed before the `&mut self` chain
+        // borrows so it doesn't conflict.
+        let preview_fx = self.preview_request.as_ref().map(|(e, _)| e.clone());
+        self.layer_skin_registry.ensure_fallback_cleared(gpu);
+        if frame.clips.is_empty() {
+            self.layer_skin_registry.clear();
+            self.source_outputs_scratch.clear();
+            // Unity: CompositorStack.cs returns immediately for empty playback.
+            // Clear to black + return tonemap output (already cleared from previous frame).
+            // Skips ALL master effects, tonemap, and LED tap — zero GPU draw calls.
+            gpu.clear_texture(self.main.source_texture(), 0.0, 0.0, 0.0, 1.0);
+            self.tonemap.clear(gpu);
+            // No layers active — advance frame counter so chains age
+            // toward CHAIN_GRACE_FRAMES, then trim stale entries.
+            self.frame_counter = self.frame_counter.wrapping_add(1);
+            // Pass `frame.layers` so chains for layers that still exist
+            // in the project survive (even if the frame has no clips).
+            // Layers removed from the project get their chains dropped.
+            self.trim_excess_buffers(frame.layers);
+            // Frame had zero active clips — every retained chain is by
+            // definition idle this frame, so this wipes all per-chain
+            // feedback state and primitive accumulators in one pass.
+            self.clear_idle_chain_state();
+            // Release LED composite resources (nothing to route).
+            self.led_main = None;
+            self.led_master_ec = None;
+            return &self.tonemap.output.texture;
+        }
+
+        // Advance frame counter so chain-liveness tracking ages stale
+        // entries even when an active layer's chain hasn't been touched
+        // this frame.
+        self.frame_counter = self.frame_counter.wrapping_add(1);
+
+        // Single composite path: one command buffer, layers generated in
+        // order, then the serial blend. The parallel per-layer-command-buffer
+        // variant was deleted (2026-08-26): its upside only materialized on
+        // frames light enough not to need it, and the duplicated layer loop
+        // drifted from this one twice (clip-mute black-out class).
+        self.composite_serial(gpu, frame);
+
+        // Keep the compositor output SceneLinear. Display adaptation, including
+        // any selected SDR curve, happens after master effects per destination.
+        self.tonemap
+            .apply(gpu, self.main.source_texture(), &frame.tonemap);
+
+        // Apply master effects once to the shared image. In SceneLinear mode
+        // their HDR contribution survives until each destination is mapped.
+        //
+        // The effect chain reads directly from tonemap.output (no copy into main)
+        // and blits the processed result back to tonemap.output via copy.
+        // Saves 2x full-resolution texture copies per frame.
+        let scene_viewport_request = self.scene_viewport_request.clone();
+        let mut scene_viewport_error = self.scene_viewport_error;
+        if has_enabled_effects(frame.master_effects) {
+            let width = self.main.width();
+            let height = self.main.height();
+
+            let ctx = PresetContext {
+                time: frame.time,
+                beat: frame.beat,
+                dt: frame.dt,
+                width,
+                height,
+                output_width: frame.output_width,
+                output_height: frame.output_height,
+                aspect: if height > 0 {
+                    width as f32 / height as f32
+                } else {
+                    1.0
+                },
+                owner_key: 0,
+                is_clip_level: false,
+                frame_count: frame.frame_count as i64,
+                anim_progress: 0.0,
+                trigger_count: frame.master_trigger_count,
+            };
+
+            // Master effects use a dedicated `EffectChain` instance,
+            // separate from the per-layer `AHashMap<LayerId, _>`. The
+            // master pass has no `LayerId` (it operates on the
+            // composited scene), so it lives in its own field — the
+            // two cannot collide by construction.
+            let master_ec = &mut self.master_effect_chain;
+
+            // Feed tonemap output directly into the effect chain — the first
+            // effect reads from tonemap.output without copying.
+            if let Some(processed) = Self::apply_effects_with_scene_viewport(
+                master_ec,
+                gpu,
+                &self.tonemap.output.texture,
+                frame.master_effects,
+                frame.master_effect_groups,
+                &ctx,
+                preview_fx.as_ref(),
+                "master",
+                self.profiling_enabled,
+                self.rt_quality,
+                &self.layer_skin_registry,
+                scene_viewport_request
+                    .as_ref()
+                    .map(|(effect_id, node_id, config)| (effect_id, node_id, *config)),
+                &mut scene_viewport_error,
+                frame.project_tempo,
+            ) {
+                // Copy processed result back into tonemap output via GPU memcpy.
+                // Use the texture `apply_effects` returned directly — under the
+                // PresetRuntime fast path, the result lives in the chain graph's
+                // backend (not in `master_ec.ping`/`pong`, which stay None for
+                // graph-dispatched chains). `source_texture_pub()` would
+                // unwrap a None ping in that case.
+                gpu.copy_texture_to_texture(processed, &self.tonemap.output.texture, width, height);
+            }
+        }
+        self.scene_viewport_error = scene_viewport_error;
+
+        // ── LED composite: master FX (gated by led_exit_index) ──
+        // The LED path runs raw HDR end-to-end — no dedicated tonemap stage.
+        // The slicer applies `led_gain` + chroma-preserving clip in linear
+        // space before the 8-bit DMX clamp. `led_exit_index` still controls
+        // master FX:
+        //   * `0` (pre-tonemap tap) — skip master FX. Raw blended composite
+        //     goes straight to the LED edge-extend pass. Escape hatch for FX
+        //     that don't translate to LEDs.
+        //   * `-1` (default, post-effects) — apply master FX in HDR.
+        //
+        // The LED composite is at native LED grid resolution, so master FX
+        // cost is negligible.
+        if let Some(ref led_main) = self.led_main
+            && frame.led_exit_index == -1
+            && has_enabled_effects(frame.master_effects)
+        {
+            let (width, height) = frame.led_composite_size;
+            let width = width.max(1);
+            let height = height.max(1);
+
+            let led_ec = self.led_master_ec.get_or_insert_with(Option::<PresetRuntime>::default);
+
+            let ctx = PresetContext {
+                time: frame.time,
+                beat: frame.beat,
+                dt: frame.dt,
+                width,
+                height,
+                output_width: frame.output_width,
+                output_height: frame.output_height,
+                aspect: if height > 0 {
+                    width as f32 / height as f32
+                } else {
+                    1.0
+                },
+                owner_key: LED_MASTER_OWNER_KEY,
+                is_clip_level: false,
+                frame_count: frame.frame_count as i64,
+                anim_progress: 0.0,
+                trigger_count: frame.master_trigger_count,
+            };
+
+            // Run master FX directly on raw HDR `led_main`, copy result back
+            // into the same source texture so the slicer reads the post-FX
+            // composite. Mirrors the screen path's read-from / copy-back-to
+            // tonemap.output pattern.
+            let led_src_tex_ptr: *const GpuTexture = led_main.source_texture();
+            // Safety: led_src_tex_ptr points to led_main.ping/pong which are
+            // not reallocated between the apply_effects call and the copy.
+            if let Some(processed) = Self::apply_effects(
+                led_ec,
+                gpu,
+                unsafe { &*led_src_tex_ptr },
+                frame.master_effects,
+                frame.master_effect_groups,
+                &ctx,
+                // LED path is not a preview surface — never unfuse for it.
+                None,
+                "led:master",
+                self.profiling_enabled,
+                self.rt_quality,
+                &self.layer_skin_registry,
+                frame.project_tempo,
+            ) {
+                gpu.copy_texture_to_texture(
+                    processed,
+                    unsafe { &*led_src_tex_ptr },
+                    width,
+                    height,
+                );
+            }
+        } else if self.led_main.is_none() {
+            // No LED layers active at all — release the LED master-FX state.
+            // (`blend_layers_to_led` clears `led_main` when no layer is
+            // flagged.) Don't release on mere exit-path-toggle: that caused
+            // churn when live MIDI control flipped `led_exit_index` per
+            // frame, dropping the master FX PresetRuntime (and its state) on
+            // every toggle. Closes audit finding C-1.
+            self.led_master_ec = None;
+        }
+        // If the LED path is active but exit_index == 0 (pre-tonemap tap),
+        // master FX sits warm for the next time the user flips exit_index
+        // back to -1.
+
+        // Publish only after every consumer, including master and LED effects,
+        // has read the previous frame. Snapshots also retain grouped children.
+        self.publish_layer_skins(gpu, frame);
+
+        // Flush uniform arena (recreates buffer if capacity grew).
+        // On native path, arena buffer is not read by GPU dispatches (uses inline
+        // set_bytes), but we still flush to handle capacity growth.
+        self.uniform_arena.flush(gpu.device);
+
+        // Trim pool entries: drop chains for layers that have been
+        // removed from the project (immediate, event-based) AND chains
+        // unused for more than CHAIN_GRACE_FRAMES (~5 min at 60 fps,
+        // memory-hygiene safety net for long shows).
+        self.trim_excess_buffers(frame.layers);
+        // Wipe persistent primitive state (feedback buffers, Bloom mip
+        // pyramids, etc.) on every chain whose layer didn't dispatch
+        // this frame. Matches the live-performance intuition: a layer
+        // with no active clips should start fresh on its next clip.
+        // The chain INSTANCE itself stays alive — only its cached
+        // per-effect state is dropped. See `docs/EFFECT_CHAIN_LIFECYCLE.md`.
+        self.clear_idle_chain_state();
+
+        &self.tonemap.output.texture
+    }
+
+    fn prepare_resize(&self, device: &GpuDevice, width: u32, height: u32) -> Result<PreparedCompositorResize, String> {
+        // Legacy plugin processors have no fallible preparation contract. Refuse
+        // rather than publishing half a resize if one is installed in the future.
+        if !self.plugin_warmups.is_empty() {
+            return Err("Resize is unavailable while a legacy plugin processor is installed".into());
+        }
+        let main = PingPong::try_new(device, width, height)?;
+        let layers = self.layer_bufs.keys().map(|id| Ok((id.clone(), PingPong::try_new(device, width, height)?)))
+            .collect::<Result<_, String>>()?;
+        let groups = self.group_bufs.keys().map(|id| Ok((id.clone(), PingPong::try_new(device, width, height)?)))
+            .collect::<Result<_, String>>()?;
+        let tonemap = RenderTarget::try_new(device, width, height, self.tonemap.output.format, "resize-tonemap")?;
+        let prepare_chains = |chains: &AHashMap<LayerId, Option<PresetRuntime>>| {
+            chains.iter().filter_map(|(id, chain)| chain.as_ref().map(|chain| (id, chain)))
+                .map(|(id, chain)| chain.prepare_resize(device, width, height)
+                    .map(|prepared| (id.clone(), prepared)).map_err(|error| error.to_string()))
+                .collect::<Result<Vec<_>, String>>()
+        };
+        Ok(PreparedCompositorResize {
+            main, layers, groups, tonemap,
+            layer_chains: prepare_chains(&self.effect_chains)?,
+            group_chains: prepare_chains(&self.group_effect_chains)?,
+            master_chain: self.master_effect_chain.as_ref()
+                .map(|chain| chain.prepare_resize(device, width, height))
+                .transpose().map_err(|error| error.to_string())?,
+        })
+    }
+
+    fn commit_resize(&mut self, prepared: PreparedCompositorResize) {
+        self.blend.resize(prepared.main.width(), prepared.main.height());
+        self.main = prepared.main;
+        self.layer_bufs = prepared.layers;
+        self.group_bufs = prepared.groups;
+        self.tonemap.output = prepared.tonemap;
+        for (id, candidate) in prepared.layer_chains {
+            self.effect_chains.get_mut(&id).and_then(Option::as_mut)
+                .expect("resize chain owner unchanged").commit_resize(candidate);
+        }
+        for (id, candidate) in prepared.group_chains {
+            self.group_effect_chains.get_mut(&id).and_then(Option::as_mut)
+                .expect("resize chain owner unchanged").commit_resize(candidate);
+        }
+        if let Some(candidate) = prepared.master_chain {
+            self.master_effect_chain.as_mut().expect("resize chain owner unchanged")
+                .commit_resize(candidate);
+        }
+        self.layer_outputs_scratch.clear();
+        self.source_outputs_scratch.clear();
+        self.clip_post_fx_scratch.clear();
+    }
+
+    fn dimensions(&self) -> (u32, u32) {
+        (self.main.width(), self.main.height())
+    }
+
+    fn pre_tonemap_output(&self) -> &GpuTexture {
+        self.main.source_texture()
+    }
+
+    fn output_texture(&self) -> &GpuTexture {
+        &self.tonemap.output.texture
+    }
+
+    fn cleanup_clip_owner(&mut self, clip_id: &str) {
+        self.cleanup_clip_owner_internal(clip_id);
+    }
+
+    fn clear_all_effect_state(&mut self) {
+        // Single state cache to walk now that the legacy per-effect
+        // dispatcher (and its EffectRegistry-singleton state storage)
+        // is gone. Primitive state — Watercolor feedback, Bloom mip
+        // pyramids, Stylized Feedback history — lives inside each
+        // chain's `chain_graph`, both as instance-level data on the
+        // primitive nodes themselves and as keyed entries in the
+        // chain's per-instance `StateStore`. Walking every pool entry
+        // here resets both styles in one pass.
+        //
+        // See `docs/EFFECT_CHAIN_LIFECYCLE.md`.
+        for chain in self.effect_chains.values_mut() {
+            clear_chain_state(chain);
+        }
+        for chain in self.group_effect_chains.values_mut() {
+            clear_chain_state(chain);
+        }
+        for chain in self.led_group_effect_chains.values_mut() {
+            clear_chain_state(chain);
+        }
+        clear_chain_state(&mut self.master_effect_chain);
+        if let Some(led_ec) = self.led_master_ec.as_mut() {
+            clear_chain_state(led_ec);
+        }
+    }
+
+    fn flush_all_background_work(&mut self) {
+        for processor in self.plugin_warmups.iter_mut() {
+            processor.flush_background_work();
+        }
+    }
+
+    fn led_composite_texture(&self) -> Option<&GpuTexture> {
+        // Present only when at least one layer was LED-routed this
+        // frame. Returns the raw HDR LED composite (post-master-FX when
+        // exit_index == -1 and master FX are enabled; otherwise pre-FX).
+        // No tonemap stage — the slicer applies `led_gain` + chroma-preserving
+        // clip in linear space before the 8-bit DMX clamp.
+        self.led_main.as_ref().map(|l| l.source_texture())
+    }
+
+    fn graph_snapshot_for(
+        &self,
+        type_id: &manifold_core::PresetTypeId,
+    ) -> Option<manifold_node_engine::snapshot::GraphSnapshot> {
+        let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(type_id)?;
+        manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view)
+    }
+
+    fn outer_routings_for(
+        &self,
+        type_id: &manifold_core::PresetTypeId,
+    ) -> Vec<manifold_node_engine::snapshot::OuterParamRouting> {
+        let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(type_id) else {
+            return Vec::new();
+        };
+        manifold_node_engine::load::loaded_preset_view::outer_routings_from_view(view)
+    }
+
+    fn layer_skin_registry(&self) -> Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry> {
+        Some(&self.layer_skin_registry)
+    }
+
+    fn set_rt_quality(&mut self, q: manifold_node_engine::exec::effect_node::RtQuality) {
+        // RT_QUALITY_SETTINGS_DESIGN.md D5: forward to all chains, same sweep as set_profiling
+        self.rt_quality = q;
+        // Forward to all chains — same sweep as set_profiling
+        for (_id, chain) in self.effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_rt_quality(q);
+            }
+        }
+        for (_id, chain) in self.group_effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_rt_quality(q);
+            }
+        }
+        for (_id, chain) in self.led_group_effect_chains.iter_mut() {
+            if let Some(cg) = chain.as_mut() {
+                cg.set_rt_quality(q);
+            }
+        }
+        if let Some(cg) = self.master_effect_chain.as_mut() {
+            cg.set_rt_quality(q);
+        }
+        if let Some(cg) = self.led_master_ec.as_mut()
+            && let Some(cg) = cg.as_mut()
+        {
+            cg.set_rt_quality(q);
+        }
+    }
+
+    fn layer_scratch_texture(&self, layer_id: &str) -> Option<&GpuTexture> {
+        self.layer_bufs
+            .get(&LayerId::new(layer_id))
+            .map(|pp| pp.source_texture())
+    }
+
+    fn chain_output_texture(&self, layer_id: &str) -> Option<&GpuTexture> {
+        self.effect_chains
+            .get(&LayerId::new(layer_id))
+            .and_then(|opt| opt.as_ref())
+            .and_then(|rt| rt.output_texture())
+    }
+
+    fn chain_debug_info(
+        &self,
+        layer_id: &str,
+    ) -> Option<manifold_node_engine::runtime::ChainDebugInfo<'_>> {
+        self.effect_chains
+            .get(&LayerId::new(layer_id))
+            .and_then(|opt| opt.as_ref())
+            .and_then(|rt| rt.chain_debug_info())
+    }
+}
+
+
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod led_warmup_tests {
+    //! P2b LED tap warmup: resources that build on the first LED-enabled frame
+    //! should be pre-created at load when the project routes layers to LEDs.
+
+    use super::*;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
+    use manifold_core::project::Project;
+    use manifold_core::types::LayerType;
+    use manifold_core::Beats;
+
+    fn led_project() -> Project {
+        let mut project = Project::default();
+        let mut layer = Layer::new("LED layer".to_string(), LayerType::Generator, 0);
+        layer.blit_to_led = true;
+        layer.clips.push(TimelineClip::new_generator(
+            Beats(0.0),
+            Beats(4.0),
+        ));
+        project.timeline.layers.push(layer);
+        project
+    }
+
+    #[test]
+    fn led_composite_resident_after_prewarm() {
+        let device = manifold_gpu::testkit::test_device();
+        let mut comp = LayerCompositor::new(&device, 64, 64);
+        let project = led_project();
+
+        let outcome = comp.prewarm_led_resources(&device, None, (8, 120), &project);
+        assert_eq!(
+            outcome,
+            manifold_core::WarmupOutcome::Quiescent,
+            "LED resource warmup should be synchronous"
+        );
+        assert!(
+            comp.led_main.is_some(),
+            "LED main ping-pong should be pre-created for LED projects"
+        );
+    }
+}
+
+
+
+
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod led_composite_pixel_tests {
+    //! BUG-2ptv (LED revival P1): value-level proof that the LED composite
+    //! path emits NON-BLACK pixels at the compositor level. The only
+    //! pre-existing coverage was `led_warmup_tests` asserting GPU resources
+    //! exist — nothing read a pixel. On the real rig the LED pipeline died
+    //! silently; this test is the oracle that localizes the fault: if the
+    //! screen composite is lit but the LED composite is black, the break is
+    //! inside `blend_layers_to_led`; if both are black, it is upstream.
+
+    use super::*;
+    use crate::compositor::CompositeLayerDescriptor;
+    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
+    use half::f16;
+
+    const LED_W: u32 = 8;
+    const LED_H: u32 = 120;
+    // Production shape: the compositor runs at output resolution, always
+    // larger than the native LED grid in both dims.
+    const COMP_W: u32 = 256;
+    const COMP_H: u32 = 256;
+    // Distinctive per-channel values — a channel swap or blend-mode mixup
+    // fails loudly instead of averaging out under a uniform fill.
+    const SRC: (f32, f32, f32) = (1.0, 0.5, 0.25);
+    // Mirror-route content in the switch/mixed-group tests — must be far
+    // enough from SRC that a leak shows.
+    const GREEN: (f32, f32, f32) = (0.15, 0.85, 0.3);
+    const TOL: f32 = 0.02;
+
+    fn solid_clip_texture(device: &manifold_gpu::testkit::TestDevice, color: (f32, f32, f32)) -> GpuTexture {
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: COMP_W,
+            height: COMP_H,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "led-composite-test-src",
+            mip_levels: 1,
+        });
+        let mut enc = device.create_encoder("led-test-src-clear");
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, device);
+            gpu.clear_texture(&tex, color.0 as f64, color.1 as f64, color.2 as f64, 1.0);
+        }
+        enc.commit_and_wait_completed();
+        tex
+    }
+
+    /// One layer in a gate-test frame. `color: Some` = the layer holds one
+    /// solid clip of that color; `color: None` = group container (no clip).
+    struct LayerSpec {
+        layer_id: LayerId,
+        layer_index: i32,
+        layer_type: manifold_core::LayerType,
+        blit_to_led: bool,
+        is_group: bool,
+        parent: Option<LayerId>,
+        color: Option<(f32, f32, f32)>,
+    }
+
+    /// Drive the full production `render` path (generate_layers →
+    /// blend_layers_to_led → fold_groups → blend_layers → tonemap) with the
+    /// given layer stack. `occluded` is the frame's occluded-layer list —
+    /// the D14 marking the content pipeline adds for LED-type layers.
+    /// Returns (LED composite bytes at the native grid, screen pre-tonemap
+    /// bytes).
+    fn render_layers(
+        comp: &mut LayerCompositor,
+        device: &manifold_gpu::testkit::TestDevice,
+        specs: &[LayerSpec],
+        occluded: &[i32],
+    ) -> (Option<Vec<u8>>, Vec<u8>) {
+        let mut textures: Vec<GpuTexture> = Vec::new();
+        let mut layers: Vec<CompositeLayerDescriptor> = Vec::new();
+        let mut clips: Vec<CompositeClipDescriptor> = Vec::new();
+        // Textures first, then descriptors/clips borrowing them — keeps the
+        // borrows immutable from here on.
+        for spec in specs {
+            if let Some(color) = spec.color {
+                textures.push(solid_clip_texture(device, color));
+            }
+        }
+        let mut next_tex = 0;
+        for spec in specs {
+            layers.push(CompositeLayerDescriptor {
+                layer_index: spec.layer_index,
+                layer_id: &spec.layer_id,
+                blend_mode: BlendMode::Normal,
+                opacity: 1.0,
+                hidden: false,
+                blit_to_led: spec.blit_to_led,
+                layer_type: spec.layer_type,
+                effects: &[],
+                effect_groups: &[],
+                parent_layer_id: spec.parent.as_ref(),
+                is_group: spec.is_group,
+                trigger_count: 0,
+            });
+            if spec.color.is_some() {
+                let tex = &textures[next_tex];
+                next_tex += 1;
+                clips.push(CompositeClipDescriptor {
+                    clip_id: "c0",
+                    texture: tex,
+                    layer_index: spec.layer_index,
+                    blend_mode: BlendMode::Normal,
+                    opacity: 1.0,
+                    is_muted: false,
+                    effects: &[],
+                    effect_groups: &[],
+                });
+            }
+        }
+        // The content pipeline sorts clips descending by layer_index
+        // (higher index = bottom of timeline = blended first).
+        clips.sort_unstable_by(|a, b| b.layer_index.cmp(&a.layer_index));
+        let frame = CompositorFrame {
+            time: 0.0,
+            beat: 0.0,
+            dt: 1.0 / 60.0,
+            project_tempo: None,
+            frame_count: 1,
+            compositor_dirty: true,
+            clips: &clips,
+            layers: &layers,
+            master_effects: &[],
+            master_effect_groups: &[],
+            master_trigger_count: 0,
+            tonemap: crate::tonemap::TonemapSettings::default(),
+            led_exit_index: -1,
+            led_composite_size: (LED_W, LED_H),
+            output_width: COMP_W,
+            output_height: COMP_H,
+            occluded_layers: occluded,
+            render_skip: &[],
+        };
+        let mut enc = device.create_encoder("led-composite-test");
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, device);
+            comp.render(&mut gpu, &frame);
+        }
+        enc.commit_and_wait_completed();
+        let led = comp
+            .led_composite_texture()
+            .map(|t| readback_raw_halves(device, t, LED_W, LED_H));
+        let screen = readback_raw_halves(device, comp.pre_tonemap_output(), COMP_W, COMP_H);
+        (led, screen)
+    }
+
+    fn decode_halves(raw: &[u8]) -> Vec<(f32, f32, f32)> {
+        raw.chunks_exact(8)
+            .map(|px| {
+                (
+                    f16::from_bits(u16::from_le_bytes([px[0], px[1]])).to_f32(),
+                    f16::from_bits(u16::from_le_bytes([px[2], px[3]])).to_f32(),
+                    f16::from_bits(u16::from_le_bytes([px[4], px[5]])).to_f32(),
+                )
+            })
+            .collect()
+    }
+
+    fn assert_solid_color(pixels: &[(f32, f32, f32)], color: (f32, f32, f32), what: &str) {
+        let black = pixels
+            .iter()
+            .filter(|p| p.0 <= 0.01 && p.1 <= 0.01 && p.2 <= 0.01)
+            .count();
+        assert!(
+            black * 10 < pixels.len(),
+            "{what}: {black}/{} pixels are black — path emitted black",
+            pixels.len(),
+        );
+        let worst = pixels
+            .iter()
+            .map(|p| {
+                (p.0 - color.0)
+                    .abs()
+                    .max((p.1 - color.1).abs())
+                    .max((p.2 - color.2).abs())
+            })
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst < TOL,
+            "{what}: channel deviates by {worst} from solid {color:?}",
+        );
+    }
+
+    fn assert_solid(pixels: &[(f32, f32, f32)], what: &str) {
+        assert_solid_color(pixels, SRC, what);
+    }
+
+    fn led_spec(layer_id: &str, layer_index: i32, parent: Option<LayerId>) -> LayerSpec {
+        LayerSpec {
+            layer_id: LayerId::from(layer_id),
+            layer_index,
+            layer_type: manifold_core::LayerType::Dmx,
+            blit_to_led: false,
+            is_group: false,
+            parent,
+            color: Some(SRC),
+        }
+    }
+
+    fn mirror_spec(
+        layer_id: &str,
+        layer_index: i32,
+        parent: Option<LayerId>,
+        color: (f32, f32, f32),
+    ) -> LayerSpec {
+        LayerSpec {
+            layer_id: LayerId::from(layer_id),
+            layer_index,
+            layer_type: manifold_core::LayerType::Video,
+            blit_to_led: true,
+            is_group: false,
+            parent,
+            color: Some(color),
+        }
+    }
+
+    fn group_spec(layer_id: &str, layer_index: i32) -> LayerSpec {
+        LayerSpec {
+            layer_id: LayerId::from(layer_id),
+            layer_index,
+            layer_type: manifold_core::LayerType::Group,
+            blit_to_led: false,
+            is_group: true,
+            parent: None,
+            color: None,
+        }
+    }
+
+    #[test]
+    fn group_mask_sources_include_folded_children_and_remove_stale_layers() {
+        let device = manifold_gpu::testkit::test_device();
+        let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let parent = LayerId::from("parent");
+        let child = LayerId::from("child");
+        // No consumer read anything: unreferenced layers are never
+        // snapshotted and serve the transparent-black fallback.
+        render_layers(&mut comp, &device, &[
+            group_spec("parent", 0),
+            mirror_spec("child", 1, Some(parent.clone()), SRC),
+        ], &[]);
+        for id in [&parent, &child] {
+            let texture = comp.layer_skin_registry.get(id);
+            assert_eq!(texture.width, 1, "{id}: unreferenced layer was snapshotted");
+        }
+        assert!(comp.layer_skin_registry.is_empty());
+        // Simulate a consumer: the recorded reads make the next publish
+        // snapshot both the group and its folded child.
+        comp.layer_skin_registry.get(&parent);
+        comp.layer_skin_registry.get(&child);
+        render_layers(&mut comp, &device, &[
+            group_spec("parent", 0),
+            mirror_spec("child", 1, Some(parent.clone()), SRC),
+        ], &[]);
+        for id in [&parent, &child] {
+            let texture = comp.layer_skin_registry.get(id);
+            assert_eq!(texture.width, COMP_W, "{id}: source lost during folding");
+            let pixels = readback_raw_halves(&device, texture, COMP_W, COMP_H);
+            assert_solid(&decode_halves(&pixels), "published source");
+        }
+        render_layers(&mut comp, &device, &[], &[]);
+        assert!(comp.layer_skin_registry.is_empty());
+    }
+
+    #[test]
+    fn led_composite_matches_source_color_for_flagged_layer() {
+        let device = manifold_gpu::testkit::test_device();
+        let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
+
+        let (led, screen) = render_layers(
+            &mut comp,
+            &device,
+            &[mirror_spec("L0", 0, None, SRC)],
+            &[],
+        );
+
+        // (a) the LED composite exists at the native LED grid size.
+        let led = led.expect("an LED-routed layer must produce an LED composite texture");
+        assert_eq!(led.len() as u32, LED_W * LED_H * 8);
+
+        // Upstream localization: the screen composite must carry the same
+        // color. If this passes and the LED assert below fails, the break
+        // is inside blend_layers_to_led, not upstream of the compositor.
+        assert_solid(&decode_halves(&screen), "screen composite");
+
+        // (b) + (c) the LED composite is non-black and matches the source.
+        assert_solid(&decode_halves(&led), "LED composite");
+    }
+
+    #[test]
+    fn led_composite_absent_for_unflagged_layer() {
+        let device = manifold_gpu::testkit::test_device();
+        let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
+
+        let (led, _) = render_layers(
+            &mut comp,
+            &device,
+            &[LayerSpec {
+                layer_id: LayerId::from("L0"),
+                layer_index: 0,
+                layer_type: manifold_core::LayerType::Video,
+                blit_to_led: false,
+                is_group: false,
+                parent: None,
+                color: Some(SRC),
+            }],
+            &[],
+        );
+
+        assert!(
+            led.is_none(),
+            "no LED-routed layer → no LED composite texture (controller blackouts)",
+        );
+    }
+
+    #[test]
+    fn led_type_layer_routes_direct_and_is_screen_invisible() {
+        let device = manifold_gpu::testkit::test_device();
+
+        // Frame A: LED-type layer (red) over a plain video layer (green),
+        // with the LED layer carrying the occluded marking the content
+        // pipeline adds for LED-type layers (D14).
+        let mut comp_a = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let (led, screen_a) = render_layers(
+            &mut comp_a,
+            &device,
+            &[
+                led_spec("led0", 0, None),
+                LayerSpec {
+                    layer_id: LayerId::from("vid1"),
+                    layer_index: 1,
+                    layer_type: manifold_core::LayerType::Video,
+                    blit_to_led: false,
+                    is_group: false,
+                    parent: None,
+                    color: Some(GREEN),
+                },
+            ],
+            &[0],
+        );
+
+        // The LED composite carries the LED layer's content (D9: rendered at
+        // main res, blended down to the native grid).
+        let led_px = decode_halves(&led.expect("an active LED-type layer must produce an LED composite"));
+        assert_solid(&led_px, "LED composite");
+
+        // D14: the screen composite is pixel-identical to a frame where the
+        // LED layer does not exist.
+        let mut comp_b = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let (_, screen_b) = render_layers(
+            &mut comp_b,
+            &device,
+            &[LayerSpec {
+                layer_id: LayerId::from("vid1"),
+                layer_index: 1,
+                layer_type: manifold_core::LayerType::Video,
+                blit_to_led: false,
+                is_group: false,
+                parent: None,
+                color: Some(GREEN),
+            }],
+            &[],
+        );
+        assert_eq!(
+            screen_a, screen_b,
+            "screen composite must be pixel-identical to the LED layer not existing"
+        );
+    }
+
+    #[test]
+    fn direct_route_switches_mirror_layers_off() {
+        let device = manifold_gpu::testkit::test_device();
+        let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
+
+        // Mirror layer ABOVE the LED layer: on a blended-composite reading
+        // its green would cover the red; under the D10 switch it contributes
+        // nothing, so the LED composite must be pure LED content.
+        let (led, _) = render_layers(
+            &mut comp,
+            &device,
+            &[
+                mirror_spec("mir0", 0, None, GREEN),
+                led_spec("led1", 1, None),
+            ],
+            &[1],
+        );
+
+        let led_px = decode_halves(&led.expect("an active LED-type layer must produce an LED composite"));
+        assert_solid(&led_px, "LED composite under the direct route");
+        let worst_green = led_px
+            .iter()
+            .map(|p| {
+                (p.0 - GREEN.0)
+                    .abs()
+                    .max((p.1 - GREEN.1).abs())
+                    .max((p.2 - GREEN.2).abs())
+            })
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst_green > TOL,
+            "mirror layer leaked into the LED composite under the direct route"
+        );
+    }
+
+    #[test]
+    fn mixed_group_mirror_child_is_absent_under_direct_route() {
+        let device = manifold_gpu::testkit::test_device();
+        let group_id = || LayerId::from("grp");
+
+        // Run A: mixed group — mirror child (green, above) + LED child
+        // (red, below). Run B: same group with only the LED child. Under
+        // the D10 switch the mirror child's contribution must be
+        // byte-identical to it being absent: no content, no black-block.
+        let mut comp_a = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let (led_a, _) = render_layers(
+            &mut comp_a,
+            &device,
+            &[
+                mirror_spec("mir", 0, Some(group_id()), GREEN),
+                led_spec("led", 1, Some(group_id())),
+                group_spec("grp", 2),
+            ],
+            &[0, 1],
+        );
+
+        let mut comp_b = LayerCompositor::new(&device, COMP_W, COMP_H);
+        let (led_b, _) = render_layers(
+            &mut comp_b,
+            &device,
+            &[
+                led_spec("led", 1, Some(group_id())),
+                group_spec("grp", 2),
+            ],
+            &[1],
+        );
+
+        let led_a = led_a.expect("a direct route through a mixed group must produce an LED composite");
+        let led_b = led_b.expect("a direct route through a group must produce an LED composite");
+        assert_eq!(
+            led_a, led_b,
+            "the mirror child's contribution must be byte-identical to absence"
+        );
+        assert_solid(
+            &decode_halves(&led_b),
+            "LED composite through the group fold",
+        );
+    }
+
+    #[test]
+    fn direct_child_never_appears_in_group_screen_composite() {
+        let device = manifold_gpu::testkit::test_device();
+        let group_id = || LayerId::from("grp");
+        let mut comp = LayerCompositor::new(&device, COMP_W, COMP_H);
+
+        // Group with a video child (below) and an LED child (above). The
+        // LED child routes to the LED composite only (D11) and is
+        // screen-invisible (D14) — including through the group fold, where
+        // the occluded blend-skip cannot reach it. Without the fold skip
+        // the red would blend over the green on screen.
+        let (led, screen) = render_layers(
+            &mut comp,
+            &device,
+            &[
+                led_spec("led", 0, Some(group_id())),
+                LayerSpec {
+                    layer_id: LayerId::from("vid"),
+                    layer_index: 1,
+                    layer_type: manifold_core::LayerType::Video,
+                    blit_to_led: false,
+                    is_group: false,
+                    parent: Some(group_id()),
+                    color: Some(GREEN),
+                },
+                group_spec("grp", 2),
+            ],
+            &[0],
+        );
+
+        let _ = led.expect("the LED child drives the LED composite");
+        assert_solid_color(
+            &decode_halves(&screen),
+            GREEN,
+            "screen composite — the LED child must never leak through the group fold",
+        );
+    }
+}

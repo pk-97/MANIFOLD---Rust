@@ -8,7 +8,7 @@ use manifold_node_engine::{
     runtime::{generator_provider::generator_provider, preset_context::PresetContext},
 };
 
-use manifold_renderer::{generator_renderer::GeneratorRenderer, generators::registry::GeneratorRegistry};
+use {manifold_compositor::generator_renderer::GeneratorRenderer, manifold_renderer::generators::registry::GeneratorRegistry};
 
 const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 const WORKER: &str = "MANIFOLD_GENERATOR_PROVIDER_PROOF_WORKER";
@@ -43,16 +43,9 @@ fn compiles() -> u64 {
 
 fn cold_device_with_shader_cache(label: &str) -> Arc<GpuDevice> {
     let device = Arc::new(GpuDevice::new_queued(label));
-    // Match the app/headless harness: reuse source-keyed translation and Metal
-    // binaries, not live pipeline objects. Every cache miss still records a
-    // PipelineCompile before consulting these disk caches, so missing provider
-    // requests cannot be hidden by a previous process warming the disk cache.
-    let cache = std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME"))
-        .join("Library/Caches/com.latentspace.manifold");
-    std::fs::create_dir_all(&cache).expect("shader cache directory");
+    // Disk hits must not hide a missing provider prewarm request.
     let before = compiles();
-    device.load_pipeline_archive(&cache.join("pipeline_cache.metallib"));
-    device.load_msl_cache(&cache.join("msl_cache"));
+    manifold_gpu::testkit::load_disk_shader_caches(&device);
     assert_eq!(cache_counts(&device), (0, 0), "disk caches must not warm the device");
     assert_eq!(compiles(), before, "loading disk caches must not request pipelines");
     device

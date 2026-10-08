@@ -73,9 +73,14 @@ def is_test_file(path):
 def production_text(path):
     """File text with the trailing `#[cfg(test)]` block and `//` comment lines removed."""
     txt = read(path)
-    cut = txt.find("#[cfg(test)]")
-    body = txt if cut < 0 else txt[:cut]
-    return "\n".join(l for l in body.split("\n") if not l.strip().startswith("//"))
+    # Keep the source offsets/line count stable while exposing production
+    # declarations hidden inside testkit_visible! calls.
+    from crate_move_replay import production_text as expand_testkit
+    body = expand_testkit(txt)
+    cut = body.find("#[cfg(test)]")
+    body = body if cut < 0 else body[:cut]
+    return "\n".join(l for l in body.split("\n")
+                   if not l.strip().startswith("//"))
 
 
 def collect_units(root):

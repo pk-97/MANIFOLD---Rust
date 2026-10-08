@@ -56,9 +56,7 @@ use manifold_core::TonemapCurve;
 use manifold_core::{AudioBand, AudioFeature, AudioFeatureKind, AudioSend, ParameterAudioMod};
 use manifold_core::{BeatDivision, Beats, Bpm, DriverWaveform, PresetTypeId, Seconds};
 use manifold_media::export_config::ExportConfig;
-use manifold_renderer::presentation::{
-    CurrentHeadroom, DisplayCapabilities, DisplayDestination, DisplayPlan, PotentialHeadroom,
-};
+use manifold_compositor::presentation::{CurrentHeadroom, DisplayCapabilities, DisplayDestination, DisplayPlan, PotentialHeadroom};
 
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;

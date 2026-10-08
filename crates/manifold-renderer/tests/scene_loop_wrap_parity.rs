@@ -17,6 +17,7 @@
 //! a deliberately non-phase-locked camera (orbit_camera vs loop_camera at
 //! the same beat), then green against the real loop_camera.
 
+use manifold_renderer as _;
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{
@@ -24,8 +25,8 @@ use manifold_core::effect_graph_def::{
     InterfacePortDef, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::preset_type_id::PresetTypeId;
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_renderer::node_graph::render_viewport_frame};
-use manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_scene::node_graph::viewport_render::render_viewport_frame};
+use manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 
 fn node(

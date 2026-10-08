@@ -691,9 +691,9 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
             RENDER_SCENE_NODE_ID,
             OBJECTS_BEFORE,
             (900.0, 200.0),
-            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
-            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
-            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
+            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
+            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
+            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
             (*view.canonical_def).clone(),
         );
         cmd.execute(&mut project);
@@ -704,7 +704,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
             RENDER_SCENE_NODE_ID,
             LIGHTS_BEFORE,
             (-260.0, 50.0),
-            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.light"),
+            manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.light"),
             (*view.canonical_def).clone(),
         );
         cmd.execute(&mut project);
@@ -1350,7 +1350,7 @@ mod cache_path_full_render {
     /// end-to-end.
     fn assert_not_blank(linear: &[u8], label: &str) {
         assert!(!linear.is_empty(), "{label}: readback is empty");
-        let bpp = manifold_renderer::presentation::UI_FORMAT.bytes_per_pixel() as usize;
+        let bpp = manifold_compositor::presentation::UI_FORMAT.bytes_per_pixel() as usize;
         let first = &linear[0..bpp];
         let all_same = linear.chunks_exact(bpp).all(|px| px == first);
         assert!(!all_same, "{label}: readback is a uniform single colour — drew nothing");
@@ -1421,10 +1421,10 @@ mod cache_path_full_render {
         sync_build(&mut ui, &data, 24.0);
 
         let device = GpuDevice::new_queued("ui-snap");
-        let mut ui_renderer = UIRenderer::new(&device, manifold_renderer::presentation::UI_FORMAT);
+        let mut ui_renderer = UIRenderer::new(&device, manifold_compositor::presentation::UI_FORMAT);
         // D8: scale factor 1.0 always, at the fixture's logical size — layout
         // is a function of logical size, never shrink the window for speed.
-        let mut cache = UICacheManager::new(manifold_renderer::presentation::UI_FORMAT, 1.0);
+        let mut cache = UICacheManager::new(manifold_compositor::presentation::UI_FORMAT, 1.0);
         cache.set_scale_factor(1.0);
         let atlas_w = LOGICAL_W as u32;
         let atlas_h = LOGICAL_H as u32;
@@ -1609,7 +1609,7 @@ mod editor_window_harness {
         build_editor_preview_column, composite_editor_frame, EditorMiniTimelineInputs,
     };
 
-    const FORMAT: GpuTextureFormat = manifold_renderer::presentation::UI_FORMAT;
+    const FORMAT: GpuTextureFormat = manifold_compositor::presentation::UI_FORMAT;
 
     #[test]
     fn node_the_fixture_places_renders_at_its_declared_screen_rect() {
@@ -1788,7 +1788,7 @@ mod editor_window_harness {
         let mut distinct: std::collections::HashSet<[u8; 8]> = std::collections::HashSet::new();
         for y in y0..y1 {
             for x in x0..x1 {
-                let idx = ((y * tex_w + x) * manifold_renderer::presentation::UI_FORMAT.bytes_per_pixel()) as usize;
+                let idx = ((y * tex_w + x) * manifold_compositor::presentation::UI_FORMAT.bytes_per_pixel()) as usize;
                 distinct.insert(bytes[idx..idx + 8].try_into().expect("RGBA16Float pixel"));
             }
         }
@@ -1902,8 +1902,8 @@ mod overlay_fidelity_proof {
         assert!(start >= 1, "overlay range must exclude its region root at start-1");
 
         let device = GpuDevice::new_queued("ui-snap");
-        let mut renderer = UIRenderer::new(&device, manifold_renderer::presentation::UI_FORMAT);
-        let mut cache = UICacheManager::new(manifold_renderer::presentation::UI_FORMAT, 1.0);
+        let mut renderer = UIRenderer::new(&device, manifold_compositor::presentation::UI_FORMAT);
+        let mut cache = UICacheManager::new(manifold_compositor::presentation::UI_FORMAT, 1.0);
         cache.set_scale_factor(1.0);
         cache.ensure_atlas(&device, w, h);
         let res = CompositeResources::new(&device, w, h);

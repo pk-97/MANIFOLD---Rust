@@ -1160,6 +1160,7 @@ fn every_fused_generator_executes_one_frame() {
     use std::panic::AssertUnwindSafe;
 
     let device = manifold_gpu::testkit::test_device();
+    manifold_gpu::testkit::load_disk_shader_caches(&device);
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (192u32, 192u32);
     let ctx = PresetContext {
@@ -1616,7 +1617,7 @@ fn watercolor_fused_kernel_animates_over_time() {
 #[test]
 fn flow_field_noise_fused_region_animates_over_time() {
     use manifold_node_engine::freeze::install::fuse_generator_view;
-    use {crate::node_graph::primitives::FlowFieldNoise, manifold_node_engine::primitives::gain::Gain};
+    use {manifold_nodes_image::node_graph::primitives::flow_field_noise::FlowFieldNoise, manifold_node_engine::primitives::gain::Gain};
     use manifold_node_engine::runtime::preset_context::PresetContext;
     use manifold_node_engine::runtime::PresetRuntime;
     use manifold_node_engine::primitive::PrimitiveSpec;

@@ -13,13 +13,14 @@
 //! jitter_amount is a live param carrying the same proof burden: the graph
 //! builder's param writes reach the renderer.
 
+use manifold_renderer as _;
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::preset_type_id::PresetTypeId;
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_renderer::node_graph::render_viewport_frame};
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_scene::node_graph::viewport_render::render_viewport_frame};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 
 fn node(

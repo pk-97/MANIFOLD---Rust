@@ -511,15 +511,16 @@ def mode_cpu(repo: Path, manifest: Path, artifact_dir: Path):
 
 def _list_gpu_tests(repo: Path, artifact_dir: Path,
                     release: bool = False,
-                    feature: str = "gpu-proofs") -> tuple[set[str] | None, int, dict]:
+                    feature: str = "gpu-proofs",
+                    package: str = "manifold-nodes-scene") -> tuple[set[str] | None, int, dict]:
     """List the gpu_proofs test names. Returns (names, exit, command record);
     names is None when the listing itself failed."""
     list_cmd = ["cargo", "test"]
     if release:
         list_cmd.append("--release")
-    list_cmd += ["-p", "manifold-renderer", "--features", feature,
+    list_cmd += ["-p", package, "--features", feature,
                  "--test", "gpu_proofs", "--", "--list"]
-    list_log = artifact_dir / "list.log"
+    list_log = artifact_dir / f"list-{package}.log"
     listed, rc, dur = list_tests(list_cmd, repo, list_log)
     record = {"cmd": " ".join(list_cmd), "exitCode": rc,
               "durationSec": round(dur, 1), "log": str(list_log)}
@@ -535,11 +536,14 @@ def _mode_gpu_groups(repo: Path, manifest: Path, artifact_dir: Path,
     release build itself instead
     (A9: one bounded run, never a debug-profile measurement)."""
     tests, commands = [], []
-    listed, rc, record = _list_gpu_tests(repo, artifact_dir)
-    commands.append(record)
-    if listed is None:
-        return 2, [blocked_entry(f"gpu: {', '.join(groups)}",
-                                 f"listing exited {rc}", "listable test suite")], {"passed": 0, "failed": 0, "blocked": 1}, commands
+    listed = set()
+    for package in ("manifold-renderer", "manifold-nodes-scene"):
+        names, rc, record = _list_gpu_tests(repo, artifact_dir, package=package)
+        commands.append(record)
+        if names is None:
+            return 2, [blocked_entry(f"gpu: {', '.join(groups)}",
+                                     f"{package} listing exited {rc}", "listable test suite")], {"passed": 0, "failed": 0, "blocked": 1}, commands
+        listed.update(names)
 
     metrics = {"passed": 0, "failed": 0, "ignored": 0, "blocked": 0}
     exit_code = 0
@@ -571,15 +575,13 @@ def _mode_gpu_groups(repo: Path, manifest: Path, artifact_dir: Path,
         group_tests = parse_test_results(output)
         for t in group_tests:
             t["artifactPaths"] = [str(run_log)]
-        if not group_tests:
-            # Gate ran but per-test lines didn't parse: record the combined
-            # gate as one entry, never a silent pass.
-            group_tests = [{
-                "name": ", ".join(selected_filters) + " (group)",
-                "status": "pass" if rc == 0 else "fail",
-                "observed": f"gate exit {rc}", "required": "parseable test output",
-                "artifactPaths": [str(run_log)],
-            }]
+        for group in selected_filters:
+            if not any(group in test["name"] for test in group_tests):
+                group_tests.append(blocked_entry(
+                    group, "run selected zero tests or no per-test results parsed",
+                    "selected non-ignored test"))
+                metrics["blocked"] += 1
+                exit_code = 1
         summary = parse_result_summary(output)
         metrics["passed"] += summary["passed"]
         metrics["failed"] += summary["failed"]
@@ -798,7 +800,7 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
 
     reference_project = Path(reference_project)
     held_out_project = Path(held_out_project)
-    checked_in_reference = repo / "crates/manifold-renderer/tests/fixtures/scene-modifiers/rt_dynamic_reference.json"
+    checked_in_reference = repo / "crates/manifold-nodes-scene/tests/fixtures/scene-modifiers/rt_dynamic_reference.json"
     if not checked_in_reference.is_file():
         tests.append(blocked_entry(
             "perf: reference fixture",
@@ -881,7 +883,7 @@ def mode_perf(repo: Path, manifest: Path, artifact_dir: Path,
         "MANIFOLD_RT_REFERENCE_CONTENT_REPORT": reference_content_report,
     }
     run_log = artifact_dir / "run-rt_dynamic_perf-release.log"
-    run_cmd = ["cargo", "test", "--release", "-p", "manifold-renderer",
+    run_cmd = ["cargo", "test", "--release", "-p", "manifold-nodes-scene",
                "--features", "rt-perf-proofs", "--test", "gpu_proofs", "--",
                "rt_dynamic_perf", "--test-threads=1"]
     rc, dur = run_streamed(run_cmd, repo, run_log, env=env)

@@ -462,7 +462,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     use manifold_core::{GraphTarget, PresetTypeId, layer::Layer, project::Project};
     use manifold_editing::command::Command;
     use manifold_editing::commands::graph::AddSceneFluidCommand;
-    use manifold_renderer::node_graph::{bundled_preset_def, scene_exposure::metadata_for_node_type};
+    use {manifold_renderer::node_graph::bundled_preset_def, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type};
 
     let mut project = Project::default();
     let preset = PresetTypeId::new("Scene");
@@ -666,8 +666,8 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     use manifold_core::scene_modifier_preset::SceneNodeRef;
     use manifold_editing::command::Command;
     use manifold_editing::commands::graph::{AddSceneFluidCommand, AddSceneObjectCommand, AssignSceneFluidRoleCommand};
-    use manifold_renderer::node_graph::{bundled_preset_def, scene_exposure::metadata_for_node_type};
-    use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    use {manifold_renderer::node_graph::bundled_preset_def, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type};
+    use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
     let mut project = Project::default();
     let preset = PresetTypeId::new("Scene");
@@ -738,7 +738,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
         target: [0.0, 1.0, 0.0], ..Default::default()
     };
     let render_node = def.nodes.iter().find(|node| node.id == render_id).unwrap().node_id.clone();
-    let def = manifold_renderer::node_graph::override_camera_def(&def, &render_node, &camera).unwrap();
+    let def = manifold_nodes_scene::node_graph::viewport_render::override_camera_def(&def, &render_node, &camera).unwrap();
     let mut def = def;
     let saved = serde_json::to_string(&def).unwrap();
     let harness = manifold_node_engine::testkit::gpu_harness::shared();
@@ -792,12 +792,12 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
         _ => None,
     }).expect("assigned domain bounds survive save/reload and mesh edit");
     assert_eq!(domain.size, [5.0, 3.125, 2.5]);
-    let lines = manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines(domain);
-    let projected = manifold_renderer::node_graph::project_lines(&camera.to_camera(), WIDTH, HEIGHT, &lines);
+    let lines = manifold_nodes_scene::node_graph::viewport_overlay::fluid_domain_lines(domain);
+    let projected = manifold_nodes_scene::node_graph::viewport_overlay::project_lines(&camera.to_camera(), WIDTH, HEIGHT, &lines);
     assert_eq!(projected.len(), 12, "container entirely in the editor view");
     let mut pixels = manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(&harness.device, &target.texture, WIDTH, HEIGHT);
     let clean = pixels.clone();
-    manifold_renderer::node_graph::composite_overlay_lines_rgba8(&mut pixels, WIDTH, HEIGHT, &projected);
+    manifold_nodes_scene::node_graph::viewport_overlay::composite_overlay_lines_rgba8(&mut pixels, WIDTH, HEIGHT, &projected);
     assert!(clean.chunks_exact(4).zip(pixels.chunks_exact(4)).filter(|(a,b)| a != b).count() > 100,
         "domain must be visibly outlined");
     std::fs::write("/tmp/manifold_assigned_fluid.png",
@@ -834,7 +834,7 @@ fn scene_physics_modifier_impulse_changes_rendered_liquid() {
         metadata.params.iter_mut().find(|param| param.id == id).unwrap().default_value = value;
         metadata.bindings.iter_mut().find(|binding| binding.id == id).unwrap().default_value = value;
     }
-    let instance = manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+    let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
         &owner, &recipe, NodeId::new("impulse"), SceneNodeRef { scope: vec![], node: NodeId::new("scene") },
         SceneTargetSelection::Explicit { objects: vec![SceneNodeRef { scope: vec![], node: NodeId::new("water_object") }] },
     ).unwrap();

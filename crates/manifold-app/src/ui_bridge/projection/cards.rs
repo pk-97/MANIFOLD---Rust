@@ -667,7 +667,7 @@ fn scene_ref_for_vm(
 ) -> Option<manifold_core::scene_modifier_preset::SceneNodeRef> {
     for node in nodes {
         if node.id == scene_doc_id
-            && node.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID
+            && node.type_id == manifold_nodes_scene::node_graph::scene_vm::RENDER_SCENE_TYPE_ID
         {
             return Some(manifold_core::scene_modifier_preset::SceneNodeRef {
                 scope: scope.to_vec(),
@@ -716,21 +716,21 @@ fn modifier_picker_reason(
 /// recipes that attachment will reject.
 pub(crate) fn modifier_picker_entries(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
-    vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
+    vm: &manifold_nodes_scene::node_graph::scene_vm::SceneVm,
 ) -> Vec<manifold_ui::param_surface::ModifierPickerEntry> {
     scene_recipe_picker_entries(def, vm, false)
 }
 
 pub(crate) fn force_picker_entries(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
-    vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
+    vm: &manifold_nodes_scene::node_graph::scene_vm::SceneVm,
 ) -> Vec<manifold_ui::param_surface::ModifierPickerEntry> {
     scene_recipe_picker_entries(def, vm, true)
 }
 
 fn scene_recipe_picker_entries(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
-    vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
+    vm: &manifold_nodes_scene::node_graph::scene_vm::SceneVm,
     forces: bool,
 ) -> Vec<manifold_ui::param_surface::ModifierPickerEntry> {
     use manifold_node_engine::load::preset_loader::SCENE_MODIFIER_CATALOG;
@@ -758,14 +758,14 @@ fn scene_recipe_picker_entries(
                     disabled: Some("Scene root is unavailable".to_string()),
                 });
             };
-            let instance = manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+            let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
                 def,
                 &recipe,
                 manifold_core::NodeId::new(format!("picker:{id}")),
                 scene,
                 manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
             ).and_then(|instance|
-                manifold_renderer::node_graph::scene_modifier_authoring::validate_new_scene_modifier(def, &instance)
+                manifold_nodes_scene::node_graph::scene_modifier_authoring::validate_new_scene_modifier(def, &instance)
                     .map(|()| instance)
             );
             instance.err().map(|error| modifier_picker_reason(&error))
@@ -791,7 +791,7 @@ pub(crate) fn is_force_surface(
 pub(crate) fn modifier_surfaces(
     gp: &manifold_core::effects::PresetInstance,
     def: &manifold_core::effect_graph_def::EffectGraphDef,
-    _vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
+    _vm: &manifold_nodes_scene::node_graph::scene_vm::SceneVm,
     layer_id: &str,
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     timing: (manifold_core::Bpm, f32),
@@ -875,7 +875,7 @@ pub(crate) fn modifier_surfaces(
                 stack_index: index,
                 stack_len: def.scene_modifiers.len(),
                 targets_all: object_targeting && matches!(instance.targets, SceneTargetSelection::AllObjects),
-                objects: if object_targeting { manifold_renderer::node_graph::scene_modifier_authoring::scene_modifier_objects(def, &instance.scene)
+                objects: if object_targeting { manifold_nodes_scene::node_graph::scene_modifier_authoring::scene_modifier_objects(def, &instance.scene)
                     .unwrap_or_else(|error| {
                         log::error!("scene modifier {} object selection unavailable: {error}", instance.id);
                         Vec::new()
@@ -1319,7 +1319,7 @@ mod modifier_audio_projection_tests {
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_core::params::{Param, ParamManifest};
     use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
-    use manifold_renderer::node_graph::{scene_modifier_authoring::prepare_new_scene_modifier, scene_vm::SceneVm};
+    use manifold_nodes_scene::node_graph::{scene_modifier_authoring::prepare_new_scene_modifier, scene_vm::SceneVm};
 
     #[test]
     fn modifier_surfaces_keep_audio_on_its_parameter_after_filtering_and_stack_reorder() {
@@ -1732,7 +1732,7 @@ mod consolidation_tests {
         def: &manifold_core::effect_graph_def::EffectGraphDef,
         preset_id: &str,
     ) -> manifold_ui::param_surface::ModifierPickerEntry {
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(def).unwrap();
+        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).unwrap();
         super::modifier_picker_entries(def, &vm)
             .into_iter()
             .find(|entry| entry.preset_id == preset_id)
@@ -1742,7 +1742,7 @@ mod consolidation_tests {
     #[test]
     fn modifier_picker_omits_retired_factory_combinations() {
         let def = fixture();
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
+        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
         let entries = super::modifier_picker_entries(&def, &vm);
         for id in ["SurfacePeel", "OrderedRecon", "SurfaceWaves", "SpatialEchoes"] {
             assert!(entries.iter().any(|entry| entry.preset_id == id), "missing {id}");
@@ -1777,7 +1777,7 @@ mod consolidation_tests {
             &manifold_core::PresetTypeId::new("SceneFog"),
         )
         .unwrap();
-        let instance = manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+        let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
             &modified,
             recipe,
             "existing-fog".into(),
@@ -1802,7 +1802,7 @@ mod consolidation_tests {
         let scene_id = conflicting
             .nodes
             .iter()
-            .find(|node| node.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
+            .find(|node| node.type_id == manifold_nodes_scene::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
             .expect("fixture render scene")
             .id;
         let next_id = conflicting.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
@@ -1839,7 +1839,7 @@ mod consolidation_tests {
                 &manifold_core::PresetTypeId::new(preset_id),
             )
             .unwrap();
-            let instance = manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+            let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
                 &graph,
                 recipe,
                 preset_id.into(),
@@ -1863,7 +1863,7 @@ mod consolidation_tests {
         );
         gp.graph = Some(graph.clone());
         gp.refresh_manifest_from_graph();
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&graph).unwrap();
+        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&graph).unwrap();
         let surfaces = super::modifier_surfaces(
             &gp,
             &graph,

@@ -9,9 +9,7 @@
 
 use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
 use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
-use crate::node_graph::primitives::{
-    MeshSpatialMask, MeshStaggerEnvelope, MorphMesh, RemapCutWeights, RemapMeshCut,
-};
+use manifold_nodes_scene::node_graph::primitives::{mesh_spatial_mask::MeshSpatialMask, mesh_stagger_envelope::MeshStaggerEnvelope, morph_mesh::MorphMesh, remap_cut_weights::RemapCutWeights, remap_mesh_cut::RemapMeshCut};
 use manifold_gpu::GpuBinding;
 use serde_json::Value;
 

@@ -22,7 +22,7 @@ the estimate (a fixed N-sample pattern is not convergence). Green therefore
 requires BOTH:
 1. Stability — the frame-to-frame ceilings below.
 2. Correctness — the RT furnace oracle
-   (`crates/manifold-renderer/tests/gpu_proofs/rt_furnace_oracle.rs`, run via
+   (`crates/manifold-nodes-scene/tests/gpu_proofs/rt_furnace_oracle.rs`, run via
    `cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs
    -- rt_furnace`): a flat albedo-1 surface under a closed-form uniform
    environment must read back the field radiance on the TRACED path (RT on)
@@ -264,7 +264,7 @@ def build_binary(repo):
 def run_furnace_oracle(repo, timeout=1800):
     """The correctness leg: run the RT furnace oracle and report pass/fail.
 
-    The oracle is `crates/manifold-renderer/tests/gpu_proofs/rt_furnace_oracle.rs`
+    The oracle is `crates/manifold-nodes-scene/tests/gpu_proofs/rt_furnace_oracle.rs`
     — I-ED4's brightness + corner legs, I-ED1's ambient linearity, and the
     ED-B sun-disc firefly fixture. It is a gpu-proofs test, run the same way
     `scripts/gpu_proofs_gate.py` runs GPU tests (cargo test, never nextest —
@@ -274,7 +274,7 @@ def run_furnace_oracle(repo, timeout=1800):
 
     Returns (passed, output)."""
     cmd = [
-        "cargo", "test", "-p", "manifold-renderer", "--features", "gpu-proofs",
+        "cargo", "test", "-p", "manifold-nodes-scene", "--features", "gpu-proofs",
         "--test", "gpu_proofs", "--", "rt_furnace", "--test-threads=1",
     ]
     exit_, out, err, dur = run_cmd(cmd, cwd=repo, timeout=timeout)
@@ -283,7 +283,8 @@ def run_furnace_oracle(repo, timeout=1800):
     # exactly the furnace tests, so a non-zero exit with a build failure and a
     # non-zero exit with a failed assertion are both a red correctness leg.
     summary = next((l for l in output.splitlines() if "test result:" in l), None)
-    if exit_ != 0:
+    passed = re.search(r"test result: ok\. ([0-9]+) passed; 0 failed; 0 ignored;", output)
+    if exit_ != 0 or passed is None or int(passed[1]) == 0:
         log(f"[rt-noise] furnace oracle FAILED after {dur:.0f}s"
             + (f" — {summary.strip()}" if summary else ""))
         return False, output

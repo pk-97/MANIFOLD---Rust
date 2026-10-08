@@ -182,7 +182,7 @@ Light required. No required textures. Optional: `normal_map`.
 
 ### Atom file structure
 
-Each atom ships in its own file: `crates/manifold-renderer/src/node_graph/primitives/{unlit,phong,pbr,cel}_material.rs`. Each is registered automatically via `inventory::submit!` from the `primitive!` macro — no manual registration.
+Each atom ships in its own file: `crates/manifold-nodes-scene/src/node_graph/primitives/{unlit,phong,pbr,cel}_material.rs`. Each is registered automatically via `inventory::submit!` from the `primitive!` macro — no manual registration.
 
 ---
 
@@ -190,8 +190,8 @@ Each atom ships in its own file: `crates/manifold-renderer/src/node_graph/primit
 
 ### Affected renderers (v1 scope)
 
-- [`render_3d_mesh`](../crates/manifold-renderer/src/node_graph/primitives/render_3d_mesh.rs)
-- [`render_instanced_3d_mesh`](../crates/manifold-renderer/src/node_graph/primitives/render_instanced_3d_mesh.rs)
+- [`render_3d_mesh`](../crates/manifold-nodes-scene/src/node_graph/primitives/render_3d_mesh.rs)
+- [`render_instanced_3d_mesh`](../crates/manifold-nodes-scene/src/node_graph/primitives/render_instanced_3d_mesh.rs)
 
 `render_lines` is out of scope — it's pure colour-along-curve rendering with no surface to shade.
 
@@ -261,14 +261,14 @@ Pipelines compile lazily on first use — a preset that only uses PBR never comp
 
 Each material kind has its own fragment shader file:
 
-- `crates/manifold-renderer/src/node_graph/primitives/shaders/material_unlit.wgsl`
-- `crates/manifold-renderer/src/node_graph/primitives/shaders/material_phong.wgsl`
-- `crates/manifold-renderer/src/node_graph/primitives/shaders/material_pbr.wgsl`
-- `crates/manifold-renderer/src/node_graph/primitives/shaders/material_cel.wgsl`
+- `crates/manifold-nodes-scene/src/node_graph/primitives/shaders/material_unlit.wgsl`
+- `crates/manifold-nodes-scene/src/node_graph/primitives/shaders/material_phong.wgsl`
+- `crates/manifold-nodes-scene/src/node_graph/primitives/shaders/material_pbr.wgsl`
+- `crates/manifold-nodes-scene/src/node_graph/primitives/shaders/material_cel.wgsl`
 
 All four share the same vertex shader (the existing one in `render_3d_mesh.wgsl` / `render_instanced_3d_mesh.wgsl`). The renderer's `create_render_pipeline_depth` call picks the right fragment entry point per kind.
 
-PBR's shader includes the existing [`pbr_brdf.wgsl`](../crates/manifold-renderer/src/node_graph/primitives/shaders/pbr_brdf.wgsl) helper that cook_torrance + envmap_sample atoms already share — that code stays reusable; it now lives inside the material's fragment shader instead of being composed via separate atoms.
+PBR's shader includes the existing [`pbr_brdf.wgsl`](../crates/manifold-nodes-scene/src/node_graph/primitives/shaders/pbr_brdf.wgsl) helper that cook_torrance + envmap_sample atoms already share — that code stays reusable; it now lives inside the material's fragment shader instead of being composed via separate atoms.
 
 ---
 
@@ -330,7 +330,7 @@ Future kinds (Glass, Hair, Skin, Toon, Water, Fabric, …) ship as:
 
 1. New `MaterialKind` variant in [`material.rs`](../crates/manifold-node-engine/src/scene/material.rs).
 2. New fields on the `Material` struct if the kind needs them (defaulted on existing materials — no version-break). Example: Glass needs `ior: f32` + `transmission: f32` — both ship defaulted to sensible inert values (1.0 / 0.0) on existing materials.
-3. New atom file (`crates/manifold-renderer/src/node_graph/primitives/{kind}_material.rs`) exposing only the kind's params on the outer card.
+3. New atom file (`crates/manifold-nodes-scene/src/node_graph/primitives/{kind}_material.rs`) exposing only the kind's params on the outer card.
 4. New fragment shader (`shaders/material_{kind}.wgsl`).
 5. New arm in each renderer's pipeline cache and conditional_requirements list.
 
@@ -408,7 +408,7 @@ If the "textures wire to the renderer, not through the material" UX wart becomes
 - Add `material: Material required` + texture inputs (`normal_map`, `base_color_map`, `roughness_map`, `metallic_map`, `envmap`) to both renderers. **Remove** `light_x/y/z/intensity`, `ambient`, `color_r/g/b` params and their related code paths.
 - Each renderer holds `pipelines: AHashMap<MaterialKind, GpuRenderPipeline>` in `extra_fields`.
 - `evaluate` reads material → checks runtime conditional requirements → get-or-compile pipeline for kind → builds uniform block → binds textures + camera + light → dispatch.
-- Four new WGSL shaders in `crates/manifold-renderer/src/node_graph/primitives/shaders/material_{unlit,phong,pbr,cel}.wgsl`. PBR includes `pbr_brdf.wgsl`.
+- Four new WGSL shaders in `crates/manifold-nodes-scene/src/node_graph/primitives/shaders/material_{unlit,phong,pbr,cel}.wgsl`. PBR includes `pbr_brdf.wgsl`.
 - Implement `conditional_requirements()` on both renderers.
 
 **~1.5 days.**

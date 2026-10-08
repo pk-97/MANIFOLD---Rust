@@ -19,7 +19,7 @@ use manifold_core::{Beats, Seconds};
     /// its main composited output.
     #[test]
     fn fluid_sim_density_can_be_wired_downstream() {
-        use {manifold_node_engine::primitives::mix::Mix, crate::node_graph::primitives::Threshold};
+        use {manifold_node_engine::primitives::mix::Mix, manifold_nodes_image::node_graph::primitives::filter::Threshold};
 
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));

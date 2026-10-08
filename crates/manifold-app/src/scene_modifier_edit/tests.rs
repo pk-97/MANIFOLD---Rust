@@ -8,7 +8,7 @@ use manifold_editing::command::Command;
 use manifold_editing::commands::graph::AddGraphNodeCommand;
 use manifold_editing::commands::graph::SetGraphNodeParamCommand;
 use manifold_editing::service::EditingService;
-use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
+use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 
 use super::{SceneModifierAction, build_action, with_admission, with_admission_snapshot};
 
@@ -508,7 +508,7 @@ fn preparation_edit_rebuilds_one_local_snapshot_and_round_trips_with_undo() {
         .preparation_params
         .push("detail".into());
     let instance =
-        manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+        manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
             &graph,
             &recipe,
             NodeId::new("preparation-test"),

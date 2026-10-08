@@ -32,7 +32,7 @@ outside the existing light model.
 
 | Piece | Where | State |
 |---|---|---|
-| `MAX_LIGHTS = 4` + `LIGHT_NAMES` static table | [render_scene.rs:68](../crates/manifold-renderer/src/node_graph/primitives/render_scene.rs#L68), :76 | delete both |
+| `MAX_LIGHTS = 4` + `LIGHT_NAMES` static table | [render_scene.rs:68](../crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs#L68), :76 | delete both |
 | `lights: [[f32;4]; MAX_LIGHTS*2]` in `RenderSceneUniforms` | render_scene.rs:112 | remove field |
 | `size_of == 400` static assert | render_scene.rs:115 | becomes 272 |
 | `rebuild()` port list: `LIGHT_NAMES[..n]`, `PortType::Light`, optional | render_scene.rs:176-183 | switch to `Cow::Owned(format!("light_{i}"))` — the `mesh_{i}` pattern at :187 |
@@ -41,7 +41,7 @@ outside the existing light model.
 | `evaluate()` light collection into fixed array; packing `[−dir, 1.0]` / `[color, 0.0]` | render_scene.rs:563-569 | becomes `Vec<[f32;4]>` push, packing IDENTICAL |
 | `build_uniforms(..., lights)` | render_scene.rs:473-513 | drop the `lights` param + field |
 | Draw-loop bindings: `Bytes{binding:0}` uniform, `Buffer{binding:1}` verts, textures 2–7 | render_scene.rs:732-761 | add `Bytes{binding:8, data:lights}` |
-| Shader `Uniforms.lights: array<vec4<f32>, 8>`; three fragment loops `u.lights[i*2u]`, count from `u.scene_params.x` | [render_scene.wgsl:86](../crates/manifold-renderer/src/node_graph/primitives/shaders/render_scene.wgsl#L86), :183, :229, :285 | array moves to `@binding(8) var<storage, read>`; loops repoint; count source unchanged |
+| Shader `Uniforms.lights: array<vec4<f32>, 8>`; three fragment loops `u.lights[i*2u]`, count from `u.scene_params.x` | [render_scene.wgsl:86](../crates/manifold-nodes-scene/src/node_graph/primitives/shaders/render_scene.wgsl#L86), :183, :229, :285 | array moves to `@binding(8) var<storage, read>`; loops repoint; count source unchanged |
 | Vertex-stage storage buffer already shipping in this pipeline | render_scene.wgsl:87 (`@binding(1) var<storage, read> verts`) | proof the render pipeline handles `var<storage>` in the VERTEX stage |
 | `GpuBinding::Bytes` on render pipelines → `setVertexBytes` + `setFragmentBytes`, slot-map indexed, missing slot skipped (`continue`) | [encoder.rs:1223-1240](../crates/manifold-gpu/src/metal/encoder.rs#L1223-L1240) | the binding mechanism; stripped-binding safe |
 | Fragment-stage `var<storage, read>` precedent | [tests/gpu_proofs/fragment_storage.rs](../crates/manifold-renderer/tests/gpu_proofs/fragment_storage.rs) | **PROVEN 2026-07-06** (was: none shipped — `blob_overlay_render.wgsl`'s storage array is a `@compute` kernel). Isolated proof: uniform@0 + `var<storage>`@8, both `Bytes`-backed, read per-pixel from a fragment entry point, byte-correct through SPIRV-Cross → MSL. See D7. |

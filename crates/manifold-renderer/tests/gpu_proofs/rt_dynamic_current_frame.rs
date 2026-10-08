@@ -14,7 +14,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
+use manifold_nodes_scene::testkit::gpu_harness as harness;
 
 pub(super) fn modifier_combo_scene() -> manifold_core::effect_graph_def::EffectGraphDef {
     use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
@@ -118,7 +118,7 @@ pub(super) fn modifier_combo_scene() -> manifold_core::effect_graph_def::EffectG
         ),
     ] {
         let recipe = serde_json::from_str(json).unwrap();
-        let graph = manifold_renderer::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(&owner, &recipe).unwrap();
+        let graph = manifold_nodes_scene::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(&owner, &recipe).unwrap();
         let instance = SceneModifierInstanceDef {
             id: id.into(),
             scene: scene_ref.clone(),
@@ -669,7 +669,7 @@ fn rt_dynamic_history_reset_and_resume() {
         .unwrap();
     let (_, reference_resets, fresh) = render_frame(&mut reference, 2, false);
     assert!(reference_resets > 0);
-    manifold_renderer::node_graph::primitives::render_scene::rt_proof::rt_probe_scene(&runtime)
+    manifold_nodes_scene::node_graph::primitives::render_scene::rt_proof::rt_probe_scene(&runtime)
         .expect("settled RT frame must publish resident histories")
         .inject_history_sentinel(&h.device, f64::from(SENTINEL));
 
@@ -743,7 +743,7 @@ fn rt_dynamic_history_reset_and_resume() {
 
 fn read_rgba32_channel(
     device: &manifold_gpu::GpuDevice,
-    capture: &manifold_renderer::node_graph::primitives::RtCaptureSlot,
+    capture: &manifold_nodes_scene::node_graph::primitives::render_scene::RtCaptureSlot,
 ) -> Vec<f32> {
     assert_eq!(capture.tex.format, GpuTextureFormat::Rgba32Float);
     let bytes_per_row = capture.w * 16;

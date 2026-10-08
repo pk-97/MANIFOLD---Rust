@@ -1,0 +1,131 @@
+//! `node.cube_mesh` — emit a unit cube as 36 triangle-list
+//! `MeshVertex` entries (6 faces × 2 triangles × 3 vertices) with
+//! per-face outward normals.
+//!
+//! Vertex data ported from
+//! `generators/shaders/digital_plants_render.wgsl`'s hardcoded
+//! cube constants. Pair with `node.render_copies` to
+//! draw N copies of a cube under different transforms — the
+//! decomposed shape of NestedCubes / DigitalPlants.
+
+use std::borrow::Cow;
+
+use manifold_gpu::GpuBinding;
+
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::scene::mesh_source::MeshSource;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+
+/// Number of triangle vertices in a cube mesh (6 faces × 2 triangles × 3 vertices).
+/// Use this when sizing buffers for downstream consumers.
+pub const CUBE_VERTEX_COUNT: u32 = 36;
+
+/// Generated-codegen uniform layout: scalar params in PARAMS order
+/// (`max_capacity` Int → i32 [allocation-only, the shader ignores it but it
+/// occupies a uniform word], `size` f32) then the codegen-injected
+/// `dispatch_count` (= output capacity, the guard), padded to 16 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct CubeUniforms {
+    max_capacity: i32,
+    size: f32,
+    dispatch_count: u32,
+    _pad0: u32,
+}
+
+manifold_node_engine::primitive! {
+    name: GenerateCubeMesh,
+    type_id: "node.cube_mesh",
+    purpose: "Emit a unit cube as 36 triangle-list MeshVertex entries (6 faces × 2 triangles × 3 vertices) with per-face outward normals. The cube-shape building block for NestedCubes / DigitalPlants and any instanced-cube graph: pair with node.arrange_copies + node.render_copies to draw a field of cubes.",
+    inputs: {},
+    outputs: {
+        vertices: Array(MeshVertex),
+        source: MeshSource,
+    },
+    params: [
+        ParamDef {
+            name: Cow::Borrowed("max_capacity"),
+            label: "Max Capacity",
+            ty: ParamType::Int,
+            default: ParamValue::Float(36.0),
+            range: Some((36.0, 4096.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("size"),
+            label: "Size",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.01, 100.0)),
+            enum_values: &[],
+        },
+    ],
+    depth_rule: Terminal,
+    composition_notes: "max_capacity is the chain-build pre-allocation ceiling — defaults to 36 (exactly one cube). Larger values pad the buffer with zero-vertex entries; useful only if downstream consumers expect a multi-mesh buffer. size scales the [-0.5, 0.5] unit cube. For non-cube wireframe shapes use node.platonic_solid_points + node.platonic_solid_edges.",
+    examples: [],
+    picker: { label: "Cube Mesh", category: Atom },
+    summary: "Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry.",
+    category: Geometry3D,
+    role: Source,
+    aliases: ["cube mesh", "generate cube mesh", "box", "cube", "Box SOP"],
+    // Geometry depends only on size/capacity; no time, state or external inputs.
+    pure: true,
+    fusion_kind: Source,
+    wgsl_body: include_str!("shaders/generate_cube_mesh_body.wgsl"),
+}
+
+impl Primitive for GenerateCubeMesh {
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let size = ctx.param_f32("size", 1.0);
+        ctx.outputs.set_mesh_source("source", MeshSource::Cube { size });
+
+        // Allocation-only param — not used by the shader, but the generated
+        // uniform lays out every PARAM, so pack it (the body ignores it).
+        let max_capacity = match ctx.params.get("max_capacity") {
+            Some(ParamValue::Float(n)) => n.round() as i32,
+            _ => CUBE_VERTEX_COUNT as i32,
+        };
+
+        let Some(dst) = ctx.outputs.array("vertices") else {
+            return;
+        };
+        let vertex_size = std::mem::size_of::<MeshVertex>() as u64;
+        let capacity = (dst.size / vertex_size) as u32;
+        if capacity == 0 {
+            return;
+        }
+
+        let gpu = ctx.gpu_encoder();
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
+
+        let uniforms = CubeUniforms {
+            max_capacity,
+            size,
+            dispatch_count: capacity,
+            _pad0: 0,
+        };
+
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: dst,
+                    offset: 0,
+                },
+            ],
+            [capacity.div_ceil(256), 1, 1],
+            "node.cube_mesh",
+        );
+    }
+}
+
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+mod extent;

@@ -9,6 +9,9 @@ name = "manifold"
 path = "src/main.rs"
 
 [dependencies]
+manifold-compositor = { path = "../manifold-compositor" }
+manifold-nodes-scene = { path = "../manifold-nodes-scene" }
+manifold-nodes-image = { path = "../manifold-nodes-image" }
 manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-core = { path = "../manifold-core" }
 manifold-editing = { path = "../manifold-editing" }
@@ -71,6 +74,7 @@ objc2-app-kit = { version = "0.3", features = [
 ] }
 
 [features]
+gpu-proofs = ["manifold-compositor/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-renderer/gpu-proofs", "manifold-node-engine/gpu-proofs"]
 ui-automation = []
 profiling = ["dep:manifold-profiler"]
 ui-snapshot = ["dep:image"]

@@ -50,7 +50,7 @@ Instruction to every phase: **extend, don't redesign.**
 
 | Piece | Where | State |
 |---|---|---|
-| Deformer family: `bend_mesh`, `twist_mesh`, `taper_mesh`, `morph_mesh`, `mesh_ramp`, `push_along_normals`, `facet_normals` | `crates/manifold-renderer/src/node_graph/primitives/` | SHIPPED 2026-07-11 (archive:MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md), all on the freeze codegen path. **Twist and bend exist — do not rebuild them.** |
+| Deformer family: `bend_mesh`, `twist_mesh`, `taper_mesh`, `morph_mesh`, `mesh_ramp`, `push_along_normals`, `facet_normals` | `crates/manifold-nodes-scene/src/node_graph/primitives/` | SHIPPED 2026-07-11 (archive:MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md), all on the freeze codegen path. **Twist and bend exist — do not rebuild them.** |
 | Texture-driven displacement | `push_along_normals.rs:1-13` — optional `field: Texture2D` sampled bilinear at vertex UV, `(sample.r - field_bias)` | exists; "2D texture pushes geometry" needs no new atom, only a texture to wire |
 | Material maps as wires | `scene_object.rs:43-59` — 17 optional `Texture2D` map ports incl. `emissive_map`, `base_color_map` | exists; a 2D texture wires into a map port today |
 | The rack | `scene_vm.rs:66-75` `MODIFIER_TYPE_IDS` (curated 7-atom vocabulary), `modifier_chain` VM `:154`, "Add modifier" affordance gated by `modifier_chain_parseable` `:160-163` | SHIPPED (SCENE_SETUP_PANEL); **the rack exists — new atoms registered in `MODIFIER_TYPE_IDS` appear in the panel's add-modifier menu with zero new UI** |

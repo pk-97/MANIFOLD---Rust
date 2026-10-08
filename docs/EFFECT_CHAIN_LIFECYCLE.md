@@ -60,8 +60,8 @@ active clip retain and evolve feedback according to that effect's parameters.
 
 | Symptom | Likely cause | Where to look |
 |---|---|---|
-| Old content appears after loading another project | A chain was not included in the clear path | [`LayerCompositor::clear_all_effect_state`](../crates/manifold-renderer/src/layer_compositor.rs) |
-| A muted layer resumes with a stale trail | The chain was marked used or bypassed the idle clear | [`clear_idle_chain_state`](../crates/manifold-renderer/src/layer_compositor.rs) and the node's `clear_state` implementation |
+| Old content appears after loading another project | A chain was not included in the clear path | [`LayerCompositor::clear_all_effect_state`](../crates/manifold-compositor/src/layer_compositor.rs) |
+| A muted layer resumes with a stale trail | The chain was marked used or bypassed the idle clear | [`clear_idle_chain_state`](../crates/manifold-compositor/src/layer_compositor.rs) and the node's `clear_state` implementation |
 | A topology edit unexpectedly changes a trail | The card failed the state-harvest match | [`PresetRuntime::harvest_state_from`](../crates/manifold-node-engine/src/runtime/core.rs) |
 | A long-unused layer rebuilds on re-entry | Pool grace eviction reclaimed the runtime | `CHAIN_GRACE_FRAMES` and `trim_excess_buffers` |
 | Memory grows during a long show | Pool trimming is not seeing the live layer list | The `trim_excess_buffers(frame.layers)` call in the compositor render path |

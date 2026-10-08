@@ -799,7 +799,7 @@ impl ContentThread {
         // section so those preparation frames cannot affect exported pixels.
         for renderer in self.engine.renderers_mut() {
             if let Some(generator) = renderer.as_any_mut().downcast_mut::<
-                manifold_renderer::generator_renderer::GeneratorRenderer,
+                manifold_compositor::generator_renderer::GeneratorRenderer,
             >() {
                 generator.reset_all_generator_state();
             }
