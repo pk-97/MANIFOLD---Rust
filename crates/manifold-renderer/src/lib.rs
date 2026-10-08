@@ -1,17 +1,7 @@
 use manifold_node_engine::load::preset_loader;
 
-pub mod compositor;
-pub mod fsr1;
-pub mod generator_renderer;
 pub mod generators;
-pub mod presentation;
-pub mod display_capture;
-pub mod layer_compositor;
-pub mod metalfx_upscaler;
 pub mod node_graph;
-pub mod pq_encoder;
-pub mod preset_thumbnail;
-pub mod tonemap;
 
 // This registration moves with the assets to the catalog crate at P3.
 inventory::submit!(preset_loader::PresetAssetsRoot {

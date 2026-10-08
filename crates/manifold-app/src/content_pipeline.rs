@@ -10,16 +10,13 @@ use manifold_core::{ClipId, EffectId, LayerId, NodeId};
 #[cfg(target_os = "macos")]
 use manifold_media::video_renderer::VideoRenderer;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
-use manifold_renderer::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 use manifold_node_engine::runtime::preset_context::ProjectTempo;
-use manifold_renderer::generator_renderer::GeneratorRenderer;
+use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_renderer::layer_compositor::CompositeClipDescriptor;
-use manifold_renderer::tonemap::{TonemapSettings, TonemapMode};
-use manifold_renderer::presentation::{
-    DisplayCapabilities, DisplayDestination, DisplayPlan, DisplayPresentationState,
-    LinearPresentationTarget, LinearSceneFrame, PresentationPipeline,
-};
+use manifold_compositor::layer_compositor::CompositeClipDescriptor;
+use manifold_compositor::tonemap::{TonemapSettings, TonemapMode};
+use manifold_compositor::presentation::{DisplayCapabilities, DisplayDestination, DisplayPlan, DisplayPresentationState, LinearPresentationTarget, LinearSceneFrame, PresentationPipeline};
 
 /// Thread-safe shared output dimensions. The content thread writes new
 /// dimensions after resize; the UI thread reads them for aspect ratio.
@@ -734,7 +731,7 @@ pub struct ContentPipeline {
     sdr_preview: bool,
     sdr_output: Option<manifold_node_engine::gpu::render_target::RenderTarget>,
     /// PQ encoder for HDR export. Lazily created on first HDR export frame.
-    pq_encoder: Option<manifold_renderer::pq_encoder::PqEncoder>,
+    pq_encoder: Option<manifold_compositor::pq_encoder::PqEncoder>,
     /// Reusable GPU→CPU readback for single-frame (still image) export.
     /// Holds the in-flight blit between `submit_still_readback` (one tick) and
     /// `take_still_readback` (the next). Idle except during a still capture.
@@ -745,11 +742,11 @@ pub struct ContentPipeline {
     /// MetalFX Spatial full-frame upscaler. Present only when render_scale < 1.0
     /// and MetalFX is supported (macOS 13+, Apple Silicon). Preferred over FSR.
     #[cfg(target_os = "macos")]
-    metalfx: Option<manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler>,
+    metalfx: Option<manifold_compositor::metalfx_upscaler::MetalFxFullFrameUpscaler>,
     /// FSR 1.0 spatial upscaler. Present only when render_scale < 1.0
     /// AND MetalFX is not available. Fallback for older hardware.
     #[cfg(target_os = "macos")]
-    fsr1: Option<manifold_renderer::fsr1::Fsr1Upscaler>,
+    fsr1: Option<manifold_compositor::fsr1::Fsr1Upscaler>,
     /// Full output dimensions (what the drawable and UI see).
     /// May differ from compositor dimensions when FSR is active.
     output_w: u32,
@@ -2803,10 +2800,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // canvas's visible nodes. Cmd+D takes precedence when both are
             // pending (both read the same captured per-node textures).
             let dump_request = if let Some((eid, _)) = pending_dump.as_ref() {
-                Some(manifold_renderer::compositor::DumpRequest::All(eid.clone()))
+                Some(manifold_compositor::compositor::DumpRequest::All(eid.clone()))
             } else if !self.node_atlas_visible.is_empty() {
                 self.node_preview_request.as_ref().map(|(e, _)| {
-                    manifold_renderer::compositor::DumpRequest::Visible(
+                    manifold_compositor::compositor::DumpRequest::Visible(
                         e.clone(),
                         self.node_atlas_visible.clone(),
                     )
@@ -3446,7 +3443,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     if self.sdr_output.as_ref().is_none_or(|t| t.width != src.width || t.height != src.height) {
                         self.sdr_output = Some(manifold_node_engine::gpu::render_target::RenderTarget::new(
                             native_device, src.width, src.height,
-                            manifold_renderer::presentation::UI_FORMAT, "SDR recording output",
+                            manifold_compositor::presentation::UI_FORMAT, "SDR recording output",
                         ));
                     }
                     let mapped = &self.sdr_output.as_ref().expect("SDR target allocated").texture;
@@ -3676,12 +3673,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let device = self.native_device.as_ref().ok_or("GPU device unavailable for resize")?;
         let compositor = self.compositor.prepare_resize(device, render_w, render_h)?;
         let (metalfx, fsr1) = if scale < 1.0 {
-            if manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::is_available(device) {
-                (Some(manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::try_new(
+            if manifold_compositor::metalfx_upscaler::MetalFxFullFrameUpscaler::is_available(device) {
+                (Some(manifold_compositor::metalfx_upscaler::MetalFxFullFrameUpscaler::try_new(
                     device, render_w, render_h, width, height,
                 )?), None)
             } else {
-                (None, Some(manifold_renderer::fsr1::Fsr1Upscaler::try_new(
+                (None, Some(manifold_compositor::fsr1::Fsr1Upscaler::try_new(
                     device, render_w, render_h, width, height,
                 )?))
             }
@@ -4114,7 +4111,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let source = self.compositor.output_texture();
         if self.sdr_output.as_ref().is_none_or(|t| t.width != source.width || t.height != source.height) {
             self.sdr_output = Some(manifold_node_engine::gpu::render_target::RenderTarget::new(
-                device, source.width, source.height, manifold_renderer::presentation::UI_FORMAT, "SDR export output",
+                device, source.width, source.height, manifold_compositor::presentation::UI_FORMAT, "SDR export output",
             ));
         }
         let target = &self.sdr_output.as_ref().expect("SDR target allocated").texture;
@@ -4184,7 +4181,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
         // Lazy init PQ encoder
         if self.pq_encoder.is_none() {
-            self.pq_encoder = Some(manifold_renderer::pq_encoder::PqEncoder::new(
+            self.pq_encoder = Some(manifold_compositor::pq_encoder::PqEncoder::new(
                 native_device,
                 w,
                 h,

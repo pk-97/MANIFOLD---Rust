@@ -13,7 +13,7 @@
 use manifold_gpu::{GpuDevice, GpuTexture};
 use manifold_ui_paint::ui_cache_manager::UICacheManager;
 use manifold_ui_paint::ui_renderer::UIRenderer;
-use manifold_renderer::presentation::UI_FORMAT;
+use manifold_compositor::presentation::UI_FORMAT;
 
 use crate::ui_frame::composite_main_ui_frame;
 use crate::ui_root::UIRoot;

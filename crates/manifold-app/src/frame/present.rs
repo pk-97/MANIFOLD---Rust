@@ -41,7 +41,7 @@ fn bug060_dump_png(
         return;
     };
     let bytes: &[u8] = unsafe { std::slice::from_raw_parts(ptr, total as usize) };
-    use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback};
+    use manifold_compositor::display_capture::{AlphaInterpretation, LinearUiReadback};
     let result = LinearUiReadback::from_bytes(
         bytes, w, h, tex.format, AlphaInterpretation::PremultipliedOverBlack,
     ).and_then(|readback| readback.to_srgb_rgba8().write_png(std::path::Path::new(path)));
@@ -734,7 +734,7 @@ impl Application {
         pseg = std::time::Instant::now();
 
         // ── Blit offscreen → drawable + present ──
-        let drawable_tex = drawable.gpu_texture(manifold_renderer::presentation::UI_FORMAT);
+        let drawable_tex = drawable.gpu_texture(manifold_compositor::presentation::UI_FORMAT);
         let blit_pipeline = match &self.blit_pipeline {
             Some(p) => p,
             None => return,
@@ -845,7 +845,7 @@ impl Application {
         self.ui_profile
             .add("present.fast_next_drawable", pseg.elapsed());
         *pseg = std::time::Instant::now();
-        let drawable_tex = drawable.gpu_texture(manifold_renderer::presentation::UI_FORMAT);
+        let drawable_tex = drawable.gpu_texture(manifold_compositor::presentation::UI_FORMAT);
         if let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) {
             let mut enc = gpu.device.create_encoder("Re-present");
             enc.draw_fullscreen(

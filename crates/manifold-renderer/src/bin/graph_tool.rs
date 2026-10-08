@@ -274,11 +274,11 @@ fn run_render(args: &[String]) -> ExitCode {
 
     let device = std::sync::Arc::new(GpuDevice::new_queued("graph-tool"));
     let result = if linear {
-        manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file_linear(
+        manifold_compositor::preset_thumbnail::render_preset_thumbnail_to_file_linear(
             &device, kind, &def, size, size, &out,
         )
     } else {
-        manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file(
+        manifold_compositor::preset_thumbnail::render_preset_thumbnail_to_file(
             &device, kind, &def, size, size, &out,
         )
     };

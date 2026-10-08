@@ -1,5 +1,5 @@
-    use crate::generator_renderer::{GeneratorRenderer, testkit::GeneratorRendererTestkit};
-    use crate::generator_renderer::state::ActiveClip;
+    use manifold_compositor::generator_renderer::{GeneratorRenderer, testkit::GeneratorRendererTestkit};
+    use manifold_compositor::generator_renderer::state::ActiveClip;
     use manifold_core::{ClipId, PresetTypeId, LayerId};
     use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_gpu::GpuTextureFormat;

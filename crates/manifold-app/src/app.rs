@@ -16,9 +16,9 @@ use manifold_playback::engine::PlaybackEngine;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 #[cfg(not(target_os = "macos"))]
 use manifold_playback::renderer::StubRenderer;
-use manifold_renderer::generator_renderer::GeneratorRenderer;
+use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_node_engine::gpu::context::GpuContext;
-use manifold_renderer::layer_compositor::LayerCompositor;
+use manifold_compositor::layer_compositor::LayerCompositor;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 
 use manifold_ui::cursors::{CursorManager, TimelineCursor};
@@ -326,10 +326,10 @@ pub struct Application {
     /// so the app doesn't stay frozen forever.
     pub(crate) display_retarget_deadline: Option<std::time::Instant>,
     /// Last native capabilities sent to the workspace presentation destination.
-    pub(crate) display_capabilities: manifold_renderer::presentation::DisplayCapabilities,
+    pub(crate) display_capabilities: manifold_compositor::presentation::DisplayCapabilities,
     /// Last native capabilities sent to the optional output destination.
-    pub(crate) output_display_capabilities: Option<manifold_renderer::presentation::DisplayCapabilities>,
-    pub(crate) graph_display_capabilities: manifold_renderer::presentation::DisplayCapabilities,
+    pub(crate) output_display_capabilities: Option<manifold_compositor::presentation::DisplayCapabilities>,
+    pub(crate) graph_display_capabilities: manifold_compositor::presentation::DisplayCapabilities,
 
     /// Main timeline workspace. Owns its `UIRoot`, offscreen render
     /// target, CVDisplayLink, and dirty/resize flags. See
@@ -638,9 +638,9 @@ impl Application {
             scale_factor: 1.0,
             display_retarget_pending: false,
             display_retarget_deadline: None,
-            display_capabilities: manifold_renderer::presentation::DisplayCapabilities::sdr(),
+            display_capabilities: manifold_compositor::presentation::DisplayCapabilities::sdr(),
             output_display_capabilities: None,
-            graph_display_capabilities: manifold_renderer::presentation::DisplayCapabilities::sdr(),
+            graph_display_capabilities: manifold_compositor::presentation::DisplayCapabilities::sdr(),
             ws: Workspace::new(WorkspaceKind::Main),
             graph_editor: None,
             graph_editor_window_id: None,
@@ -1825,12 +1825,12 @@ impl Application {
                                             let png_path =
                                                 lib.thumbnail_path(ctx.kind, id.as_str());
                                             if let Err(e) =
-                                                manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file(
+                                                manifold_compositor::preset_thumbnail::render_preset_thumbnail_to_file(
                                                     &gpu.device,
                                                     ctx.kind,
                                                     &ctx.def,
-                                                    manifold_renderer::preset_thumbnail::THUMBNAIL_WIDTH,
-                                                    manifold_renderer::preset_thumbnail::THUMBNAIL_HEIGHT,
+                                                    manifold_compositor::preset_thumbnail::THUMBNAIL_WIDTH,
+                                                    manifold_compositor::preset_thumbnail::THUMBNAIL_HEIGHT,
                                                     &png_path,
                                                 )
                                             {
@@ -2098,7 +2098,7 @@ impl ApplicationHandler for Application {
                 &*window,
                 size.width.max(1),
                 size.height.max(1),
-                manifold_renderer::presentation::UI_FORMAT,
+                manifold_compositor::presentation::UI_FORMAT,
                 false, // no display sync — CVDisplayLink is the pacer
             );
             // 3 drawables: CVDisplayLink is the pacer so nextDrawable should
@@ -2110,7 +2110,7 @@ impl ApplicationHandler for Application {
             // EDR: configure colorspace + query headroom
             surface.configure_edr();
             self.display_capabilities = crate::edr_surface::query_window_capabilities(&window);
-            log::info!("[Display] Workspace: format={:?} potential={:.2}x current={:.2}x", manifold_renderer::presentation::UI_FORMAT, self.display_capabilities.potential().value(), self.display_capabilities.current().value());
+            log::info!("[Display] Workspace: format={:?} potential={:.2}x current={:.2}x", manifold_compositor::presentation::UI_FORMAT, self.display_capabilities.potential().value(), self.display_capabilities.current().value());
             crate::edr_surface::register_screen_change_observer();
             // BUG-028: winit never surfaces a live pointer position during a
             // Finder file drag. Install the draggingUpdated:/performDragOperation:
@@ -2169,7 +2169,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 blit_shader,
                 "vs_main",
                 "fs_main",
-                manifold_renderer::presentation::UI_FORMAT,
+                manifold_compositor::presentation::UI_FORMAT,
                 None,
                 "Blit Pipeline",
             ));
@@ -2213,7 +2213,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 atlas_shader,
                 "vs_main",
                 "fs_main",
-                manifold_renderer::presentation::UI_FORMAT,
+                manifold_compositor::presentation::UI_FORMAT,
                 Some(premultiplied_blend),
                 "Atlas Blit Pipeline",
             ));
@@ -2255,7 +2255,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 thumb_shader,
                 "vs_main",
                 "fs_main",
-                manifold_renderer::presentation::UI_FORMAT,
+                manifold_compositor::presentation::UI_FORMAT,
                 None,
                 "Node Thumbnail Pipeline",
             ));
@@ -2270,12 +2270,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Create UI renderer using native Metal
             self.ui_renderer = Some(UIRenderer::new(
                 &native_device,
-                manifold_renderer::presentation::UI_FORMAT,
+                manifold_compositor::presentation::UI_FORMAT,
             ));
 
             // Create panel cache system
             self.ui_cache_manager = Some(manifold_ui_paint::ui_cache_manager::UICacheManager::new(
-                manifold_renderer::presentation::UI_FORMAT,
+                manifold_compositor::presentation::UI_FORMAT,
                 scale,
             ));
 
@@ -2284,15 +2284,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // (section 24 5b).
             self.layer_bitmap_gpu = Some(manifold_ui_paint::layer_bitmap_gpu::LayerBitmapGpu::new(
                 &native_device,
-                manifold_renderer::presentation::UI_FORMAT,
+                manifold_compositor::presentation::UI_FORMAT,
             ));
             self.clip_content_gpu = Some(manifold_ui_paint::clip_content_gpu::ClipContentGpu::new(
                 &native_device,
-                manifold_renderer::presentation::UI_FORMAT,
+                manifold_compositor::presentation::UI_FORMAT,
             ));
             self.clip_thumb_gpu = Some(manifold_ui_paint::clip_thumb_gpu::ClipThumbGpu::new(
                 &native_device,
-                manifold_renderer::presentation::UI_FORMAT,
+                manifold_compositor::presentation::UI_FORMAT,
             ));
 
             // GPU-completion fence for the four UI immediate-draw vertex
@@ -2469,7 +2469,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(Box::new(
                 LayerCompositor::new(&native_device, output_w, output_h),
             ));
-            content_pipeline.presentation.update(manifold_renderer::presentation::DisplayDestination::Workspace, self.display_capabilities);
+            content_pipeline.presentation.update(manifold_compositor::presentation::DisplayDestination::Workspace, self.display_capabilities);
             // Save pipeline archive after all pipelines have been created.
             native_device.save_pipeline_archive();
             native_device.log_msl_cache_stats();
@@ -3169,7 +3169,7 @@ impl Application {
     /// or display parameters changed).
     /// Returns `true` if any CVDisplayLink was retargeted to a new display.
     fn update_edr_headroom(&mut self) -> bool {
-        use manifold_renderer::presentation::DisplayDestination;
+        use manifold_compositor::presentation::DisplayDestination;
         // Commands retain the destination so moving one window cannot change another.
         let mut updates = [None; 3];
         for (id, ws) in self.window_registry.iter() {
@@ -3269,7 +3269,7 @@ impl Application {
             width,
             height,
             depth: 1,
-            format: manifold_renderer::presentation::UI_FORMAT,
+            format: manifold_compositor::presentation::UI_FORMAT,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "UI Offscreen",
@@ -3292,7 +3292,7 @@ impl Application {
             width,
             height,
             depth: 1,
-            format: manifold_renderer::presentation::UI_FORMAT,
+            format: manifold_compositor::presentation::UI_FORMAT,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "Graph Editor Offscreen",

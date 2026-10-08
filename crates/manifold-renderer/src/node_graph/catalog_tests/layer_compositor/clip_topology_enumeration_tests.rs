@@ -3,7 +3,7 @@
     //! topology enumeration dedups by the production topology hash without
     //! touching a GPU. Two clips with identical effective post-fx sets must
     //! yield one topology; differing sets must yield two.
-    use crate::layer_compositor::unique_clip_chain_topologies;
+    use manifold_compositor::layer_compositor::unique_clip_chain_topologies;
     use manifold_core::effects::PresetInstance;
     use manifold_core::PresetTypeId;
     use manifold_core::clip::TimelineClip;

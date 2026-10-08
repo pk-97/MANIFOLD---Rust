@@ -326,7 +326,7 @@ fn enable_profiling(ct: &mut ContentThread) {
     for renderer in ct.engine.renderers_mut() {
         if let Some(generator) = renderer
             .as_any_mut()
-            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>(
+            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
         ) {
             generator.set_profiling(true);
         }

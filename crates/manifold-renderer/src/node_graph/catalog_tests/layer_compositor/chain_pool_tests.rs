@@ -14,8 +14,8 @@
     //! iteration order." If that holds, every field of the
     //! `EffectChain` (including the cached `chain_graph`) survives
     //! by construction.
-    use crate::layer_compositor::{CompositeClipDescriptor, LayerCompositor, CHAIN_GRACE_FRAMES};
-    use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+    use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor, CHAIN_GRACE_FRAMES};
+    use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
     use manifold_core::effects::EffectContainer;
     use manifold_core::{BlendMode, LayerId, PresetTypeId};
     use manifold_node_engine::runtime::PresetRuntime;
@@ -211,7 +211,7 @@
             master_effects: &[],
             master_effect_groups: &[],
             master_trigger_count: 0,
-            tonemap: crate::tonemap::TonemapSettings::default(),
+            tonemap: manifold_compositor::tonemap::TonemapSettings::default(),
             led_exit_index: -1,
             led_composite_size: (1, 1),
             output_width: 64,
@@ -451,7 +451,7 @@
     /// not record any chain-construction cold touches.
     #[test]
     fn warmup_builds_layer_post_fx_chain_and_zero_cold_touches_on_play() {
-        use crate::compositor::{Compositor, CompositorFrame};
+        use manifold_compositor::compositor::{Compositor, CompositorFrame};
         use manifold_node_engine::gpu::render_target::RenderTarget;
         use manifold_core::effect_graph_def::ParamSpecDef;
         use manifold_core::effects::PresetInstance;
@@ -563,7 +563,7 @@
             master_effects: &[],
             master_effect_groups: &[],
             master_trigger_count: 0,
-            tonemap: crate::tonemap::TonemapSettings::default(),
+            tonemap: manifold_compositor::tonemap::TonemapSettings::default(),
             led_exit_index: -1,
             led_composite_size: (1, 1),
             output_width: 64,

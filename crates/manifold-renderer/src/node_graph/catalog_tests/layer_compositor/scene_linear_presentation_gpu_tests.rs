@@ -2,18 +2,15 @@
     //! Production compositor proofs: master effects run on SceneLinear HDR,
     //! then the destination presentation pass applies the optional SDR curve.
 
-    use crate::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
-    use crate::compositor::CompositeLayerDescriptor;
+    use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
+    use manifold_compositor::compositor::CompositeLayerDescriptor;
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_gpu::{GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
-    use crate::compositor::{Compositor, CompositorFrame};
+    use manifold_compositor::compositor::{Compositor, CompositorFrame};
     use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
-    use crate::presentation::{
-        DisplayCapabilities, DisplayPlan, LinearPresentationTarget, LinearSceneFrame,
-        PresentationPipeline, UI_FORMAT,
-    };
-    use crate::tonemap::{TonemapMode, TonemapSettings};
+    use manifold_compositor::presentation::{DisplayCapabilities, DisplayPlan, LinearPresentationTarget, LinearSceneFrame, PresentationPipeline, UI_FORMAT};
+    use manifold_compositor::tonemap::{TonemapMode, TonemapSettings};
     use half::f16;
     use manifold_core::{BlendMode, LayerId, PresetTypeId, TonemapCurve};
     use manifold_gpu::GpuLoadAction;

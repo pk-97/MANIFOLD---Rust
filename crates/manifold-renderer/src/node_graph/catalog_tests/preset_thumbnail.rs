@@ -1,4 +1,4 @@
-use crate::preset_thumbnail::*;
+use manifold_compositor::preset_thumbnail::*;
 use manifold_core::preset_def::PresetKind;
 #[cfg(feature = "gpu-proofs")]
 use manifold_core::effect_graph_def::EffectGraphDef;

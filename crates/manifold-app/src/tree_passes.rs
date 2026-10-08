@@ -76,7 +76,7 @@ pub(crate) fn render_tree_overlay_passes(
         if ui_renderer.has_image(handle) {
             continue;
         }
-        match manifold_renderer::preset_thumbnail::decode_png_rgba8(std::path::Path::new(path)) {
+        match manifold_compositor::preset_thumbnail::decode_png_rgba8(std::path::Path::new(path)) {
             Ok((w, h, rgba)) => {
                 ui_renderer.register_image(device, handle, w, h, &rgba);
             }

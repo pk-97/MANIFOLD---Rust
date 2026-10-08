@@ -1971,7 +1971,7 @@ impl Application {
             );
             return;
         };
-        let drawable_tex = drawable.gpu_texture(manifold_renderer::presentation::UI_FORMAT);
+        let drawable_tex = drawable.gpu_texture(manifold_compositor::presentation::UI_FORMAT);
         let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) else {
             #[cfg(target_os = "macos")]
             crate::shared_texture::retire_leases_via_marker(

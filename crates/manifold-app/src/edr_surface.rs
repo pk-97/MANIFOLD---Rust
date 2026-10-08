@@ -21,7 +21,7 @@
 //! switch. An NSNotification observer watches for screen changes and sets a
 //! flag checked by the main loop.
 
-use manifold_renderer::presentation::{CurrentHeadroom, DisplayCapabilities, PotentialHeadroom};
+use manifold_compositor::presentation::{CurrentHeadroom, DisplayCapabilities, PotentialHeadroom};
 
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};

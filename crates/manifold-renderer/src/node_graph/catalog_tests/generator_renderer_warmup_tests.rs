@@ -1,6 +1,6 @@
-    use crate::generator_renderer::{GeneratorRenderer, testkit::GeneratorRendererTestkit};
-    use crate::generator_renderer::state::ThumbGen;
-    use crate::generator_renderer::testkit::{THUMB_W, THUMB_H};
+    use manifold_compositor::generator_renderer::{GeneratorRenderer, testkit::GeneratorRendererTestkit};
+    use manifold_compositor::generator_renderer::state::ThumbGen;
+    use manifold_compositor::generator_renderer::testkit::{THUMB_W, THUMB_H};
     use manifold_node_engine::runtime::PresetRuntime;
     use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_core::{ClipId, LayerId};

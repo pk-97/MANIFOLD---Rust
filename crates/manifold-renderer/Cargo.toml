@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+manifold-compositor = { path = "../manifold-compositor" }
 manifold-nodes-scene = { path = "../manifold-nodes-scene" }
 manifold-nodes-image = { path = "../manifold-nodes-image" }
 manifold-node-engine = { path = "../manifold-node-engine" }
@@ -174,7 +175,7 @@ testkit = []
 # deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,
 # every `mod gpu_tests`, the `gpu_proofs` integration binary above, and the
 # counters and error tap the liquid conformance suite reads.
-gpu-proofs = ["manifold-nodes-scene/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-node-engine/testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-editing/gpu-proofs"]
+gpu-proofs = ["manifold-compositor/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-node-engine/testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-editing/gpu-proofs"]
 # Bounded dynamic-RT timing is opt-in, separate from correctness gates.
 rt-perf-proofs = ["manifold-nodes-scene/rt-perf-proofs", "manifold-node-engine/rt-perf-proofs", "gpu-proofs"]
 # GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.

@@ -298,7 +298,7 @@ fn report_cpu_frame(ct: &mut crate::content_thread::ContentThread, frame: u32, t
     let mut per_type = std::collections::BTreeMap::<String, f64>::new();
     for renderer in ct.engine.renderers_mut() {
         if let Some(generator) = renderer.as_any_mut()
-            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>() {
+            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>() {
             for step in generator.take_step_profiles() {
                 *per_type.entry(step.type_id).or_default() += step.cpu_nanos as f64 / 1_000_000.0;
             }
@@ -499,7 +499,7 @@ pub fn run(args: &[String]) -> ! {
     if profile_cpu {
         for renderer in ct.engine.renderers_mut() {
             if let Some(generator) = renderer.as_any_mut()
-                .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>() {
+                .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>() {
                 generator.set_profiling(true);
             }
         }

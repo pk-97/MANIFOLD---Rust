@@ -29,9 +29,7 @@ use std::path::{Path, PathBuf};
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
 use manifold_gpu::GpuDevice;
-use manifold_renderer::preset_thumbnail::{
-    THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, factory_thumbnail_path, render_preset_thumbnail_to_file,
-};
+use manifold_compositor::preset_thumbnail::{THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, factory_thumbnail_path, render_preset_thumbnail_to_file};
 use sha2::Digest;
 
 const ASSET_SUBDIRS: &[(&str, PresetKind)] = &[

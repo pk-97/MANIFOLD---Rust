@@ -6,13 +6,13 @@
     //! one all-muted Opaque layer blacked out the entire frame (hot-mute
     //! regression: muted clips flow into clip descriptors, this branch
     //! never learned to handle the all-muted group).
-    use crate::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
-    use crate::compositor::CompositorFrame;
+    use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
+    use manifold_compositor::compositor::CompositorFrame;
     use manifold_core::effects::PresetInstance;
     use manifold_core::{BlendMode, LayerId, PresetTypeId};
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_gpu::{GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
-    use crate::compositor::CompositeLayerDescriptor;
+    use manifold_compositor::compositor::CompositeLayerDescriptor;
 
     fn make_layer_desc<'a>(
         layer_id: &'a LayerId,
@@ -75,7 +75,7 @@
             master_effects: &[],
             master_effect_groups: &[],
             master_trigger_count: 0,
-            tonemap: crate::tonemap::TonemapSettings::default(),
+            tonemap: manifold_compositor::tonemap::TonemapSettings::default(),
             led_exit_index: -1,
             led_composite_size: (8, 120),
             output_width: 64,

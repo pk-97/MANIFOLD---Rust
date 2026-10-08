@@ -12,6 +12,7 @@ members = [
     "crates/manifold-io",
     "crates/manifold-renderer",
     "crates/manifold-node-engine",
+    "crates/manifold-compositor",
     "crates/manifold-nodes-scene",
     "crates/manifold-nodes-image",
     "crates/manifold-native",

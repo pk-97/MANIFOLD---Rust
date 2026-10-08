@@ -393,7 +393,7 @@ fn measure_project(
         for renderer in ct.engine.renderers_mut() {
             if let Some(generator) = renderer
                 .as_any_mut()
-                .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>(
+                .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
             ) {
                 cpu_total_nanos += generator
                     .take_step_profiles()

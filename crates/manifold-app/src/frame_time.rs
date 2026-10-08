@@ -698,7 +698,7 @@ fn set_profiling(ct: &mut crate::content_thread::ContentThread, on: bool) {
     for renderer in ct.engine.renderers_mut() {
         if let Some(generator) = renderer
             .as_any_mut()
-            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>()
         {
             generator.set_profiling(on);
         }
@@ -713,7 +713,7 @@ fn split(ct: &mut crate::content_thread::ContentThread, granularity: ProfileGran
     for renderer in ct.engine.renderers_mut() {
         if let Some(generator) = renderer
             .as_any_mut()
-            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>()
         {
             steps.extend(generator.take_step_profiles());
         }

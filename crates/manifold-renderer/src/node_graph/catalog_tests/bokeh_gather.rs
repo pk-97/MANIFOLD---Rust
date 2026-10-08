@@ -10,14 +10,14 @@ use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
-use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
-use crate::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
+use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
 use manifold_node_engine::exec::backend::Backend;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId};
 use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
 use manifold_node_engine::gpu::render_target::RenderTarget;
-use crate::tonemap::{TonemapMode, TonemapSettings};
+use manifold_compositor::tonemap::{TonemapMode, TonemapSettings};
 use manifold_core::{BlendMode, LayerId, LayerType};
 
 use manifold_nodes_image::node_graph::primitives::bokeh_gather::{BokehGather, BokehSettings};

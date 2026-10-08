@@ -343,7 +343,7 @@ impl Application {
                 }
             }
         };
-        let drawable_tex = drawable.gpu_texture(manifold_renderer::presentation::UI_FORMAT);
+        let drawable_tex = drawable.gpu_texture(manifold_compositor::presentation::UI_FORMAT);
         let blit_pipeline = match &self.blit_pipeline {
             Some(p) => p,
             None => {

@@ -1022,7 +1022,7 @@ impl ContentThread {
             let anim_map: Vec<(String, f32)> = {
                 let (renderers, _) = self.engine.split_renderer_project();
                 let gen_renderer = renderers.iter().find_map(|r| {
-                        r.as_any().downcast_ref::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+                        r.as_any().downcast_ref::<manifold_compositor::generator_renderer::GeneratorRenderer>()
                     });
                 tick_result
                     .ready_clips
