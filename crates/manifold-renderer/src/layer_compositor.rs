@@ -16,6 +16,21 @@ use manifold_gpu::{
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+// Catalog tests call the same compositor helpers through testkit after P2c.
+// Keep every production item at its original visibility.
+#[cfg(any(test, feature = "testkit"))]
+macro_rules! compositor_testkit_visible {
+    ($(#[$attribute:meta])* $visibility:vis $kind:ident $($body:tt)*) => {
+        $(#[$attribute])* pub $kind $($body)*
+    };
+}
+#[cfg(not(any(test, feature = "testkit")))]
+macro_rules! compositor_testkit_visible {
+    ($(#[$attribute:meta])* $visibility:vis $kind:ident $($body:tt)*) => {
+        $(#[$attribute])* $visibility $kind $($body)*
+    };
+}
+
 /// Descriptor for a single clip to composite.
 pub struct CompositeClipDescriptor<'a> {
     pub clip_id: &'a str,
@@ -282,6 +297,7 @@ fn has_enabled_effects(effects: &[PresetInstance]) -> bool {
     false
 }
 
+compositor_testkit_visible! {
 /// One unique per-clip chain topology (WARMUP_DESIGN P7 D17): a clip's
 /// effective post-fx set — the layer's effects followed by the clip's own
 /// (`TimelineClip::effects`, the legacy per-clip field; empty in projects
@@ -294,7 +310,9 @@ pub(crate) struct ClipChainTopology {
     pub groups: Vec<EffectGroup>,
     pub layer_id: LayerId,
 }
+}
 
+compositor_testkit_visible! {
 /// Walk every clip on every visual layer and collect the UNIQUE effective
 /// chain topologies, deduped by the production topology hash (WARMUP_DESIGN
 /// P7 D17). Bounded by unique topology, not clip count — the design's point:
@@ -363,6 +381,7 @@ pub(crate) fn unique_clip_chain_topologies(
     }
     out
 }
+}
 
 /// LED routing for a layer this frame (LED_STRIPS_DESIGN.md section 5b D11).
 /// Derived ONCE at `LayerOutput` construction from the descriptor's
@@ -389,6 +408,7 @@ impl LedRoute {
     }
 }
 
+compositor_testkit_visible! {
 /// Output descriptor for a single processed layer, ready for the blend pass.
 ///
 /// Uses a raw pointer for the texture reference to avoid borrow checker conflicts
@@ -408,6 +428,7 @@ pub(crate) struct LayerOutput {
     layer_index: i32,
     /// How this layer routes to the LED composite this frame.
     led_route: LedRoute,
+}
 }
 
 // Safety: LayerOutput is only used within the compositor on the content thread.
@@ -476,13 +497,22 @@ pub struct LayerCompositor {
     /// layers' chains are dropped after `CHAIN_GRACE_FRAMES` of disuse.
     /// Type-level invariant: the key is `LayerId`, not `usize`, so
     /// iteration-counter indexing won't compile.
+    #[cfg(not(any(test, feature = "testkit")))]
     effect_chains: AHashMap<LayerId, Option<PresetRuntime>>,
+    #[cfg(any(test, feature = "testkit"))]
+    pub effect_chains: AHashMap<LayerId, Option<PresetRuntime>>,
     /// Per-chain last-used frame counter. Parallel to `effect_chains`;
     /// updated each frame the chain is touched. Trimmed once stale.
+    #[cfg(not(any(test, feature = "testkit")))]
     chain_last_used_frame: AHashMap<LayerId, u64>,
+    #[cfg(any(test, feature = "testkit"))]
+    pub chain_last_used_frame: AHashMap<LayerId, u64>,
     /// Monotonic frame counter for chain liveness tracking. Wraps at
     /// u64 (~10⁹ years at 60 fps — i.e., never).
+    #[cfg(not(any(test, feature = "testkit")))]
     frame_counter: u64,
+    #[cfg(any(test, feature = "testkit"))]
+    pub frame_counter: u64,
     /// Scratch buffer reused each frame to collect active layer IDs
     /// during pre-scan. Stored on `self` to avoid per-frame allocation.
     active_layer_ids_scratch: Vec<LayerId>,
@@ -499,7 +529,10 @@ pub struct LayerCompositor {
     /// so master FX and layer FX cannot share a chain. Costs ~56
     /// bytes of idle struct space when unused and zero CPU when
     /// no master effects are present.
+    #[cfg(not(any(test, feature = "testkit")))]
     master_effect_chain: Option<PresetRuntime>,
+    #[cfg(any(test, feature = "testkit"))]
+    pub master_effect_chain: Option<PresetRuntime>,
     /// Plugin warmup processors — held for the process lifetime so
     /// background FFI workers (BlobDetector, DepthEstimator,
     /// WireframeDepth) stay alive. The compositor forwards `resize`
@@ -514,7 +547,10 @@ pub struct LayerCompositor {
     /// Pre-allocated scratch buffer for per-layer output descriptors.
     /// Cleared and populated each frame by generate_layers
     /// to avoid per-frame heap allocation.
+    #[cfg(not(any(test, feature = "testkit")))]
     layer_outputs_scratch: Vec<LayerOutput>,
+    #[cfg(any(test, feature = "testkit"))]
+    pub layer_outputs_scratch: Vec<LayerOutput>,
     // Retain leaf outputs before group folding removes their descriptors.
     source_outputs_scratch: Vec<(i32, GpuTexture)>,
     /// section 24 5c with-effects thumbnails: `clip_id → that layer's post-effect output
@@ -558,7 +594,10 @@ pub struct LayerCompositor {
     /// `ensure_buffers` driven by the LED PresetContext.
     /// Uses owner_key `LED_MASTER_OWNER_KEY` to keep temporal state separate
     /// from the main master chain.
+    #[cfg(not(any(test, feature = "testkit")))]
     led_master_ec: Option<Option<PresetRuntime>>,
+    #[cfg(any(test, feature = "testkit"))]
+    pub led_master_ec: Option<Option<PresetRuntime>>,
 
     /// Per-group LED scratch buffers at LED grid resolution, keyed
     /// by the group container's `LayerId`. One per group whose
@@ -641,6 +680,7 @@ fn led_scope(group_id: &LayerId) -> String {
 /// owner_key 0 (main master) or any layer/clip hash.
 const LED_MASTER_OWNER_KEY: i64 = i64::MIN + 1;
 
+compositor_testkit_visible! {
 /// How many render() calls a per-layer effect chain may stay unused before
 /// it's dropped as a memory-hygiene safety net. Acts ALONGSIDE the
 /// event-based eviction in `trim_excess_buffers` (which drops a chain
@@ -655,6 +695,7 @@ const LED_MASTER_OWNER_KEY: i64 = i64::MIN + 1;
 /// margin around typical mid-song mutes / song-to-song transitions
 /// (sub-minute) while still freeing memory inside a long show.
 const CHAIN_GRACE_FRAMES: u64 = 18000;
+}
 
 /// Returns true when blending an opaque-black source with this mode is a
 /// mathematical no-op on the destination RGB.
@@ -830,6 +871,7 @@ impl LayerCompositor {
             .insert(layer_id.clone(), self.frame_counter);
     }
 
+    compositor_testkit_visible! {
     /// Ensure a chain exists for the given `LayerId`. Stable across frames and
     /// layer reorders — the chain's cached `PresetRuntime` (with primitive state)
     /// is preserved as long as the layer is touched within `CHAIN_GRACE_FRAMES`.
@@ -838,6 +880,7 @@ impl LayerCompositor {
         self.effect_chains.entry(layer_id.clone()).or_default();
         self.chain_last_used_frame
             .insert(layer_id.clone(), self.frame_counter);
+    }
     }
 
     /// Same contract as `ensure_chain_for_layer`, but for the group-effect-chain
@@ -1573,6 +1616,7 @@ impl LayerCompositor {
         WarmupOutcome::Quiescent
     }
 
+    compositor_testkit_visible! {
     /// Hybrid pool eviction policy:
     ///
     /// 1. **Event-based (immediate)**: drop any pool entry whose `LayerId`
@@ -1633,6 +1677,7 @@ impl LayerCompositor {
             &mut self.led_group_buf_last_used_frame,
         );
     }
+    }
 
     /// Hybrid pool pruner shared by every chain / buf map.
     /// Drops entries where the `LayerId` is no longer alive in the
@@ -1667,6 +1712,7 @@ impl LayerCompositor {
         }
     }
 
+    compositor_testkit_visible! {
     /// Release cached runtimes whose authored effect owner has been removed.
     ///
     /// A layer can remain in the project, and therefore inside the grace pool,
@@ -1705,6 +1751,7 @@ impl LayerCompositor {
             self.master_effect_chain = None;
             self.led_master_ec = None;
         }
+    }
     }
 
     /// For every effect chain whose layer / group did NOT dispatch this
@@ -1875,6 +1922,7 @@ impl LayerCompositor {
             .and_then(|rt| rt.chain_debug_info())
     }
 
+    compositor_testkit_visible! {
     /// Phase A: Process each layer's clips + effects into per-layer output textures.
     ///
     /// For single-clip layers without layer effects, the output is the clip texture
@@ -2169,6 +2217,7 @@ impl LayerCompositor {
             }
         }
         self.scene_viewport_error = scene_viewport_error;
+    }
     }
 
     /// Phase B: Blend all layer outputs into main in order.
@@ -3579,601 +3628,7 @@ impl Compositor for LayerCompositor {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod chain_pool_tests {
-    //! Regression tests for the LayerId-keyed chain/buf pools.
-    //!
-    //! The bug class these guard against: positional indexing
-    //! (`Vec<EffectChain>` indexed by iteration counter or
-    //! `layer_index`) caused chains to be re-bound to different
-    //! layers when the active-clip set shifted or layers were
-    //! reordered, forcing per-frame `PresetRuntime` rebuilds and
-    //! wiping primitive state (Bloom mips, feedback buffers).
-    //!
-    //! These tests exercise the pool API directly. The structural
-    //! invariant is: "same `LayerId` → same `EffectChain` map
-    //! entry across frames, regardless of timeline position or
-    //! iteration order." If that holds, every field of the
-    //! `EffectChain` (including the cached `chain_graph`) survives
-    //! by construction.
-    use super::*;
 
-    /// Build a minimal compositor. Tiny size keeps GPU costs low; tests
-    /// don't render, so resolution doesn't matter.
-    fn make_compositor() -> (manifold_gpu::testkit::TestDevice, LayerCompositor) {
-        let device = manifold_gpu::testkit::test_device();
-        let comp = LayerCompositor::new(&device, 64, 64);
-        (device, comp)
-    }
-
-    /// Reserve capacity high enough that test insertions don't trigger
-    /// an `AHashMap` rehash — preserves entry pointers for identity
-    /// comparison.
-    fn reserve_test_capacity(comp: &mut LayerCompositor) {
-        comp.effect_chains.reserve(16);
-        comp.chain_last_used_frame.reserve(16);
-    }
-
-    /// Build a minimal `CompositeLayerDescriptor` for tests that need to
-    /// drive `trim_excess_buffers`. All defaults are inert (no clips,
-    /// no effects, no group).
-    fn make_layer_desc<'a>(
-        layer_id: &'a LayerId,
-        layer_index: i32,
-    ) -> CompositeLayerDescriptor<'a> {
-        CompositeLayerDescriptor {
-            layer_index,
-            layer_id,
-            blend_mode: BlendMode::Normal,
-            opacity: 1.0,
-            hidden: false,
-            blit_to_led: false,
-            layer_type: manifold_core::LayerType::Video,
-            effects: &[],
-            effect_groups: &[],
-            parent_layer_id: None,
-            is_group: false,
-            trigger_count: 0,
-        }
-    }
-
-    fn make_effect_layer(name: &str, enabled: bool, amount: f32) -> manifold_core::layer::Layer {
-        let mut layer = manifold_core::layer::Layer::new(
-            name.to_string(),
-            manifold_core::LayerType::Video,
-            0,
-        );
-        let mut fx = manifold_core::preset_definition_registry::create_default(
-            &PresetTypeId::MIRROR,
-        );
-        fx.enabled = enabled;
-        if let Some(param) = fx.params.iter_mut().next() {
-            param.value = amount;
-            param.base = amount;
-        }
-        layer.effects_mut().push(fx);
-        layer
-    }
-
-    fn authored_layer_desc<'a>(
-        layer: &'a manifold_core::layer::Layer,
-    ) -> CompositeLayerDescriptor<'a> {
-        CompositeLayerDescriptor {
-            layer_index: 0,
-            layer_id: &layer.layer_id,
-            blend_mode: layer.default_blend_mode,
-            opacity: layer.opacity,
-            hidden: false,
-            blit_to_led: layer.blit_to_led,
-            layer_type: layer.layer_type,
-            effects: layer.effects(),
-            effect_groups: layer.effect_groups(),
-            parent_layer_id: layer.parent_layer_id.as_ref(),
-            is_group: layer.is_group(),
-            trigger_count: 0,
-        }
-    }
-
-    fn warm_effect_layer(
-        comp: &mut LayerCompositor,
-        device: &manifold_gpu::testkit::TestDevice,
-        layer: &manifold_core::layer::Layer,
-    ) {
-        assert_eq!(
-            comp.prewarm_layer_chains(
-                layer,
-                manifold_core::WarmupBudget::default(),
-                device,
-            ),
-            manifold_core::WarmupOutcome::Quiescent,
-            "minimal effect chain must quiesce during warmup",
-        );
-        assert!(comp
-            .effect_chains
-            .get(&layer.layer_id)
-            .and_then(Option::as_ref)
-            .is_some());
-    }
-
-    #[test]
-    fn empty_authored_effects_drop_only_their_layer_chain() {
-        let (device, mut comp) = make_compositor();
-        let removed = make_effect_layer("removed", true, 1.0);
-        let retained = make_effect_layer("retained", true, 1.0);
-        warm_effect_layer(&mut comp, &device, &removed);
-        warm_effect_layer(&mut comp, &device, &retained);
-
-        let empty_effects = Vec::new();
-        let removed_desc = CompositeLayerDescriptor {
-            effects: &empty_effects,
-            effect_groups: &[],
-            ..authored_layer_desc(&removed)
-        };
-        let retained_desc = authored_layer_desc(&retained);
-        comp.clear_obsolete_effect_chains(&[removed_desc, retained_desc], &[]);
-
-        assert!(comp
-            .effect_chains
-            .get(&removed.layer_id)
-            .is_some_and(Option::is_none));
-        assert!(comp.chain_last_used_frame.contains_key(&removed.layer_id));
-        assert!(comp
-            .effect_chains
-            .get(&retained.layer_id)
-            .and_then(Option::as_ref)
-            .is_some());
-        assert!(comp.chain_last_used_frame.contains_key(&retained.layer_id));
-    }
-
-    #[test]
-    fn disabled_and_zero_amount_effects_retain_their_chain() {
-        let (device, mut comp) = make_compositor();
-        let mut layer = make_effect_layer("retained", true, 1.0);
-        warm_effect_layer(&mut comp, &device, &layer);
-
-        layer.effects_mut()[0].enabled = false;
-        let disabled_desc = authored_layer_desc(&layer);
-        comp.clear_obsolete_effect_chains(&[disabled_desc], &[]);
-        assert!(comp
-            .effect_chains
-            .get(&layer.layer_id)
-            .and_then(Option::as_ref)
-            .is_some());
-
-        layer.effects_mut()[0].enabled = true;
-        layer.effects_mut()[0]
-            .params
-            .iter_mut()
-            .next()
-            .expect("minimal effect has an amount parameter")
-            .value = 0.0;
-        let zero_amount_desc = authored_layer_desc(&layer);
-        comp.clear_obsolete_effect_chains(&[zero_amount_desc], &[]);
-        assert!(comp
-            .effect_chains
-            .get(&layer.layer_id)
-            .and_then(Option::as_ref)
-            .is_some());
-    }
-
-    #[test]
-    fn empty_frame_master_effects_drop_master_chain_before_early_return() {
-        let (device, mut comp) = make_compositor();
-        let mut project = manifold_core::project::Project::default();
-        project.settings.master_effects.push(
-            manifold_core::preset_definition_registry::create_default(&PresetTypeId::MIRROR),
-        );
-        assert_eq!(
-            comp.prewarm_master_chain(
-                &project,
-                manifold_core::WarmupBudget::default(),
-                &device,
-                None,
-                (1, 1),
-            ),
-            manifold_core::WarmupOutcome::Quiescent,
-            "minimal master chain must quiesce during warmup",
-        );
-        assert!(comp.master_effect_chain.is_some());
-
-        let frame = CompositorFrame {
-            time: 0.0,
-            beat: 0.0,
-            dt: 1.0 / 60.0,
-            project_tempo: None,
-            frame_count: 0,
-            compositor_dirty: true,
-            clips: &[],
-            layers: &[],
-            master_effects: &[],
-            master_effect_groups: &[],
-            master_trigger_count: 0,
-            tonemap: crate::tonemap::TonemapSettings::default(),
-            led_exit_index: -1,
-            led_composite_size: (1, 1),
-            output_width: 64,
-            output_height: 64,
-            occluded_layers: &[],
-            render_skip: &[],
-        };
-        let mut enc = device.create_encoder("empty-frame-obsolete-chain");
-        let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
-        let _ = comp.render(&mut gpu, &frame);
-        enc.commit_and_wait_completed();
-
-        assert!(comp.master_effect_chain.is_none());
-        assert!(comp.led_master_ec.is_none());
-    }
-
-    #[test]
-    fn chain_entry_stable_across_active_set_changes() {
-        // Mirrors the live bug: active layer set shifts frame-to-frame
-        // (clips firing/stopping). Each LayerId's chain entry must
-        // survive intact regardless of which other layers are active.
-        let (_device, mut comp) = make_compositor();
-        reserve_test_capacity(&mut comp);
-
-        let a = LayerId::from("A");
-        let b = LayerId::from("B");
-        let c = LayerId::from("C");
-
-        // Frame 1: A + B active.
-        comp.frame_counter = 1;
-        comp.ensure_chain_for_layer(&a);
-        comp.ensure_chain_for_layer(&b);
-        let a_ptr = comp.effect_chains.get(&a).unwrap() as *const Option<PresetRuntime>;
-        let b_ptr = comp.effect_chains.get(&b).unwrap() as *const Option<PresetRuntime>;
-
-        // Frame 2: B + C active (A goes quiet, C new).
-        comp.frame_counter = 2;
-        comp.ensure_chain_for_layer(&b);
-        comp.ensure_chain_for_layer(&c);
-
-        // B is the same instance — its chain_graph, primitive state,
-        // and all internal buffers are preserved.
-        assert_eq!(
-            comp.effect_chains.get(&b).unwrap() as *const Option<PresetRuntime>,
-            b_ptr,
-            "B's chain instance must be identical across frame transition",
-        );
-        // A is still in the pool (within grace period).
-        assert_eq!(
-            comp.effect_chains.get(&a).unwrap() as *const Option<PresetRuntime>,
-            a_ptr,
-            "A's chain instance must persist within CHAIN_GRACE_FRAMES",
-        );
-
-        // Frame 3: A + B + C all active again.
-        comp.frame_counter = 3;
-        comp.ensure_chain_for_layer(&a);
-        comp.ensure_chain_for_layer(&b);
-        comp.ensure_chain_for_layer(&c);
-
-        // All entries still the same instances.
-        assert_eq!(comp.effect_chains.get(&a).unwrap() as *const _, a_ptr);
-        assert_eq!(comp.effect_chains.get(&b).unwrap() as *const _, b_ptr);
-    }
-
-    #[test]
-    fn chain_entry_independent_of_layer_index() {
-        // The original Vec<EffectChain> indexed by `layer_index as usize`
-        // would have bound chains to timeline positions; dragging a layer
-        // up/down the timeline would have shuffled which chain each layer
-        // received. LayerId keying makes that impossible: only the id
-        // matters, regardless of `layer_index`.
-        //
-        // We can't reorder layers without going through the full render
-        // pipeline, but we can prove the structural invariant directly:
-        // ensure_chain_for_layer takes a LayerId, never a layer_index.
-        // The map is `AHashMap<LayerId, EffectChain>` — `chains[5]`
-        // (a `usize` index) doesn't compile.
-        let (_device, mut comp) = make_compositor();
-        reserve_test_capacity(&mut comp);
-
-        let x = LayerId::from("X");
-        comp.frame_counter = 1;
-        comp.ensure_chain_for_layer(&x);
-        let x_ptr = comp.effect_chains.get(&x).unwrap() as *const Option<PresetRuntime>;
-
-        // Simulate many frames of reorder activity: ensure many other
-        // layers come/go but X stays present.
-        for f in 2..20 {
-            comp.frame_counter = f;
-            // "Other layers at varying timeline positions" — irrelevant
-            // because keying is by LayerId, not position.
-            let other = LayerId::from(format!("other-{f}"));
-            comp.ensure_chain_for_layer(&other);
-            comp.ensure_chain_for_layer(&x);
-        }
-
-        // X's chain is still the same instance.
-        assert_eq!(
-            comp.effect_chains.get(&x).unwrap() as *const Option<PresetRuntime>,
-            x_ptr,
-            "X's chain instance must survive arbitrary other-layer churn",
-        );
-    }
-
-    #[test]
-    fn master_chain_is_separate_field_from_layer_chains() {
-        // The master FX pass operates on the composited scene — it has
-        // no `LayerId` to key by, so it lives in a dedicated field.
-        // This makes "master chain accidentally bound to layer N's chain"
-        // structurally impossible: different types, different fields.
-        let (_device, mut comp) = make_compositor();
-        reserve_test_capacity(&mut comp);
-
-        let any_layer = LayerId::from("any");
-        comp.frame_counter = 1;
-        comp.ensure_chain_for_layer(&any_layer);
-
-        let layer_chain_ptr = comp.effect_chains.get(&any_layer).unwrap() as *const Option<PresetRuntime>;
-        let master_chain_ptr: *const Option<PresetRuntime> = &comp.master_effect_chain;
-
-        assert_ne!(
-            layer_chain_ptr, master_chain_ptr,
-            "master_effect_chain must be a different instance from any layer chain",
-        );
-    }
-
-    #[test]
-    fn chain_dropped_immediately_when_layer_removed_from_project() {
-        // Event-based eviction: when a layer disappears from
-        // `frame.layers` (project edit removed it), its chain drops on
-        // the next `trim_excess_buffers` call — no waiting for the
-        // grace timer. This bounds memory tightly to the project's
-        // current layer set.
-        let (_device, mut comp) = make_compositor();
-        reserve_test_capacity(&mut comp);
-
-        let kept = LayerId::from("kept");
-        let removed = LayerId::from("removed");
-
-        // Frame 1: both layers exist and touch their chains.
-        comp.frame_counter = 1;
-        comp.ensure_chain_for_layer(&kept);
-        comp.ensure_chain_for_layer(&removed);
-        assert!(comp.effect_chains.contains_key(&kept));
-        assert!(comp.effect_chains.contains_key(&removed));
-
-        // Frame 2: the user deletes `removed` from the project. The next
-        // CompositorFrame includes only `kept` in its `layers` slice.
-        // Even though `removed`'s chain was just touched, trim drops it
-        // immediately — the layer no longer exists.
-        comp.frame_counter = 2;
-        let layers_after_delete = vec![make_layer_desc(&kept, 0)];
-        comp.trim_excess_buffers(&layers_after_delete);
-
-        assert!(
-            !comp.effect_chains.contains_key(&removed),
-            "chain for a deleted layer must drop on the next trim, not wait for grace",
-        );
-        assert!(
-            comp.effect_chains.contains_key(&kept),
-            "chain for a layer still in the project must survive",
-        );
-    }
-
-    #[test]
-    fn aged_chains_pruned_after_grace_period() {
-        // Timer-based safety net: a chain whose layer is still in the
-        // project but hasn't been touched in CHAIN_GRACE_FRAMES is
-        // dropped. Catches the "operator moved on from this section
-        // hours ago" case in long live shows.
-        let (_device, mut comp) = make_compositor();
-        reserve_test_capacity(&mut comp);
-
-        let stale = LayerId::from("stale");
-        let alive = LayerId::from("alive");
-
-        // Frame 1: both active and touch their chains.
-        comp.frame_counter = 1;
-        comp.ensure_chain_for_layer(&stale);
-        comp.ensure_chain_for_layer(&alive);
-
-        // Advance well past the grace window while only refreshing `alive`.
-        // BOTH layers stay in `frame.layers` — only `stale`'s chain is idle.
-        let last_frame = CHAIN_GRACE_FRAMES + 50;
-        for f in 2..=last_frame {
-            comp.frame_counter = f;
-            comp.ensure_chain_for_layer(&alive);
-        }
-
-        let layers = vec![make_layer_desc(&stale, 0), make_layer_desc(&alive, 1)];
-        comp.trim_excess_buffers(&layers);
-
-        assert!(
-            !comp.effect_chains.contains_key(&stale),
-            "stale chain must have been pruned after exceeding CHAIN_GRACE_FRAMES",
-        );
-        assert!(
-            comp.effect_chains.contains_key(&alive),
-            "alive chain must still be present",
-        );
-    }
-
-    #[test]
-    fn chain_survives_layer_idle_within_grace() {
-        // Common live-performance case: a layer mutes / has no active
-        // clip for a short window (typical mid-song breakdown), then
-        // resumes. Its chain — and any feedback state it holds — must
-        // survive the gap so the visual look is continuous.
-        let (_device, mut comp) = make_compositor();
-        reserve_test_capacity(&mut comp);
-
-        let idle = LayerId::from("idle");
-
-        comp.frame_counter = 1;
-        comp.ensure_chain_for_layer(&idle);
-        let initial_ptr = comp.effect_chains.get(&idle).unwrap() as *const Option<PresetRuntime>;
-
-        // Many frames pass without `idle` being touched, but the layer
-        // is still in the project (typical mute / clip-gap scenario).
-        // CHAIN_GRACE_FRAMES is 18000 — pick a value well below it.
-        let layers = vec![make_layer_desc(&idle, 0)];
-        for f in 2..=(CHAIN_GRACE_FRAMES / 4) {
-            comp.frame_counter = f;
-            comp.trim_excess_buffers(&layers);
-        }
-
-        assert_eq!(
-            comp.effect_chains.get(&idle).unwrap() as *const _,
-            initial_ptr,
-            "chain instance must survive layer-idle periods well below grace window",
-        );
-    }
-
-    /// P2 chain warmup: a layer with enabled post-fx effects must have its
-    /// `PresetRuntime` built at load time, and the first playback frames must
-    /// not record any chain-construction cold touches.
-    #[test]
-    fn warmup_builds_layer_post_fx_chain_and_zero_cold_touches_on_play() {
-        use crate::compositor::{Compositor, CompositorFrame};
-        use manifold_node_engine::gpu::render_target::RenderTarget;
-        use manifold_core::effect_graph_def::ParamSpecDef;
-        use manifold_core::effects::PresetInstance;
-        use manifold_core::layer::Layer;
-        use manifold_core::params::{Param, ParamManifest};
-        use manifold_core::types::LayerType;
-        use manifold_foundation::cold_touch::{
-            reset_cold_touch_counts, set_transport_playing, total_cold_touches,
-        };
-
-        fn slot(id: &str, value: f32) -> Param {
-            let mut p = Param::bundled(ParamSpecDef {
-                tooltip: None,
-                id: id.into(),
-                name: id.into(),
-                min: 0.0,
-                max: 1.0,
-                default_value: value,
-                whole_numbers: false,
-                is_toggle: false,
-                is_trigger: false,
-                value_labels: vec![],
-                format_string: None,
-                osc_suffix: String::new(),
-                curve: Default::default(),
-                invert: false,
-                is_angle: false,
-                is_trigger_gate: false,
-                wraps: false,
-                section: None,
-                card_visible: true,
-                material_role: None,
-            });
-            p.value = value;
-            p.base = value;
-            p.exposed = true;
-            p
-        }
-
-        let (device, mut comp) = make_compositor();
-        let mut layer = Layer::new("fx-layer".to_string(), LayerType::Video, 0);
-        let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Invert"));
-        fx.params = ParamManifest::from_params(vec![slot("amount", 1.0)]);
-        layer.effects_mut().push(fx);
-
-        // Warmup should build the per-layer chain.
-        let outcome = comp.prewarm_layer_chains(
-            &layer,
-            manifold_core::WarmupBudget::default(),
-            &device,
-        );
-        assert_eq!(
-            outcome,
-            manifold_core::WarmupOutcome::Quiescent,
-            "Invert chain must quiesce within default budget"
-        );
-        let chain = comp
-            .effect_chains
-            .get(&layer.layer_id)
-            .expect("chain slot must exist after warmup")
-            .as_ref()
-            .expect("chain runtime must be built after warmup");
-        assert!(
-            !chain.warmup_pending(),
-            "warmed chain must report no pending work"
-        );
-
-        // Simulate a first playback frame: one clip on the layer, with layer FX.
-        let clip_tex = RenderTarget::new(
-            &device,
-            64,
-            64,
-            GpuTextureFormat::Rgba16Float,
-            "warmup test clip",
-        );
-        let clip = CompositeClipDescriptor {
-            clip_id: "clip-1",
-            texture: &clip_tex.texture,
-            layer_index: layer.index,
-            blend_mode: BlendMode::Normal,
-            opacity: 1.0,
-            is_muted: false,
-            effects: &[],
-            effect_groups: &[],
-        };
-        let layer_desc = CompositeLayerDescriptor {
-            layer_index: layer.index,
-            layer_id: &layer.layer_id,
-            blend_mode: BlendMode::Normal,
-            opacity: 1.0,
-            hidden: false,
-            blit_to_led: false,
-            layer_type: manifold_core::LayerType::Video,
-            effects: layer.effects(),
-            effect_groups: layer.effect_groups(),
-            parent_layer_id: None,
-            is_group: false,
-            trigger_count: 0,
-        };
-        let frame = CompositorFrame {
-            time: 0.0,
-            beat: 0.0,
-            dt: 1.0 / 60.0,
-            project_tempo: None,
-            frame_count: 0,
-            compositor_dirty: true,
-            clips: std::slice::from_ref(&clip),
-            layers: std::slice::from_ref(&layer_desc),
-            master_effects: &[],
-            master_effect_groups: &[],
-            master_trigger_count: 0,
-            tonemap: crate::tonemap::TonemapSettings::default(),
-            led_exit_index: -1,
-            led_composite_size: (1, 1),
-            output_width: 64,
-            output_height: 64,
-            occluded_layers: &[],
-            render_skip: &[],
-        };
-
-        // One render to ensure the cached chain is exercised, then reset and
-        // sample the cold-touch counter over 60 frames.
-        let mut enc = device.create_encoder("warmup play");
-        let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
-        let _ = comp.render(&mut gpu, &frame);
-        enc.commit_and_wait_completed();
-
-        reset_cold_touch_counts();
-        set_transport_playing(true);
-        for f in 0..60 {
-            let mut enc = device.create_encoder("warmup play");
-            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
-            let _ = comp.render(&mut gpu, &frame);
-            enc.commit_and_wait_completed();
-            // Silence unused warning in release builds.
-            let _ = f;
-        }
-        assert_eq!(
-            total_cold_touches(),
-            0,
-            "no chain construction (or other first-touch work) during playback after warmup"
-        );
-        set_transport_playing(false);
-    }
-}
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod led_warmup_tests {
@@ -4218,237 +3673,9 @@ mod led_warmup_tests {
     }
 }
 
-#[cfg(test)]
-mod clip_topology_enumeration_tests {
-    //! P7 D17 (WARMUP_DESIGN section 5) value-level coverage: the per-clip
-    //! topology enumeration dedups by the production topology hash without
-    //! touching a GPU. Two clips with identical effective post-fx sets must
-    //! yield one topology; differing sets must yield two.
-    use super::*;
-    use manifold_core::clip::TimelineClip;
-    use manifold_core::layer::Layer;
-    use manifold_core::types::LayerType;
 
-    fn make_fx(ty: PresetTypeId) -> PresetInstance {
-        let mut fx = manifold_core::preset_definition_registry::create_default(&ty);
-        // `has_enabled_effects` gates on the first param being > 0 — the
-        // registry default for these presets is 1.0, but pin it so the test
-        // doesn't depend on preset defaults.
-        if let Some(p) = fx.params.iter_mut().next() {
-            p.value = 1.0;
-        }
-        fx
-    }
 
-    fn make_layer() -> manifold_core::layer::Layer {
-        Layer::new("gen".to_string(), LayerType::Generator, 0)
-    }
 
-    #[test]
-    fn clips_with_identical_post_fx_sets_produce_one_topology() {
-        let mut layer = make_layer();
-        layer.effects_mut().push(make_fx(PresetTypeId::MIRROR));
-        for _ in 0..3 {
-            layer.clips.push(TimelineClip::default());
-        }
-
-        let topos = unique_clip_chain_topologies(std::slice::from_ref(&layer), 256, 256);
-        assert_eq!(
-            topos.len(),
-            1,
-            "three clips with the same (empty) clip post-fx must collapse to \
-             the layer's single topology",
-        );
-        assert_eq!(
-            topos[0].effects.len(),
-            1,
-            "the collapsed topology carries the layer's effective post-fx set",
-        );
-    }
-
-    #[test]
-    fn clips_with_differing_post_fx_sets_produce_distinct_topologies() {
-        let mut layer = make_layer();
-        layer.effects_mut().push(make_fx(PresetTypeId::MIRROR));
-        let mut clip_a = TimelineClip::default();
-        clip_a.effects.push(make_fx(PresetTypeId::COLOR_GRADE));
-        layer.clips.push(clip_a);
-        let mut clip_b = TimelineClip::default();
-        clip_b.effects.push(make_fx(PresetTypeId::VORONOI_PRISM));
-        layer.clips.push(clip_b);
-        layer.clips.push(TimelineClip::default());
-
-        let topos = unique_clip_chain_topologies(std::slice::from_ref(&layer), 256, 256);
-        assert_eq!(
-            topos.len(),
-            3,
-            "layer topology + two distinct clip post-fx sets must yield \
-             three unique topologies (one per distinct set)",
-        );
-    }
-
-    #[test]
-    fn same_effect_shape_different_identity_stays_distinct() {
-        // The production hash keys on per-instance effect ids, not effect
-        // types — two same-typed effects with different ids are different
-        // topologies, and a shape-only dedup would silently pool them.
-        let mut layer = make_layer();
-        let mut clip_a = TimelineClip::default();
-        clip_a.effects.push(make_fx(PresetTypeId::MIRROR));
-        let mut clip_b = TimelineClip::default();
-        clip_b.effects.push(make_fx(PresetTypeId::MIRROR));
-        layer.clips.push(clip_a);
-        layer.clips.push(clip_b);
-
-        let topos = unique_clip_chain_topologies(std::slice::from_ref(&layer), 256, 256);
-        assert_eq!(
-            topos.len(),
-            2,
-            "same effect type with a different instance id is a distinct \
-             topology — the production key is id-keyed",
-        );
-    }
-}
-
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod muted_clip_output_tests {
-    //! Regression: a layer whose clips are ALL muted must emit no
-    //! `LayerOutput`. Before the fix, the multi-clip / has-layer-effects
-    //! branch pushed the empty (transparent) layer buffer unconditionally —
-    //! under Opaque blend, which replaces every pixel regardless of alpha,
-    //! one all-muted Opaque layer blacked out the entire frame (hot-mute
-    //! regression: muted clips flow into clip descriptors, this branch
-    //! never learned to handle the all-muted group).
-    use super::*;
-    use crate::compositor::CompositeLayerDescriptor;
-
-    fn make_layer_desc<'a>(
-        layer_id: &'a LayerId,
-        effects: &'a [PresetInstance],
-    ) -> CompositeLayerDescriptor<'a> {
-        CompositeLayerDescriptor {
-            layer_index: 0,
-            layer_id,
-            blend_mode: BlendMode::Opaque,
-            opacity: 1.0,
-            hidden: false,
-            blit_to_led: false,
-            layer_type: manifold_core::LayerType::Video,
-            effects,
-            effect_groups: &[],
-            parent_layer_id: None,
-            is_group: false,
-            trigger_count: 0,
-        }
-    }
-
-    fn make_clip<'a>(clip_id: &'a str, texture: &'a GpuTexture, muted: bool) -> CompositeClipDescriptor<'a> {
-        CompositeClipDescriptor {
-            clip_id,
-            texture,
-            layer_index: 0,
-            blend_mode: BlendMode::Normal,
-            opacity: 1.0,
-            is_muted: muted,
-            effects: &[],
-            effect_groups: &[],
-        }
-    }
-
-    fn make_fx() -> PresetInstance {
-        let mut fx = manifold_core::preset_definition_registry::create_default(
-            &PresetTypeId::MIRROR,
-        );
-        if let Some(p) = fx.params.iter_mut().next() {
-            p.value = 1.0;
-        }
-        fx
-    }
-
-    fn run(
-        comp: &mut LayerCompositor,
-        device: &manifold_gpu::testkit::TestDevice,
-        layers: &[CompositeLayerDescriptor],
-        clips: &[CompositeClipDescriptor],
-    ) {
-        let frame = CompositorFrame {
-            time: 0.0,
-            beat: 0.0,
-            dt: 1.0 / 60.0,
-            project_tempo: None,
-            frame_count: 1,
-            compositor_dirty: true,
-            clips,
-            layers,
-            master_effects: &[],
-            master_effect_groups: &[],
-            master_trigger_count: 0,
-            tonemap: crate::tonemap::TonemapSettings::default(),
-            led_exit_index: -1,
-            led_composite_size: (8, 120),
-            output_width: 64,
-            output_height: 64,
-            occluded_layers: &[],
-            render_skip: &[],
-        };
-        let mut native_enc = device.create_encoder("muted-clip-output-test");
-        {
-            let mut gpu = GpuEncoder::new(&mut native_enc, device);
-            comp.generate_layers(&mut gpu, &frame);
-        }
-        native_enc.commit_and_wait_completed();
-    }
-
-    fn white_texture(device: &manifold_gpu::testkit::TestDevice) -> GpuTexture {
-        device.create_texture(&GpuTextureDesc {
-            width: 64,
-            height: 64,
-            depth: 1,
-            format: GpuTextureFormat::Rgba16Float,
-            dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::RENDER_TARGET_FULL,
-            label: "muted-clip-test-src",
-            mip_levels: 1,
-        })
-    }
-
-    #[test]
-    fn all_muted_clips_with_layer_effects_emit_no_output() {
-        let device = manifold_gpu::testkit::test_device();
-        let mut comp = LayerCompositor::new(&device, 64, 64);
-        let layer_id = LayerId::from("L0");
-        let fx = [make_fx()];
-        let layers = [make_layer_desc(&layer_id, &fx)];
-        let tex = white_texture(&device);
-        let clips = [make_clip("c0", &tex, true)];
-
-        run(&mut comp, &device, &layers, &clips);
-        assert!(
-            comp.layer_outputs_scratch.is_empty(),
-            "all-muted layer must emit no LayerOutput — an empty buffer under \
-             Opaque blend blacks out the whole frame",
-        );
-    }
-
-    #[test]
-    fn visible_clip_with_layer_effects_still_emits() {
-        let device = manifold_gpu::testkit::test_device();
-        let mut comp = LayerCompositor::new(&device, 64, 64);
-        let layer_id = LayerId::from("L0");
-        let fx = [make_fx()];
-        let layers = [make_layer_desc(&layer_id, &fx)];
-        let tex = white_texture(&device);
-        // Mixed group: one muted, one visible — the layer must emit.
-        let clips = [make_clip("c0", &tex, true), make_clip("c1", &tex, false)];
-
-        run(&mut comp, &device, &layers, &clips);
-        assert_eq!(
-            comp.layer_outputs_scratch.len(),
-            1,
-            "a layer with any visible clip keeps its output",
-        );
-    }
-}
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod led_composite_pixel_tests {
@@ -4937,240 +4164,5 @@ mod led_composite_pixel_tests {
             GREEN,
             "screen composite — the LED child must never leak through the group fold",
         );
-    }
-}
-
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod scene_linear_presentation_gpu_tests {
-    //! Production compositor proofs: master effects run on SceneLinear HDR,
-    //! then the destination presentation pass applies the optional SDR curve.
-
-    use super::*;
-    use crate::compositor::{Compositor, CompositorFrame};
-    use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
-    use crate::presentation::{
-        DisplayCapabilities, DisplayPlan, LinearPresentationTarget, LinearSceneFrame,
-        PresentationPipeline, UI_FORMAT,
-    };
-    use crate::tonemap::{TonemapMode, TonemapSettings};
-    use half::f16;
-    use manifold_core::{BlendMode, LayerId, PresetTypeId, TonemapCurve};
-    use manifold_gpu::GpuLoadAction;
-
-    const WIDTH: u32 = 4;
-    const HEIGHT: u32 = 4;
-
-    #[derive(Clone, Copy)]
-    enum MasterEffect {
-        None,
-        Invert,
-        ColorGradeGain,
-    }
-
-    struct RenderSample {
-        hdr: [f32; 4],
-        mapped: [f32; 4],
-    }
-
-    fn solid_source(device: &manifold_gpu::testkit::TestDevice, rgb: [f32; 3]) -> GpuTexture {
-        let texture = device.create_texture(&GpuTextureDesc {
-            width: WIDTH,
-            height: HEIGHT,
-            depth: 1,
-            format: GpuTextureFormat::Rgba16Float,
-            dimension: GpuTextureDimension::D2,
-            usage: GpuTextureUsage::RENDER_TARGET_FULL,
-            label: "scene-linear-presentation-source",
-            mip_levels: 1,
-        });
-        let mut encoder = device.create_encoder("scene-linear-presentation-source-clear");
-        {
-            let mut gpu = GpuEncoder::new(&mut encoder, device);
-            gpu.clear_texture(&texture, rgb[0] as f64, rgb[1] as f64, rgb[2] as f64, 1.0);
-        }
-        encoder.commit_and_wait_completed();
-        texture
-    }
-
-    fn first_pixel(raw: &[u8]) -> [f32; 4] {
-        std::array::from_fn(|channel| {
-            let offset = channel * 2;
-            f16::from_bits(u16::from_le_bytes([raw[offset], raw[offset + 1]])).to_f32()
-        })
-    }
-
-    fn render_sample(
-        source_rgb: [f32; 3],
-        curve: TonemapCurve,
-        master_effect_kind: MasterEffect,
-    ) -> RenderSample {
-        let device = manifold_gpu::testkit::test_device();
-        let mut compositor = LayerCompositor::new(&device, WIDTH, HEIGHT);
-        let source = solid_source(&device, source_rgb);
-        let layer_id = LayerId::from("scene-linear-presentation-layer");
-        let layer = CompositeLayerDescriptor {
-            layer_index: 0,
-            layer_id: &layer_id,
-            blend_mode: BlendMode::Normal,
-            opacity: 1.0,
-            hidden: false,
-            blit_to_led: false,
-            layer_type: manifold_core::LayerType::Video,
-            effects: &[],
-            effect_groups: &[],
-            parent_layer_id: None,
-            is_group: false,
-            trigger_count: 0,
-        };
-        let clip = CompositeClipDescriptor {
-            clip_id: "scene-linear-presentation-clip",
-            texture: &source,
-            layer_index: 0,
-            blend_mode: BlendMode::Normal,
-            opacity: 1.0,
-            is_muted: false,
-            effects: &[],
-            effect_groups: &[],
-        };
-        let mut master_effect = match master_effect_kind {
-            MasterEffect::None => None,
-            MasterEffect::Invert => Some(
-                manifold_core::preset_definition_registry::create_default(
-                    &PresetTypeId::INVERT_COLORS,
-                ),
-            ),
-            MasterEffect::ColorGradeGain => Some(
-                manifold_core::preset_definition_registry::create_default(
-                    &PresetTypeId::COLOR_GRADE,
-                ),
-            ),
-        };
-        if let Some(effect) = master_effect.as_mut() {
-            effect.enabled = true;
-            match master_effect_kind {
-                MasterEffect::None => unreachable!("None has no master effect"),
-                MasterEffect::Invert => {
-                    effect.params.get_mut("amount").expect("Invert amount").value = 1.0;
-                }
-                MasterEffect::ColorGradeGain => {
-                    effect.params.get_mut("amount").expect("ColorGrade amount").value = 1.0;
-                    effect.params.get_mut("gain").expect("ColorGrade gain").value = 2.0;
-                }
-            }
-        }
-        let master_effects = master_effect.as_slice();
-        let frame = CompositorFrame {
-            time: 0.0,
-            beat: 0.0,
-            dt: 1.0 / 60.0,
-            project_tempo: None,
-            frame_count: 1,
-            compositor_dirty: true,
-            clips: std::slice::from_ref(&clip),
-            layers: std::slice::from_ref(&layer),
-            master_effects,
-            master_effect_groups: &[],
-            master_trigger_count: 0,
-            tonemap: TonemapSettings {
-                exposure: 1.0,
-                mode: TonemapMode::SceneLinear,
-                paper_white_nits: 200.0,
-                max_display_nits: 10_000.0,
-                curve,
-            },
-            led_exit_index: -1,
-            led_composite_size: (1, 1),
-            output_width: WIDTH,
-            output_height: HEIGHT,
-            occluded_layers: &[],
-            render_skip: &[],
-        };
-
-        let mut encoder = device.create_encoder("scene-linear-presentation-render");
-        {
-            let mut gpu = GpuEncoder::new(&mut encoder, &device);
-            compositor.render(&mut gpu, &frame);
-        }
-        encoder.commit_and_wait_completed();
-        let hdr = first_pixel(&readback_raw_halves(
-            &device,
-            compositor.output_texture(),
-            WIDTH,
-            HEIGHT,
-        ));
-
-        let target = RenderTarget::new(&device, WIDTH, HEIGHT, UI_FORMAT, "scene-presentation-target");
-        let pipeline = PresentationPipeline::new(&device);
-        let plan = DisplayPlan::new(DisplayCapabilities::sdr(), Some(curve));
-        let mut encoder = device.create_encoder("scene-linear-presentation-map");
-        pipeline.encode(
-            &mut encoder,
-            LinearSceneFrame::new(compositor.output_texture()).expect("SceneLinear output"),
-            LinearPresentationTarget::new(&target.texture).expect("presentation target"),
-            plan,
-            (0.0, 0.0, WIDTH as f32, HEIGHT as f32),
-            GpuLoadAction::Clear,
-        );
-        encoder.commit_and_wait_completed();
-        let mapped = first_pixel(&readback_raw_halves(&device, &target.texture, WIDTH, HEIGHT));
-        RenderSample { hdr, mapped }
-    }
-
-    fn narkowicz(value: f32) -> f32 {
-        let mapped = (value * (2.51 * value + 0.03))
-            / (value * (2.43 * value + 0.59) + 0.14);
-        mapped.clamp(0.0, 1.0)
-    }
-
-    #[test]
-    fn presentation_curves_are_distinct_after_scene_linear_compositor() {
-        let source = [2.0, 0.7, 0.1];
-        let curves = [
-            TonemapCurve::AcesNarkowicz,
-            TonemapCurve::AcesHill,
-            TonemapCurve::Agx,
-            TonemapCurve::KhronosPbrNeutral,
-        ];
-        let outputs = curves
-            .into_iter()
-            .map(|curve| render_sample(source, curve, MasterEffect::None).mapped)
-            .collect::<Vec<_>>();
-        for (index, output) in outputs.iter().enumerate() {
-            assert!(output[..3].iter().all(|value| value.is_finite() && (0.0..=1.0).contains(value)));
-            assert_eq!(output[3], 1.0);
-            for other in outputs.iter().skip(index + 1) {
-                let distance = output[..3]
-                    .iter()
-                    .zip(&other[..3])
-                    .map(|(a, b)| (a - b).abs())
-                    .fold(0.0, f32::max);
-                assert!(distance > 0.01, "curves are not distinct: {output:?} vs {other:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn presentation_maps_after_master_invert_and_preserves_alpha() {
-        let source = [0.2, 0.4, 0.7];
-        let sample = render_sample(source, TonemapCurve::AcesNarkowicz, MasterEffect::Invert);
-        let expected_hdr = source.map(|value| 1.0 - value);
-        let expected_sdr = expected_hdr.map(narkowicz);
-        for channel in 0..3 {
-            assert!((sample.hdr[channel] - expected_hdr[channel]).abs() < 0.02);
-            assert!((sample.mapped[channel] - expected_sdr[channel]).abs() < 0.02);
-        }
-        assert_eq!(sample.hdr[3], 1.0);
-        assert_eq!(sample.mapped[3], 1.0);
-    }
-
-    #[test]
-    fn presentation_maps_hdr_after_master_gain() {
-        let source = [4.0, 2.0, 0.5];
-        let sample = render_sample(source, TonemapCurve::AcesNarkowicz, MasterEffect::ColorGradeGain);
-        let expected_hdr = source.map(|value| value * 2.0);
-        assert!(expected_hdr[0] > 1.0);
-        assert!(sample.hdr[0] > 7.9, "master gain lost HDR headroom: {:?}", sample.hdr);
-        assert!((sample.mapped[0] - narkowicz(expected_hdr[0])).abs() < 0.02);
-        assert!(sample.mapped[..3].iter().all(|value| value.is_finite() && *value <= 1.0));
     }
 }
