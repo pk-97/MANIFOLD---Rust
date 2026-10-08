@@ -1015,7 +1015,7 @@ impl NativeTextRenderer {
     /// The installed-font family of each queued text command, in queue
     /// order (`None` = the UI font) — for proofs that a node's font reached
     /// the renderer.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "gpu-proofs"))]
     pub(crate) fn queued_families(&self) -> Vec<Option<&str>> {
         self.commands
             .iter()
