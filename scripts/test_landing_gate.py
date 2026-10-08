@@ -142,7 +142,7 @@ class LandingTests(unittest.TestCase):
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None,
                  comment=False, gpu_output=None, proof_cached=False, manifest=None,
-                 nextest_output=None, readiness_errors=()):
+                 nextest_output=None, readiness_errors=(), failure_code=1):
         called, commands = [], []
         self.events = events = []
         paths = paths or ["crates/manifold-gpu/src/metal/device.rs"]
@@ -209,10 +209,10 @@ class LandingTests(unittest.TestCase):
             called.append(label)
             events.append(label)
             if label == "gpu-proofs" and gpu_output is not None:
-                return (1 if label == failed else 0), gpu_output, "", 0.01
+                return (failure_code if label == failed else 0), gpu_output, "", 0.01
             if cmd[:2] == ["cargo", "nextest"] and "--no-run" not in cmd and nextest_output:
-                return (1 if label == failed else 0), *nextest_output, 0.01
-            return (1 if label == failed else 0), f"output for {label}\n", "", 0.01
+                return (failure_code if label == failed else 0), *nextest_output, 0.01
+            return (failure_code if label == failed else 0), f"output for {label}\n", "", 0.01
 
         with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
             root = Path(d)
@@ -332,6 +332,21 @@ class LandingTests(unittest.TestCase):
         summary = output[output.index("FAIL clippy"):]
         self.assertRegex(summary, r"rerun: cargo clippy --manifest-path \S+/Cargo.toml -p manifold-gpu")
         self.assertIn("fix each red with its `rerun:` command", summary)
+
+    def test_quoted_proof_refusal_is_an_ordinary_failure(self):
+        output = 'AssertionError: "GPU-PROOFS GATE: FAIL (inputs changed"\n'
+        for label in ("tests", "gpu-proofs"):
+            with self.subTest(label=label):
+                code, *_ = self.exercise(
+                    failed=label, gpu_output=output, nextest_output=(output, ""))
+                self.assertEqual(code, landing_gate.CHECKS_RED)
+
+    def test_proof_refusal_status_is_only_reserved_for_proof_subprocess(self):
+        for label in ("tests", "gpu-proofs", "gpu-proofs-build"):
+            with self.subTest(label=label):
+                code, *_ = self.exercise(
+                    failed=label, failure_code=landing_gate.PROOF_INPUTS_CHANGED)
+                self.assertEqual(code, landing_gate.CHECKS_RED if label == "tests" else 1)
 
     def test_leg_rerun_lines_win_over_the_leg_command(self):
         gpu_output = ("failures:\n    liquid_conformance::broken\n\n"
@@ -1003,6 +1018,23 @@ class DiffScopeTests(unittest.TestCase):
         self.assertIn("--patch", calls[0])
         self.assertIn("-z", calls[0])
         self.assertNotIn("--name-only", calls[0])
+
+    def test_worktree_comment_edit_normalizes_batched_blob_newlines(self):
+        for newline in ("\r\n", "\r"):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                path = "comment.rs"
+                before = f"fn f() {{}} /*{newline}old{newline}*/{newline}".encode()
+                (root / path).write_bytes(before.replace(b"old", b"new"))
+                old_oid = "a" * 40
+                raw = (f":100644 100644 {old_oid} {'0' * 40} M\0{path}\0\0"
+                       f"diff --git a/{path} b/{path}\n@@ -2 +2 @@\n-old\n+new\n")
+                batch = f"{old_oid} blob {len(before)}\n".encode() + before + b"\n"
+                with patch.object(diff_scope, "git", return_value=raw), \
+                        patch.object(diff_scope.subprocess, "run", return_value=
+                                     subprocess.CompletedProcess([], 0, batch, b"")):
+                    self.assertEqual(diff_scope.effective_paths(root, "base", head=None),
+                                     ([], [path]))
 
     def test_worktree_head_reads_after_side_from_filesystem(self):
         with tempfile.TemporaryDirectory() as d:

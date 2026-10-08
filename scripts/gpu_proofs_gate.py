@@ -68,6 +68,9 @@ import diff_scope
 import gate_passes
 from gate_workspace import Workspace
 
+# Reserved for input changes; child failures with this status become ordinary reds.
+INPUTS_CHANGED = 78
+
 # Matches glb_conformance.rs's check_golden() mismatch message:
 #   "golden mismatch: mean_abs_diff {mean_abs:.4} > tol {mean_abs_tol} \
 #    ({golden_path} vs {rel_file})"
@@ -954,14 +957,14 @@ def _main() -> int:
     build_code = build_tests(manifest_path, pending) if pending else 0
     if build_code:
         print(f"GPU-PROOFS GATE: FAIL (test build failed, exit {build_code}; no GPU lock taken)")
-        return build_code
+        return 1 if build_code == INPUTS_CHANGED else build_code
     if args.build_only:
         print("GPU-PROOFS GATE: BUILT (--build-only; no test run, no GPU lock taken)")
         return 0
 
     if gate_passes.changed_passes(passes):
         print('GPU-PROOFS GATE: FAIL (inputs changed after planning; rerun before GPU admission)')
-        return 2
+        return INPUTS_CHANGED
     exit_code, outputs, all_timings, hung = 0, [], [], []
     # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for all
     # cargo runs so another run cannot interleave between test binaries.
@@ -970,12 +973,12 @@ def _main() -> int:
     with gpu_queue.hold("gpu_proofs_gate") if pending else contextlib.nullcontext():
         if gate_passes.changed_passes(passes):
             print('GPU-PROOFS GATE: FAIL (inputs changed while waiting for the GPU)')
-            return 2
+            return INPUTS_CHANGED
         for run, passed in zip(runs, passes):
             if passed and passed.record:
                 if not passed.reused():
                     print('GPU-PROOFS GATE: FAIL (inputs changed before reuse)')
-                    return 2
+                    return INPUTS_CHANGED
                 target = ','.join(run['targets'] or []) or ('lib' if run['lib'] else 'all')
                 all_timings.append(timing_entry(run.get('package'), target,
                                                 'reused proof set', passed.record['seconds'],
@@ -986,6 +989,8 @@ def _main() -> int:
                                     run["full"], run["lib"], run_timings, hung,
                                     args.hang_allowance, run["package"], run["target"],
                                     run["budgeted"], run.get("target_specs"))
+            if code == INPUTS_CHANGED:
+                code = 1
             if (parse_failed_tests(output) or parse_golden_mismatches(output)
                     or any(status == "FAILED" for _, status, _, _ in parse_binaries(output))
                     or any(timing_fields(t)[4] == "FAILED" for t in run_timings)):
@@ -1023,14 +1028,14 @@ def _main() -> int:
         remember_times(recorded_timings, verdict, hung)
     if gate_passes.changed_passes([p for p in passes if p]):
         print('GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)')
-        return 2
+        return INPUTS_CHANGED
     for passed, code, seconds in measured:
         if passed:
             # Budget warnings do not invalidate functional passes. Real
             # failures and hangs can never acquire a reusable pass.
             if passed.save(code or verdict, seconds) is False:
                 print('GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)')
-                return 2
+                return INPUTS_CHANGED
     return verdict
 
 

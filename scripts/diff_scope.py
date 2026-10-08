@@ -183,7 +183,7 @@ def _cat_file_batch(repo, object_ids):
         data_end = data_start + size
         if data_end >= len(result.stdout) or result.stdout[data_end:data_end + 1] != b"\n":
             raise RuntimeError("git cat-file --batch returned truncated data")
-        blobs[object_id] = result.stdout[data_start:data_end].decode()
+        blobs[object_id] = result.stdout[data_start:data_end].decode().replace("\r\n", "\n").replace("\r", "\n")
         cursor = data_end + 1
     return blobs
 

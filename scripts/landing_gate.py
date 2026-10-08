@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import gpu_queue
+from gpu_proofs_gate import INPUTS_CHANGED as PROOF_INPUTS_CHANGED
 
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 GATED_HEAD = contextvars.ContextVar('gated_head', default=None)
@@ -279,9 +280,10 @@ def run_check(label, cmd, cwd, timeout, passed=None):
     print(f"[RUN] {label}  (live transcript: {live})", flush=True)
     result = run_cmd(cmd, cwd, timeout, live_log=live)
     exit_, out, err, seconds = result
-    if exit_ == -1 or any(marker in out + err for marker in (
-            'GPU-PROOFS GATE: HUNG', 'GPU-PROOFS TIMING: FAIL',
-            'GPU-PROOFS GATE: FAIL (inputs changed')):
+    proof_refusal = (exit_ == PROOF_INPUTS_CHANGED and len(cmd) > 1
+                     and Path(cmd[1]).name == 'gpu_proofs_gate.py')
+    if exit_ == -1 or proof_refusal or any(marker in out + err for marker in (
+            'GPU-PROOFS GATE: HUNG', 'GPU-PROOFS TIMING: FAIL')):
         # Keep collecting runtime reds, but missing coverage cannot be waived
         # through the named-red landing path.
         RAN_EVERY_CHECK.set(False)

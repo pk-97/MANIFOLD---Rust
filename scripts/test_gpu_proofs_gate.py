@@ -268,6 +268,21 @@ class GpuProofsGateTests(unittest.TestCase):
             code = gate.main()
         return code, calls, out.getvalue()
 
+    def test_child_failure_cannot_return_input_refusal_status(self):
+        for stage in ("build", "run"):
+            with self.subTest(stage=stage):
+                code, _, _ = self.run_main(
+                    ["--filter", "failed"], **{f"{stage}_exit": gate.INPUTS_CHANGED})
+                self.assertEqual(code, 1)
+
+    def test_input_changes_return_reserved_refusal_status(self):
+        for checks in ([True], [False, True], [False, False, True]):
+            with self.subTest(checks=checks), patch.object(
+                    gate.gate_passes, "changed_passes", side_effect=checks):
+                code, _, text = self.run_main(["--filter", "failed"])
+                self.assertEqual(code, gate.INPUTS_CHANGED)
+                self.assertIn("GPU-PROOFS GATE: FAIL (inputs changed", text)
+
     def test_test_binaries_build_before_the_hold_with_the_run_arguments(self):
         code, _, _ = self.run_main(
             [], repo_changed=["crates/manifold-renderer/src/node_graph/primitives/invert.rs"])
