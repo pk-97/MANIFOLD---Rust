@@ -38,7 +38,7 @@ from gate_policy import (
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
-    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, CATALOG_PACKAGE, is_inert_plan_path,
+    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, CATALOG_PACKAGE, GPU_CONTRACT_TARGETS, is_inert_plan_path,
 )
 from gate_workspace import Workspace
 
@@ -110,6 +110,15 @@ def is_gpu_path(path, workspace=None):
         return False
     if workspace:
         owner = workspace.owner(path)
+        if owner and 'gpu-proofs' in workspace.packages[owner]['features']:
+            source = (workspace.repo / path).resolve()
+            for target in workspace.targets(owner, 'test'):
+                root = Path(target['src_path']).resolve()
+                if ('gpu-proofs' in target.get('required-features', [])
+                        and root.name == 'main.rs' and source.is_relative_to(root.parent)):
+                    return True
+                if target['name'] == GPU_CONTRACT_TARGETS.get(owner) and source == root:
+                    return True
         if (owner and 'gpu-proofs' in workspace.packages[owner]['features']
                 and ((path.startswith(workspace.roots[owner] + '/src/')
                       and path.endswith(('.rs', '.wgsl')))
@@ -201,14 +210,14 @@ class Plan:
         for package in self.workspace.feature_packages('gpu-proofs'):
             filters = (UI_PAINT_FILTERS if self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
                        else self.final_filters())
-            if package == CATALOG_PACKAGE:
+            if package in GPU_CONTRACT_TARGETS:
                 filters = [re.sub(r'^(exec|freeze|load|runtime|water|palette|preview_encoding|primitive_registry|node_graph)::',
                                   r'contracts::\1::', value) for value in filters]
             targets = [t['name'] for t in self.workspace.targets(package, 'test')
                        if ('gpu-proofs' in t.get('required-features', [])
                            or (self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
                                and t['name'] == 'main')
-                           or (package == CATALOG_PACKAGE and t['name'] == 'main'))
+                           or t['name'] == GPU_CONTRACT_TARGETS.get(package))
                        and t['name'] not in GLB_TESTS
                        and not (route and route[:2] == (package, t['name']) and not route[2])]
             has_lib = bool(self.workspace.targets(package, 'lib'))
@@ -295,7 +304,7 @@ def contract_module_filters(path, repo):
             if attrs:
                 child = source.parent.joinpath(*scope, attrs[-1])
             else:
-                base = source.parent if source.stem in ("lib", "mod", "main") else source.with_suffix("")
+                base = source.parent if not ancestors or source.stem in ("lib", "mod", "main") else source.with_suffix("")
                 child = base.joinpath(*scope, name + ".rs")
                 if not child.is_file():
                     child = base.joinpath(*scope, name, "mod.rs")
@@ -303,6 +312,7 @@ def contract_module_filters(path, repo):
 
     walk(repo / RENDERER_SRC / "lib.rs", (), set())
     walk(repo / "crates/manifold-nodes/tests/main.rs", (), set())
+    walk(repo / "crates/manifold-app/tests/renderer_contracts.rs", (), set())
     return sorted(found)
 
 
@@ -487,6 +497,12 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
                             if path.startswith(prefix) and path.endswith(".rs"))
         plan.paths.append(path)
         owner = workspace.owner(path)
+        if owner in GPU_CONTRACT_TARGETS and any(
+                target['name'] == GPU_CONTRACT_TARGETS[owner]
+                and (Path(repo) / path).resolve() == Path(target['src_path']).resolve()
+                for target in workspace.targets(owner, 'test')):
+            plan.required_binaries.add((owner, GPU_CONTRACT_TARGETS[owner]))
+            continue
         if owner and path == workspace.roots[owner] + '/Cargo.toml':
             plan.whole_packages.add(owner)
             continue

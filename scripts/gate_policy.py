@@ -44,7 +44,9 @@ CATALOG_PATHS = ('crates/manifold-nodes-scene/src/node_graph/primitives/',
 
 RENDERER_SRC = "crates/manifold-nodes/src/"
 ENGINE_SRC = "crates/manifold-node-engine/src/"
-CONTRACT_TESTS_DIR = ("crates/manifold-nodes/tests/contracts/",)
+CONTRACT_TESTS_DIR = ("crates/manifold-nodes/tests/contracts/",
+                      "crates/manifold-app/tests/contracts/")
+GPU_CONTRACT_TARGETS = {"manifold-nodes": "main", "manifold-app": "renderer_contracts"}
 UI_PAINT_DIR = "crates/manifold-ui-paint/"
 UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::", "contracts::"]
 PROOFS_DIR = "crates/manifold-nodes/tests/gpu_proofs/"

@@ -26,6 +26,7 @@ def fixture_workspace(repo):
     repo = repo.resolve()
     packages = []
     rows = {
+        "manifold-app": ("crates/manifold-app", True, ["renderer_contracts", "renderer_gpu_proofs"]),
         "manifold-compositor": ("crates/manifold-compositor", True, ["gpu_proofs"]),
         "manifold-nodes-scene": ("crates/manifold-nodes-scene", True, ["gpu_proofs"]),
         "manifold-nodes-image": ("crates/manifold-nodes-image", True, []),
@@ -38,8 +39,8 @@ def fixture_workspace(repo):
         targets = [{"name": name, "kind": ["lib"], "src_path": str(repo / root / "src/lib.rs"),
                     "required-features": []}]
         targets.extend({"name": target, "kind": ["test"],
-                        "src_path": str(repo / root / "tests" / ("gpu_proofs/main.rs" if target == "gpu_proofs" else f"{target}.rs")),
-                        "required-features": [] if name in ("manifold-ui-paint", "manifold-nodes") and target == "main" else ["gpu-proofs"]}
+                        "src_path": str(repo / root / "tests" / ("renderer_contracts/gpu_proofs/main.rs" if target == "renderer_gpu_proofs" else "gpu_proofs/main.rs" if target == "gpu_proofs" else f"{target}.rs")),
+                        "required-features": [] if (name in ("manifold-ui-paint", "manifold-nodes") and target == "main") or target == "renderer_contracts" else ["gpu-proofs"]}
                        for target in tests)
         packages.append({
             "id": f"path+file://{repo}/{root}#{name}@0.1.0",
@@ -56,6 +57,31 @@ def fixture_workspace(repo):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_moved_contract_harnesses_and_nested_proofs_keep_gpu_ownership(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            workspace = fixture_workspace(repo)
+            for package, target in g.GPU_CONTRACT_TARGETS.items():
+                harness = repo / f"crates/{package}/tests/{target}.rs"
+                proof = harness.parent / 'contracts/proof.rs'
+                proof.parent.mkdir(parents=True)
+                harness.write_text('mod contracts;\n')
+                (proof.parent / 'mod.rs').write_text('mod proof;\n')
+                proof.write_text('#[cfg(feature = "gpu-proofs")]\n#[test]\nfn value_proof() {}\n')
+                path = proof.relative_to(repo).as_posix()
+                selected = g.plan_for_paths([path], repo, workspace=workspace, cpu_plan=None)
+                self.assertTrue(selected.active)
+                self.assertFalse(selected.unmapped)
+                run = next(row for row in selected.runs() if (row['package'], row['target']) == (package, target))
+                self.assertIn('contracts::proof::', run['filters'])
+            nested = 'crates/manifold-app/tests/renderer_contracts/gpu_proofs/liquid_conformance.rs'
+            self.assertTrue(g.is_gpu_path(nested.replace('.rs', '.json'), workspace))
+            selected = g.plan_for_paths([nested], repo, workspace=workspace, cpu_plan=None)
+            self.assertTrue(selected.active)
+            self.assertFalse(selected.unmapped)
+            run = next(row for row in selected.runs() if (row['package'], row['target']) == ('manifold-app', 'renderer_gpu_proofs'))
+            self.assertIn('liquid_conformance::', run['filters'])
+
     def test_retired_crate_proof_requires_confirmed_git_deletion(self):
         path = "crates/retired-catalog/tests/gpu_proofs/proof.rs"
         with tempfile.TemporaryDirectory() as directory:
@@ -484,8 +510,8 @@ class ScopeTests(unittest.TestCase):
                               and target["name"] not in g.GLB_TESTS
                               and target["name"] != "glb_conformance"])
                        for package in p.workspace.feature_packages("gpu-proofs"))
-        # The ordinary UI and catalog harnesses also own device proofs.
-        self.assertEqual(len(runs), expected + 2)
+        # The ordinary UI, app and catalog harnesses also own device proofs.
+        self.assertEqual(len(runs), expected + 3)
         self.assertIn("manifold-ui-paint", {run["package"] for run in runs})
 
     def test_broad_set_is_bounded(self):
