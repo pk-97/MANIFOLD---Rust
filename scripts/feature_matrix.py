@@ -1,151 +1,56 @@
 #!/usr/bin/env python3
-"""Feature-matrix lint gate — kills the build-rot class (FOUNDATIONAL_GAPS A7).
-
-Non-default features rot because nothing builds them: the workspace clippy
-sweep lints only default-feature targets, so a feature-gated test or module
-can sit broken on main for weeks (BUG-029 profiling, BUG-033 ui-snapshot,
-BUG-hxka gpu-proofs). This script clippy-checks every non-default feature —
-build/lint only, never the GPU-run suites — and exits nonzero on any red.
-
-Runs in the nightly trunk-health sweep (scripts/trunk_health.py), not at
-landing (GIT_TREE_DISCIPLINE.md section 2 (Landing protocol), 2026-07-29).
-Adding a feature to any crate means adding a
-row to MATRIX below — the selftest cross-checks MATRIX against the workspace's
-Cargo.toml [features] sections, so a new feature that isn't listed (or
-exempted with a reason) fails here too.
-
-Usage: scripts/feature_matrix.py [--list | --check-coverage]
-"""
-
+"""Nightly compile/lint coverage for every non-default Cargo feature."""
 import argparse
-import re
-import subprocess
-import sys
-import time
+import os
 from pathlib import Path
+import subprocess
+import time
+
+from gate_workspace import Workspace
 
 REPO = Path(__file__).resolve().parent.parent
 
-# (package, feature) pairs to lint. One row per feature; combinations are
-# deliberately not exploded — the rot class is "nothing ever builds this",
-# not feature interaction.
-MATRIX = [
-    ("manifold-app", "profiling"),
-    ("manifold-app", "ui-snapshot"),
-    ("manifold-app", "ui-automation"),
-    ("manifold-app", "journey-proofs"),
-    ("manifold-app", "perf-soak"),
-    ("manifold-core", "bench-timing"),
-    ("manifold-editing", "gpu-proofs"),
-    ("manifold-gpu", "gpu-proofs"),
-    ("manifold-ui-paint", "gpu-proofs"),
-    ("manifold-gpu", "vulkan"),
-    ("manifold-recording", "recording-proofs"),
-    ("manifold-node-engine", "testkit"),
-    ("manifold-node-engine", "rt-perf-proofs"),
-    ("manifold-node-engine", "fluid-perf-proofs"),
-    ("manifold-node-engine", "matter-perf-proofs"),
-    ("manifold-node-engine", "water-race-probes"),
-    ("manifold-node-engine", "whitewater-oracle"),
-    ("manifold-renderer", "rt-perf-proofs"),
-    ("manifold-renderer", "fluid-perf-proofs"),
-    ("manifold-renderer", "matter-perf-proofs"),
-    ("manifold-renderer", "water-race-probes"),
-    ("manifold-renderer", "whitewater-oracle"),
-    ("manifold-spectral", "gpu-proofs"),
-]
-
-# Features that are deliberately not in MATRIX, with the reason. An
-# unexempted feature missing from MATRIX fails the coverage check.
-EXEMPT = {
-    ("manifold-gpu", "default"): "empty default set",
-    ("manifold-spectral", "default"): "empty default set",
-    ("manifold-spectral", "gpu"): "strict subset of its gpu-proofs row",
-    ("manifold-node-engine", "gpu-proofs"): "strict subset of its rt-perf-proofs row",
-    ("manifold-renderer", "gpu-proofs"): "strict subset of its rt-perf-proofs row",
-    ("manifold-fluids", "whitewater-oracle"): "strict subset of manifold-renderer's whitewater-oracle row",
-    ("manifold-fluids", "face-oracle"): "strict subset of manifold-renderer's water-race-probes row",
-}
-
-FEATURES_RE = re.compile(r"^\[features\]\s*$")
-SECTION_RE = re.compile(r"^\[")
-FEATURE_LINE_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*=")
-
 
 def workspace_features():
-    """Yield (package, feature) for every [features] entry in crates/*/Cargo.toml."""
-    for manifest in sorted(REPO.glob("crates/*/Cargo.toml")):
-        package = manifest.parent.name
-        in_features = False
-        for line in manifest.read_text().splitlines():
-            if FEATURES_RE.match(line):
-                in_features = True
-                continue
-            if in_features and SECTION_RE.match(line):
-                in_features = False
-            if in_features:
-                m = FEATURE_LINE_RE.match(line)
-                if m:
-                    yield package, m.group(1)
+    return Workspace(REPO).feature_matrix()
 
 
 def check_coverage():
-    """Every workspace feature is in MATRIX or EXEMPT; no stale rows."""
-    actual = set(workspace_features())
-    listed = set(MATRIX) | set(EXEMPT)
-    problems = []
-    for pair in sorted(actual - listed):
-        problems.append(f"{pair[0]} feature {pair[1]!r} is in Cargo.toml but not "
-                        "in MATRIX (add a row, or EXEMPT it with a reason)")
-    for pair in sorted(listed - actual):
-        problems.append(f"{pair[0]} feature {pair[1]!r} is listed here but not "
-                        "in any Cargo.toml (remove the stale row)")
-    return problems
+    Workspace(REPO)  # Failure is red; there is no partial matrix.
+    return []
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--list", action="store_true",
-                        help="print the matrix and exit")
-    parser.add_argument("--check-coverage", action="store_true",
-                        help="validate feature coverage without running builds")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--list', action='store_true')
+    parser.add_argument('--check-coverage', action='store_true')
     args = parser.parse_args()
-
+    try:
+        matrix = workspace_features()
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        print(f'[FAIL] feature metadata: {error}')
+        return 1
     if args.list:
-        for package, feature in MATRIX:
-            print(f"{package} --features {feature}")
+        for package, feature in matrix:
+            print(f'{package} --features {feature}')
         return 0
-
-    problems = check_coverage()
-    for p in problems:
-        print(f"[FAIL] coverage — {p}")
-    if problems:
-        return 1
     if args.check_coverage:
-        print(f"[PASS] feature coverage: {len(MATRIX)} build rows, {len(EXEMPT)} exemptions")
+        print(f'[PASS] feature coverage: {len(matrix)} metadata-derived build rows')
         return 0
-
     failed = []
-    for package, feature in MATRIX:
-        cmd = ["cargo", "clippy", "-p", package, "--features", feature,
-               "--tests", "--", "-D", "warnings"]
-        start = time.time()
-        r = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True)
-        duration = time.time() - start
-        status = "PASS" if r.returncode == 0 else "FAIL"
-        print(f"[{status}] {package} --features {feature} ({duration:.0f}s)")
-        if r.returncode != 0:
+    for package, feature in matrix:
+        command = ['cargo', 'clippy', '--manifest-path', str(REPO / 'Cargo.toml'),
+                   '-p', package, '--features', feature, '--tests', '--', '-D', 'warnings']
+        start = time.monotonic()
+        result = subprocess.run(command, cwd=REPO, capture_output=True, text=True,
+                                env=dict(os.environ, CARGO_BUILD_JOBS='4', CARGO_INCREMENTAL='0'))
+        status = 'PASS' if result.returncode == 0 else 'FAIL'
+        print(f'[{status}] {package} --features {feature} ({time.monotonic() - start:.0f}s)')
+        if result.returncode:
             failed.append((package, feature))
-            tail = (r.stdout + r.stderr).rstrip().splitlines()[-25:]
-            print("\n".join(f"    {line}" for line in tail))
-
-    if failed:
-        names = ", ".join(f"{p} +{f}" for p, f in failed)
-        print(f"feature matrix RED: {names}")
-        return 1
-    print(f"feature matrix green: {len(MATRIX)} rows")
-    return 0
+            print('\n'.join((result.stdout + result.stderr).splitlines()[-25:]))
+    return int(bool(failed))
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__ == '__main__':
+    raise SystemExit(main())

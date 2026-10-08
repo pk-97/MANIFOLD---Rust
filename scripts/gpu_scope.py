@@ -11,11 +11,10 @@ scripts/landing_gate.py and scripts/codex_checks.py. Rules:
 - A GPU path with no mapping is a hard failure naming the path; the author adds
   a rule here. There is no run-everything fallback. Everything runs only with
   `gpu_proofs_gate.py --all` (nightly trunk_health.py).
-- Scoped runs defer tests measured over SLOW_THRESHOLD_S, except exact-name
-  selections (including changed test bodies); there is no hand-kept list.
+- Measured duration never removes an owning proof from scoped runs.
 - glb_conformance (the ~16-minute glTF sample sweep) runs only when glTF import
   paths are touched, and is exempt from the time budget.
-- manifold-gpu core, shared WGSL and the proof harness map to BROAD, a bounded
+- GPU backend core, shared WGSL and the proof harness map to BROAD, a bounded
   set (named below), never to everything.
 
 Filters are libtest substring filters applied to the renderer lib binary
@@ -32,67 +31,16 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-RENDERER_SRC = "crates/manifold-renderer/src/"
-ENGINE_SRC = "crates/manifold-node-engine/src/"
-CONTRACT_TESTS_DIR = RENDERER_SRC + "engine_contract_tests/"
-UI_PAINT_DIR = "crates/manifold-ui-paint/"
-UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::"]
-PROOFS_DIR = "crates/manifold-renderer/tests/gpu_proofs/"
-CPU_FLIP_FIXTURES_DIR = "crates/manifold-renderer/tests/fixtures/cpu-flip/"
-CPU_FLIP_REFERENCE_FILTERS = [
-    "liquid_conformance::",
-    "water_basin::",
-    "fluid_surface_perf::",
-    "node_graph::primitives::whitewater_scene_tests::",
-    "node_graph::primitives::gpu_flip_render_smoke_tests::",
-    "water::primitives::gpu_flip_preset::",
-    "load::expand::acceleration::",
-    "water::runtime::physics_carry::",
-    "water::runtime::physics_sampling::",
-    "water::runtime::physics_impulses::tests::coupled_playback_tests::",
-]
-
-# Landing warning budget for the scoped (non-glb) GPU step, seconds of test time.
-LANDING_BUDGET_S = 360
-
-# Fixed end-to-end smoke: always runs when any GPU path is touched. Four proofs
-# that cover the effect chain + alpha contract, command-buffer replay, the
-# camera/scene render, and the G-buffer. Must stay under ~2 minutes in total;
-# the 25-slowest timing report is how that is re-checked.
-SMOKE_FILTERS = [
-    "alpha_contract::effects_preserve_transparency",
-    "encode_replay::encode_replay_parity",
-    "camera_conformance::render_scene_matches_project_to_pixel_oracle",
-    "gbuffer_depth::gbuffer_depth_conformance",
-]
-
-# Graph runtime + freeze compiler.
-RUNTIME_FILTERS = [
-    "freeze::",
-    "exec::execution",
-    "exec::resource_allocation",
-    "exec::metal_backend",
-    "bindings",
-    "load::graph_loader",
-    "runtime::",
-]
-
-# manifold-gpu core, shared WGSL, proof harness: runtime set + lighting proofs,
-# plus the generated water mesher, whose Metal compile is the shader compiler's
-# known hard case (constant struct arrays, BUG-jro0j).
-BROAD_FILTERS = RUNTIME_FILTERS + ["render_scene_lights", "volume_surface_mesh::gpu_tests::mesh_contact_"]
-
-# Tests measured slower than this are skipped by scoped runs (nightly --all runs
-# them). The measurements live in scripts/gpu_test_times.json, written by
-# `gpu_proofs_gate.py --all --record-times PATH` (nightly trunk_health does this
-# into /tmp). Successful gate-driven runs retain measurements in the Git common
-# directory, shared by slots. Missing tests run once to establish their cost.
-SLOW_THRESHOLD_S = 60
-TIMES_PATH = Path(__file__).resolve().parent / "gpu_test_times.json"
-# The glTF sweep has its own unbudgeted run (glb_conformance). Its measured time
-# only sizes the hang watchdog's allowance; it never makes the sweep "slow".
-GLB_TESTS = frozenset({"glb_conformance_sweep"})
-
+from gate_policy import (
+    RENDERER_SRC, ENGINE_SRC, CONTRACT_TESTS_DIR, UI_PAINT_DIR, UI_PAINT_FILTERS,
+    PROOFS_DIR, CPU_FLIP_FIXTURES_DIR, CPU_FLIP_REFERENCE_FILTERS, LANDING_BUDGET_S,
+    SMOKE_FILTERS, RUNTIME_FILTERS, BROAD_FILTERS, SLOW_THRESHOLD_S, TIMES_PATH,
+    GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
+    LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
+    BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
+    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS,
+)
+from gate_workspace import Workspace
 
 def learned_times_path():
     repo = TIMES_PATH.parent.parent
@@ -153,296 +101,22 @@ def slow_tests(times=None):
                   key=lambda t: -t[1])
 
 
-# A shader included by more primitives than this is "shared WGSL" -> BROAD.
-SHARED_WGSL_USERS = 12
-
-# Reporters print timings and assert nothing about behaviour, so they prove no
-# change; they run when their own file is touched (the skip drops out then, see
-# Plan.final_skips) and nightly under --all. Filters name the test fn.
-REPORTER_SKIPS = [
-    "matter_cost_probe",
-    "matter_solver_perf",
-    "gpu_flip_frame_perf",
-    "gpu_flip_cost_probe",
-    "gpu_flip_speed_measure",
-]
-
-# Liquid paths whose change is narrower than the whole solver: the tick clock,
-# the scene force fields and the domain nodes feed forces and pacing, not the
-# body, step or pressure kernels. They get the force/clock proofs only, never
-# the body engine side-by-side or the sparse-vs-dense solver proofs. Body, step
-# and pressure paths stay on the broad `gpu_flip_` row below.
-# Filters, not skips: a skip is global and would hide body proofs that another
-# touched path selected.
-# Real-clock proofs (liquid_coupled_live_frame_rate, ~4 minutes) are never
-# named here: a name selects a slow test past the measured-time deferral.
-# They run nightly and when their own body changes.
-LIQUID_FORCE_FILTERS = [
-    "liquid_conformance::liquid_coupled_world_steps",
-    "liquid_conformance::liquid_free_flight",
-    "liquid_conformance::liquid_pause_",
-    "liquid_conformance::liquid_export_",
-    "liquid_conformance::liquid_nonfinite",
-    "liquid_conformance::liquid_overflow",
-    "liquid_conformance::liquid_live_frames",
-    "liquid_conformance::liquid_half_speed",
-    "liquid_conformance::liquid_reset",
-    "gpu_flip_face_gravity",
-]
-LIQUID_DOMAIN_FILTERS = LIQUID_FORCE_FILTERS + [
-    "gpu_flip_domain_",
-    "gpu_flip_preset::",
-    "gpu_flip_resolution_card",
-    "gpu_flip_still_pool",
-    "gpu_flip_free_fall",
-]
-MATTER_DOMAIN_FILTERS = ["matter_scene::", "matter_coupling::", "matter_look::",
-                         "matter_transfer::", "substeps_"]
-
-# Narrow rows win over EXPLICIT_ROWS: a path matching any gets only the narrow
-# rows it matches.
-NARROW_ROWS = [
-    ((ENGINE_SRC + "water/primitives/gpu_flip_extension_tests.rs",),
-     (["gpu_flip_step_order_", "gpu_flip_extend_faces_"], [])),
-    ((ENGINE_SRC + "water/liquid/lattice.rs",
-      ENGINE_SRC + "water/primitives/liquid_frame.rs",
-      ENGINE_SRC + "water/primitives/liquid_solid_distance.rs",
-      ENGINE_SRC + "water/primitives/particle_volume.rs",
-      ENGINE_SRC + "water/primitives/shaders/particle_volume_body.wgsl",
-      ENGINE_SRC + "water/primitives/shaders/liquid_solid_distance_body.wgsl"),
-     (["fluid_mesh_grid_native_", "liquid_frame::gpu_tests::",
-       "gpu_flip_narrow_band_mesher_values",
-       "mesh_contact_oblique_wall_and_thin_plate_match_cpu_reference",
-       "fluid_clamp_scheduled_boundary_renders_like_unfrozen"], [])),
-    ((ENGINE_SRC + "water/primitives/particle_identity",
-      ENGINE_SRC + "water/primitives/particle_publication",
-      RENDERER_SRC + "node_graph/primitives/particle_frame_blend_tests",
-      RENDERER_SRC + "node_graph/primitives/interpolate_particle_frames",
-      ENGINE_SRC + "water/primitives/push_out_of_solid",
-      RENDERER_SRC + "node_graph/primitives/mix_arrays",
-      ENGINE_SRC + "water/primitives/liquid_frame",
-      ENGINE_SRC + "water/liquid/frame_ring",
-      ENGINE_SRC + "water/liquid/frame_history",
-      ENGINE_SRC + "water/primitives/shaders/particle_identity",
-      ENGINE_SRC + "water/primitives/shaders/particle_publication",
-      RENDERER_SRC + "node_graph/primitives/shaders/interpolate_particle_frames",
-      ENGINE_SRC + "water/primitives/shaders/push_out_of_solid",
-      RENDERER_SRC + "node_graph/primitives/shaders/mix_arrays",
-      ENGINE_SRC + "water/primitives/shaders/liquid_frame_faces.wgsl"),
-     (["particle_publication_gpu_tests::", "particle_frame_blend_tests::gpu_tests::",
-       "interpolate_particle_frames::gpu_tests::", "push_out_of_solid::gpu_tests::",
-       "mix_arrays::gpu_tests::", "gpu_flip_inflow_emits_at_empty_sites_into_free_slots",
-       "gpu_flip_narrow_band_publication_repeats_failed_ticks",
-       "liquid_frame::gpu_tests::"], [])),
-    # The sheeting stage; its step wiring is proven by gpu_flip_step's own filters.
-    ((ENGINE_SRC + "water/primitives/gpu_flip_sheeting",
-      ENGINE_SRC + "water/primitives/shaders/gpu_flip_sheeting.wgsl"),
-     (["gpu_flip_sheeting_tests::"], [])),
-    ((ENGINE_SRC + "water/primitives/gpu_flip_clock.rs",
-      ENGINE_SRC + "water/primitives/shaders/gpu_flip_clock.wgsl"),
-     (["gpu_flip_clock::gpu_tests::"], [])),
-    ((ENGINE_SRC + "water/primitives/emission_count.rs",
-      ENGINE_SRC + "water/primitives/spawn_whitewater.rs",
-      ENGINE_SRC + "water/primitives/shaders/emission_count_body.wgsl",
-      ENGINE_SRC + "water/primitives/shaders/spawn_whitewater_body.wgsl"),
-     (["whitewater_particle_tests::"], [])),
-    ((ENGINE_SRC + "water/primitives/gpu_flip_narrow_band_tests.rs",
-      ENGINE_SRC + "water/primitives/gpu_flip_narrow_band.rs",
-      ENGINE_SRC + "water/primitives/shaders/gpu_flip_narrow_band.wgsl"),
-     (["narrow_band", "face_grid_demo_gpu_flip_and_matter_side_by_side"], [])),
-    ((ENGINE_SRC + "water/liquid/clock.rs",
-      ENGINE_SRC + "water/liquid/fields.rs",
-      ENGINE_SRC + "water/liquid/fields/"),
-     (LIQUID_FORCE_FILTERS, REPORTER_SKIPS)),
-    ((ENGINE_SRC + "water/primitives/gpu_flip_domain.rs",),
-     (LIQUID_DOMAIN_FILTERS + ["fluid_mesh_grid_native_"], REPORTER_SKIPS)),
-    ((ENGINE_SRC + "water/primitives/matter_domain.rs",),
-     (MATTER_DOMAIN_FILTERS, REPORTER_SKIPS)),
-]
-
-# Explicit rows: (path substrings, (filters, skips)). `rt_` skips particletext:
-# the freeze proof `particletext_*` hangs the GPU on main (BUG-i6eo).
-EXPLICIT_ROWS = [
-    # Blob bounds controls the sparse reach and dense particle field together.
-    ((RENDERER_SRC + "node_graph/primitives/blob_bounds.rs",
-      RENDERER_SRC + "node_graph/primitives/shaders/blob_bounds.wgsl"),
-     (["node_graph::primitives::blob_bounds::",
-       "liquid_surface_tests::", "liquid_bricks::tests::gpu_tests::"], [])),
-    ((ENGINE_SRC + "water/primitives/offset_lattice",
-      ENGINE_SRC + "water/primitives/redistance_lattice",
-      ENGINE_SRC + "water/primitives/lattice_closing",
-      ENGINE_SRC + "water/primitives/shaders/offset_lattice",
-      ENGINE_SRC + "water/primitives/shaders/redistance_lattice"),
-     (["fluid_fill_pits"], [])),
-    (("crates/manifold-gpu/src/metal/raytrace.rs",
-      RENDERER_SRC + "node_graph/primitives/render_scene.rs",
-      RENDERER_SRC + "node_graph/primitives/shaders/render_scene.wgsl",
-      PROOFS_DIR + "rt_"),
-     (["rt_"], ["particletext"])),
-    ((ENGINE_SRC + "freeze/",), (["freeze::"], [])),
-    # Live Matter (GPU_MPM_SOLVER_DESIGN.md) and the substep regions it runs in.
-    ((ENGINE_SRC + "water/matter.rs",
-      ENGINE_SRC + "water/matter/",
-      ENGINE_SRC + "exec/substeps.rs",
-      ENGINE_SRC + "exec/execution/substep_region.rs",
-      ENGINE_SRC + "water/primitives/matter_",
-      RENDERER_SRC + "node_graph/primitives/grid_to_matter",
-      RENDERER_SRC + "node_graph/primitives/zero_array",
-      ENGINE_SRC + "water/primitives/shaders/matter_",
-      ENGINE_SRC + "water/primitives/shaders/grid_to_matter",
-      RENDERER_SRC + "node_graph/primitives/shaders/zero_array",
-      PROOFS_DIR + "matter_",
-      PROOFS_DIR + "substeps"),
-     (["matter_", "substeps_"], REPORTER_SKIPS)),
-    # GPU FLIP water (GPU_FLIP_PRESSURE_SOLVE.md): the step's proofs are scene
-    # proofs in other files (still pool, free fall, whitewater, resize), so a
-    # module filter alone would miss them.
-    ((ENGINE_SRC + "water/liquid/",
-      ENGINE_SRC + "water/primitives/gpu_flip_",
-      ENGINE_SRC + "water/primitives/liquid_state",
-      ENGINE_SRC + "water/primitives/liquid_fill",
-      ENGINE_SRC + "water/primitives/face_sample_component",
-      ENGINE_SRC + "water/primitives/shaders/gpu_flip_",
-      ENGINE_SRC + "water/primitives/shaders/liquid_fill",
-      ENGINE_SRC + "water/primitives/shaders/face_sample_component"),
-     (["gpu_flip_", "face_grid_tests::"], REPORTER_SKIPS)),
-    # The GPU FLIP step runs its sort, scans and coarse inverse gated on the
-    # clock's slot plan; only the inactive-slot proof runs them gated.
-    ((ENGINE_SRC + "water/primitives/sort_particles_into_cells",
-      ENGINE_SRC + "water/primitives/prefix_scan",
-      ENGINE_SRC + "water/primitives/shaders/sort_particles_into_cells",
-      ENGINE_SRC + "water/primitives/shaders/prefix_scan",
-      ENGINE_SRC + "water/primitives/shaders/coarse_inverse"),
-     (["gpu_flip_inactive_slots_match_the_ungated_step"], [])),
-    # The counting sort word for word against its CPU oracle, and the proofs
-    # that drive the sorter directly: the node, and the step's crowding cap.
-    ((ENGINE_SRC + "water/primitives/sort_particles_into_cells",
-      ENGINE_SRC + "water/primitives/prefix_scan",
-      ENGINE_SRC + "water/primitives/shaders/sort_particles_into_cells",
-      ENGINE_SRC + "water/primitives/shaders/prefix_scan"),
-     (["sort_particles_into_cells::gpu_tests::", "fluid_sort_particles_into_cells_",
-       "gpu_flip_step_order_cell_cap_compacts_preserving_ids"], [])),
-    # Shared marching-cubes topology: ownership, solid-contact CPU value parity
-    # (volume_surface_mesh::gpu_tests::mesh_contact_*), and raster parity.
-    ((ENGINE_SRC + "water/primitives/count_surface_edges",
-      ENGINE_SRC + "water/primitives/volume_surface_mesh",
-      ENGINE_SRC + "water/primitives/relax_surface_mesh",
-      RENDERER_SRC + "node_graph/primitives/smooth_surface_mesh",
-      RENDERER_SRC + "node_graph/primitives/surface_mesh_normals",
-      ENGINE_SRC + "water/primitives/surface_mesh_parity",
-      RENDERER_SRC + "node_graph/primitives/surface_mesh_freeze_tests",
-      ENGINE_SRC + "water/primitives/shaders/count_surface_edges",
-      ENGINE_SRC + "water/primitives/shaders/surface_edge_",
-      ENGINE_SRC + "water/primitives/shaders/volume_surface_mesh",
-      ENGINE_SRC + "water/primitives/shaders/relax_surface_mesh",
-      ENGINE_SRC + "water/primitives/shaders/surface_mesh_",
-      RENDERER_SRC + "node_graph/primitives/shaders/surface_mesh_",
-      PROOFS_DIR + "liquid_indexed.rs"),
-     (["count_surface_edges::gpu_tests::", "volume_surface_mesh::gpu_tests::", "surface_mesh_normals::gpu_tests::", "surface_mesh_freeze_tests::gpu_tests::", "fluid_indexed_", "liquid_indexed::"], [])),
-    # Graph runtime.
-    ((ENGINE_SRC + "exec/execution",
-      ENGINE_SRC + "exec/resource_allocation",
-      ENGINE_SRC + "exec/metal_backend",
-      ENGINE_SRC + "exec/backend.rs",
-      ENGINE_SRC + "exec/bound_graph.rs",
-      ENGINE_SRC + "graph.rs",
-      ENGINE_SRC + "load/graph_loader.rs",
-      ENGINE_SRC + "bindings",
-      ENGINE_SRC + "exec/effect_node.rs",
-      ENGINE_SRC + "primitive.rs",
-      ENGINE_SRC + "gpu/gpu_encoder.rs"),
-     (RUNTIME_FILTERS, [])),
-]
-
-# Paths whose change affects every proof: BROAD.
-BROAD_PATHS = (
-    ENGINE_SRC + "lib.rs",
-    ENGINE_SRC + "primitives/mod.rs",
-    ENGINE_SRC + "water/primitives/mod.rs",
-    RENDERER_SRC + "node_graph/primitives/mod.rs",
-    RENDERER_SRC + "node_graph/mod.rs",
-    RENDERER_SRC + "lib.rs",
-    PROOFS_DIR + "harness.rs",
-    PROOFS_DIR + "main.rs",
-)
-
-GLTF_PATHS = (
-    "crates/manifold-renderer/tests/glb_conformance.rs",
-    "tests/fixtures/gltf/",
-    RENDERER_SRC + "node_graph/gltf_",
-    RENDERER_SRC + "node_graph/primitives/gltf_",
-)
-
-DOC_SUFFIXES = (".md", ".txt")
-
-# Renderer files outside node_graph/ whose lib tests include GPU proofs.
-# preset_runtime/ drives every graph; layer_skin.rs's end-to-end proofs live
-# in preset_runtime's tests, so its row names both modules.
-PRESET_RUNTIME_DIR = ENGINE_SRC + "runtime/"
-LIB_PROOF_ROWS = {
-    ENGINE_SRC + "runtime/layer_skin.rs": ["runtime::layer_skin::", "runtime::layer_skin_tests::"],
-    # The whitewater step's proofs (across frames, the pool passes, the
-    # handoff, the golden fingerprints that prove its output unchanged) live
-    # in sibling `_tests` modules the path filter alone misses.
-    ENGINE_SRC + "water/primitives/whitewater_step.rs": [
-        "water::primitives::whitewater_step::",
-        "water::primitives::whitewater_step_tests::",
-        "water::primitives::whitewater_pool_tests::",
-        "water::primitives::whitewater_handoff_tests::",
-        "water::primitives::whitewater_engine_gpu_tests::",
-        "water::primitives::whitewater_golden_tests::",
-    ],
-}
-
-# The solver adapter publishes the accepted schedule and MAC history.
-# The broad gpu_flip_ row above still supplies its existing solver proofs.
-LIB_PROOF_ROWS[ENGINE_SRC + "water/primitives/gpu_flip_step.rs"] = [
-    "water::primitives::gpu_flip_step::",
-    "water::primitives::whitewater_engine_gpu_tests::",
-]
-
-# BUG-imy3.1: per-element emitters share CPU-reference and fused value proofs.
-for _whitewater_atom in (
-    "turbulence_field", "inside_turbulence_potential", "turbulence_emission_count",
-    "whitewater_emitter_velocity", "whitewater_obstacle_source", "whitewater_influence",
-    "dust_potential", "whitewater_emitter_dispatch", "whitewater_emitter_cpu",
-    "whitewater_emitter_gpu_tests",
-):
-    LIB_PROOF_ROWS[ENGINE_SRC + f"water/primitives/{_whitewater_atom}.rs"] = [
-        "water::primitives::whitewater_emitter_gpu_tests::",
-        "water::primitives::whitewater_step_tests::",
-    ]
-del _whitewater_atom
-
-# BUG-g75v.7: engine distance, accepted MAC history, force and drain proofs.
-for _engine_path in (
-    "primitives/upwind_distance.rs", "primitives/whitewater_distance.rs",
-    "primitives/whitewater_engine_cpu.rs", "primitives/whitewater_engine_gpu_tests.rs",
-    "primitives/advect_whitewater.rs", "primitives/keep_whitewater.rs",
-    "liquid/substep_history.rs",
-):
-    LIB_PROOF_ROWS[ENGINE_SRC + "water/" + _engine_path] = [
-        "water::primitives::whitewater_engine_gpu_tests::",
-        "water::primitives::whitewater_pool_tests::",
-        "water::primitives::whitewater_step_tests::",
-    ]
-del _engine_path
-
-LIB_PROOF_ROWS[RENDERER_SRC + "reference_fixtures.rs"] = CPU_FLIP_REFERENCE_FILTERS
-for _pressure_fixture in ("dambreak_pressure_problems.bin.zst", "deep_pool_pressure_problems.bin.zst",
-                          "deep_pool_density_problems.bin.zst", "gpu_flip_pressure_golden.txt"):
-    LIB_PROOF_ROWS["crates/manifold-node-engine/tests/fixtures/" + _pressure_fixture] = [
-        "water::primitives::gpu_flip_pressure_tests::",
-    ]
-
 PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
+_CPU_PLAN_UNSET = object()
 
 
-def is_gpu_path(path):
+def is_gpu_path(path, workspace=None):
     """Paths that trigger the GPU-proofs leg (mirrors the context-nudge triggers)."""
+    if workspace:
+        owner = workspace.owner(path)
+        if (owner and 'gpu-proofs' in workspace.packages[owner]['features']
+                and ((path.startswith(workspace.roots[owner] + '/src/')
+                      and path.endswith(('.rs', '.wgsl')))
+                     or path == workspace.roots[owner] + '/Cargo.toml')):
+            return True
     if path.endswith(".wgsl"):
         return True
-    if path.startswith(("crates/manifold-gpu/", UI_PAINT_DIR, ENGINE_SRC, CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
+    if path.startswith((GPU_BACKEND_ROOT, UI_PAINT_DIR, ENGINE_SRC, CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
         return True
     if "shaders/" in path or "gpu::gpu_encoder" in path:
         return True
@@ -465,6 +139,9 @@ class Plan:
     broad: list = field(default_factory=list)        # (path, reason) that mapped to BROAD
     unmapped: list = field(default_factory=list)     # (path, why)
     notes: list = field(default_factory=list)
+    workspace: object = None
+    required_binaries: set = field(default_factory=set)
+    whole_packages: set = field(default_factory=set)
 
     @property
     def active(self):
@@ -474,31 +151,39 @@ class Plan:
         return sorted(set(SMOKE_FILTERS) | self.filters)
 
     def final_skips(self):
-        # Exact test selections beat reporter and measured-time skips.
-        skips = {s for s in self.skips if not any(s in f for f in self.filters)}
-        return sorted(skips | {n for n, _ in slow_tests() if n not in self.final_filters()})
+        # Timing never removes an owning proof. Exact selections also override
+        # the explicit reporter-only exclusions in the semantic policy.
+        return sorted(s for s in self.skips if not any(s in f for f in self.filters))
 
     def deferred(self):
-        filters = self.final_filters()
-        return [(n, s) for n, s in slow_tests()
-                if n not in filters and any(f in n for f in filters)]
+        return []
 
     def runs(self):
-        """[{targets, lib, filters, skips, budgeted}] cargo invocations to make."""
         if not self.active:
             return []
-        runs = [{"targets": ["gpu_proofs"], "lib": True, "filters": self.final_filters(),
-                 "skips": self.final_skips(), "budgeted": True}]
-        runs.append({"package": "manifold-node-engine", "targets": [], "lib": True,
-                     "filters": self.final_filters(), "skips": self.final_skips(),
-                     "budgeted": True})
-        if self.ui_paint:
-            runs.append({"package": "manifold-ui-paint", "targets": [], "lib": True,
-                         "filters": UI_PAINT_FILTERS, "skips": self.final_skips(),
-                         "budgeted": True})
+        if self.workspace is None:
+            raise ValueError('GPU plan has no Cargo ownership inventory')
+        runs = []
+        for package in self.workspace.feature_packages('gpu-proofs'):
+            filters = (UI_PAINT_FILTERS if self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
+                       else self.final_filters())
+            targets = [t['name'] for t in self.workspace.targets(package, 'test')
+                       if 'gpu-proofs' in t.get('required-features', [])
+                       and t['name'] not in GLB_TESTS and t['name'] != 'glb_conformance']
+            has_lib = bool(self.workspace.targets(package, 'lib'))
+            if has_lib:
+                runs.append({'package': package, 'targets': [], 'lib': True, 'target': 'lib',
+                             'filters': [] if package in self.whole_packages else filters,
+                             'skips': self.final_skips(), 'budgeted': True})
+            for target in targets:
+                runs.append({'package': package, 'targets': [target], 'lib': False, 'target': target,
+                             'filters': [] if package in self.whole_packages or (package, target) in self.required_binaries else self.final_filters(),
+                             'skips': [] if package in self.whole_packages or (package, target) in self.required_binaries else self.final_skips(),
+                             'budgeted': True})
         if self.glb:
-            runs.append({"targets": ["glb_conformance"], "lib": False, "filters": [],
-                         "skips": [], "budgeted": False})
+            runs.append({'package': self.workspace.binary_owner('glb_conformance'),
+                         'targets': ['glb_conformance'], 'lib': False, 'target': 'glb_conformance',
+                         'filters': [], 'skips': [], 'budgeted': False})
         return runs
 
     def describe(self):
@@ -512,7 +197,7 @@ class Plan:
             lines.append("GPU-PROOFS DEFERRED: " + ", ".join(
                 f"{name} ({secs:.0f}s)" for name, secs in self.deferred()))
         if self.ui_paint:
-            lines.append("  manifold-ui-paint --lib: " + ", ".join(UI_PAINT_FILTERS))
+            lines.append("  UI paint proofs: " + ", ".join(UI_PAINT_FILTERS))
         if self.broad:
             lines.append("  broad set (runtime + lighting) because: " +
                          "; ".join(f"{p} ({why})" for p, why in self.broad))
@@ -622,7 +307,34 @@ def default_shader_users(repo, wgsl_path, depth=3):
     return sorted(found)
 
 
-def changed_test_filters(path, repo, base):
+def shader_index(repo, workspace):
+    """Read each source once for a planning run, including transitive WGSL users."""
+    users = {}
+    sources = (source for root in workspace.roots.values()
+               for source in (Path(repo) / root).rglob('*'))
+    for source in sources:
+        if source.suffix not in {'.rs', '.wgsl'} or not source.is_file():
+            continue
+        relative = source.relative_to(repo).as_posix()
+        for name in set(re.findall(r'[\w.-]+\.wgsl', source.read_text())):
+            users.setdefault(name, set()).add(relative)
+
+    def resolve(path):
+        found, frontier, seen = set(), {path}, {path}
+        while frontier:
+            following = set()
+            for current in frontier:
+                for user in users.get(Path(current).name, ()):
+                    if user in seen:
+                        continue
+                    seen.add(user)
+                    (following if user.endswith('.wgsl') else found).add(user)
+            frontier = following
+        return sorted(found)
+    return resolve
+
+
+def changed_test_filters(path, repo, base, patch=None):
     """Promote changed test bodies; shared-helper edits retain module scope."""
     # Only renderer lib and proof paths have a derivable test-name prefix.
     if not path.startswith((RENDERER_SRC, ENGINE_SRC, PROOFS_DIR)):
@@ -633,18 +345,20 @@ def changed_test_filters(path, repo, base):
     text = source.read_text()
     if "#[test]" not in text:
         return set()
-    diff = subprocess.run(["git", "-C", str(repo), "diff", "--no-ext-diff",
+    diff = None if patch is not None else subprocess.run(["git", "-C", str(repo), "diff", "--no-ext-diff",
                            "--no-textconv", "-U0", "--merge-base", base, "--", path],
                           capture_output=True, text=True)
-    if diff.returncode:
+    if diff is not None and diff.returncode:
         raise RuntimeError(f"cannot scope changed test bodies: {diff.stderr.strip()}")
+    patch = diff.stdout if diff is not None else patch
     hunks = [(int(m[1]), max(1, int(m[2] or 1))) for m in re.finditer(
-        r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", diff.stdout, re.M)]
+        r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", patch, re.M)]
     if path.startswith(PROOFS_DIR):
         parts = list(Path(path[len(PROOFS_DIR):]).with_suffix("").parts)
         prefix = "::".join(parts[:-1] if parts[-1] == "mod" else parts) + "::"
     else:
-        prefix = (path_attr_filters(path, repo) or module_filters(path))[0]
+        prefixes = path_attr_filters(path, repo) or module_filters(path)
+        prefix = prefixes[0] if prefixes else ''
     selected = set()
     for match in re.finditer(r"#\[test\]\s*(?:#\[[^\n]+\]\s*)*"
                              r"fn (?P<name>\w+)\([^)]*\)[^{;]*\{", text):
@@ -665,14 +379,35 @@ def changed_test_filters(path, repo, base):
     return selected
 
 
-def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
+def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace=None,
+                   cpu_plan=_CPU_PLAN_UNSET):
     """Map touched `paths` to a Plan. Never returns an implicit 'everything'."""
-    shader_users = shader_users or (lambda p: default_shader_users(repo, p))
-    plan = Plan()
+    workspace = workspace or Workspace(repo)
+    if shader_users is None:
+        shader_users = shader_index(repo, workspace) if any(p.endswith('.wgsl') for p in paths) else lambda p: []
+    plan = Plan(workspace=workspace)
+    test_paths = [p for p in paths if p.endswith('.rs') and (Path(repo) / p).is_file()
+                  and '#[test]' in (Path(repo) / p).read_text()
+                  and p.startswith((RENDERER_SRC, ENGINE_SRC, PROOFS_DIR))]
+    patches = {}
+    if test_paths:
+        diff = subprocess.run(['git', '-C', str(repo), 'diff', '--no-ext-diff',
+                               '--no-textconv', '--no-renames', '-U0', '--merge-base', base,
+                               '--', *test_paths], capture_output=True, text=True)
+        if diff.returncode:
+            raise RuntimeError(f'cannot scope changed test bodies: {diff.stderr.strip()}')
+        for section in re.split(r'^diff --git ', diff.stdout, flags=re.M)[1:]:
+            path = re.search(r'^\+\+\+ b/(.+)$', section, re.M)
+            if path:
+                patches[path[1]] = section
     for path in sorted(set(paths)):
-        if not is_gpu_path(path):
+        if not is_gpu_path(path, workspace):
             continue
         plan.paths.append(path)
+        owner = workspace.owner(path)
+        if owner and path == workspace.roots[owner] + '/Cargo.toml':
+            plan.whole_packages.add(owner)
+            continue
         if path.startswith(UI_PAINT_DIR):
             plan.ui_paint = True
             continue
@@ -682,7 +417,7 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
                 plan.unmapped.append((path, "contract test has no resolvable Rust module mount"))
                 continue
             plan.filters.update(mounted)
-        plan.filters.update(changed_test_filters(path, repo, base))
+        plan.filters.update(changed_test_filters(path, repo, base, patches.get(path, '')))
         if is_gltf_path(path):
             plan.glb = True
         # A path that several features own maps to every one of their rows.
@@ -696,12 +431,13 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
             plan.filters.update(BROAD_FILTERS)
             plan.broad.append((path, "affects every proof"))
             continue
-        if path.startswith("crates/manifold-gpu/"):
+        if path.startswith(GPU_BACKEND_ROOT):
+            plan.whole_packages.add(owner)
             plan.ui_paint = True
             if path.endswith("raytrace.rs") or "/vulkan/" in path:
                 continue  # rt row above / Vulkan not built here: smoke only
             plan.filters.update(BROAD_FILTERS)
-            plan.broad.append((path, "manifold-gpu core"))
+            plan.broad.append((path, "GPU backend core"))
             continue
         if path in LIB_PROOF_ROWS:
             plan.filters.update(LIB_PROOF_ROWS[path])
@@ -723,20 +459,33 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
             continue
         if is_gltf_path(path):
             continue
-        if not path.startswith(("crates/manifold-renderer/", "crates/manifold-node-engine/", "crates/manifold-gpu/")):
-            plan.notes.append(f"{path}: outside renderer/gpu crates, smoke only")
-            continue
+        owner = workspace.owner(path)
+        if owner and path.endswith('.rs'):
+            root = workspace.roots[owner] + '/src/'
+            if path.startswith(root):
+                plan.whole_packages.add(owner)
+                continue
         plan.unmapped.append((path, "no GPU test mapping rule for this file type"))
+    # Feature-gated integration targets selected by CPU ownership belong here.
+    if cpu_plan is _CPU_PLAN_UNSET:
+        import cpu_scope
+        # GPU callers that do not share readiness planning are commonly using
+        # synthetic repositories without origin/main; preserve the historical
+        # no-base CPU scope in that mode.
+        cpu_plan = cpu_scope.plan_for_paths(paths, repo, workspace)
+    if cpu_plan is not None:
+        plan.required_binaries.update(cpu_plan.gpu_binaries)
     return plan
 
 
 def _map_wgsl(plan, path, repo, shader_users):
     if not (Path(repo) / path).exists():
-        plan.notes.append(f"{path}: deleted shader, smoke only")
-        return
-    if path.startswith(("crates/manifold-led/", "crates/manifold-recording/",
-                        "crates/manifold-spectral/")):
-        plan.notes.append(f"{path}: other crate's shader, smoke only")
+        owner = plan.workspace.owner(path)
+        if owner in plan.workspace.feature_packages('gpu-proofs'):
+            plan.whole_packages.add(owner)
+            plan.notes.append(f'{path}: deleted shader; every owning package proof is required')
+        else:
+            plan.unmapped.append((path, 'deleted shader has no proof package owner'))
         return
     if path.startswith(ENGINE_SRC + "freeze/shaders/"):
         plan.filters.add("freeze::")
@@ -753,7 +502,11 @@ def _map_wgsl(plan, path, repo, shader_users):
         if user.startswith((RENDERER_SRC, ENGINE_SRC)):
             plan.filters.update(LIB_PROOF_ROWS.get(user, module_filters(user)))
         else:
-            plan.notes.append(f"{path}: user {user} outside renderer")
+            owner = plan.workspace.owner(user)
+            if owner in plan.workspace.feature_packages('gpu-proofs'):
+                plan.whole_packages.add(owner)
+            else:
+                plan.unmapped.append((path, f'shader user {user} has no proof package owner'))
 
 
 def unmapped_message(plan):

@@ -29,7 +29,9 @@ taken.
 
 Importable: `with gpu_queue.hold("label"): ...` for scripts that take the lock
 for a whole multi-process run. Waiting is poll-based, not first-come
-first-served.
+first-served. A landing announces itself with `landing_pending()` before it
+builds; nightly callers use `hold(..., priority="nightly")` and yield to that
+announcement between independent GPU runs.
 
 Obsolete when: the Vulkan backend ships its own device-level scheduler, or
 GPU runs move off this machine.
@@ -46,9 +48,14 @@ import sys
 import time
 from pathlib import Path
 
+from gate_policy import SLOW_THRESHOLD_S
+
 POLL_SECONDS = 0.25
 REPORT_SECONDS = 30.0
 HOLDER_ENV = "MANIFOLD_GPU_LOCK_HOLDER"
+LANDING_PENDING_DIR = "landing.pending"
+NIGHTLY_WAITING = "nightly.waiting"
+ADMISSION_LOCK = "gpu.admission"
 
 # Same-process nesting: `hold()` inside `hold()` must not block on itself.
 _held_depth = 0
@@ -57,6 +64,240 @@ _held_depth = 0
 def queue_dir():
     override = os.environ.get("MANIFOLD_GPU_QUEUE_DIR")
     return Path(override) if override else Path.home() / ".cache" / "manifold"
+
+
+def _landing_pending_dir(directory):
+    return Path(directory) / LANDING_PENDING_DIR
+
+
+def _read_pending(path):
+    info = {}
+    try:
+        text = path.read_text()
+    except OSError:
+        return info
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            info[key] = value
+    return info
+
+
+def process_start_identity(pid=None):
+    """Return a stable process-start token, or ``None`` when it is unknown.
+
+    A PID alone is unsafe for landing announcements: the kernel can recycle it
+    after a landing dies.  Linux exposes a monotonic start tick in procfs;
+    macOS exposes the start timestamp through libproc.  Keep this helper small
+    and patchable so queue tests can exercise PID reuse deterministically.
+    """
+    pid = os.getpid() if pid is None else int(pid)
+    try:
+        stat = Path(f"/proc/{pid}/stat")
+        if stat.exists():
+            fields = stat.read_text().rsplit(") ", 1)[-1].split()
+            if len(fields) > 19:
+                return f"proc:{fields[19]}"
+    except (OSError, ValueError):
+        pass
+    if sys.platform == "darwin":
+        try:
+            import ctypes
+
+            class ProcBsdInfo(ctypes.Structure):
+                _fields_ = [
+                    ("flags", ctypes.c_uint32), ("status", ctypes.c_uint32),
+                    ("xstatus", ctypes.c_uint32), ("pid", ctypes.c_uint32),
+                    ("ppid", ctypes.c_uint32), ("uid", ctypes.c_uint32),
+                    ("gid", ctypes.c_uint32), ("ruid", ctypes.c_uint32),
+                    ("rgid", ctypes.c_uint32), ("svuid", ctypes.c_uint32),
+                    ("svgid", ctypes.c_uint32), ("reserved", ctypes.c_uint32),
+                    ("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32),
+                    ("nfiles", ctypes.c_uint32), ("pgid", ctypes.c_uint32),
+                    ("pjobc", ctypes.c_uint32), ("tdev", ctypes.c_uint32),
+                    ("tpgid", ctypes.c_uint32), ("nice", ctypes.c_int32),
+                    ("start_sec", ctypes.c_uint64), ("start_usec", ctypes.c_uint64),
+                ]
+
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+            proc_pidinfo = libproc.proc_pidinfo
+            proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                     ctypes.c_void_p, ctypes.c_int]
+            proc_pidinfo.restype = ctypes.c_int
+            info = ProcBsdInfo()
+            if proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)) == ctypes.sizeof(info):
+                return f"proc:{info.start_sec}.{info.start_usec}"
+        except (OSError, AttributeError, TypeError):
+            pass
+    try:
+        result = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
+                                capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = result.stdout.strip()
+    return f"ps:{value}" if result.returncode == 0 and value else None
+
+
+def _identity_live(info):
+    """Whether a pending record still names the same process incarnation."""
+    pid = info.get("pid", "")
+    expected = info.get("start", "")
+    if not pid.isdigit() or int(pid) <= 1 or not expected:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except PermissionError:
+        pass  # A live process outside our signal permission still owns its record.
+    except OSError:
+        return False
+    return process_start_identity(int(pid)) == expected
+
+
+def pending_landings(directory=None):
+    """Return live landing announcements, removing dead or malformed records."""
+    directory = Path(directory) if directory else queue_dir()
+    pending_dir = _landing_pending_dir(directory)
+    try:
+        paths = list(pending_dir.iterdir())
+    except OSError:
+        return []
+    live = []
+    for path in paths:
+        if path.suffix != '.pending' or not path.is_file():
+            continue
+        info = _read_pending(path)
+        if _identity_live(info):
+            info["path"] = str(path)
+            live.append(info)
+        else:
+            with contextlib.suppress(OSError):
+                path.unlink()
+    return live
+
+
+def _pending_description(info):
+    label = info.get("label", "landing")
+    return f"pid {info.get('pid', '?')} `{label}`"
+
+
+@contextlib.contextmanager
+def landing_pending(directory=None, label="landing"):
+    """Announce a live landing so nightly GPU work yields before its next leg."""
+    directory = Path(directory) if directory else queue_dir()
+    pending_dir = _landing_pending_dir(directory)
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    nonce = secrets.token_hex(16)
+    start = process_start_identity()
+    if not start:
+        raise RuntimeError("cannot identify landing process start")
+    path = pending_dir / f"{os.getpid()}.{nonce}.pending"
+    body = (f"pid={os.getpid()}\nstart={start}\nnonce={nonce}\nsince={time.time():.3f}\n"
+            f"label={' '.join(str(label).split())[:300]}\n")
+    tmp = pending_dir / f".{path.name}.tmp"
+    tmp.write_text(body)
+    os.replace(tmp, path)
+    try:
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            path.unlink()
+
+
+def _nightly_waiting_path(directory):
+    return Path(directory) / NIGHTLY_WAITING
+
+
+def _nightly_waiting(directory):
+    """Read the fair-queue turn marker, removing a dead owner."""
+    path = _nightly_waiting_path(directory)
+    info = _read_pending(path)
+    if not info:
+        return {}
+    if not _identity_live(info):
+        with contextlib.suppress(OSError):
+            path.unlink()
+        return {}
+    info["path"] = str(path)
+    return info
+
+
+def _batch_paths(info):
+    return {path for path in info.get("batch", "").split("|") if path}
+
+
+def _write_nightly_waiting(directory, batch):
+    start = process_start_identity()
+    if not start:
+        raise RuntimeError("cannot identify nightly process start")
+    path = _nightly_waiting_path(directory)
+    body = (f"pid={os.getpid()}\nstart={start}\nsince={time.time():.3f}\n"
+            f"batch={'|'.join(sorted(batch))}\n")
+    tmp = directory / f".{path.name}.tmp.{os.getpid()}"
+    tmp.write_text(body)
+    os.replace(tmp, path)
+    return path
+
+
+def _remove_own_nightly_waiting(directory):
+    with _admission_guard(directory):
+        _remove_own_nightly_waiting_locked(directory)
+
+
+def _remove_own_nightly_waiting_locked(directory):
+    path = _nightly_waiting_path(directory)
+    info = _read_pending(path)
+    if _is_own_turn(info):
+        with contextlib.suppress(OSError):
+            path.unlink()
+
+
+@contextlib.contextmanager
+def _admission_guard(directory):
+    """Serialize nightly turn selection without holding the GPU lock."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    fd = os.open(directory / ADMISSION_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _own_landing_paths(directory):
+    with _admission_guard(directory):
+        return _own_landing_paths_locked(directory)
+
+
+def _own_landing_paths_locked(directory):
+    pid = str(os.getpid())
+    start = process_start_identity()
+    if not start:
+        return set()
+    return {info["path"] for info in pending_landings(directory)
+            if info.get("pid") == pid and info.get("start") == start}
+
+
+def _normal_waits_for_nightly(directory):
+    """Block newer normal work while a nightly turn drains its landing batch."""
+    with _admission_guard(directory):
+        return _normal_waits_for_nightly_locked(directory)
+
+
+def _is_own_turn(info):
+    return (bool(info) and info.get("pid") == str(os.getpid())
+            and info.get("start") == process_start_identity())
+
+
+def _normal_waits_for_nightly_locked(directory):
+    waiting = _nightly_waiting(directory)
+    if not waiting:
+        return False
+    # A landing already in the frozen batch must be allowed to acquire and
+    # drain; announcements after that snapshot wait for the nightly turn.
+    return not (_own_landing_paths_locked(directory) & _batch_paths(waiting))
 
 
 def read_holder(directory):
@@ -174,8 +415,16 @@ class Held:
             os.environ[HOLDER_ENV] = self.previous_token
 
 
-def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out=None):
-    """Block until this process may use the GPU. Returns a `Held`."""
+def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out=None,
+            priority="normal"):
+    """Block until this process may use the GPU. Returns a `Held`.
+
+    ``priority="nightly"`` freezes the currently announced landing batch,
+    admits one nightly leg after that batch drains, and defers announcements
+    made after the snapshot. An active holder is never interrupted.
+    """
+    if priority not in {"normal", "nightly"}:
+        raise ValueError(f"unknown GPU queue priority: {priority}")
     out = out or sys.stderr
     directory = Path(directory) if directory else queue_dir()
     directory.mkdir(parents=True, exist_ok=True)
@@ -185,28 +434,65 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
     ancestors = None
     try:
         while True:
+            acquired = False
+            busy_info = None
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
+                acquired = True
             except BlockingIOError:
-                pass
-            info = read_holder(directory)
-            if _token_matches(info):
-                os.close(fd)
-                return Held(None, directory)
-            if ancestors is None:
-                ancestors = set(ancestor_pids())
-            holder_pid = info.get("pid", "")
-            if holder_pid.isdigit() and int(holder_pid) in ancestors:
-                os.close(fd)
-                return Held(None, directory)
-            now = time.monotonic()
-            if last_report is None or now - last_report >= report:
-                verb = "waiting for the GPU" if last_report is None else "still waiting for the GPU"
-                print(f"[gpu-queue] {verb}: held by {_describe(info)}", file=out, flush=True)
-                last_report = now
+                busy_info = read_holder(directory)
+                # Check inherited ownership before applying queue fairness. A
+                # cargo/test child can be a nightly-priority caller while its
+                # landing parent already owns the lock; making it wait here
+                # would deadlock the parent behind its child.
+                inherited = _token_matches(busy_info)
+                holder_pid = busy_info.get("pid", "")
+                if not inherited and holder_pid.isdigit():
+                    if ancestors is None:
+                        ancestors = set(ancestor_pids())
+                    inherited = int(holder_pid) in ancestors
+                if inherited:
+                    os.close(fd)
+                    return Held(None, directory)
+
+            with _admission_guard(directory):
+                waiting = _nightly_waiting(directory)
+                allowed = True
+                if priority == "nightly":
+                    if waiting and not _is_own_turn(waiting):
+                        allowed = False
+                    elif not waiting:
+                        pending = pending_landings(directory)
+                        _write_nightly_waiting(directory,
+                                               {info["path"] for info in pending
+                                                if info.get("path")})
+                        waiting = _nightly_waiting(directory)
+                    if waiting and _is_own_turn(waiting):
+                        pending = pending_landings(directory)
+                        allowed = not any(info["path"] in _batch_paths(waiting)
+                                          for info in pending if info.get("path"))
+                elif waiting:
+                    allowed = not _normal_waits_for_nightly_locked(directory)
+
+                if allowed and acquired:
+                    if priority == "nightly":
+                        _remove_own_nightly_waiting_locked(directory)
+                    break
+
+            if acquired:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            if busy_info is not None:
+                now = time.monotonic()
+                if last_report is None or now - last_report >= report:
+                    verb = "waiting for the GPU" if last_report is None else "still waiting for the GPU"
+                    print(f"[gpu-queue] {verb}: held by {_describe(busy_info)}",
+                          file=out, flush=True)
+                    last_report = now
             time.sleep(poll)
     except BaseException:
+        with _admission_guard(directory):
+            if priority == "nightly":
+                _remove_own_nightly_waiting_locked(directory)
         os.close(fd)
         raise
     if last_report is not None:
@@ -224,7 +510,7 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
 
 
 @contextlib.contextmanager
-def hold(label, **kwargs):
+def hold(label, priority="normal", **kwargs):
     """Hold the GPU lock for the body; re-entrant within and across processes."""
     global _held_depth
     if _held_depth:
@@ -234,7 +520,7 @@ def hold(label, **kwargs):
         finally:
             _held_depth -= 1
         return
-    held = acquire(label, **kwargs)
+    held = acquire(label, priority=priority, **kwargs)
     _held_depth = 1
     try:
         yield
@@ -375,7 +661,17 @@ def run_queued(command, label=None, **kwargs):
             return build_code
         if kind == "build" or (kind == "test" and _cargo_has_no_run(command)):
             return 0
+    if passed and gate_passes.changed_passes([passed]):
+        # The binary was planned and built against an earlier content
+        # snapshot. Never admit that stale plan to the GPU; the caller must
+        # replan and rebuild against the changed inputs.
+        print("[NO REUSE] gpu-proofs: inputs changed after build planning; "
+              "refusing stale GPU admission", flush=True)
+        return 2
     with hold(label, **kwargs):
+        if passed and gate_passes.changed_passes([passed]):
+            print('[NO REUSE] gpu-proofs: inputs changed while waiting for the GPU', flush=True)
+            return 2
         started = time.monotonic()
         try:
             child = subprocess.Popen(command)
@@ -393,15 +689,16 @@ def run_queued(command, label=None, **kwargs):
             code = child.wait()
             if passed:
                 seconds = time.monotonic() - started
-                from gpu_proofs_gate import HANG_FLOOR_S
-                if code == 0 and seconds > HANG_FLOOR_S:
+                if code == 0 and seconds > SLOW_THRESHOLD_S:
                     # Raw cargo has no per-test watchdog/timings. A total
-                    # shorter than its minimum allowance proves no test
-                    # exceeded it; longer runs need the instrumented wrapper.
+                    # over the heavy-test threshold cannot earn a reusable
+                    # receipt without the instrumented timing proof.
                     print('[NO REUSE] gpu-proofs: raw cargo duration cannot establish '
-                          'per-test hang allowances; use gpu_proofs_gate.py', flush=True)
+                          'per-test hang allowances or reviewed heavy-test timing; '
+                          'use gpu_proofs_gate.py', flush=True)
                 else:
-                    passed.save(code, seconds)
+                    if passed.save(code, seconds) is False:
+                        return 2
             return code
         finally:
             for sig, handler in previous.items():
