@@ -1791,8 +1791,8 @@ Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P9 (Add Fluid authors the default liq
   the rest declare or read). Record the pre-change point hash of the `MatterScene` run
   that `matter_deterministic_under_seed` uses (`tests/gpu_proofs/matter_scene.rs:555`,
   seed 7, 120 ticks) in the phase notes.
-- **Read-back:** D3, D10, D31–D37; section 4.4; DECOMPOSING_GENERATORS.md section 1.2
-  (Specialised solvers are stage nodes); ADDING_PRIMITIVES.md; how includes reach a
+- **Read-back:** D3, D10, D31–D37; section 4.4; DECOMPOSING_GENERATORS.md section 1.2 (Engine internals are stage nodes);
+  ADDING_PRIMITIVES.md; how includes reach a
   pipeline (`wgsl_includes`, `grid_to_matter.rs:112`). Restate: the include is
   binding-free; water's numbers do not change; the published record does not change;
   the Rust material record is P5a's.
