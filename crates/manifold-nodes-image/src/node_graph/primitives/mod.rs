@@ -47,10 +47,10 @@ mod coc_dilate;
 mod coc_from_depth;
 #[cfg(any(test, feature = "testkit"))]
 pub(crate) mod coc_from_depth;
-#[cfg(feature = "testkit")]
-pub mod color;
-#[cfg(not(feature = "testkit"))]
-pub(crate) mod color;
+mod color;
+pub use color::{
+    BRIGHTNESS_TYPE_ID, Brightness, CHANNEL_MIX_TYPE_ID, COLOR_RAMP_TYPE_ID, ChannelMix, ColorRamp,
+};
 mod color_sample;
 mod colorize;
 mod compressor_envelope;
@@ -198,6 +198,7 @@ mod posterize;
 mod power_texture;
 mod mirror_fold_uv;
 mod note_rates;
+pub use note_rates::{NOTE_RATE_LABELS, NOTE_RATE_VALUES};
 mod radial_burst_force_field;
 mod radial_fold_uv;
 mod radial_offset_field;
@@ -233,10 +234,10 @@ pub mod seed_particles_from_texture;
 mod seed_particles;
 #[cfg(any(test, feature = "testkit"))]
 pub mod seed_particles;
-#[cfg(feature = "testkit")]
-pub mod separable_gaussian;
-#[cfg(not(feature = "testkit"))]
-pub(crate) mod separable_gaussian;
+mod separable_gaussian;
+pub use separable_gaussian::{
+    GAUSSIAN_BLUR_AXES, GAUSSIAN_BLUR_KERNELS, GAUSSIAN_BLUR_TYPE_ID, GaussianBlur,
+};
 mod set_alpha;
 #[cfg(not(any(test, feature = "testkit")))]
 mod sharpen;
@@ -257,10 +258,8 @@ mod trig_texture;
 mod smoothing;
 mod smoothstep_texture;
 mod track_persist;
-#[cfg(feature = "testkit")]
-pub mod temporal;
-#[cfg(not(feature = "testkit"))]
-pub(crate) mod temporal;
+mod temporal;
+pub use temporal::{FEEDBACK_TYPE_ID, Feedback};
 mod texture_advect;
 mod texture_dimensions;
 mod tone_map;
@@ -277,10 +276,8 @@ mod compose_vec3;
 mod vignette;
 mod voronoi_2d;
 pub mod watercolor;
-#[cfg(feature = "testkit")]
-pub mod wet_dry_mix;
-#[cfg(not(feature = "testkit"))]
-pub(crate) mod wet_dry_mix;
+mod wet_dry_mix;
+pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
 #[cfg(not(any(test, feature = "testkit")))]
 mod interpolate_particle_frames;
 #[cfg(any(test, feature = "testkit"))]

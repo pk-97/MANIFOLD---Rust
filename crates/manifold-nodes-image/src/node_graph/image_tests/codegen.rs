@@ -106,7 +106,7 @@ fn fused_texture_region_carries_and_dedups_wgsl_includes() {
 #[test]
 fn fused_virtual_chain_emits_fetch_and_skips_cs_main() {
     use manifold_node_engine::primitive::PrimitiveSpec;
-    use {manifold_node_engine::primitives::gain::Gain, crate::node_graph::primitives::separable_gaussian::GaussianBlur};
+    use {manifold_node_engine::primitives::gain::Gain, crate::node_graph::primitives::GaussianBlur};
     let id = NodeInstanceId;
     let region = FusionRegion {
         nodes: vec![

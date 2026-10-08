@@ -21,15 +21,15 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
         let expected: &[&str] = &[
             SOURCE_TYPE_ID,
             FINAL_OUTPUT_TYPE_ID,
-            manifold_nodes_image::node_graph::primitives::color::BRIGHTNESS_TYPE_ID,
-            manifold_nodes_image::node_graph::primitives::color::CHANNEL_MIX_TYPE_ID,
-            manifold_nodes_image::node_graph::primitives::color::COLOR_RAMP_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::BRIGHTNESS_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::CHANNEL_MIX_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::COLOR_RAMP_TYPE_ID,
             manifold_node_engine::primitives::mix::MIX_TYPE_ID,
             manifold_nodes_image::node_graph::primitives::filter::THRESHOLD_TYPE_ID,
             manifold_nodes_image::node_graph::primitives::filter::BLUR_TYPE_ID,
-            manifold_nodes_image::node_graph::primitives::separable_gaussian::GAUSSIAN_BLUR_TYPE_ID,
-            manifold_nodes_image::node_graph::primitives::temporal::FEEDBACK_TYPE_ID,
-            manifold_nodes_image::node_graph::primitives::wet_dry_mix::WET_DRY_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::GAUSSIAN_BLUR_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::FEEDBACK_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::WET_DRY_TYPE_ID,
             manifold_nodes_image::node_graph::primitives::watercolor::WATERCOLOR_TYPE_ID,
         ];
         for id in expected {
