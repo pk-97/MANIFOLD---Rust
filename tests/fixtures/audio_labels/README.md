@@ -16,11 +16,29 @@ snare-coincident kicks 0.62–0.67× are kicks, confirmed visually).
 
 Counts: apricots 16 · bad_guy 17 · feel 16 · inhale_exhale 14 · tears 10 (73).
 
-**bad_guy caveat:** its stems are unwarped (15.0 s, native 128) while its mix
-is tempo-warped (13.241 s). `mix_time_s` was linearly scaled (×0.8828) and
-snapped to the nearest mix low-band onset (±60 ms window). The other four
-tracks' stems and mix share a time base exactly. Re-exporting bad_guy stems
-warped would remove the caveat.
+**bad_guy repair (2026-10-09):** the old mix lasted 13.241396 s, while all
+four stems lasted 15.000023 s. The replacement mix is the unit-gain sum of
+those unchanged stems, at their original 44,100 Hz and 661,501 frames,
+encoded as 24-bit PCM. It is a reconstructed mix, not a time-stretched copy
+of the old master. Both label columns now use the historical stem timestamps;
+the duration-ratio scaling and onset snapping have been removed.
+
+`bad_guy_128bpm.repair.json` records source and output hashes. Reproduce with
+`python3 scripts/repair_audio_fixture.py --fixture-dir tests/fixtures/audio/bad_guy_128bpm
+--backup-dir /path/to/preserved-original --apply` (omit `--apply` to inspect).
+The original mix and repair provenance are preserved locally in
+`~/.cache/manifold/audio-fixture-backups/bad_guy-2026-10-09/`.
+
+The other four mixes were checked against their summed stems: zero lag and
+correlation >0.999999 at 8 kHz, with gain within 0.00002 of unity. Folder BPMs
+are historical names, not proof of the exported tempo. Published song BPMs
+must not override measured audio timing.
+
+**Baseline status:** historical detector scores and the old bad_guy timing
+calibration do not apply to the reconstructed mix. The 17 stem labels retain
+the original sub-envelope onset convention; alignment repair does not certify
+their perceptual onset accuracy or constitute a fresh detector benchmark.
+The broader label/scoring review remains tracked by BUG-qtd.
 
 These labels are the grading target for the BUG-046 successor (ridge-motion
 kick sweep-event detector) and replace the circular "drums-stem detector

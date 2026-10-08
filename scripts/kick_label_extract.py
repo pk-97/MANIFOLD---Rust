@@ -5,7 +5,7 @@ Ground-truth path for the BUG-046 sweep-event detector: labels come from the
 isolated drums stem (low-band energy onsets), verified by eye on a spectrogram
 of BOTH the drums stem and the mix (alignment check), then frozen as CSV.
 """
-import sys, os, csv
+import argparse, os, csv
 import numpy as np
 from scipy.io import wavfile
 from scipy.signal import butter, sosfilt, stft
@@ -14,7 +14,12 @@ from PIL import Image, ImageDraw
 FIXTURES = "tests/fixtures/audio"
 TRACKS = ["apricots_128bpm", "bad_guy_128bpm", "feel_the_vibration_174bpm",
           "inhale_exhale_145bpm", "tears_140bpm"]
-OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/kick_labels"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("out", nargs="?", default="/tmp/kick_labels")
+parser.add_argument("--track", choices=TRACKS, action="append",
+                    help="extract only this fixture (repeat to select more)")
+args = parser.parse_args()
+OUT = args.out
 os.makedirs(OUT, exist_ok=True)
 
 HOP_S = 0.005          # 5 ms envelope hop
@@ -77,22 +82,7 @@ def spec_panel(sr, x, fmax=300.0, px_per_s=100, height=220):
     w = int(t[-1] * px_per_s)
     return im.resize((w, height)), t[-1]
 
-def mix_env(sr, x):
-    sos = butter(4, [30, 150], btype="bandpass", fs=sr, output="sos")
-    low = sosfilt(sos, x)
-    hop = int(sr * HOP_S)
-    n = len(low) // hop
-    return np.sqrt(np.mean(low[: n * hop].reshape(n, hop) ** 2, axis=1))
-
-def snap_to_mix_onset(t, menv, win_s=0.06):
-    """Snap a predicted time to the strongest local low-band env rise in the mix."""
-    i0 = int((t - win_s) / HOP_S); i1 = int((t + win_s) / HOP_S)
-    i0 = max(i0, 4); i1 = min(i1, len(menv) - 1)
-    if i1 <= i0: return t
-    d = menv[i0:i1] - menv[i0 - 4 : i1 - 4]  # rise over 20 ms
-    return (i0 + int(np.argmax(d))) * HOP_S
-
-def render(track, panels, fires_mixtime, env, path, ratios=(), k=1.0):
+def render(track, panels, fires_mixtime, env, path, ratios=()):
     # panels: list of (image, caption); fires drawn in mix time on all
     w = max(p.width for p, _ in panels)
     env_h, gap = 60, 14
@@ -116,37 +106,32 @@ def render(track, panels, fires_mixtime, env, path, ratios=(), k=1.0):
         d.line([(x, 0), (x, H)], fill=(255, 60, 60), width=2)
     for cap, cy in caps:
         d.text((4, cy - 12), cap, fill=(255, 200, 80))
-    for t, r in ratios:  # sub/body ratio at every candidate peak (drums time -> mix time)
-        x = int(t * k * 100)
+    for t, r in ratios:
+        x = int(t * 100)
         col = (120, 255, 120) if r >= SUB_DOMINANCE else (255, 255, 100)
         d.text((max(x - 10, 0), panels[0][0].height + 2), f"{r:.1f}", fill=col)
     canvas.save(path)
 
-for track in TRACKS:
+for track in args.track or TRACKS:
     sr_d, drums = mono(f"{FIXTURES}/{track}/drums.wav")
     sr_m, mix = mono(f"{FIXTURES}/{track}/mix.wav")
     env, fires, ratios = kick_onsets(sr_d, drums)
     dur_d, dur_m = len(drums) / sr_d, len(mix) / sr_m
-    k = dur_m / dur_d  # bad_guy: stems unwarped (15.0s) vs warped mix (13.241s)
-    menv = mix_env(sr_m, mix)
-    if abs(k - 1.0) > 0.001:
-        fires_mix = [snap_to_mix_onset(t * k, menv) for t in fires]
-        fires_mix = [t for t in fires_mix if t < dur_m]
-    else:
-        fires_mix = fires
+    # Different sample rates may differ by one rounding sample. A larger
+    # duration mismatch is an invalid fixture, not permission to manufacture
+    # alignment by scaling labels and snapping to peaks in the mix.
+    if abs(dur_m - dur_d) > 1.0 / min(sr_d, sr_m):
+        raise ValueError(f"{track}: mix/stem durations differ; repair audio alignment first")
+    fires_mix = fires
     with open(f"{OUT}/{track}.csv", "w", newline="") as fh:
-        wtr = csv.writer(fh); wtr.writerow(["mix_time_s", "drums_time_s"])
+        wtr = csv.writer(fh, lineterminator="\n"); wtr.writerow(["mix_time_s", "drums_time_s"])
         for tm, td in zip(fires_mix, fires): wtr.writerow([f"{tm:.3f}", f"{td:.3f}"])
     pfull, _ = spec_panel(sr_d, drums, fmax=8000.0, height=180)
     plow, _ = spec_panel(sr_d, drums, fmax=300.0)
     pmix, _ = spec_panel(sr_m, mix, fmax=300.0)
-    if abs(k - 1.0) > 0.001:  # draw drum panels in mix time so ticks line up
-        pfull = pfull.resize((int(pfull.width * k), pfull.height))
-        plow = plow.resize((int(plow.width * k), plow.height))
-        env = np.interp(np.arange(int(len(env) * k)) / k, np.arange(len(env)), env)
     render(track, [(pfull, f"{track} drums FULL 0-8k | {len(fires_mix)} kicks | red=label (mix time)"),
                    (plow, "drums LOW 0-300"), (pmix, "mix LOW 0-300 (alignment check)")],
-           fires_mix, env, f"{OUT}/{track}.png", ratios=ratios, k=k)
+           fires_mix, env, f"{OUT}/{track}.png", ratios=ratios)
     rs = sorted(r for _, r in ratios)
-    print(f"{track}: {len(fires_mix)} kicks of {len(ratios)} peaks | k={k:.4f} | "
+    print(f"{track}: {len(fires_mix)} kicks of {len(ratios)} peaks | aligned timebases | "
           f"sub/body sorted: {rs}")
