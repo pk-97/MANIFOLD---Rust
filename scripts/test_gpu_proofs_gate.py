@@ -383,7 +383,7 @@ class GpuProofsGateTests(unittest.TestCase):
 
     def test_test_binaries_build_before_the_hold_with_the_run_arguments(self):
         code, _, _ = self.run_main(
-            [], repo_changed=["crates/manifold-nodes/src/node_graph/primitives/invert.rs"])
+            [], repo_changed=["crates/manifold-nodes/src/registry.rs"])
         self.assertEqual(code, 0)
         kinds = [kind for kind, _ in self.events]
         packages = sorted({cmd[cmd.index("-p") + 1]
@@ -431,13 +431,13 @@ class GpuProofsGateTests(unittest.TestCase):
         self.assertIn("GPU-PROOFS GATE: BUILT", text)
 
     def test_default_is_scoped_from_diff_and_prints_mode(self):
-        p = "crates/manifold-nodes/src/node_graph/primitives/invert.rs"
+        p = "crates/manifold-nodes/src/registry.rs"
         code, calls, text = self.run_main([], repo_changed=[p])
         self.assertEqual(code, 0)
         self.assertEqual(len(calls), 3)
         self.assertTrue(calls[0]["lib"])
         self.assertFalse(calls[0]["full"])
-        self.assertIn("contracts::node_graph::primitives::invert::", calls[0]["filters"])
+        self.assertIn("registry::", calls[0]["filters"])
         self.assertIn("GPU-PROOFS MODE: scoped", text)
 
     def test_default_with_no_gpu_paths_runs_nothing(self):
@@ -447,7 +447,7 @@ class GpuProofsGateTests(unittest.TestCase):
 
     def test_unmapped_path_fails_without_running(self):
         code, calls, text = self.run_main(
-            [], repo_changed=["crates/manifold-nodes/src/node_graph/x.bin"])
+            [], repo_changed=["crates/manifold-nodes/tests/contracts/node_graph/x.bin"])
         self.assertEqual(code, 2)
         self.assertEqual(calls, [])
         self.assertIn("node_graph/x.bin", text)

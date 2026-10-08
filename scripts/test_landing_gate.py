@@ -35,6 +35,8 @@ def synthetic_workspace(root, paths):
     """
     root = Path(root).resolve()
     packages = sorted({path.split("/")[1] for path in paths if path.startswith("crates/")})
+    if any(path.startswith(cpu_scope.CATALOG_PATHS) or path.endswith(".wgsl") for path in paths):
+        packages = sorted(set(packages) | {"manifold-nodes"})
     if not packages:
         packages = ["manifold-app"]
     metadata = {"workspace_members": [], "packages": []}
@@ -289,11 +291,11 @@ class LandingTests(unittest.TestCase):
             with self.subTest(failed=failed):
                 _, _, timings, _, _, _, _ = self.exercise(
                     failed=failed, nextest_output=(stdout, stderr), gpu_output=stdout,
-                    paths=['crates/manifold-nodes/src/node_graph/primitives/camera_lens.rs'])
+                    paths=['crates/manifold-nodes-scene/src/node_graph/primitives/camera_lens.rs'])
                 for check in timings['checks']:
                     if check['label'].startswith('tests/'):
                         self.assertEqual(check['slow_tests'], expected)
-                    elif check['label'] == 'tests-build':
+                    elif check['label'] == 'tests-build' or check['label'].startswith('tests-build/'):
                         self.assertEqual(check['slow_tests'], [])
                     else:
                         self.assertNotIn('slow_tests', check)
@@ -545,8 +547,8 @@ class LandingTests(unittest.TestCase):
         # Compare entire argv: no feature, package or filter changes may leak
         # from proof selection into nextest (including build/catalog commands).
         for path in (
-            "crates/manifold-nodes/src/node_graph/primitives/invert.rs",
-            "crates/manifold-nodes/src/node_graph/primitives/mod.rs",
+            "crates/manifold-nodes-image/src/node_graph/primitives/invert.rs",
+            "crates/manifold-nodes-image/src/node_graph/primitives/mod.rs",
             "crates/manifold-node-engine/src/water/primitives/gpu_flip_scene_tests.rs",
             "crates/manifold-nodes/src/bundled_presets.rs",
             "crates/manifold-nodes/tests/gpu_proofs/main.rs",
@@ -630,13 +632,15 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(self.events[-1], "hold-exit")
 
     def test_unmapped_gpu_path_fails_gate_naming_path(self):
+        # A non-Rust source file is GPU-scoped but owns no CPU test binary.
+        # Putting it under tests/ would make this harness select a CPU binary.
         code, called, _, _, _, output, _ = self.exercise(
-            paths=["crates/manifold-nodes/src/node_graph/orphan.bin"])
+            paths=["crates/manifold-node-engine/src/orphan.bin"])
         self.assertEqual(code, 1)
         self.assertNotIn("gpu-proofs", called)
         self.assertNotIn("gpu-proofs-build", called)
         self.assertNotIn("tests-build", called)
-        self.assertIn("node_graph/orphan.bin", output)
+        self.assertIn("src/orphan.bin", output)
         self.assertIn("Add a mapping rule", output)
 
     def test_named_red_collection_does_not_skip_remaining_checks(self):
@@ -776,10 +780,10 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(deps, 0)
 
     def test_one_primitive_selects_its_module_and_the_layout_proofs(self):
-        path = "crates/manifold-nodes/src/node_graph/primitives/camera_lens.rs"
+        path = "crates/manifold-nodes-scene/src/node_graph/primitives/camera_lens.rs"
         _, _, _, commands, _, output, _ = self.exercise(paths=[path])
         expected = sorted([
-            "(package(=manifold-nodes) & test(/^node_graph::primitives::camera_lens::/))",
+            "(package(=manifold-nodes-scene) & test(/^node_graph::primitives::camera_lens::/))",
             "(package(=manifold-nodes) & test(/^uniform_layout_proof::/))",
             "(package(=manifold-nodes) & test(/^uniform_layout_extended::/))",
             "(package(=manifold-nodes) & test(regenerates_in_sync))",
@@ -788,8 +792,10 @@ class LandingTests(unittest.TestCase):
                   and "-E" in c]
         builds = [c[c.index("-E") + 1] for c in scoped if "--no-run" in c]
         runs = sorted(c[c.index("-E") + 1] for c in scoped if "--no-run" not in c)
-        self.assertEqual(builds, [" | ".join(expected)])
-        self.assertEqual(runs, [" | ".join(expected)])
+        selections = sorted([" | ".join(f for f in expected if "package(=manifold-nodes)" in f),
+                             " | ".join(f for f in expected if "package(=manifold-nodes-scene)" in f)])
+        self.assertEqual(sorted(builds), selections)
+        self.assertEqual(runs, selections)
         self.assertIn("[tests] filterset: " + " | ".join(expected), output)
 
 
@@ -1002,7 +1008,7 @@ class DiffScopeTests(unittest.TestCase):
                 self.assertEqual(diff_scope.code_lines(source, '.rs'), expected)
 
     def test_changed_lines_drive_path_exclusion(self):
-        path = "crates/manifold-nodes/src/node_graph/primitives/blur.rs"
+        path = "crates/manifold-nodes-image/src/node_graph/primitives/bilateral_blur.rs"
         old_oid, new_oid = "a" * 40, "b" * 40
         raw = (f":100644 100644 {old_oid} {new_oid} M\0{path}\0\0"
                f"diff --git a/{path} b/{path}\n@@ -1 +1 @@\n-// old\n+// new\n")
@@ -1224,9 +1230,9 @@ class DiffScopeTests(unittest.TestCase):
 
     def test_primitive_source_selects_the_uniform_layout_proofs(self):
         with tempfile.TemporaryDirectory() as d:
-            workspace = synthetic_workspace(d, ["crates/manifold-nodes/src/node_graph/primitives/blob_bounds.rs"])
+            workspace = synthetic_workspace(d, ["crates/manifold-node-engine/src/water/primitives/blob_bounds.rs"])
             plan = cpu_scope.plan_for_paths(
-                ["crates/manifold-nodes/src/node_graph/primitives/blob_bounds.rs"], d,
+                ["crates/manifold-node-engine/src/water/primitives/blob_bounds.rs"], d,
                 workspace=workspace)
             self.assertIn("(package(=manifold-nodes) & test(/^uniform_layout_proof::/))", plan.filters)
             self.assertIn("(package(=manifold-nodes) & test(/^uniform_layout_extended::/))", plan.filters)
@@ -1234,16 +1240,17 @@ class DiffScopeTests(unittest.TestCase):
 
     def test_shader_selects_wgsl_validation_and_hand_abi_proof(self):
         with tempfile.TemporaryDirectory() as d:
-            workspace = synthetic_workspace(d, ["crates/manifold-nodes/src/node_graph/primitives/shaders/blob_bounds.wgsl"])
+            workspace = synthetic_workspace(d, ["crates/manifold-node-engine/src/water/primitives/shaders/blob_bounds.wgsl"])
             plan = cpu_scope.plan_for_paths(
-                ["crates/manifold-nodes/src/node_graph/primitives/shaders/blob_bounds.wgsl"], d,
+                ["crates/manifold-node-engine/src/water/primitives/shaders/blob_bounds.wgsl"], d,
                 workspace=workspace)
             self.assertEqual(plan.filters, {
+                "(package(=manifold-nodes) & test(/^uniform_layout_proof::/))",
                 "(package(=manifold-nodes) & test(/^uniform_layout_extended::/))",
                 "(package(=manifold-nodes) & test(/^wgsl_validation::/))",
                 "(package(=manifold-nodes) & test(regenerates_in_sync))",
             })
-            effect = cpu_scope.plan_for_paths(["crates/manifold-nodes/src/effects/shaders/fx_bloom.wgsl"], d,
+            effect = cpu_scope.plan_for_paths(["crates/manifold-compositor/src/effects/shaders/presentation.wgsl"], d,
                                               workspace=workspace)
             self.assertEqual(effect.filterset, "(package(=manifold-nodes) & test(/^wgsl_validation::/))")
 

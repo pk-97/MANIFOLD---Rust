@@ -400,10 +400,12 @@ class ReplayTests(unittest.TestCase):
 
     def test_family_reference_keeps_owner(self):
         replay.CONFIG = {}
-        text = 'crate::node_graph::primitives::blob_bounds::BlobBounds::new();\n'
-        actual = replay.rewrite_rust(text, 'crates/manifold-nodes/src/node_graph/primitives/liquid_surface_tests.rs',
+        # Library crate:: references keep the original family owner. An
+        # integration-test source has its own crate root and cannot prove this.
+        text = 'crate::node_graph::primitives::invert::Invert::new();\n'
+        actual = replay.rewrite_rust(text, 'crates/manifold-nodes-image/src/node_graph/primitives/invert.rs',
                                     'crates/manifold-node-engine/src/water/primitives/liquid_surface_tests.rs', {}, {})
-        self.assertEqual(actual, text.replace('crate::', 'manifold_nodes::', 1))
+        self.assertEqual(actual, text.replace('crate::', 'manifold_nodes_image::', 1))
 
     def pin(self):
         self.original.update({'plans/p1/'+p:v for p,v in replay.files(self.plan).items()})

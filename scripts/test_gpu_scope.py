@@ -14,7 +14,7 @@ import gpu_scope as g
 R = "crates/manifold-nodes/src/"
 E = "crates/manifold-node-engine/src/"
 W = E + "water/primitives/"
-P = R + "node_graph/primitives/"
+P = E + "primitives/"
 
 
 def plan(paths, users=None, repo=None):
@@ -162,15 +162,15 @@ class ScopeTests(unittest.TestCase):
     def test_path_attr_filter_finds_testkit_visible_mount(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
-            mount = repo / R / "node_graph" / "mod.rs"
+            mount = repo / E / "fixture" / "mod.rs"
             mount.parent.mkdir(parents=True)
             mount.write_text(
                 'manifold_core::testkit_visible! {\n'
                 '    #[path = "tests/wrapped.rs"] mod wrapped;\n'
                 '}\n'
             )
-            path = R + "node_graph/tests/wrapped.rs"
-            self.assertEqual(g.path_attr_filters(path, repo), ["node_graph::wrapped::"])
+            path = E + "fixture/tests/wrapped.rs"
+            self.assertEqual(g.path_attr_filters(path, repo), ["fixture::wrapped::"])
 
     def test_p2_catalog_contracts_follow_leaf_sources(self):
         cases = {
@@ -394,7 +394,7 @@ class ScopeTests(unittest.TestCase):
             "water::runtime::physics_carry::", "water::runtime::physics_sampling::",
             "water::runtime::physics_impulses::tests::coupled_playback_tests::",
         }
-        for path in (R + "reference_fixtures.rs", *(
+        for path in (R + "testkit/reference_fixtures.rs", *(
                 g.CPU_FLIP_FIXTURES_DIR + name for name in (
                     "WaterBasin.json", "WaterDamBreak.json", "WaterDamBreakGpu.json"))):
             with self.subTest(path=path):
@@ -477,10 +477,10 @@ class ScopeTests(unittest.TestCase):
             self.assertFalse(result.unmapped)
 
     def test_blob_bounds_selects_dense_and_sparse_consumers(self):
-        for path in (P + "blob_bounds.rs", P + "shaders/blob_bounds.wgsl"):
-            result = plan([path], users=lambda _: [P + "blob_bounds.rs"],
+        for path in (W + "blob_bounds.rs", W + "shaders/blob_bounds.wgsl"):
+            result = plan([path], users=lambda _: [W + "blob_bounds.rs"],
                           repo=self._repo_with(path))
-            self.assertTrue({"node_graph::primitives::blob_bounds::",
+            self.assertTrue({"water::primitives::blob_bounds::",
                              "liquid_surface_tests::",
                              "liquid_bricks::tests::gpu_tests::"} <= result.filters)
             self.assertFalse(result.unmapped)
@@ -523,23 +523,23 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(p.runs(), [])
 
     def test_primitive_maps_to_its_own_proofs_plus_smoke(self):
-        p = plan([P + "invert.rs"])
-        self.assertEqual(p.final_filters(), sorted(g.SMOKE_FILTERS + ["node_graph::primitives::invert::"]))
+        p = plan([P + "gain.rs"])
+        self.assertEqual(p.final_filters(), sorted(g.SMOKE_FILTERS + ["primitives::gain::"]))
         self.assertFalse(p.glb)
         self.assertEqual(p.broad, [])
 
     def test_primitive_gpu_tests_file_maps_to_parent_primitive(self):
-        p = plan([P + "analytic_echo_instances_gpu_tests.rs"])
-        self.assertIn("node_graph::primitives::analytic_echo_instances::", p.filters)
+        filters = g.module_filters(P + "fixture_gpu_tests.rs")
+        self.assertIn("primitives::fixture::", filters)
 
     def test_primitive_directory_maps_to_dir_module(self):
-        p = plan([P + "render_scene/lights.rs"])
-        self.assertIn("node_graph::primitives::render_scene::lights::", p.filters)
+        p = plan([P + "gain/extent.rs"])
+        self.assertIn("primitives::gain::extent::", p.filters)
 
     def test_primitive_shader_maps_through_its_user(self):
-        p = plan([P + "shaders/invert.wgsl"], users=lambda s: [P + "invert.rs"],
-                 repo=self._repo_with(P + "shaders/invert.wgsl"))
-        self.assertIn("node_graph::primitives::invert::", p.filters)
+        p = plan([P + "shaders/gain.wgsl"], users=lambda s: [P + "gain.rs"],
+                 repo=self._repo_with(P + "shaders/gain.wgsl"))
+        self.assertIn("primitives::gain::", p.filters)
         self.assertEqual(p.broad, [])
 
     def test_shader_included_by_another_shader_reaches_the_rust_user(self):
@@ -596,7 +596,7 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(p.broad, [])
 
     def test_skip_dropped_when_it_would_hide_a_selected_filter(self):
-        p = plan(["crates/manifold-gpu/src/metal/raytrace.rs", P + "particletext.rs"])
+        p = plan(["crates/manifold-gpu/src/metal/raytrace.rs", "crates/manifold-nodes-image/src/node_graph/primitives/particletext.rs"])
         self.assertEqual(sorted(set(p.final_skips()) - {n for n, _ in g.slow_tests()}), [])
 
     def test_matter_row(self):
@@ -839,7 +839,7 @@ class ScopeTests(unittest.TestCase):
         self.assertTrue(set(g.BROAD_FILTERS) <= p.filters)
 
     def test_glb_runs_only_for_gltf_paths(self):
-        self.assertFalse(plan([P + "invert.rs"]).glb)
+        self.assertFalse(plan([P + "gain.rs"]).glb)
         self.assertFalse(plan(["crates/manifold-gpu/src/metal/device.rs"]).glb)
         for path in ["crates/manifold-nodes/tests/gpu_proofs/glb_conformance.rs",
                      "tests/fixtures/gltf/khronos/manifest.json",
@@ -852,11 +852,11 @@ class ScopeTests(unittest.TestCase):
             self.assertTrue(runs[0]["budgeted"])
 
     def test_unknown_file_type_in_gpu_dir_is_unmapped(self):
-        p = plan([R + "node_graph/something.bin"])
-        self.assertEqual(p.unmapped[0][0], R + "node_graph/something.bin")
+        p = plan(["crates/manifold-nodes/tests/contracts/node_graph/something.bin"])
+        self.assertEqual(p.unmapped[0][0], "crates/manifold-nodes/tests/contracts/node_graph/something.bin")
 
     def test_main_run_targets_lib_and_gpu_proofs_never_glb(self):
-        runs = plan([P + "invert.rs"]).runs()
+        runs = plan([P + "gain.rs"]).runs()
         run = next(run for run in runs
                    if run["package"] == "manifold-nodes" and run["target"] == "lib")
         proof = next(run for run in runs

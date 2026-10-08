@@ -228,9 +228,9 @@ EXPLICIT_ROWS = [
        "rt_normal_tangent_mirror::", "rt_r3_heldout_gltf::"], [])),
 
     # Blob bounds controls the sparse reach and dense particle field together.
-    ((RENDERER_SRC + "node_graph/primitives/blob_bounds.rs",
-      RENDERER_SRC + "node_graph/primitives/shaders/blob_bounds.wgsl"),
-     (["node_graph::primitives::blob_bounds::",
+    ((ENGINE_SRC + "water/primitives/blob_bounds.rs",
+      ENGINE_SRC + "water/primitives/shaders/blob_bounds.wgsl"),
+     (["water::primitives::blob_bounds::",
        "liquid_surface_tests::", "liquid_bricks::tests::gpu_tests::"], [])),
     ((ENGINE_SRC + "water/primitives/offset_lattice",
       ENGINE_SRC + "water/primitives/redistance_lattice",
@@ -396,7 +396,7 @@ for _engine_path in (
     ]
 del _engine_path
 
-LIB_PROOF_ROWS[RENDERER_SRC + "reference_fixtures.rs"] = CPU_FLIP_REFERENCE_FILTERS
+LIB_PROOF_ROWS[RENDERER_SRC + "testkit/reference_fixtures.rs"] = CPU_FLIP_REFERENCE_FILTERS
 for _pressure_fixture in ("dambreak_pressure_problems.bin.zst", "deep_pool_pressure_problems.bin.zst",
                           "deep_pool_density_problems.bin.zst", "gpu_flip_pressure_golden.txt"):
     LIB_PROOF_ROWS["crates/manifold-node-engine/tests/fixtures/" + _pressure_fixture] = [
