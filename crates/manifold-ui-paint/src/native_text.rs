@@ -173,15 +173,19 @@ impl FontManager {
 
     /// An installed font by family name, resolved the same way the Text
     /// generator resolves it (`new_from_name`), so a preview shows what the
-    /// generator will draw. An unknown name falls back to Inter Regular.
+    /// generator will draw. An unknown name, or a symbol font (Wingdings,
+    /// Zapf Dingbats, Emoji — its name would draw as pictures), falls back
+    /// to Inter Regular so the name stays readable.
     fn get_family_font(&mut self, family_id: u16, name: &str, physical_size: f32) -> CTFont {
+        use core_text::font_descriptor::{kCTFontClassMaskTrait, kCTFontSymbolicClass};
         let size_x10 = (physical_size * 10.0).round() as u16;
         if let Some(f) = self.family_fonts.get(&(family_id, size_x10)) {
             return f.clone();
         }
-        let font = core_text::font::new_from_name(name, physical_size as f64).unwrap_or_else(|()| {
-            core_text::font::new_from_CGFont(&self.regular, physical_size as f64)
-        });
+        let font = core_text::font::new_from_name(name, physical_size as f64)
+            .ok()
+            .filter(|f| f.symbolic_traits() & kCTFontClassMaskTrait != kCTFontSymbolicClass)
+            .unwrap_or_else(|| core_text::font::new_from_CGFont(&self.regular, physical_size as f64));
         self.family_fonts.insert((family_id, size_x10), font.clone());
         font
     }
@@ -1909,5 +1913,17 @@ mod tests {
             .map(|g| g.pixel_h)
             .expect("large");
         assert!(large > small * 3, "48px glyph ({large}) must be ~4x the 12px one ({small})");
+    }
+
+    /// A symbol font's name would draw as pictures, so the picker shows it
+    /// in Inter instead. Wingdings and Zapf Dingbats ship with macOS.
+    #[test]
+    fn symbol_fonts_preview_their_name_in_the_ui_font() {
+        let mut fm = FontManager::new();
+        for (id, name) in ["Wingdings", "Zapf Dingbats"].into_iter().enumerate() {
+            let f = fm.get_family_font(id as u16, name, 24.0);
+            assert!(f.family_name().starts_with("Inter"), "{name} resolved to {}", f.family_name());
+        }
+        assert_eq!(fm.get_family_font(9, "Georgia", 24.0).family_name(), "Georgia");
     }
 }
