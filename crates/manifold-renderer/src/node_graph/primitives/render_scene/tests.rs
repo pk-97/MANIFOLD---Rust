@@ -1,6 +1,6 @@
     use super::*;
-    use crate::node_graph::ports::ArrayType;
-    use crate::node_graph::transform::Transform;
+    use manifold_node_engine::ports::ArrayType;
+    use manifold_node_engine::scene::transform::Transform;
 
     /// VOLUMETRIC_LIGHT_DESIGN.md V1: the CPU half of "off = zero cost".
     /// `shaft_intensity == 0` (unwired default) must gate `wants_shafts`
@@ -30,10 +30,10 @@
     /// first Sun-mode caster under the RT caster cap, None otherwise.
     /// Tested against the production fn (never a duplicated copy — a copy
     /// drifts silently).
-    fn svt_test_light(mode: crate::node_graph::light::LightMode) -> crate::node_graph::light::Light {
-        crate::node_graph::light::Light {
+    fn svt_test_light(mode: manifold_node_engine::scene::light::LightMode) -> manifold_node_engine::scene::light::Light {
+        manifold_node_engine::scene::light::Light {
             mode,
-            falloff: crate::node_graph::light::LightFalloff::Legacy,
+            falloff: manifold_node_engine::scene::light::LightFalloff::Legacy,
             pos: [0.0, 0.0, 0.0],
             aim: [0.0, 0.0, 1.0],
             dir: [0.0, 0.0, 1.0],
@@ -42,7 +42,7 @@
             inner_cone_angle: 0.0,
             outer_cone_angle: 0.0,
             cast_shadows: true,
-            shadow_softness: crate::node_graph::light::ShadowSoftness::Soft,
+            shadow_softness: manifold_node_engine::scene::light::ShadowSoftness::Soft,
             shadow_bias: 0.005,
             shadow_resolution: 1024,
         }
@@ -50,21 +50,21 @@
 
     #[test]
     fn rt_svt_slot_sun_first_is_zero() {
-        use crate::node_graph::light::LightMode;
+        use manifold_node_engine::scene::light::LightMode;
         let casters = [svt_test_light(LightMode::Sun), svt_test_light(LightMode::Point)];
         assert_eq!(rt_svt_slot(&casters), Some(0));
     }
 
     #[test]
     fn rt_svt_slot_point_only_is_none() {
-        use crate::node_graph::light::LightMode;
+        use manifold_node_engine::scene::light::LightMode;
         let casters = [svt_test_light(LightMode::Point), svt_test_light(LightMode::Point)];
         assert_eq!(rt_svt_slot(&casters), None);
     }
 
     #[test]
     fn rt_svt_slot_sun_past_cap_is_none() {
-        use crate::node_graph::light::LightMode;
+        use manifold_node_engine::scene::light::LightMode;
         let mut casters: Vec<_> = (0..manifold_gpu::raytrace::MAX_RT_CASTERS)
             .map(|_| svt_test_light(LightMode::Point))
             .collect();
@@ -280,7 +280,7 @@
     /// petals hatch and flicker with softness set to Hard.
     #[test]
     fn sun_cone_half_angle_honours_the_lights_softness() {
-        use crate::node_graph::light::ShadowSoftness;
+        use manifold_node_engine::scene::light::ShadowSoftness;
         assert_eq!(sun_cone_half_angle(ShadowSoftness::Hard), 0.0);
         assert_eq!(
             sun_cone_half_angle(ShadowSoftness::Soft),
@@ -573,8 +573,8 @@
     }
 
     impl EffectNode for StubProducer {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
@@ -597,9 +597,9 @@
     /// `FinalOutput`; `depth` wired to a second `FinalOutput` iff
     /// `wire_depth`. Returns the compiled plan plus the scene node's id so
     /// the caller can inspect its step's `outputs` list.
-    fn compile_scene(wire_depth: bool) -> (crate::node_graph::ExecutionPlan, crate::node_graph::NodeInstanceId) {
+    fn compile_scene(wire_depth: bool) -> (manifold_node_engine::exec::execution_plan::ExecutionPlan, manifold_node_engine::exec::effect_node::NodeInstanceId) {
         use crate::node_graph::primitives::scene_object::SceneObjectNode;
-        use crate::node_graph::{FinalOutput, Graph, compile};
+        use manifold_node_engine::{scene::boundary_nodes::FinalOutput, graph::Graph, exec::execution_plan::compile};
 
         let mut graph = Graph::new();
         let cam = graph.add_node(Box::new(StubProducer::new("stub.camera", PortType::Camera)));
@@ -814,15 +814,15 @@ fn render_mode_default_is_rendered_and_fills() {
     // Rendered value takes (mode 0 → no material substitution, Fill), so
     // unwired and wired-Rendered are the identical code path by
     // construction; these assertions pin the helper behavior both rely on.
-    let default = crate::node_graph::render_mode::RenderMode::default();
-    assert_eq!(default.mode, crate::node_graph::render_mode::RENDER_MODE_RENDERED);
+    let default = manifold_node_engine::scene::render_mode::RenderMode::default();
+    assert_eq!(default.mode, manifold_node_engine::scene::render_mode::RENDER_MODE_RENDERED);
     assert_eq!(
         color_pass_fill_mode(&default),
         manifold_gpu::GpuTriangleFillMode::Fill,
         "Rendered (and therefore unwired) must draw Fill"
     );
-    let wired_rendered = crate::node_graph::render_mode::RenderMode {
-        mode: crate::node_graph::render_mode::RENDER_MODE_RENDERED,
+    let wired_rendered = manifold_node_engine::scene::render_mode::RenderMode {
+        mode: manifold_node_engine::scene::render_mode::RENDER_MODE_RENDERED,
         line_color: [1.0, 0.0, 0.0, 1.0],
         line_brightness: 4.0,
         ..default
@@ -837,8 +837,8 @@ fn render_mode_default_is_rendered_and_fills() {
 #[test]
 fn render_mode_wireframe_draws_lines_and_substitutes_unlit_line_material() {
     // D6: color pass gets Lines; shading is unlit line_color × brightness.
-    let mode = crate::node_graph::render_mode::RenderMode {
-        mode: crate::node_graph::render_mode::RENDER_MODE_WIREFRAME,
+    let mode = manifold_node_engine::scene::render_mode::RenderMode {
+        mode: manifold_node_engine::scene::render_mode::RENDER_MODE_WIREFRAME,
         line_color: [0.5, 1.0, 0.25, 1.0],
         line_brightness: 2.0,
         ..Default::default()
@@ -848,7 +848,7 @@ fn render_mode_wireframe_draws_lines_and_substitutes_unlit_line_material() {
         manifold_gpu::GpuTriangleFillMode::Lines
     );
     let material = wireframe_material(&mode);
-    assert_eq!(material.kind, crate::node_graph::material::MaterialKind::Unlit);
+    assert_eq!(material.kind, manifold_node_engine::scene::material::MaterialKind::Unlit);
     assert_eq!(
         material.base_color,
         [0.5 * 2.0, 1.0 * 2.0, 0.25 * 2.0, 1.0],
@@ -862,8 +862,8 @@ fn render_mode_solid_substitutes_pbr_clay_material() {
     // PBR carrying the wire's flat clay_color with matte roughness, and
     // the color pass still draws Fill (Solid is a shading substitution,
     // not a topology change).
-    let mode = crate::node_graph::render_mode::RenderMode {
-        mode: crate::node_graph::render_mode::RENDER_MODE_SOLID,
+    let mode = manifold_node_engine::scene::render_mode::RenderMode {
+        mode: manifold_node_engine::scene::render_mode::RENDER_MODE_SOLID,
         clay_color: [0.7, 0.4, 0.2, 1.0],
         ..Default::default()
     };
@@ -875,7 +875,7 @@ fn render_mode_solid_substitutes_pbr_clay_material() {
     let material = clay_material(&mode);
     assert_eq!(
         material.kind,
-        crate::node_graph::material::MaterialKind::Pbr,
+        manifold_node_engine::scene::material::MaterialKind::Pbr,
         "D7: Solid rides the existing PBR pipeline — every object's effective kind is PBR"
     );
     assert_eq!(
@@ -890,7 +890,7 @@ fn render_mode_solid_substitutes_pbr_clay_material() {
     assert_eq!(material.ambient, 0.0);
     assert_eq!(
         material.alpha_mode,
-        crate::node_graph::material::AlphaMode::Opaque,
+        manifold_node_engine::scene::material::AlphaMode::Opaque,
         "clay is opaque coverage regardless of the object's own alpha mode"
     );
 }
@@ -900,14 +900,14 @@ fn render_mode_solid_rt_enabled_collapses_to_rendered() {
     // INV-R4 for Solid: rt_enabled + Solid produces the Rendered uniform
     // set — the effective mode collapses to default, so no clay material
     // ever reaches the gi_materials table.
-    let solid = crate::node_graph::render_mode::RenderMode {
-        mode: crate::node_graph::render_mode::RENDER_MODE_SOLID,
+    let solid = manifold_node_engine::scene::render_mode::RenderMode {
+        mode: manifold_node_engine::scene::render_mode::RENDER_MODE_SOLID,
         ..Default::default()
     };
     let effective = effective_render_mode(&solid, true);
     assert_eq!(
         effective,
-        crate::node_graph::render_mode::RenderMode::default(),
+        manifold_node_engine::scene::render_mode::RenderMode::default(),
         "rt_enabled must ignore the wire (D4)"
     );
     assert_eq!(
@@ -918,7 +918,7 @@ fn render_mode_solid_rt_enabled_collapses_to_rendered() {
     // wire's presence.
     assert_eq!(
         effective_render_mode(&solid, false).mode,
-        crate::node_graph::render_mode::RENDER_MODE_SOLID
+        manifold_node_engine::scene::render_mode::RENDER_MODE_SOLID
     );
 }
 
@@ -927,14 +927,14 @@ fn render_mode_rt_enabled_ignores_the_wire() {
     // INV-R4: rt_enabled + wireframe produces the Rendered uniform set —
     // the effective mode collapses to default, so fill mode is Fill and
     // no wireframe material ever reaches the gi_materials table.
-    let wireframe = crate::node_graph::render_mode::RenderMode {
-        mode: crate::node_graph::render_mode::RENDER_MODE_WIREFRAME,
+    let wireframe = manifold_node_engine::scene::render_mode::RenderMode {
+        mode: manifold_node_engine::scene::render_mode::RENDER_MODE_WIREFRAME,
         ..Default::default()
     };
     let effective = effective_render_mode(&wireframe, true);
     assert_eq!(
         effective,
-        crate::node_graph::render_mode::RenderMode::default(),
+        manifold_node_engine::scene::render_mode::RenderMode::default(),
         "rt_enabled must ignore the wire (D4)"
     );
     assert_eq!(
@@ -945,7 +945,7 @@ fn render_mode_rt_enabled_ignores_the_wire() {
     // the wire's presence.
     assert_eq!(
         effective_render_mode(&wireframe, false).mode,
-        crate::node_graph::render_mode::RENDER_MODE_WIREFRAME
+        manifold_node_engine::scene::render_mode::RENDER_MODE_WIREFRAME
     );
 }
 
@@ -955,8 +955,8 @@ fn render_mode_points_draws_point_topology_with_unlit_line_shading() {
     // the SAME unlit line surface as wireframe (D2: line_color ×
     // line_brightness serve Points too) — a shading substitution plus a
     // topology flag, not a new material family.
-    let mode = crate::node_graph::render_mode::RenderMode {
-        mode: crate::node_graph::render_mode::RENDER_MODE_POINTS,
+    let mode = manifold_node_engine::scene::render_mode::RenderMode {
+        mode: manifold_node_engine::scene::render_mode::RENDER_MODE_POINTS,
         line_color: [0.25, 0.5, 1.0, 1.0],
         line_brightness: 2.0,
         point_size: 5.0,
@@ -974,7 +974,7 @@ fn render_mode_points_draws_point_topology_with_unlit_line_shading() {
     let material = wireframe_material(&mode);
     assert_eq!(
         material.kind,
-        crate::node_graph::material::MaterialKind::Unlit,
+        manifold_node_engine::scene::material::MaterialKind::Unlit,
         "Points rides the synthesized unlit line material, same as wireframe"
     );
     assert_eq!(
@@ -984,13 +984,13 @@ fn render_mode_points_draws_point_topology_with_unlit_line_shading() {
     );
     // Unwired/Rendered never selects points — INV-R1 parity by construction.
     assert!(
-        !color_pass_points(&crate::node_graph::render_mode::RenderMode::default()),
+        !color_pass_points(&manifold_node_engine::scene::render_mode::RenderMode::default()),
         "Rendered (and therefore unwired) must draw triangles"
     );
     // The wire's point_size must reach the uniform slot every draw carries
     // (build_uniforms is the sole RenderSceneUniforms producer).
-    let material = crate::node_graph::material::Material::default_unlit_white();
-    let cam = crate::node_graph::camera::Camera::default_perspective();
+    let material = manifold_node_engine::scene::material::Material::default_unlit_white();
+    let cam = manifold_node_engine::scene::camera::Camera::default_perspective();
     let uniforms = build_uniforms(
         [[0.0; 4]; 4],
         [[0.0; 4]; 4],
@@ -998,7 +998,7 @@ fn render_mode_points_draws_point_topology_with_unlit_line_shading() {
         &material,
         0.0,
         0.0,
-        &crate::node_graph::atmosphere::Atmosphere::default(),
+        &manifold_node_engine::scene::atmosphere::Atmosphere::default(),
         [[0.0; 4]; 4],
         [[0.0; 4]; 4],
         1.0,
@@ -1017,14 +1017,14 @@ fn render_mode_points_rt_enabled_collapses_to_rendered() {
     // INV-R4 for Points: rt_enabled + Points produces the Rendered uniform
     // set — the effective mode collapses to default, so no point topology
     // and no unlit line material ever reach the raster path.
-    let points = crate::node_graph::render_mode::RenderMode {
-        mode: crate::node_graph::render_mode::RENDER_MODE_POINTS,
+    let points = manifold_node_engine::scene::render_mode::RenderMode {
+        mode: manifold_node_engine::scene::render_mode::RENDER_MODE_POINTS,
         ..Default::default()
     };
     let effective = effective_render_mode(&points, true);
     assert_eq!(
         effective,
-        crate::node_graph::render_mode::RenderMode::default(),
+        manifold_node_engine::scene::render_mode::RenderMode::default(),
         "rt_enabled must ignore the wire (D4)"
     );
     assert!(
@@ -1033,7 +1033,7 @@ fn render_mode_points_rt_enabled_collapses_to_rendered() {
     );
     assert_eq!(
         effective_render_mode(&points, false).mode,
-        crate::node_graph::render_mode::RENDER_MODE_POINTS,
+        manifold_node_engine::scene::render_mode::RENDER_MODE_POINTS,
         "without RT the same wire applies"
     );
 }

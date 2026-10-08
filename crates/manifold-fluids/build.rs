@@ -2,7 +2,7 @@ use std::env;
 use std::path::PathBuf;
 
 #[path = "../../scripts/native_source_identity.rs"]
-mod native_source_identity;
+pub mod native_source_identity;
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));

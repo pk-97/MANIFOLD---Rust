@@ -62,7 +62,7 @@ Rejected alternative: rebuild all geometry on every write without metadata. It i
 
 ### 3.1 Exact types and ownership
 
-New renderer module: `crates/manifold-renderer/src/node_graph/mesh_change.rs`. No serde derives. Types are renderer-owned; `manifold-gpu` does not depend on them.
+New renderer module: `crates/manifold-node-engine/src/scene/mesh_change.rs`. No serde derives. Types are renderer-owned; `manifold-gpu` does not depend on them.
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

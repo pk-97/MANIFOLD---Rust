@@ -7,21 +7,21 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
 use super::divide_by_value::DivideByValue;
-use super::dot_products::DotProducts;
-use super::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
-use super::liquid_surface_tests::{Harness, params, read};
-use super::matter_face_component::MatterFaceComponent;
-use super::gpu_flip_preset::WaterScene;
-use super::gpu_flip_scene_tests::Run;
-use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::liquid::grid::{face_coords, face_dims, face_index, face_len};
-use crate::node_graph::liquid::lattice::PADDING_NODES;
-use crate::node_graph::matter::{MatterGridNode, MatterPoint};
-use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::{NodeInstanceId, PrimitiveRegistry, ResourceId};
-use crate::preset_context::PresetContext;
-use crate::preset_runtime::PresetRuntime;
-use crate::render_target::RenderTarget;
+use manifold_node_engine::water::primitives::dot_products::DotProducts;
+use manifold_node_engine::water::primitives::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
+use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
+use manifold_node_engine::water::primitives::matter_face_component::MatterFaceComponent;
+use manifold_node_engine::water::primitives::gpu_flip_preset::WaterScene;
+use crate::water::primitives::gpu_flip_scene_tests::Run;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::water::liquid::grid::{face_coords, face_dims, face_index, face_len};
+use manifold_node_engine::water::liquid::lattice::PADDING_NODES;
+use manifold_node_engine::water::matter::{MatterGridNode, MatterPoint};
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::{exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 /// WaterDamBreakMatter's lattice at its default Resolution, in its unwired
 /// 4 m domain.
@@ -32,7 +32,7 @@ const FACE_INPUTS: [&str; 3] = ["face_u_in", "face_v_in", "face_w_in"];
 /// A matter scene on the app's generator path, every output held past its
 /// frame so any array reads back after it.
 struct MatterRun {
-    device: crate::TestDevice,
+    device: manifold_gpu::testkit::TestDevice,
     runtime: PresetRuntime,
     target: RenderTarget,
     frames: u32,
@@ -40,7 +40,7 @@ struct MatterRun {
 
 impl MatterRun {
     fn new(def: EffectGraphDef) -> Self {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let registry = PrimitiveRegistry::with_builtin();
         let mut runtime =
             PresetRuntime::from_def_with_device(def, &registry, device.arc(), 64, 64, FMT, None).expect("matter scene builds");
@@ -79,7 +79,7 @@ impl MatterRun {
     }
 
     /// The one step running `type_id`.
-    fn step_of(&self, type_id: &str) -> &crate::node_graph::ExecutionStep {
+    fn step_of(&self, type_id: &str) -> &manifold_node_engine::exec::execution_plan::ExecutionStep {
         let mut steps = self.runtime.plan.steps().iter().filter(|s| self.type_of(s.node) == type_id);
         let step = steps.next().unwrap_or_else(|| panic!("no {type_id} step"));
         assert!(steps.next().is_none(), "two {type_id} steps");
@@ -127,7 +127,7 @@ impl MatterRun {
 
     /// Cells of the authored box holding a live point, x fastest.
     fn liquid_cells(&self) -> Vec<bool> {
-        let layout = crate::node_graph::fluid::domain_layout(None, 4.0, CELLS[0]).expect("the preset's domain");
+        let layout = manifold_node_engine::water::fluid::domain_layout(None, 4.0, CELLS[0]).expect("the preset's domain");
         assert_eq!(layout.cells, CELLS);
         let points: Vec<MatterPoint> = self.read_all(self.output_of("node.matter_state", "out"));
         let mut liquid = vec![false; CELLS.iter().product::<u32>() as usize];
@@ -202,7 +202,7 @@ fn layer_shares(faces: &[Vec<f32>; 3], liquid: &[bool], cells: [u32; 3], padding
 #[test]
 fn matter_face_component_fused_matches_unfused() {
     let def = matter_dam_break_faces(Some(1), false);
-    let fused = crate::node_graph::freeze::install::fused_generator_view_for(&def).expect("the scene fuses");
+    let fused = manifold_node_engine::freeze::install::fused_generator_view_for(&def).expect("the scene fuses");
     let mut run = MatterRun::new((*fused.def).clone());
     for _ in 0..3 {
         run.frame();

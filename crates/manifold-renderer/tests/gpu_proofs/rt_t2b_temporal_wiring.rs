@@ -18,10 +18,10 @@
 //! not re-proving the reset mechanism at unit-test tightness.
 
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::PrimitiveRegistry;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
@@ -448,7 +448,7 @@ fn live_temporal_upscale_toggle_is_inert_and_does_not_panic() {
         .set_param(
             scene_node,
             "temporal_upscale",
-            manifold_renderer::node_graph::ParamValue::Bool(true),
+            manifold_node_engine::parameters::ParamValue::Bool(true),
         )
         .expect("temporal_upscale param exists");
 
@@ -560,7 +560,7 @@ fn live_rt_toggle_with_scene_object_does_not_dangle_mesh_slots() {
         .set_param(
             scene_node,
             "rt_enabled",
-            manifold_renderer::node_graph::ParamValue::Bool(true),
+            manifold_node_engine::parameters::ParamValue::Bool(true),
         )
         .expect("rt_enabled param exists");
     for f in 4..7 {

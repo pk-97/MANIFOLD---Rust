@@ -10,7 +10,7 @@
 
 use crate::harness;
 use manifold_gpu::{GpuBinding, GpuTextureFormat};
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const WGSL: &str = r#"
 struct Uniforms { bias: vec4<f32> }

@@ -10,10 +10,10 @@
 use half::f16;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::PrimitiveRegistry;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
@@ -33,12 +33,12 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
     use manifold_core::{Beats, GraphTarget, NodeId};
     use manifold_editing::command::Command;
     use manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand;
-    use manifold_renderer::node_graph::PrimitiveRegistry;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
     use manifold_renderer::node_graph::scene_modifier_authoring::{
         prepare_new_scene_modifier, scene_modifier_objects,
     };
-    use manifold_renderer::node_graph::scene_modifier_expand::expand_scene_modifiers;
+    use manifold_node_engine::load::expand::expand_scene_modifiers;
     use manifold_renderer::node_graph::scene_vm::SceneVm;
 
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -610,7 +610,7 @@ fn imported_flower_physics_off_renders_authored_transform() {
 
 fn warm_imported_runtime(
     runtime: &mut PresetRuntime,
-    target: &manifold_renderer::render_target::RenderTarget,
+    target: &manifold_node_engine::gpu::render_target::RenderTarget,
     params: &ParamManifest,
 ) {
     let h = harness::shared();
@@ -625,7 +625,7 @@ fn warm_imported_runtime(
 
 fn render_frame(
     runtime: &mut PresetRuntime,
-    target: &manifold_renderer::render_target::RenderTarget,
+    target: &manifold_node_engine::gpu::render_target::RenderTarget,
     frame: u32,
     width: u32,
     height: u32,
@@ -644,7 +644,7 @@ fn render_frame(
 
 fn render_frame_with_params(
     runtime: &mut PresetRuntime,
-    target: &manifold_renderer::render_target::RenderTarget,
+    target: &manifold_node_engine::gpu::render_target::RenderTarget,
     frame: u32,
     width: u32,
     height: u32,

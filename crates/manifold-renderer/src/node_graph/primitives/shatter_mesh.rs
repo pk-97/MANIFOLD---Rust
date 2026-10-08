@@ -9,11 +9,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
 
@@ -30,7 +30,7 @@ struct ShatterUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ShatterMesh,
     type_id: "node.shatter_mesh",
     purpose: "Per-triangle face-normal explosion of an Array<MeshVertex> flat triangle list. Triangle t reads/writes verts [3t, 3t+3); each vertex is displaced along the computed face normal by amount * hash(tri_id + seed), and output normals are set to that face normal. `w` is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). Trailing partial triangles pass through unchanged. The flat-list convention matches node.facet_normals and node.spawn_from_mesh.",
@@ -85,7 +85,7 @@ crate::primitive! {
 // `run()` does). The marker carries the member→fused-port mapping for the
 // `weights` port (fused kernels rename inputs to `src_<k>`).
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.shatter_mesh",
         array_ports: &["weights"],
         recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
@@ -98,7 +98,7 @@ impl Primitive for ShatterMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -188,7 +188,7 @@ mod gpu_tests {
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<ShatterMesh>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<ShatterMesh>()
             .expect("shatter_mesh buffer codegen")
     }
 
@@ -217,7 +217,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "shatter-mesh-test",
         );
         let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
@@ -267,7 +267,7 @@ mod gpu_tests {
 
     #[test]
     fn amount_zero_is_identity() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src = vec![
             mk_vertex([0.5, -0.3, 1.2], [0.267, 0.535, 0.802], [0.1, 0.2]),
@@ -288,7 +288,7 @@ mod gpu_tests {
 
     #[test]
     fn face_normals_match_cpu_reference() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let v0 = [0.0f32, 0.0, 0.0];
         let v1 = [4.0f32, 0.0, 0.0];
@@ -326,7 +326,7 @@ mod gpu_tests {
 
     #[test]
     fn displacement_matches_cpu_reference() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let v0 = [0.0f32, 0.0, 0.0];
         let v1 = [1.0f32, 0.0, 0.0];
@@ -380,7 +380,7 @@ mod gpu_tests {
 
     #[test]
     fn short_weights_degrade_to_one_for_the_tail() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let v0 = [0.0f32, 0.0, 0.0];
         let v1 = [1.0f32, 0.0, 0.0];

@@ -15,9 +15,9 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction,
     GpuRenderPipeline, GpuTextureFormat};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -28,7 +28,7 @@ struct FilledRectsUniforms {
     _pad: [u32; 3],
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RenderFilledRects,
     type_id: "node.draw_rectangles",
     purpose: "Instanced filled-rectangle overlay composited onto a source texture. Each item in the input Channels[X, Y, WIDTH, HEIGHT] array draws one axis-aligned filled rectangle with the configured color and alpha. Additive blend. Zero-size items are skipped. For gauge fills, center dots, debug regions, VU meters, status bars, selection boxes.",

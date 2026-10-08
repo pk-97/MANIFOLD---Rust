@@ -22,7 +22,7 @@ use manifold_playback::audio_layer_playback::AudioLayerPlayback;
 use manifold_playback::sync::{SyncArbiter, SyncTargetSnapshot};
 use manifold_playback::tempo_recorder::TempoRecorder;
 use manifold_playback::transport_controller::TransportController;
-use manifold_renderer::gpu::GpuContext;
+use manifold_node_engine::gpu::context::GpuContext;
 
 use crate::content_command::ContentCommand;
 use crate::content_pipeline::ContentPipeline;
@@ -48,7 +48,7 @@ pub struct CachedGraphSnapshot {
     pub preset_type: manifold_core::PresetTypeId,
     pub version: u32,
     pub fingerprint: u64,
-    pub snapshot: Arc<manifold_renderer::node_graph::GraphSnapshot>,
+    pub snapshot: Arc<manifold_node_engine::snapshot::GraphSnapshot>,
 }
 
 /// An in-flight "export current frame" request. Captured across two content
@@ -90,7 +90,7 @@ pub struct ContentThread {
     /// Physics metrics from the most recently completed live content render.
     /// Owned by the content thread so snapshot construction can read it after
     /// `tick_frame` finishes rendering.
-    pub physics_metrics: manifold_renderer::node_graph::physics_metrics::PhysicsMetrics,
+    pub physics_metrics: manifold_node_engine::water::physics_metrics::PhysicsMetrics,
 
     // ── Sync infrastructure ──
     /// Authority gatekeeper — only the active ClockAuthority can issue transport commands.
@@ -154,7 +154,7 @@ pub struct ContentThread {
     /// any. Combined with `watched_graph_target` each frame to drive the
     /// per-node output capture. `None` = no preview.
     pub preview_graph_node: Option<manifold_core::NodeId>,
-    pub modifier_preview_context: Option<std::sync::Arc<manifold_renderer::preset_runtime::ModifierPreviewContext>>,
+    pub modifier_preview_context: Option<std::sync::Arc<manifold_node_engine::runtime::ModifierPreviewContext>>,
     /// Whether the node-output preview applies auto-gain/normalization. Off by
     /// default; toggled from the editor's preview pane ("Smart preview"). Pushed
     /// to the pipeline each frame. Node preview only — never affects the live
@@ -229,7 +229,7 @@ pub struct ContentThread {
 /// param (no metadata, or no binding targets it) and for a binding whose
 /// outer id isn't in the manifest (an authoring-time gap, not a user state).
 fn apply_effective_bound_values(
-    snap: &mut manifold_renderer::node_graph::GraphSnapshot,
+    snap: &mut manifold_node_engine::snapshot::GraphSnapshot,
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     instance: &manifold_core::effects::PresetInstance,
 ) {
@@ -269,10 +269,10 @@ fn apply_effective_bound_values(
 /// recursing into group bodies — a bound node can live inside a group
 /// (BUG-103's glTF per-object case).
 fn find_node_param_row_mut<'a>(
-    nodes: &'a mut [manifold_renderer::node_graph::NodeSnapshot],
+    nodes: &'a mut [manifold_node_engine::snapshot::NodeSnapshot],
     node_id: &manifold_core::NodeId,
     param: &str,
-) -> Option<&'a mut manifold_renderer::node_graph::ParamSnapshot> {
+) -> Option<&'a mut manifold_node_engine::snapshot::ParamSnapshot> {
     for node in nodes.iter_mut() {
         if &node.node_id == node_id
             && let Some(row) = node.parameters.iter_mut().find(|p| p.name == param)
@@ -784,7 +784,7 @@ impl ContentThread {
         // Physics metrics are scoped to the live content render. Warmup runs
         // outside this boundary, and nested parked-thumbnail work suspends the
         // accumulator so the HUD reflects live render cost only.
-        manifold_renderer::node_graph::physics_metrics::begin_frame();
+        manifold_node_engine::water::physics_metrics::begin_frame();
         let render_work_start = std::time::Instant::now();
         self.content_pipeline.render_content(
             &self.gpu,
@@ -796,7 +796,7 @@ impl ContentThread {
             self.editing_service.data_version(),
             Some(self.audio_mod_runtime.visuals()),
         );
-        self.physics_metrics = manifold_renderer::node_graph::physics_metrics::take_frame();
+        self.physics_metrics = manifold_node_engine::water::physics_metrics::take_frame();
         let render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
         self.content_pipeline.set_last_render_work_ms(render_work_ms);
 
@@ -927,7 +927,7 @@ impl ContentThread {
         // env var so production builds stay silent.
         if std::env::var("MANIFOLD_LOG_CHAIN_STATS").is_ok() && self.frame_count.is_multiple_of(60)
         {
-            let s = manifold_renderer::chain_dispatch::take_chain_dispatch_stats();
+            let s = manifold_node_engine::runtime::chain_dispatch::take_chain_dispatch_stats();
             if s.dispatches > 0 {
                 let avg_effects = s.effects as f64 / s.dispatches.max(1) as f64;
                 let avg_dispatch_us = (s.dispatch_ns as f64 / 1000.0) / s.dispatches.max(1) as f64;
@@ -1522,7 +1522,7 @@ impl ContentThread {
     fn graph_snapshot(
         &mut self,
         target: &manifold_core::GraphTarget,
-    ) -> Option<Arc<manifold_renderer::node_graph::GraphSnapshot>> {
+    ) -> Option<Arc<manifold_node_engine::snapshot::GraphSnapshot>> {
         use manifold_core::GraphTarget;
         let fingerprint = self.embedded_presets_fingerprint;
         let project = self.engine.project()?;
@@ -1565,7 +1565,7 @@ impl ContentThread {
                     // Per-card override: `from_def` has no live effect, so its
                     // outer_routings come out empty. The compositor's per-type
                     // routings are authoritative — fill them in here.
-                    let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(def)?;
+                    let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(def)?;
                     snap.outer_routings = self
                         .content_pipeline
                         .outer_routings_for(instance.effect_type());
@@ -1589,10 +1589,10 @@ impl ContentThread {
                     manifold_renderer::generators::registry::graft_preset_metadata_from_bundle(
                         &mut d, gen_type,
                     );
-                    let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(&d)?;
+                    let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(&d)?;
                     if let Some(meta) = d.preset_metadata.as_ref() {
                         use manifold_core::effect_graph_def::BindingTarget;
-                        use manifold_renderer::node_graph::{OuterParamRouting, OuterParamSource};
+                        use manifold_node_engine::snapshot::{OuterParamRouting, OuterParamSource};
                         // Recurse into group bodies (BUG-103): a binding whose
                         // target lives inside a group — the glTF importer's
                         // per-object knobs on `mat_k` nodes inside each object's
@@ -1602,7 +1602,7 @@ impl ContentThread {
                         // arms resolve handles identically.
                         let mut handle_by_id: std::collections::HashMap<&str, &str> =
                             std::collections::HashMap::new();
-                        manifold_renderer::node_graph::collect_node_handles(
+                        manifold_node_engine::load::loaded_preset_view::collect_node_handles(
                             &d.nodes,
                             &mut handle_by_id,
                         );
@@ -1633,27 +1633,27 @@ impl ContentThread {
                     // got views in #4, so this mirrors the effect pristine path
                     // — `snapshot_for_view` does `from_def(canonical_def)` +
                     // `outer_routings_from_view`.
-                    let view = manifold_renderer::node_graph::loaded_preset_view_by_id(gen_type)?;
-                    manifold_renderer::node_graph::snapshot_for_view(view)?
+                    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(gen_type)?;
+                    manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view)?
                 }
             }
             GraphTarget::SceneModifier { .. } => {
                 let local = crate::graph_target::resolve(project, target)?;
                 let owner = project.graph_target_owner(target)?;
-                let mut snap = manifold_renderer::node_graph::GraphSnapshot::from_def(local)?;
+                let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(local)?;
                 let mut projection = local.clone();
                 let metadata = projection.preset_metadata.as_mut()?;
                 metadata.bindings = crate::graph_target::modifier_bindings(project, target)?;
                 metadata.params = owner.params.iter().map(|param|param.spec.clone()).collect();
                 let mut handles = std::collections::HashMap::new();
-                manifold_renderer::node_graph::collect_node_handles(&local.nodes, &mut handles);
+                manifold_node_engine::load::loaded_preset_view::collect_node_handles(&local.nodes, &mut handles);
                 snap.outer_routings = metadata.bindings.iter().filter_map(|binding| {
                     let manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } = &binding.target else { return None; };
-                    Some(manifold_renderer::node_graph::OuterParamRouting {
+                    Some(manifold_node_engine::snapshot::OuterParamRouting {
                         outer_label: binding.label.clone(), outer_param_id: binding.id.clone(),
                         node_handle: handles.get(node_id.as_str())?.to_string(), inner_param:param.clone(),
-                        source: if binding.user_added { manifold_renderer::node_graph::OuterParamSource::User }
-                            else { manifold_renderer::node_graph::OuterParamSource::Static },
+                        source: if binding.user_added { manifold_node_engine::snapshot::OuterParamSource::User }
+                            else { manifold_node_engine::snapshot::OuterParamSource::Static },
                     })
                 }).collect();
                 apply_effective_bound_values(&mut snap, &projection, owner);

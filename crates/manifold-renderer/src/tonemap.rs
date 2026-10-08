@@ -7,8 +7,8 @@
 //! Uses a native Metal compute dispatch via manifold-gpu. This eliminates
 //! Metal TBDR tile alloc/load/store overhead (~290us at 4K per pass).
 
-use crate::gpu_encoder::GpuEncoder;
-use crate::render_target::RenderTarget;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_core::TonemapCurve;
 use manifold_gpu::{GpuDevice, GpuTexture};
 

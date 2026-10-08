@@ -10,11 +10,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::InstanceTransform;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout (NOT the hand `neighbor_smooth.wgsl`
 /// order): scalar params in PARAMS order — `grid_size` (Int → i32),
@@ -30,7 +30,7 @@ struct SmoothUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: NeighborSmooth,
     type_id: "node.neighbor_smooth",
     purpose: "5-point cross-neighborhood smoothing of an Array<InstanceTransform> arranged as an NxN grid. Smooths the xyz position; scale and rotation pass through. Border instances fall back to self. Drives plant-stalk-style smoothed motion in instanced renderers — pair upstream with a procedural compute that emits noisy positions, then this primitive cleans them.",
@@ -78,7 +78,7 @@ impl Primitive for NeighborSmooth {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

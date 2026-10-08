@@ -7,12 +7,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::camera::{Camera, CameraMode};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::scene::camera::{Camera, CameraMode};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Codegen uniform layout: params in PARAMS order, the derived camera
 /// fields, then `dispatch_count`, padded to 16 bytes.
@@ -61,7 +61,7 @@ pub(crate) struct GridDerived {
     pub y_top: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ProjectedGrid,
     type_id: "node.projected_grid",
     purpose: "A columns × rows grid of MeshVertex points on the plane y = level, laid so it covers the camera's view from the bottom of the frame to the horizon at constant screen spacing. Each point is a screen-space sample cast onto the plane; rays that miss it, or meet it past Max Distance, stop at Max Distance. UV is the point's world x/z in metres, the rest position node.ocean_displace samples at. Vertex colour is the water's own colour. Row 0 is the horizon, so node.make_triangles' normals point up.",
@@ -191,7 +191,7 @@ impl Primitive for ProjectedGrid {
     fn array_output_capacity(
         &self,
         port: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _inputs: &[(&str, u32)],
     ) -> Option<u32> {
         let get = |name: &str, default: f32| match params.get(name) {
@@ -216,7 +216,7 @@ impl Primitive for ProjectedGrid {
         let Some(out) = ctx.outputs.array("vertices") else {
             return;
         };
-        let count = super::standalone_pipeline::active_elements::<MeshVertex>(out.size, columns * rows);
+        let count = manifold_node_engine::primitives::standalone_pipeline::active_elements::<MeshVertex>(out.size, columns * rows);
         if count == 0 {
             return;
         }
@@ -341,9 +341,9 @@ mod gpu_tests {
     /// The generated kernel matches the CPU reference vertex for vertex.
     #[test]
     fn projected_grid_matches_cpu() {
-        let device = crate::test_device();
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<ProjectedGrid>().expect("projected_grid codegen");
-        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "projected-grid-test");
+        let device = manifold_gpu::testkit::test_device();
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<ProjectedGrid>().expect("projected_grid codegen");
+        let pipeline = device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "projected-grid-test");
         let (cols, rows, level, range, margin) = (48u32, 27u32, 0.5f32, 20000.0f32, 0.25f32);
         let cam = test_camera();
         let derived = derive(&cam, 16.0 / 9.0, level, range, margin).unwrap();
@@ -393,3 +393,6 @@ mod tests_support {
         cam
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

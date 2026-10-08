@@ -10,10 +10,10 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::transform::Transform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::transform::Transform;
 
 /// Phase offsets per axis so each Euler component shakes with different
 /// timing while staying derived from the same time value.
@@ -27,7 +27,7 @@ const NOISE_FREQS: [f32; 4] = [1.0, 2.7182817, 4.6692016, 7.389056];
 /// Normalisation so the sum sits roughly in [-1, 1].
 const NOISE_SCALE: f32 = 0.25;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TransformShake,
     type_id: "node.transform_shake",
     purpose: "Stateless camera/object shake on a Transform wire. Adds a summed-sine noise offset (rotational dominant, positional at 0.25 ratio) driven by time × frequency. amount² response means amount = 0 is a byte-identical passthrough.",
@@ -143,12 +143,12 @@ fn shake_noise_vector(scaled_time: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::MockBackend;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::{FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::ports::PortType;
+    use manifold_node_engine::exec::backend::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::PortType;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -191,7 +191,7 @@ mod tests {
         for &(name, value) in wires {
             let slot = backend.acquire(
                 ResourceId(next_id),
-                crate::node_graph::ports::PortType::Scalar(crate::node_graph::ports::ScalarType::F32),
+                manifold_node_engine::ports::PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
                 None,
                 (0, 0),
             );

@@ -71,7 +71,7 @@ This makes the real app and the headless harness share one path. Do NOT add insp
 
 **Root cause (verified this session, closes the backlog entry's "unknown"):** not a partition regression. Commit `a065dec4` (2026-07-16) unbundled eight 3D-infra presets to `assets/reference-presets/`; CinematicScene was one of them and it fused (its fused-WGSL golden was deleted in the same commit). The bundled fused-preset count therefore dropped 33 → 32 while regions/atoms RATCHETED UP (measured this session at tip: 32 presets / 56 regions / 243 atoms vs the P6 floors 33/55/225). The backlog's "do NOT just lower the floor" instruction assumed a regression; the evidence overturns it — lowering the preset floor is the correct fix here.
 
-**Fix:** in `crates/manifold-renderer/src/node_graph/freeze/proof.rs` (`fusion_coverage_baseline`, floors at ~line 2103): preset floor 33 → 32, regions floor 55 → 56, atoms floor 225 → 240 (measured 243, small churn headroom per the test's own convention). Rewrite the floor comment: cite `a065dec4` (CinematicScene left the bundled set), note regions/atoms ratcheted from post-P6 work, date it.
+**Fix:** in `crates/manifold-renderer/src/engine_contract_tests/freeze_proof.rs` (`fusion_coverage_baseline`, floors at ~line 2103): preset floor 33 → 32, regions floor 55 → 56, atoms floor 225 → 240 (measured 243, small churn headroom per the test's own convention). Rewrite the floor comment: cite `a065dec4` (CinematicScene left the bundled set), note regions/atoms ratcheted from post-P6 work, date it.
 
 **Gates:** `cargo test -p manifold-renderer --features gpu-proofs --lib node_graph::freeze::proof::fusion_coverage_baseline` green (≈2s after build). Flip BUG-183's backlog status with the root cause.
 

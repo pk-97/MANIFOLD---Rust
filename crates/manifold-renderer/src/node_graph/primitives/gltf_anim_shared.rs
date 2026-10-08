@@ -12,9 +12,9 @@
 //! independently gate-tested per primitive) avoids tripling a bug surface
 //! that has real correctness coupling.
 
-use crate::node_graph::effect_node::FrameTime;
+use manifold_node_engine::exec::effect_node::FrameTime;
 use crate::node_graph::gltf_load::GltfInterp;
-use crate::node_graph::parameters::TableData;
+use manifold_node_engine::parameters::TableData;
 
 /// How `progress` maps into `[0, 1]` past the wrap point. Applies uniformly
 /// to wired and default-beat-drive progress (D3: "whichever the source, the

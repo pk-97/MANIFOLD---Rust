@@ -697,8 +697,10 @@ def _main(stack):
     # Catalog freshness is relevant to node declarations and catalog output,
     # not every change in a renderer dependency.
     catalog_paths = ("crates/manifold-renderer/src/node_graph/primitives/",
+                     "crates/manifold-node-engine/src/primitives/",
+                     "crates/manifold-node-engine/src/water/primitives/",
                      "crates/manifold-renderer/src/node_graph/catalog_gen.rs",
-                     "crates/manifold-renderer/src/node_graph/descriptor.rs",
+                     "crates/manifold-node-engine/src/descriptor.rs",
                      "crates/manifold-renderer/src/node_graph/registry.rs",
                      "docs/node_catalog")
     if any(path.startswith(catalog_paths) for path in paths):

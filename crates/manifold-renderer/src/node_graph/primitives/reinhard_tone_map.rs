@@ -21,10 +21,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -35,7 +35,7 @@ struct ReinhardUniforms {
     _pad0: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ReinhardToneMap,
     type_id: "node.reinhard_tone_map",
     purpose: "Tone mapping for HDR display in one of three curves: Extended (default — `x*(1+x/9)/(1+x)`, matches FluidSim bit-for-bit, preserves highlights), Simple (`x/(x+1)`, the textbook Reinhard curve, matches the legacy MetallicGlass render terminal bit-for-bit), or Log (`log2(1+x)/log2(1+64)` — the flame-fractal response for particle-density pipelines: reveals faint accumulation structure Reinhard compresses away; ride intensity as the exposure). intensity + contrast are port-shadowed pre-multipliers — wire a `node.canvas_area_scale → node.math` chain into `intensity` for resolution-aware brightness compensation in particle-density pipelines. SDR-only — for HDR-aware (PQ / EDR) or alternate curves (ACES / AgX / Khronos PBR Neutral), use `node.tone_map`.",
@@ -143,15 +143,12 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::ReinhardToneMap;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::Slot;
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::{
-        ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
-        ParamValue, Source, compile,
-    };
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -178,7 +175,7 @@ mod gpu_tests {
     /// Run `Source → ReinhardToneMap → FinalOutput` on a solid-colour
     /// input and return the (0,0) output pixel.
     fn run_tone_map_at(pixel: f32, intensity: f32, contrast: f32, curve: u32) -> [f32; 4] {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 

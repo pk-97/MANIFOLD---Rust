@@ -406,7 +406,7 @@ fn rt_dynamic_export_first_frame_and_state_steps() {
         assert!((frame.dt_seconds - expected_dt).abs() < 1e-9);
         assert_eq!(
             frame.status,
-            manifold_renderer::frame_status::FrameRenderStatus::Complete
+            manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete
         );
     }
     assert!(

@@ -1,6 +1,6 @@
 use super::*;
 use crate::headless_readback::readback_raw_halves;
-use crate::node_graph::camera::CameraMode;
+use manifold_node_engine::scene::camera::CameraMode;
 use manifold_gpu::GpuTextureFormat;
 
 /// CPU port of the diagram shader's `euler_xyz` + `apply_copy`: rotate (XYZ
@@ -54,7 +54,7 @@ fn apply_copy_cpu(p: [f32; 3], inst: InstanceTransform) -> [f32; 3] {
 
 #[test]
 fn math_view_instance_history_records_per_copy_motion() {
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
     let pipeline = device.create_compute_pipeline(CAPTURE_SHADER, "cs_main", "instance-history-proof");
     let history = device.create_buffer_shared(
@@ -189,9 +189,9 @@ fn math_view_instance_history_records_per_copy_motion() {
 fn math_view_trails_render_recorded_copy_motion() {
     const W: u32 = 640;
     const H: u32 = 360;
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
-    let target = crate::render_target::RenderTarget::new(
+    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
         &device,
         W,
         H,
@@ -396,9 +396,9 @@ fn math_view_trails_render_recorded_copy_motion() {
 fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
     const W: u32 = 640;
     const H: u32 = 360;
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
-    let target = crate::render_target::RenderTarget::new(
+    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
         &device,
         W,
         H,
@@ -566,9 +566,9 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
 fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
     const W: u32 = 640;
     const H: u32 = 360;
-    let guard = crate::test_device();
+    let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
-    let target = crate::render_target::RenderTarget::new(
+    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
         &device,
         W,
         H,

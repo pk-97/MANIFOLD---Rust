@@ -22,7 +22,7 @@ clip start, every tempo-map point inside it, and the clip end — mirroring the
 playback formula pointwise. Carried as plain `Vec<(f32, f32)>` on
 `ViewportClip`/`ClipScreenRect` (ui depends on foundation only);
 `warped_secs_per_beat` deleted (no other consumers).
-`crates/manifold-renderer/src/clip_content_gpu.rs` draws one `draw_waveform`
+`crates/manifold-ui-paint/src/clip_content_gpu.rs` draws one `draw_waveform`
 segment per breakpoint pair; fingerprint folds in segment geometry + MIP texel
 count. Constant-tempo projects produce exactly 2 breakpoints — pixel-identical
 to the old rendering.

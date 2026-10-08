@@ -68,22 +68,22 @@ use std::path::PathBuf;
 
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuDevice;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::{
     encode_rgba8_png, mean_abs_half_diff, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8,
 };
 use manifold_renderer::compositor::{Compositor, CompositorFrame, CompositeLayerDescriptor};
 use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback};
 use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 use manifold_renderer::presentation::{
     DisplayCapabilities, DisplayPlan, LinearPresentationTarget, LinearSceneFrame,
     PresentationPipeline, UI_FORMAT,
 };
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_renderer::tonemap::{TonemapMode, TonemapSettings};
 use manifold_core::{BlendMode, LayerId, LayerType, TonemapCurve};
 use manifold_gpu::GpuLoadAction;

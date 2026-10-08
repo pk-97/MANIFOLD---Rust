@@ -8,10 +8,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,7 +22,7 @@ struct PolarUniforms {
     _pad1: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: PolarField,
     type_id: "node.polar_field",
     purpose: "Pure generator. Per-pixel polar coordinates around a configurable center: R = angle (atan2, normalized to [0,1]), G = radius (UV distance), B = 0, A = 1. Building block for spirals, rotations, kaleidoscopes, and any radial composition.",

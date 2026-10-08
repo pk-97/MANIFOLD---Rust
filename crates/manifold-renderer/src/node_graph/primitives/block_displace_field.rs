@@ -20,10 +20,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 // Standalone-codegen uniform layout: PARAMS order (amount, block_size, speed,
 // time) then the injected multi-output write flags (write_offset, write_hash),
@@ -42,7 +42,7 @@ struct BlockDisplaceUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BlockDisplaceField,
     type_id: "node.block_displace_field",
     purpose: "Generator for a per-block random UV-offset field (the datamosh / block-glitch building block). Quantises the canvas into block_size-pixel blocks, hashes each (animated by time), and emits `offset` (RG = signed per-block UV displacement, gated so only a fraction of blocks move) and `hash` (R = raw per-block hash in [0,1) for downstream per-block accents that must align with the displaced blocks). Feed `offset` into node.remap (Relative mode) — alone or summed with other offset fields via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
@@ -110,7 +110,7 @@ crate::primitive! {
 // D7/P0: per-frame recompute for a FUSED region's `time` field, IN DECLARATION
 // ORDER — `run()` resolves an unwired `time` input from `ctx.time.seconds.0`.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.block_displace_field",
         array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32]),

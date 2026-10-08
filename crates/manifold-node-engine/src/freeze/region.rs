@@ -1,0 +1,3500 @@
+//! Region partition — the pointwise-fusion finder (design section 3).
+//!
+//! This is the "other half" of the freeze compiler. [`super::codegen`] already
+//! chains a region of atom bodies into one kernel; [`super::install`] already
+//! rewrites a def around a region and retargets its bindings. What was missing
+//! was the *finder*: until now [`super::install::fuse_canonical_def`] only fused
+//! a card when its **entire** worker body was one pointwise region rooted at the
+//! single source (the ColorGrade shape) — one boundary anywhere left the whole
+//! card unfused. This module generalises that to **partition any flattened graph
+//! into every maximal pointwise region**, cutting at boundaries, so an effect
+//! with a blur (or warp, feedback, DNN, resolution change) in the middle still
+//! fuses the pure runs on either side of it.
+//!
+//! ## The algorithm (section 3 "region growing")
+//!
+//! 1. **Classify** each node as [`NodeClass::Eligible`] (a same-element-space
+//!    pointwise/coincident atom that can thread a register) or
+//!    [`NodeClass::Boundary`] (everything else — the seams). Classification is
+//!    read off each atom's declared [`FusionKind`](super::classify::FusionKind)
+//!    plus [`InputAccess`](super::classify::InputAccess); never inferred from
+//!    a hard-coded atom list, so a newly-converted atom widens coverage with no
+//!    change here (and an unclassified atom stays `Boundary` — conservative).
+//! 2. **Grow** maximal connected components over texture wires between eligible
+//!    nodes. Each component is a candidate region; boundaries are the cuts.
+//! 3. **Resolve** each region's *external* inputs (texture wires entering it from
+//!    a non-member — read once as `src_e`) and its *output(s)* (each member whose
+//!    texture output leaves the region — one for a linear chain, several for a
+//!    fan-out, each stored to its own `dst_<k>`). Conservative gates (length ≥ 2,
+//!    every escaping consumer live) skip anything the codegen can't yet express or
+//!    the executor wouldn't allocate — left unfused, never miscompiled.
+//!
+//! Everything here is a pure function over the def + registry — no GPU — so the
+//! partition is unit-tested structurally (design section 7's "cheap GPU-free layer
+//! first") before the install path ever renders it.
+//!
+//! ## Conservative-by-construction
+//!
+//! Every gate fails *closed*: an ambiguous node is a `Boundary`, a region the
+//! codegen can't express is dropped, an unrecognised wire shape aborts the
+//! region. The unfused graph is always a correct fallback, so under-fusing only
+//! costs speed; the partition never produces a region that renders differently.
+
+use ahash::{AHashMap, AHashSet};
+use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
+
+use crate::persistence::PrimitiveRegistry;
+use crate::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
+use crate::freeze::classify::{CapacityExpr, FusedOutputCapacity, InputAccess};
+use crate::freeze::codegen::param_wgsl_type;
+use crate::freeze::space::{ElementSpace, resolve_output_spaces, space_of};
+use crate::ports::PortType;
+
+/// Resolved per-output element spaces, or `None` when the def didn't build
+/// standalone (synthetic fixtures) — every lookup then defaults to
+/// [`ElementSpace::Canvas`], reproducing pre-tier-6 behaviour.
+type SpaceMap = Option<AHashMap<(u32, String), ElementSpace>>;
+
+/// Minimum members for a region to be worth fusing. A single-node "region" is
+/// just the atom's own standalone kernel — fusing it changes nothing and only
+/// adds a rewrite — so the smallest useful region threads one register between
+/// two atoms (saving one full-canvas round-trip). The perf gate is the real
+/// arbiter of whether a given region pays; this only avoids emitting no-ops.
+const MIN_REGION_LEN: usize = 2;
+
+/// How a graph node participates in fusion, resolved once per node.
+///
+/// `pub(crate)` (with [`classify_node`]) since GRAPH_TOOLING_DESIGN P3's
+/// `graph_tool fusion` verb calls it directly for its per-node report — the
+/// exact same classification `partition_regions` grows regions from, never
+/// a second implementation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeClass {
+    /// A same-element-space atom that folds into a fused kernel: a pointwise /
+    /// coincident atom threading its input register(s), or a Source generator
+    /// producing the region's head value from position. Writes one texture output.
+    Eligible,
+    /// A fusion seam — source/final_output, any non-pointwise atom (blur,
+    /// feedback, DNN, resample, generator, router), a gather-input atom, a
+    /// resolution/scale override, a non-scalar param, or a control-wired param.
+    /// Boundaries stay their own dispatch and bound the regions around them.
+    Boundary,
+}
+
+/// One member of a fusion region: its def node-id and each texture input
+/// resolved to where it reads from.
+#[derive(Debug, Clone)]
+pub struct RegionMember {
+    /// The member's `EffectGraphNode::id` (doc id).
+    pub doc_id: u32,
+    /// Texture inputs in body-arg order (the atom's `inputs()` filtered to
+    /// texture ports). Each resolves to an external slot, an earlier member,
+    /// or `Unwired` (an optional port with no wire).
+    pub inputs: Vec<RegionInput>,
+    /// How each input in [`Self::inputs`] is read (aligned by index). A `Gather`
+    /// entry's input is always an [`RegionInput::External`] — the codegen binds
+    /// it as a texture (+ sampler) the body samples itself.
+    pub input_access: Vec<InputAccess>,
+    /// f16-faithful rounding (stencil tier A): this member sits inside a
+    /// feedback loop and its unfused output texture is f16, so the unfused
+    /// graph rounds its value to half precision every frame. The fused kernel
+    /// must reproduce that rounding in-register (`q16` pack/unpack round-trip)
+    /// or the f32 registers drift from the editor's unfused render and the
+    /// loop amplifies the gap. False for fp32-marked members (their store is
+    /// exact) and everything outside a loop (shipped behaviour, unchanged).
+    pub quantize_f16: bool,
+}
+
+/// Where one of a member's texture inputs comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegionInput {
+    /// The region's Nth external input (a texture produced outside the region,
+    /// read once into a register). Index into [`Region::externals`].
+    External(usize),
+    /// Another member's output register (must be earlier in topo order).
+    Member(u32),
+    /// Another member's output register, but that member is MULTI-OUTPUT (a
+    /// struct-return body with ≥2 texture outputs — voronoi_2d's `out`/
+    /// `cell_id`, D4/P6): the register alone isn't the value, so this names
+    /// which `BodyOutputs` field the wire threads. Single-output members keep
+    /// `Member(u32)` (the register IS the value already) — byte-identical for
+    /// every prior region. Carries the producer's own output PORT NAME (from
+    /// the wire), same shape as `ExternalRef::from_port`.
+    MemberPort(u32, String),
+    /// An OPTIONAL texture input with no wire (pack_channels' unwired b/a). The
+    /// fused body receives a zero vector gated off by its injected use flag —
+    /// folded to a literal `0u` at codegen since wiring is static in the def.
+    Unwired,
+    /// STENCIL tier: a Gather input backed by a VIRTUAL SOURCE — the producer
+    /// chain is recomputed inside the consumer's `fetch_<port>` instead of
+    /// rendered to a texture. Index into [`Region::virtual_chains`]. Only ever
+    /// paired with a `Gather` access on a stencil-fetch member.
+    Virtual(usize),
+}
+
+/// A pointwise/Source chain absorbed INTO a stencil member's gather read (the
+/// stencil tier's "fuse through the blur"). The chain's members are deleted
+/// from the installed def like ordinary fused members; the consumer's fetch
+/// re-evaluates them at each tap's bilinear corner texels (externals read via
+/// exact `textureLoad`, tail value q16-rounded to reproduce the f16 store the
+/// unfused chain made), so the only fused-vs-unfused gap is the manual f32
+/// lerp vs the hardware filter unit — measured by the stencil parity proof.
+#[derive(Debug, Clone)]
+pub struct VirtualChain {
+    /// The consuming stencil member's doc id.
+    pub consumer: u32,
+    /// Which of the consumer's texture-input slots (index into its
+    /// [`RegionMember::inputs`]) this chain backs.
+    pub input_index: usize,
+    /// Chain members in topo order. Inputs resolve to [`RegionInput::External`]
+    /// (region externals — read at corner texels) or [`RegionInput::Member`] of
+    /// an EARLIER chain member (never a main-region member; convexity ensures
+    /// the region never feeds the chain).
+    pub members: Vec<RegionMember>,
+    /// Doc id of the chain's OUTPUT member — the node whose texture the unfused
+    /// graph stored for the consumer to sample. Its (q16-rounded) value is what
+    /// the fetch returns per corner; not necessarily topo-last (the output may
+    /// also feed other chain members).
+    pub output: u32,
+}
+
+/// A texture produced outside a region and read by ≥1 of its members. Read once
+/// as the fused node's `src_<slot>` input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalRef {
+    /// Producer node doc-id.
+    pub from_node: u32,
+    /// Producer output port.
+    pub from_port: String,
+}
+
+/// A maximal fusable region: members in topo order, the external textures they
+/// read, and the member(s) whose output leaves the region (one for a linear
+/// chain, several for a fan-out).
+#[derive(Debug, Clone)]
+pub struct Region {
+    /// Members in topological order (every `Member` input refers to an earlier
+    /// entry). The fused kernel evaluates them in this order, threading registers.
+    pub members: Vec<RegionMember>,
+    /// External inputs, indexed by the slot a [`RegionInput::External`] names.
+    pub externals: Vec<ExternalRef>,
+    /// The member(s) whose texture output is consumed outside the region (feeds a
+    /// boundary or `final_output`), in stable doc-id order. Usually one — the tail
+    /// of a linear chain. A FAN-OUT region has several: an interior member whose
+    /// output feeds two distinct downstream boundaries appears once here and is
+    /// stored to its own `dst_<k>` slot (this vec's index). Every output's
+    /// consumers are reachable from `final_output` (live), so the install pass can
+    /// wire each `dst_<k>` to an allocated texture — a region with any escaping
+    /// wire to a dead (non-final-reachable) consumer is dropped, not fused.
+    /// Each entry carries the escaping PORT NAME too (D4/P6): a single-output
+    /// member has exactly one, so this is unchanged in shape for every prior
+    /// region; a MULTI-output member (voronoi_2d) can appear TWICE here — once
+    /// per distinct port that has a live external consumer — each its own
+    /// `dst_<k>`.
+    pub outputs: Vec<(u32, String)>,
+    /// The element space every member ran at in the UNFUSED plan (tier 6).
+    /// `Some` for texture regions — the install pass stamps a `Scaled` space
+    /// onto the fused node's `output_canvas_scales` so the executor sizes the
+    /// fused output exactly like the member output it replaced, and the
+    /// build-check verifies the fused def resolves back to this space.
+    /// `None` for buffer (Array) regions, which have no texture grid.
+    pub space: Option<ElementSpace>,
+    /// CROSS-RESOLUTION externals (workstream 4): external slots whose producer
+    /// resolved to a DIFFERENT element space than the region's own grid and are
+    /// read `Coincident` (resolution-robust). The fused kernel can't `textureLoad`
+    /// these at its own canvas coord — a half-res producer would misread — so the
+    /// codegen samples them through the shared `samp` at the fragment UV
+    /// (`textureSampleLevel`), exactly the read the unfused atom makes. Same-space
+    /// coincident externals stay textureLoad (byte-identical to the v1 codegen);
+    /// `CoincidentTexel` externals are never admitted off-space (they'd corrupt a
+    /// texel-exact pattern under rescale) — the region drops instead. Empty for
+    /// every same-space region (and buffer regions). Sorted, deduped.
+    pub sampled_externals: Vec<usize>,
+    /// STENCIL tier: producer chains absorbed into a stencil member's gather
+    /// read (recomputed per tap corner instead of round-tripped through a
+    /// canvas texture). Empty for every non-stencil region.
+    pub virtual_chains: Vec<VirtualChain>,
+    /// BUFFER regions only: the composed output-capacity expression over the
+    /// ARRAY external slots (BUG-orm4). `None` = identity (the fused count
+    /// anchors on `min(arrayLength(&src_e), …)` over every array external —
+    /// every pre-BUG-orm4 region). `Some(expr)` = a member declared
+    /// [`FusedOutputCapacity::MultipleOf`] and the region's whole output
+    /// capacity composes to `expr` (e.g. `Mul(2, Slot(0))` for a
+    /// reflect_array-headed region) — the codegen emits `expr` as the count
+    /// anchor so the widened range (the mirrored half, the echo stride) is
+    /// actually dispatched and written, and mirrors it to
+    /// `node.wgsl_compute` through the `// @fused_output_capacity:` marker so
+    /// the fresh `dst` is sized to match. A lattice-sized region (a
+    /// `ParamProduct` member) composes its count from the fused uniforms,
+    /// clamped as `lattice_count` describes. Resolved in `build_region`;
+    /// texture regions keep `None`.
+    pub output_capacity: Option<CapacityExpr>,
+}
+
+/// Partition a flattened def into its maximal pointwise-fusion regions. Returns
+/// an empty vec when nothing fuses (the overwhelming-majority case today, and
+/// always safe). Deterministic: members and regions come out in stable doc-id /
+/// topo order so the generated WGSL — a pipeline-cache key — is reproducible.
+pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Vec<Region> {
+    // Groups must be flattened away before fusion ever sees the def (the loader
+    // does this); a def still carrying a group node isn't a fusion target.
+    if def.nodes.iter().any(|n| n.group.is_some()) {
+        return Vec::new();
+    }
+
+    // ── Resolve every output's element space from the unfused plan (tier 6).
+    // `None` (def doesn't build standalone — synthetic fixtures) degrades every
+    // lookup to Canvas, i.e. the pre-tier-6 single-space behaviour. ──
+    let spaces: SpaceMap = resolve_output_spaces(def, registry);
+
+    // ── Classify every node once. ──
+    let class: AHashMap<u32, NodeClass> = def
+        .nodes
+        .iter()
+        .map(|n| (n.id, classify_node(n, def, registry)))
+        .collect();
+    let eligible: AHashSet<u32> = class
+        .iter()
+        .filter(|(_, c)| **c == NodeClass::Eligible)
+        .map(|(id, _)| *id)
+        .collect();
+    if eligible.is_empty() {
+        return Vec::new();
+    }
+
+    // ── Grow regions over texture wires between eligible nodes — but only when
+    // the merge keeps the collapsed graph ACYCLIC (convexity). ──
+    //
+    // A coincident texture wire eligible→eligible means the consumer can thread
+    // the producer's register, so the two *want* to be one region. (A GATHER-
+    // consumed wire does NOT union — a gather samples the whole texture at a coord
+    // it computes, which a single register can't carry, so the gathered producer
+    // stays an external the body samples; that's what makes gather-into-region
+    // safe.) But two register-adjacent atoms still can't fuse if an *external*
+    // path runs from one, out through a boundary, and back into the other:
+    // collapsing them to one node would make that boundary both read from and
+    // write to the fused node — a cycle the graph builder rejects (Watercolor's
+    // uv_displace → blur → slope_displace is exactly this). So we merge greedily
+    // and accept a union only if the region partition stays convex.
+    //
+    // "Acyclic" is measured on the FORWARD dependency graph: a state-capture wire
+    // (a feedback node's captured input — last frame's value, not this frame's) is
+    // a back edge the planner already excludes, so we exclude it too. Otherwise a
+    // legal feedback loop would look like a cycle and we'd over-split.
+    let forward: Vec<(u32, u32)> = def
+        .wires
+        .iter()
+        .filter(|w| !is_state_capture_wire(def, registry, w))
+        .map(|w| (w.from_node, w.to_node))
+        .collect();
+    // A substep region repeats its body inside one frame
+    // (`docs/GPU_MPM_SOLVER_DESIGN.md` D7). A kernel spanning its border would
+    // repeat outside work per iteration or leak a body intermediate, so nodes
+    // on different sides never union.
+    let substep_side = substep_sides(def, registry, &forward);
+    let mut candidates: Vec<(u32, u32)> = def
+        .wires
+        .iter()
+        .filter(|w| {
+            eligible.contains(&w.from_node)
+                && eligible.contains(&w.to_node)
+                && substep_side.get(&w.from_node) == substep_side.get(&w.to_node)
+                // Union over coincident wires of EITHER domain: a texture (pixel)
+                // chain OR an Array (particle / instance) chain. A texture wire
+                // into a BUFFER atom (a force-sampler's flow field, anti_clump's
+                // modulator) is a sampler-GATHER — the body samples the whole
+                // texture at element-computed coords, which no register can
+                // carry — so it never unions; the texture producer stays an
+                // external the fused kernel binds. Without this guard an
+                // eligible texture atom would merge into a buffer region across
+                // that wire, producing an unexpressible mixed-domain region.
+                && (is_array_wire(def, registry, w)
+                    || (is_texture_wire(def, registry, w)
+                        && !node_is_buffer_atom(def, registry, w.to_node)))
+                && wire_coincident_consumed(def, registry, w)
+                // Tier 6: a texture union additionally requires producer and
+                // consumer to share one element space — the fused kernel
+                // iterates a single grid. Mixed-space chains (a quarter-res
+                // value feeding a node whose OWN output resolved to canvas via
+                // the mixed-input fallback) split at the seam instead of
+                // fusing onto the wrong grid. Array wires carry no texture
+                // grid, so the check doesn't apply.
+                && (is_array_wire(def, registry, w)
+                    || space_of(spaces.as_ref(), w.from_node, &w.from_port)
+                        == node_output_space(spaces.as_ref(), def, registry, w.to_node))
+        })
+        .map(|w| (w.from_node, w.to_node))
+        .collect();
+    candidates.sort_unstable(); // deterministic merge order → reproducible regions
+    candidates.dedup();
+
+    // D4/P6 (multi-output bridging) + BufferGather admission: a gather-consumed
+    // wire's producer must NEVER end up a member of the SAME region as its
+    // consumer (`build_region` bails on exactly this — "gather input wired from
+    // a member" — because a register can't carry a whole texture/array the body
+    // reads at a computed coord/index). Before these phases every multi-output /
+    // BufferGather candidate was Boundary, so it could never bridge two
+    // components that only interact through such a wire. Now a multi-output
+    // node's TWO ports can each union independently (one feeds branch A
+    // coincidentally, the other feeds branch B coincidentally) and merge A and
+    // B into one component even though A and B ALSO share an unrelated gather
+    // wire between two of their OTHER members (Glitch: block_displace_field's
+    // `offset`→combine_offset→remap bridges into `hash`→exposure→...→masked_mix,
+    // and remap's output feeds rgb_split's GATHER `in` input — remap and
+    // rgb_split were never unioned by that wire directly, but the multi-output
+    // bridge puts them in one component anyway). Same shape as the cycle check
+    // just below: track every gather-consumed eligible→eligible pair — texture
+    // OR Array (a `BufferGather` wire is the buffer-domain twin) — and refuse
+    // any union that would collapse both endpoints into one region — the two
+    // components stay separate and connect via the SAME cross-region gather the
+    // multi-region model already relies on (`generate_fused`'s doc: "two
+    // distinct regions can only be directly texture-wired through a GATHER").
+    let gather_pairs: Vec<(u32, u32)> = def
+        .wires
+        .iter()
+        .filter(|w| {
+            eligible.contains(&w.from_node)
+                && eligible.contains(&w.to_node)
+                && !wire_coincident_consumed(def, registry, w)
+                && (is_texture_wire(def, registry, w) || is_array_wire(def, registry, w))
+        })
+        .map(|w| (w.from_node, w.to_node))
+        .collect();
+
+    let mut uf = UnionFind::new(&eligible);
+    for (a, b) in candidates {
+        if uf.find(a) == uf.find(b) {
+            continue;
+        }
+        // Region key of each node under a TENTATIVE merge of a's and b's regions:
+        // an eligible node maps to its region rep (with b's rep folded onto a's);
+        // a boundary maps to itself. Unifying via the rep keeps the test O(V+E).
+        let finds: AHashMap<u32, u32> = eligible.iter().map(|&n| (n, uf.find(n))).collect();
+        let (ra, rb) = (uf.find(a), uf.find(b));
+        let key = |n: u32| -> u32 {
+            match finds.get(&n) {
+                Some(&r) if r == rb => ra,
+                Some(&r) => r,
+                None => n,
+            }
+        };
+        let would_bridge_a_gather_wire = gather_pairs.iter().any(|&(gp, gc)| key(gp) == key(gc));
+        if !collapsed_has_cycle(&forward, &key) && !would_bridge_a_gather_wire {
+            uf.union(a, b);
+        }
+    }
+    let mut components: AHashMap<u32, Vec<u32>> = AHashMap::default();
+    for &id in &eligible {
+        components.entry(uf.find(id)).or_default().push(id);
+    }
+    // Deterministic component list (rep, sorted members) — reused by the
+    // stencil absorption pass below.
+    let mut comp_list: Vec<(u32, Vec<u32>)> = components
+        .into_iter()
+        .map(|(rep, mut nodes)| {
+            nodes.sort_unstable();
+            (rep, nodes)
+        })
+        .collect();
+    comp_list.sort_unstable_by_key(|(rep, _)| *rep);
+
+    // Nodes that reach a `final_output` (live). A region output's consumer must
+    // be in here, so each fused `dst_<k>` lands on a texture the executor actually
+    // allocates — see `build_region`.
+    let final_reachable = final_reachable_nodes(def);
+
+    // ── Build a region from each component; drop the ones v1 can't express. ──
+    let mut regions: Vec<Region> = Vec::new();
+    for (_, nodes) in &comp_list {
+        match build_region(def, registry, nodes, &final_reachable, spaces.as_ref()) {
+            Ok(region) => regions.push(region),
+            // `MANIFOLD_REGION_DEBUG=1` surfaces the refusal reason a fused
+            // graph hit (partition drops it silently by design —
+            // `graph-tool fusion` reports it per def).
+            Err(reason) if std::env::var_os("MANIFOLD_REGION_DEBUG").is_some() => {
+                eprintln!("[region-debug] component {nodes:?} refused: {reason:?}");
+            }
+            Err(_) => {}
+        }
+    }
+    // Stable order across runs (components iterate in hash order otherwise).
+    regions.sort_by_key(|r| r.members.first().map(|m| m.doc_id).unwrap_or(0));
+
+    // ── Stencil tier: absorb producer chains into stencil members' gather
+    // reads (recomputed per tap corner — no canvas round-trip). ──
+    absorb_virtual_chains(
+        def,
+        registry,
+        &mut regions,
+        &comp_list,
+        spaces.as_ref(),
+        &forward,
+        &substep_side,
+    );
+
+    // A single-member region only pays once a chain folded into it (fusing one
+    // node alone changes nothing — the MIN_REGION_LEN rule, applied after
+    // absorption so a lone blur + its absorbed producer run still fuses).
+    regions.retain(|r| r.members.len() >= MIN_REGION_LEN || !r.virtual_chains.is_empty());
+    regions
+}
+
+/// Longest producer chain a stencil member's fetch will recompute. Per-tap
+/// recomputation multiplies the chain's ALU by 4 bilinear corners × the tap
+/// count, so v1 absorbs only STRANDED SINGLES — a lone pointwise/Source atom
+/// that would otherwise be dropped below MIN_REGION_LEN and pay a full canvas
+/// round-trip for one cheap dispatch. Multi-atom chains already fuse as their
+/// own pointwise region; absorbing those trades a known win for taps×4
+/// recomputes, and the perf gate (per CARD, fused vs unfused) can't compare
+/// the two fused configurations — so don't raise this without per-region
+/// gating.
+const MAX_VIRTUAL_CHAIN: usize = 1;
+
+/// Upper bound on the estimated WGSL the inliner will materialize for one
+/// absorbed chain: consumer fetch sites × 4 bilinear corners × chain body
+/// bytes. Past this, absorption is refused and the producer runs as its own
+/// dispatch — one extra cheap dispatch beats a multi-second kernel compile on
+/// the content thread. 256 KB clears Watercolor's warp-into-blur (~75 KB, the
+/// largest shipped absorption) with ~3× headroom and rejects FilmGrain's
+/// noise-into-blur (~860 KB) by ~3×. See the BUG-175 gate in
+/// [`chain_is_absorbable`].
+const MAX_VIRTUAL_INLINE_BYTES: usize = 256 * 1024;
+
+/// Absorb eligible producer components into stencil members' gather inputs as
+/// [`VirtualChain`]s. A component qualifies when its ONLY escape is the single
+/// gather-consumed wire into one stencil member of `regions[ri]`, every member
+/// is a same-space all-coincident texture atom off any feedback cycle, every
+/// texture wire INTO it comes from the region's element space, and collapsing
+/// it into the region keeps the graph acyclic. A region that was built from an
+/// absorbed component is removed (its work now lives inside the consumer's
+/// fetch); a dropped single-node component absorbs the same way.
+fn absorb_virtual_chains(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    regions: &mut Vec<Region>,
+    comps: &[(u32, Vec<u32>)],
+    spaces: Option<&AHashMap<(u32, String), ElementSpace>>,
+    forward: &[(u32, u32)],
+    substep_side: &AHashMap<u32, u32>,
+) {
+    let comp_of: AHashMap<u32, u32> = comps
+        .iter()
+        .flat_map(|(rep, ns)| ns.iter().map(move |&n| (n, *rep)))
+        .collect();
+    let comp_nodes: AHashMap<u32, &[u32]> =
+        comps.iter().map(|(rep, ns)| (*rep, ns.as_slice())).collect();
+
+    // Running chain-rep → region-rep merges, so each candidate's convexity test
+    // sees every previously accepted absorption (same incremental invariant the
+    // union loop maintains).
+    let mut merged_into: AHashMap<u32, u32> = AHashMap::default();
+    let mut absorbed_reps: AHashSet<u32> = AHashSet::default();
+    // (region index, consumer doc id, input index, chain rep, chain output doc id)
+    let mut planned: Vec<(usize, u32, usize, u32, u32)> = Vec::new();
+
+    for (ri, region) in regions.iter().enumerate() {
+        let Some(region_space) = region.space else {
+            continue; // buffer regions have no texture grid to recompute on
+        };
+        let region_rep = region
+            .members
+            .first()
+            .and_then(|m| comp_of.get(&m.doc_id))
+            .copied();
+        let Some(region_rep) = region_rep else { continue;
+        };
+        for member in &region.members {
+            let Some(doc_node) = def.nodes.iter().find(|n| n.id == member.doc_id) else {
+                continue;
+            };
+            let Some(node) = configured_construct(registry, doc_node) else { continue;
+            };
+            if !node.stencil_fetch() {
+                continue;
+            }
+            for (idx, (input, access)) in
+                member.inputs.iter().zip(&member.input_access).enumerate()
+            {
+                if *access != InputAccess::Gather {
+                    continue;
+                }
+                let RegionInput::External(e) = input else { continue;
+                };
+                let prod = region.externals[*e].from_node;
+                let Some(&rep) = comp_of.get(&prod) else {
+                    continue; // boundary producer — stays a real external
+                };
+                let chain_output = prod;
+                if rep == region_rep || absorbed_reps.contains(&rep) {
+                    continue;
+                }
+                let nodes = comp_nodes[&rep];
+                if nodes.len() > MAX_VIRTUAL_CHAIN
+                    || nodes
+                        .iter()
+                        .any(|n| substep_side.get(n) != substep_side.get(&member.doc_id))
+                {
+                    continue;
+                }
+                if !chain_is_absorbable(def, registry, nodes, member.doc_id, region_space, spaces)
+                {
+                    continue;
+                }
+                // Convexity under the tentative merge: every eligible node maps
+                // to its component rep with accepted merges (plus this one)
+                // folded onto their region reps; boundaries map to themselves.
+                let resolve = |r: u32| merged_into.get(&r).copied().unwrap_or(r);
+                let key = |n: u32| -> u32 {
+                    match comp_of.get(&n) {
+                        Some(&r) if r == rep => resolve(region_rep),
+                        Some(&r) => resolve(r),
+                        None => n,
+                    }
+                };
+                if collapsed_has_cycle(forward, &key) {
+                    continue;
+                }
+                merged_into.insert(rep, resolve(region_rep));
+                absorbed_reps.insert(rep);
+                planned.push((ri, member.doc_id, idx, rep, chain_output));
+            }
+        }
+    }
+    if planned.is_empty() {
+        return;
+    }
+
+    // ── Apply each plan: resolve the chain's members against the region's
+    // externals, repoint the consumer's input, record the chain. ──
+    for (ri, consumer, idx, rep, chain_output) in planned {
+        let nodes = comp_nodes[&rep];
+        let region = &mut regions[ri];
+        let applied = (|| -> Option<(Vec<RegionMember>, Vec<ExternalRef>)> {
+            let node_set: AHashSet<u32> = nodes.iter().copied().collect();
+            let order = topo_sort(nodes, def, registry, &node_set, false)?;
+            let mut new_externals = region.externals.clone();
+            let mut ext_index: AHashMap<(u32, String), usize> = new_externals
+                .iter()
+                .enumerate()
+                .map(|(i, e)| ((e.from_node, e.from_port.clone()), i))
+                .collect();
+            let mut members: Vec<RegionMember> = Vec::with_capacity(order.len());
+            for &doc_id in &order {
+                let constructed =
+                    configured_construct(registry, def.nodes.iter().find(|n| n.id == doc_id)?)?;
+                let tex_ports: Vec<&crate::ports::NodeInput> = constructed
+                    .inputs()
+                    .iter()
+                    .filter(|i| is_texture_port(&i.ty))
+                    .collect();
+                let access_list = constructed.input_access();
+                let mut inputs: Vec<RegionInput> = Vec::with_capacity(tex_ports.len());
+                let mut input_access: Vec<InputAccess> = Vec::with_capacity(tex_ports.len());
+                for (pidx, port) in tex_ports.iter().enumerate() {
+                    let access =
+                        access_list.get(pidx).copied().unwrap_or(InputAccess::Coincident);
+                    let Some(wire) = def
+                        .wires
+                        .iter()
+                        .find(|w| w.to_node == doc_id && w.to_port == port.name)
+                    else {
+                        // A gather needs a real texture to sample — unwired
+                        // (even optional) can't re-anchor; required-unwired
+                        // wouldn't render anyway.
+                        if port.required || access.is_gather() {
+                            return None;
+                        }
+                        inputs.push(RegionInput::Unwired);
+                        input_access.push(access);
+                        continue;
+                    };
+                    let resolved = if node_set.contains(&wire.from_node) {
+                        // A gathered producer can't thread as a per-corner
+                        // register (the body samples a whole texture).
+                        if access.is_gather() {
+                            return None;
+                        }
+                        // D4/P6: a multi-output producer feeding a STENCIL
+                        // chain member isn't a shape any atom needs yet (every
+                        // struct-return atom today is a 0-texture-input
+                        // Source, never itself gather-consumed) — bail
+                        // defensively rather than guess which BodyOutputs
+                        // field the chain's per-corner recompute would want.
+                        if producer_tex_output_count(registry, def, wire.from_node) > 1 {
+                            return None;
+                        }
+                        RegionInput::Member(wire.from_node)
+                    } else {
+                        let key = (wire.from_node, wire.from_port.clone());
+                        let slot = *ext_index.entry(key).or_insert_with(|| {
+                            new_externals.push(ExternalRef {
+                                from_node: wire.from_node,
+                                from_port: wire.from_port.clone(),
+                            });
+                            new_externals.len() - 1
+                        });
+                        RegionInput::External(slot)
+                    };
+                    inputs.push(resolved);
+                    input_access.push(access);
+                }
+                // Chains never sit on a feedback cycle (gate above), so the
+                // tier-A in-loop rounding never applies; the codegen q16s the
+                // chain TAIL unconditionally to reproduce the f16 store the
+                // unfused chain made for the blur to sample.
+                members.push(RegionMember { doc_id, inputs, input_access, quantize_f16: false,
+                });
+            }
+            Some((members, new_externals))
+        })();
+        let Some((members, new_externals)) = applied else {
+            continue; // defensive skip — region keeps its real external (unfused-equivalent)
+        };
+        region.externals = new_externals;
+        let chain_idx = region.virtual_chains.len();
+        if let Some(m) = region.members.iter_mut().find(|m| m.doc_id == consumer) {
+            m.inputs[idx] = RegionInput::Virtual(chain_idx);
+        }
+        region.virtual_chains.push(VirtualChain {
+            consumer,
+            input_index: idx,
+            members,
+            output: chain_output,
+        });
+    }
+
+    // ── Compact each affected region's externals (drop slots no input reads —
+    // the absorbed chains' output textures) and remap indices. ──
+    for region in regions.iter_mut() {
+        if region.virtual_chains.is_empty() {
+            continue;
+        }
+        let mut used: Vec<usize> = Vec::new();
+        let mut mark = |inputs: &Vec<RegionInput>| {
+            for input in inputs {
+                if let RegionInput::External(e) = input
+                    && !used.contains(e)
+                {
+                    used.push(*e);
+                }
+            }
+        };
+        for m in &region.members {
+            mark(&m.inputs);
+        }
+        for c in &region.virtual_chains {
+            for m in &c.members {
+                mark(&m.inputs);
+            }
+        }
+        used.sort_unstable();
+        let remap: AHashMap<usize, usize> =
+            used.iter().enumerate().map(|(new, &old)| (old, new)).collect();
+        let rewrite = |inputs: &mut Vec<RegionInput>| {
+            for input in inputs {
+                if let RegionInput::External(e) = input {
+                    *e = remap[e];
+                }
+            }
+        };
+        for m in &mut region.members {
+            rewrite(&mut m.inputs);
+        }
+        for c in &mut region.virtual_chains {
+            for m in &mut c.members {
+                rewrite(&mut m.inputs);
+            }
+        }
+        region.externals = used.iter().map(|&e| region.externals[e].clone()).collect();
+    }
+
+    // ── Remove regions whose whole component was absorbed into a fetch. ──
+    regions.retain(|r| {
+        r.members
+            .first()
+            .and_then(|m| comp_of.get(&m.doc_id))
+            .is_none_or(|rep| !absorbed_reps.contains(rep))
+    });
+}
+
+/// Per-member gates for absorbing `nodes` into a stencil fetch: single escape
+/// to `consumer`, texture-domain pointwise/coincident/gather/Source members
+/// off any cycle whose OUTPUT lives at the region's element space, every
+/// member agreeing with the consumer's sampler address mode. Chain INPUT wires
+/// carry no space constraint: the fetch reads chain externals through the
+/// shared sampler at the corner uv (coincident) or a body-computed coord
+/// (gather) — the same resolution-robust read the unfused standalone atom
+/// makes, so a half-res flow field feeding an absorbed warp stays exact.
+fn chain_is_absorbable(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    nodes: &[u32],
+    consumer: u32,
+    region_space: ElementSpace,
+    spaces: Option<&AHashMap<(u32, String), ElementSpace>>,
+) -> bool {
+    let node_set: AHashSet<u32> = nodes.iter().copied().collect();
+    let mut escapes = 0usize;
+    for w in &def.wires {
+        if node_set.contains(&w.from_node) && !node_set.contains(&w.to_node) {
+            escapes += 1;
+            if w.to_node != consumer {
+                return false;
+            }
+        }
+    }
+    if escapes != 1 {
+        return false;
+    }
+    // The consumer's sampler mode is the region's shared `samp`; every chain
+    // member's reads go through it, so each member must create the same mode
+    // standalone (default clamp for nearly every atom) or the look would shift
+    // at texture edges.
+    let consumer_mode = node_sampler_mode(def, registry, consumer);
+    // In a PURE-TEXTURE feedback loop, absorption is sound only when the
+    // consumer's taps are texel-exact (Linear blur): corner values are q16'd
+    // to the unfused store and integer taps read corners exactly, so the loop
+    // stays bit-identical by induction (the tier-A argument). Fractional taps
+    // leave ~1 ulp of lerp noise per frame, which a loop amplifies — and a
+    // PARTICLE loop amplifies anything (the parked f16 class) — both stay out.
+    let consumer_taps_exact = node_taps_texel_exact(def, registry, consumer);
+    // Compile-cost gate (BUG-175): absorption pastes the chain's bodies into
+    // every corner evaluation of every fetch site in the consumer's body, and
+    // spirv-opt's InlineExhaustive materializes all of it — fetch_sites × 4
+    // corners × chain body bytes of WGSL. MAX_VIRTUAL_CHAIN prices the runtime
+    // ALU of that multiplication; this prices the CODE SIZE, which otherwise
+    // explodes kernel compile time. FilmGrain was the proof: noise absorbed
+    // into gaussian_blur = 35 fetch sites × 4 × ~6 KB ≈ 860 KB of inlined
+    // WGSL, ~50 s of synchronous spirv-opt + Metal compile per build on the
+    // content thread — twice, once more for the specialized variant.
+    // Watercolor's warp-into-blur (~75 KB) is the
+    // largest absorption that must keep fusing.
+    let consumer_fetch_sites = def
+        .nodes
+        .iter()
+        .find(|n| n.id == consumer)
+        .and_then(|doc| configured_construct(registry, doc))
+        .and_then(|n| n.wgsl_body().map(|b| b.matches("fetch_").count()))
+        .unwrap_or(usize::MAX)
+        .max(1);
+    let chain_body_bytes: usize = nodes
+        .iter()
+        .map(|id| {
+            def.nodes
+                .iter()
+                .find(|n| n.id == *id)
+                .and_then(|doc| configured_construct(registry, doc))
+                .and_then(|n| n.wgsl_body().map(str::len))
+                .unwrap_or(usize::MAX)
+        })
+        .fold(0usize, usize::saturating_add);
+    if consumer_fetch_sites
+        .saturating_mul(4)
+        .saturating_mul(chain_body_bytes)
+        > MAX_VIRTUAL_INLINE_BYTES
+    {
+        return false;
+    }
+    for &id in nodes {
+        let Some(doc) = def.nodes.iter().find(|n| n.id == id) else {
+            return false;
+        };
+        let Some(n) = configured_construct(registry, doc) else {
+            return false;
+        };
+        if n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+            return false; // buffer atom — no texture grid
+        }
+        // Coincident reads re-anchor as sampled corner reads; a sampler-Gather
+        // re-anchors as (texture, sampler) body args. Exact-texel kinds
+        // (CoincidentTexel / GatherTexel) are resolution- and grid-pinned in a
+        // way a re-anchored sampled read can't reproduce — boundary.
+        if n.input_access()
+            .iter()
+            .any(|a| !matches!(a, InputAccess::Coincident | InputAccess::Gather))
+        {
+            return false;
+        }
+        if n.stencil_fetch() {
+            return false; // nested stencils are a follow-on
+        }
+        if node_on_cycle(id, def)
+            && (!consumer_taps_exact || cycle_contains_array(id, def, registry))
+        {
+            return false; // in-loop recompute is only bit-faithful under exact taps
+        }
+        if node_output_space(spaces, def, registry, id) != region_space {
+            return false;
+        }
+        if node_sampler_mode(def, registry, id) != consumer_mode {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether node `id`'s stencil taps are texel-exact under its def params —
+/// see [`EffectNode::stencil_taps_texel_exact`]. Same effective-param
+/// resolution as [`node_sampler_mode`].
+fn node_taps_texel_exact(def: &EffectGraphDef, registry: &PrimitiveRegistry, id: u32) -> bool {
+    use crate::parameters::ParamValue;
+    let Some(doc) = def.nodes.iter().find(|n| n.id == id) else {
+        return false;
+    };
+    let Some(n) = configured_construct(registry, doc) else {
+        return false;
+    };
+    let mut params: crate::exec::effect_node::ParamValues = AHashMap::default();
+    for p in n.parameters() {
+        let v = match doc.params.get(p.name.as_ref()) {
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => {
+                Some(*value)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Int { value }) => {
+                Some(*value as f32)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Enum { value }) => {
+                Some(*value as f32)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Bool { value }) => {
+                Some(if *value { 1.0 } else { 0.0 })
+            }
+            _ => match &p.default {
+                ParamValue::Float(f) => Some(*f),
+                ParamValue::Enum(u) => Some(*u as f32),
+                ParamValue::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+                _ => None,
+            },
+        };
+        if let Some(v) = v {
+            params.insert(p.name.clone(), ParamValue::Float(v));
+        }
+    }
+    n.stencil_taps_texel_exact(&params)
+}
+
+/// The sampler address mode node `id` would create standalone, resolved from
+/// its def params (the same read the install pass's gather agreement does).
+fn node_sampler_mode(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    id: u32,
+) -> manifold_gpu::GpuAddressMode {
+    use crate::parameters::ParamValue;
+    let Some(doc) = def.nodes.iter().find(|n| n.id == id) else {
+        return manifold_gpu::GpuAddressMode::ClampToEdge;
+    };
+    let Some(n) = configured_construct(registry, doc) else {
+        return manifold_gpu::GpuAddressMode::ClampToEdge;
+    };
+    let mut params: crate::exec::effect_node::ParamValues = AHashMap::default();
+    for p in n.parameters() {
+        let v = match doc.params.get(p.name.as_ref()) {
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => {
+                Some(*value)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Int { value }) => {
+                Some(*value as f32)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Enum { value }) => {
+                Some(*value as f32)
+            }
+            Some(manifold_core::effect_graph_def::SerializedParamValue::Bool { value }) => {
+                Some(if *value { 1.0 } else { 0.0 })
+            }
+            _ => match &p.default {
+                ParamValue::Float(f) => Some(*f),
+                ParamValue::Enum(u) => Some(*u as f32),
+                ParamValue::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+                _ => None,
+            },
+        };
+        if let Some(v) = v {
+            params.insert(p.name.clone(), ParamValue::Float(v));
+        }
+    }
+    n.fused_gather_sampler_mode(&params)
+}
+
+/// Stencil tier A kill switch: `MANIFOLD_FREEZE_Q16=0` (or `false`/`off`)
+/// keeps in-loop f16 atoms as boundaries, restoring pre-tier-A partitions.
+/// Read per call (cheap env lookup at fuse-build time, never per frame) so
+/// tests can flip it without process restarts.
+fn q16_tier_enabled() -> bool {
+    !matches!(
+        std::env::var("MANIFOLD_FREEZE_Q16").as_deref(),
+        Ok("0") | Ok("false") | Ok("off")
+    )
+}
+
+/// Is `start` on a dataflow cycle — i.e. inside a feedback loop? Forward node
+/// reachability over the wire graph: a feedback node (`array_feedback` /
+/// `node.feedback`) is a SINGLE node whose `in` wires and `out` wires both attach
+/// to it, so the loop's back-edge through it shows up as an ordinary wire-graph
+/// cycle (no special feedback handling needed). Returns true iff following wires
+/// forward from `start` returns to `start`. Bounded by the node/wire counts; runs
+/// once per fusion build (cached).
+fn node_on_cycle(start: u32, def: &EffectGraphDef) -> bool {
+    let mut stack = vec![start];
+    let mut visited: AHashSet<u32> = AHashSet::default();
+    while let Some(n) = stack.pop() {
+        for w in &def.wires {
+            if w.from_node != n {
+                continue;
+            }
+            if w.to_node == start {
+                return true; // wire chain from start loops back to start
+            }
+            if visited.insert(w.to_node) {
+                stack.push(w.to_node);
+            }
+        }
+    }
+    false
+}
+
+/// Does `start`'s feedback cycle pass through a PARTICLE/array stage? True
+/// when some node with an `Array`-typed output is mutually reachable with
+/// `start` (same strongly-connected component). Distinguishes the two loop
+/// families for the in-loop f16 fusion gate:
+///   - pure texture loops (OilyFluid's advection): locally smooth — a 1-ulp
+///     register/store gap stays ~1 ulp, and tier A's q16 rounding holds the
+///     fused render bit-exact (its proof passes);
+///   - particle loops (FluidSim: density → flow field → forces → particle
+///     buffer → scatter → density): a 1-ulp force difference moves a particle
+///     across a texel boundary and the scatter amplifies it to a visibly
+///     different field (measured max_abs 0.6+ over ~30% of pixels).
+fn cycle_contains_array(start: u32, def: &EffectGraphDef, registry: &PrimitiveRegistry) -> bool {
+    // Forward reachability from `start`, remembering everything reachable.
+    let mut forward: AHashSet<u32> = AHashSet::default();
+    let mut stack = vec![start];
+    while let Some(n) = stack.pop() {
+        for w in &def.wires {
+            if w.from_node == n && forward.insert(w.to_node) {
+                stack.push(w.to_node);
+            }
+        }
+    }
+    if !forward.contains(&start) {
+        return false; // not on a cycle at all
+    }
+    // A node is in `start`'s SCC iff start →* node AND node →* start. Check
+    // each forward-reachable array-producing node for a path back to start.
+    for node in &def.nodes {
+        if !forward.contains(&node.id) {
+            continue;
+        }
+        // CONFIGURED construct: a full-kernel `node.wgsl_compute` (e.g.
+        // StrangeAttractor's "simulate" node, which ships a
+        // `var<storage, read_write> array<Particle>` output) introspects its real
+        // port list only after its `wgsl_source` is applied. A bare construct sees
+        // the DEFAULT kernel (no Array output), so the particle stage would be
+        // invisible to the SCC scan and a texture atom on the loop would wrongly
+        // fuse tier-A f16 in-loop, where the bit-exact induction fails across a
+        // scatter (BUG-007).
+        let Some(n) = configured_construct(registry, node) else {
+            continue;
+        };
+        if !n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+            continue;
+        }
+        let mut back: AHashSet<u32> = AHashSet::default();
+        let mut stack = vec![node.id];
+        while let Some(m) = stack.pop() {
+            if m == start && node.id != start {
+                return true;
+            }
+            for w in &def.wires {
+                if w.from_node == m && back.insert(w.to_node) {
+                    if w.to_node == start {
+                        return true;
+                    }
+                    stack.push(w.to_node);
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Construct a primitive for a def node and apply the node's CONFIGURED state —
+/// its `wgsl_source` (so a fragment-form `node.wgsl_compute` reparses its declared
+/// ports/params and reports its `fusion_kind()` / `wgsl_body()`) and its param
+/// values (so dynamic-port primitives like `node.switch_texture` reconfigure to the
+/// right port count). A bare `registry.construct` returns the DEFAULT shape; the
+/// freeze classifier, finder, and codegen must see the SAME shape the live loader
+/// ([`instantiate_def`](crate::node_graph::graph_loader::instantiate_def)) builds —
+/// mirroring its `set_wgsl_source` then param-override + `reconfigure` order.
+pub fn configured_construct(
+    registry: &PrimitiveRegistry,
+    node: &EffectGraphNode,
+) -> Option<Box<dyn crate::exec::effect_node::EffectNode>> {
+    let mut boxed = registry.construct(&node.type_id)?;
+    // (1) WGSL source first — a dynamic-shape primitive reparses its port list
+    // before params are read. No-op for fixed-shape atoms.
+    if let Some(src) = node.wgsl_source.as_deref() {
+        boxed.set_wgsl_source(src);
+    }
+    // (2) Params — seed every declared default, override with the def's values,
+    // then reconfigure (variadic nodes rebuild param-derived ports). Matches
+    // `NodeInstance::new`. Unknown / mistyped params are skipped (the loader would
+    // have rejected the def upstream; the freeze pass only needs a faithful shape).
+    let params = configured_params(boxed.as_ref(), node);
+    boxed.reconfigure(&params);
+    Some(boxed)
+}
+
+/// A node's params as the runtime seeds them: every declared default,
+/// overridden by the def's values.
+fn configured_params(
+    constructed: &dyn crate::exec::effect_node::EffectNode,
+    node: &EffectGraphNode,
+) -> crate::exec::effect_node::ParamValues {
+    let mut params: crate::exec::effect_node::ParamValues = AHashMap::default();
+    for p in constructed.parameters() {
+        params.insert(p.name.clone(), p.default.clone());
+    }
+    for (key, value) in &node.params {
+        if let Some(p) = constructed.parameters().iter().find(|p| p.name == key.as_str()) {
+            params.insert(p.name.clone(), value.clone().into());
+        }
+    }
+    params
+}
+
+/// How many texture outputs `doc_id` declares (0 if it's not in `def`, or the
+/// registry doesn't know its type — a defensive default that never falsely
+/// reports "multi-output"). D4/P6: a producer with ≥2 texture outputs is a
+/// struct-return body (voronoi_2d's `out`/`cell_id`) — wiring FROM one of its
+/// ports into a region member must disambiguate which `BodyOutputs` field
+/// threads, via `RegionInput::MemberPort` instead of the plain `Member(u32)`
+/// single-output producers keep.
+fn producer_tex_output_count(
+    registry: &PrimitiveRegistry,
+    def: &EffectGraphDef,
+    doc_id: u32,
+) -> usize {
+    def.nodes
+        .iter()
+        .find(|n| n.id == doc_id)
+        .and_then(|n| configured_construct(registry, n))
+        .map(|c| {
+            c.outputs()
+                .iter()
+                .filter(|o| is_texture_port(&o.ty))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// Conservative symbolic bound for array dispatch. Refuse an unproven relation
+/// instead of relying on the synthetic probe's particular test capacities.
+fn capacity_bounded_by(value: &CapacityExpr, limit: &CapacityExpr) -> bool {
+    value == limit
+        || matches!(value, CapacityExpr::Min(children) if children.iter().any(|child| capacity_bounded_by(child, limit)))
+        || matches!(limit, CapacityExpr::Min(children) if children.iter().all(|child| capacity_bounded_by(value, child)))
+}
+
+/// The count of a region with a lattice-sized member: the output's own
+/// capacity, clamped by every member capacity and coincident array external
+/// that does not provably bound it, so no member runs past its lattice and no
+/// pre-read runs past its array when live params change. At the configured
+/// params the clamps must not bite, or the fused count would differ from the
+/// output's unfused one: refuse (the graph is misconfigured; unfused reports
+/// it by name).
+fn lattice_count(
+    output: &CapacityExpr,
+    member_expr: &[Option<CapacityExpr>],
+    coincident_slots: &[usize],
+    params: &crate::exec::effect_node::ParamValues,
+) -> Result<CapacityExpr, &'static str> {
+    let clamps = member_expr.iter().flatten().cloned().chain(coincident_slots.iter().map(|&e| CapacityExpr::Slot(e)));
+    let mut children = vec![output.clone()];
+    for clamp in clamps {
+        if capacity_bounded_by(output, &clamp) || children.contains(&clamp) {
+            continue;
+        }
+        let slot_free = |e: &CapacityExpr| e.eval_with(&[], params).is_some();
+        if slot_free(&clamp) && slot_free(output) && clamp.eval_with(&[], params) < output.eval_with(&[], params) {
+            return Err("a member's lattice is smaller than the region output's");
+        }
+        children.push(clamp);
+    }
+    Ok(match children.len() {
+        1 => children.pop().expect("one child"),
+        _ => CapacityExpr::Min(children),
+    })
+}
+
+fn cut_reference_cache_boundary(node: &EffectGraphNode, def: &EffectGraphDef) -> bool {
+    if node.type_id != "node.remap_mesh_cut" {
+        return false;
+    }
+    let mut pending = vec![node.id];
+    let mut visited = AHashSet::new();
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        for wire in def
+            .wires
+            .iter()
+            .filter(|wire| wire.from_node == id && wire.from_port == "out")
+        {
+            let Some(consumer) = def.nodes.iter().find(|node| node.id == wire.to_node) else {
+                continue;
+            };
+            if wire.to_port == "reference"
+                && matches!(
+                    consumer.type_id.as_str(),
+                    "node.cut_mesh_bands" | "node.cut_mesh_cells"
+                )
+            {
+                return true;
+            }
+            if wire.to_port == "in" && consumer.type_id == "node.remap_mesh_cut" {
+                pending.push(consumer.id);
+            }
+        }
+    }
+    false
+}
+
+/// Classify one node. `Eligible` requires *every* gate to pass; any failure —
+/// including "the registry doesn't know this type" — is a `Boundary`.
+///
+/// `pub(crate)`: `graph_tool fusion`'s report module calls this directly per
+/// node (GRAPH_TOOLING_DESIGN P3) to explain *why* a node sits outside every
+/// region — reusing this exact function rather than re-deriving the verdict.
+pub fn classify_node(
+    node: &EffectGraphNode,
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+) -> NodeClass {
+    use crate::freeze::classify::FusionKind;
+
+    // Boundaries by identity: the graph endpoints are always seams.
+    if node.type_id == SOURCE_TYPE_ID || node.type_id == FINAL_OUTPUT_TYPE_ID {
+        return NodeClass::Boundary;
+    }
+    // Cutters cache connectivity from their reference's write generation.
+    // Keep that reference's remap chain independently cacheable: a fused
+    // motion kernel conservatively marks every output written each frame.
+    // Current-mesh remaps and reference remaps with no cutter consumer still
+    // use normal buffer fusion.
+    if cut_reference_cache_boundary(node, def) {
+        return NodeClass::Boundary;
+    }
+    // Configured so a fragment-form `node.wgsl_compute` reports its real
+    // fusion_kind/body/ports (a bare construct is the DEFAULT opaque kernel).
+    let Some(n) = configured_construct(registry, node) else {
+        return NodeClass::Boundary; // unknown atom → never fuse
+    };
+
+    // Three kinds fold INTO a region: Pointwise / MultiInputCoincident thread
+    // their input register(s); Source is a 0-input generator that produces the
+    // region's head value from uv/dims (no input register — the fused codegen
+    // already calls a 0-input body as `n{i}_body(uv, dims, params)`). Everything
+    // else (Boundary) is a seam.
+    if !matches!(
+        n.fusion_kind(),
+        FusionKind::Pointwise | FusionKind::MultiInputCoincident | FusionKind::Source
+    ) {
+        return NodeClass::Boundary;
+    }
+    if n.wgsl_body().is_none() {
+        return NodeClass::Boundary;
+    }
+    // Cell-owned outputs stay standalone. Scheduled element kernels may fuse
+    // only through an explicitly declared equivalent dense form.
+    if !n.owned_outputs().is_empty()
+        || (n.buffer_index().is_some() && dense_buffer_fusion(n.as_ref()).is_none())
+    {
+        return NodeClass::Boundary;
+    }
+
+    // Register-heavy body (a bespoke inlined simplex): fusing it raises the
+    // whole kernel's register pressure past the occupancy cliff, so the fused
+    // region runs slower than the standalone dispatches (FluidSim2D's
+    // euler+wrap+burst: 3.05 ms fused vs 2.43 unfused). Keep it a boundary —
+    // its register-light neighbours still fuse around it.
+    if n.fusion_register_heavy() {
+        return NodeClass::Boundary;
+    }
+
+    // Every param must lay out in the fused per-node namespaced uniform —
+    // scalar (`param_wgsl_type`), OR Vec3 (three consecutive `_x`/`_y`/`_z`
+    // f32 fields) / Vec4/Color (four `_x`/`_y`/`_z`/`_w` f32 fields, no
+    // padding needed) via `param_is_fusable`. Table/String stay boundary:
+    // Table is storage-shaped data (a fixed-size array-of-vec4 the per-node
+    // namespacing doesn't extend to) and String has no GPU representation —
+    // neither is debt, both are a deliberate boundary by nature (D4 #5).
+    for p in n.parameters() {
+        if !crate::freeze::codegen::param_is_fusable(p) {
+            return NodeClass::Boundary;
+        }
+        // Binding-targeted ENUM params are no longer boundaries (the 59b3cf25
+        // gate): the retarget rewrites the binding's `EnumRound` convert to
+        // `IntRound` when it repoints onto the fused uniform field, which the
+        // field's u32 cast consumes identically (round + clamp-at-0 happens at
+        // the uniform-write boundary either way). FluidSim3D's `container` →
+        // container_repel_force_3d fuses through this. Specialization-token
+        // enum params (blurVW's `quality`) are a different story — see the
+        // wgsl_specialization gate below, which stays.
+    }
+
+    // BUFFER-domain atom (writes an `Array<T>` — particle / instance / curve).
+    // The write-only-output model (fused output as a `@fused_output` array, not an
+    // aliased read_write one, so the node's read-only inputs stay forward deps and
+    // run after their producers) fixed the execution-ORDERING bug, and the
+    // compute `arrayLength()` buffer-size-buffer index fix (manifold-gpu pins
+    // SPIRV-Cross's `buffer_size_buffer_index` to the slot it actually binds)
+    // closed the residual — `digitalplants_buffer_fusion_renders_like_unfused` is
+    // now bit-exact (0/160000 differing). Buffer atoms fuse on the live path.
+    if n.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
+        return classify_buffer_node(n.as_ref(), node, def, registry);
+    }
+
+    // Texture I/O shape: ≥1 texture output (the register(s) the region
+    // threads). A Source reads NO texture input (it generates from position); the
+    // threaded kinds read ≥1. D4/P6 (narrowed cut rule 6): a MULTI-output atom
+    // (≥2 texture outputs — voronoi_2d's `out`/`cell_id`, block_displace_field's
+    // `offset`/`raw_hash`) is Eligible too, on the same struct-return-body
+    // mechanism the codegen's buffer path already ships (`codegen.rs`'s
+    // BufferOutputs wrapper) extended to texture kernels: every atom that
+    // declares ≥2 texture outputs in this codebase already returns a
+    // `BodyOutputs` struct (there is no "multi-output but NOT struct-return"
+    // atom on the codegen path — an atom with 0/1 outputs never declares the
+    // struct; ≥2 always does, by the `primitive!` authoring contract
+    // `ADDING_PRIMITIVES.md` documents). Only tex_out == 0 (no register to
+    // thread at all) stays Boundary.
+    let tex_in = n.inputs().iter().filter(|i| is_texture_port(&i.ty)).count();
+    let tex_out = n.outputs().iter().filter(|o| is_texture_port(&o.ty)).count();
+    let arity_ok = if matches!(n.fusion_kind(), FusionKind::Source) {
+        tex_in == 0
+    } else {
+        tex_in >= 1
+    };
+    if !arity_ok || tex_out == 0 {
+        return NodeClass::Boundary;
+    }
+
+    // A gather input (the body samples at a coord it computes) IS eligible now:
+    // the codegen binds the gathered texture + a sampler and the body samples it,
+    // and the finder keeps the gathered producer external (it never unions across
+    // a gather-consumed wire — see `partition_regions`). But a RESAMPLE — a gather
+    // whose output resolution differs from the canvas (downsample, a
+    // resolution-setting generator) — must stay a boundary: the fused node would
+    // inherit the canvas dst size, not the resample's, and iterate at the wrong
+    // resolution. Detect it generically via an `output_canvas_scale` override
+    // (≠ 1:1), never a hard-coded atom list. (Fusing a resample correctly =
+    // propagating the fused node's output scale — the element-space follow-on.)
+    let default_params: crate::exec::effect_node::ParamValues = AHashMap::default();
+    for o in n.outputs().iter().filter(|o| is_texture_port(&o.ty)) {
+        if let Some(scale) = n.output_canvas_scale(o.name.as_ref(), &default_params)
+            && scale != (1, 1)
+        {
+            return NodeClass::Boundary;
+        }
+    }
+
+    // Element space (tier 6): per-node spaces are resolved from the unfused
+    // plan in `partition_regions` — unions are gated on space equality and
+    // `build_region` enforces member/external uniformity, so a def-level
+    // canvas-scale override no longer makes the atom a blanket boundary (its
+    // space simply has to match its neighbours'). Atom-level resamples
+    // (`output_canvas_scale` ≠ 1:1, the gate above) remain boundaries: folding
+    // a resampler INTO a region needs cross-scale reads (stencil-tier work).
+    // 3D ports stay out of the texture finder.
+    if n.inputs().iter().any(|i| i.ty == PortType::Texture3D)
+        || n.outputs().iter().any(|o| o.ty == PortType::Texture3D)
+    {
+        return NodeClass::Boundary;
+    }
+
+    // Control wires (a scalar driving a param port — LFO → gain.gain, a focus
+    // distance → scale_offset.offset — not a texture):
+    //   - INTO this node's scalar param: fine. After fusion the producer feeds the
+    //     fused node's port-shadow `n{i}_<param>` (DD-A5), so the param keeps being
+    //     driven every frame. A wire into any OTHER non-texture input (an
+    //     Array/buffer port the fused uniform can't carry) still cuts.
+    //   - OUT of this node into someone else's param makes this a control PRODUCER.
+    //     It must stay a boundary so it survives the rewrite and can wire its scalar
+    //     into the fused node — folding it away would strand the scalar (the fused
+    //     node only exposes its members' texture output). Pure scalar nodes are
+    //     already boundaries by arity; this also catches a texture atom that
+    //     additionally emits a control scalar, keeping the install rewrite local.
+    let tex_ports: AHashSet<&str> = n
+        .inputs()
+        .iter()
+        .filter(|i| is_texture_port(&i.ty))
+        .map(|i| i.name.as_ref())
+        .collect();
+    let scalar_params: AHashSet<&str> = n
+        .parameters()
+        .iter()
+        .filter(|p| param_wgsl_type(p).is_ok())
+        .map(|p| p.name.as_ref())
+        .collect();
+    // D7/P0 exemption (`docs/CINEMATIC_POST_DESIGN.md`): a wire into a
+    // CPU-struct (Camera) port no longer cuts, PROVIDED the atom consumes that
+    // struct entirely via `derived_uniforms()` — never as a GPU binding (already
+    // true by construction: `is_texture_port` excludes `PortType::Camera`, so a
+    // Camera port was never a texture/buffer binding). The predicate is
+    // therefore: the wire's target port is Camera-typed AND the atom declares a
+    // non-empty `derived_uniforms()` list. A Camera port on an atom with NO
+    // derived_uniforms (a complex 3D renderer reading the whole matrix inline,
+    // not expressible as a handful of recomputed scalar fields) is not exempted
+    // — it still cuts, same as any other non-texture non-param wire. Install
+    // routes the exempted wire's producer onto the fused node's synthesized
+    // `camera_ext_N` port (`freeze/install.rs`); the fused kernel recomputes the
+    // member's derived fields every frame via
+    // `derived_uniform_registry::recompute` (`primitives/wgsl_compute.rs`).
+    //
+    // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P1: `Object` joins the `Camera`
+    // line above — same CPU-struct-wire reasoning (`is_texture_port`
+    // excludes `PortType::Object` too, so an Object port was never a
+    // texture/buffer binding). No fusable atom declares `derived_uniforms`
+    // for an Object input today (the single-hop invariant means the only
+    // legal `Object` consumer, `render_scene`, is a draw-call rasterizer —
+    // always `NodeClass::Boundary` by cut rule 4 already, never reaching
+    // this predicate); this keeps the exemption set structurally complete
+    // for the day a second Object consumer exists, which is itself an
+    // escalation trigger (design doc section 8).
+    let camera_ports: AHashSet<&str> = if n.derived_uniforms().is_empty() {
+        AHashSet::default()
+    } else {
+        n.inputs()
+            .iter()
+            .filter(|i| matches!(i.ty, PortType::Camera | PortType::Object))
+            .map(|i| i.name.as_ref())
+            .collect()
+    };
+    // D3 exemption (`docs/FUSION_SOTA_DESIGN.md`, closes BUG-114): a wire into
+    // an Array-typed input the atom tags `BufferIndex` no longer cuts — the
+    // narrowing cut rule 9, same shape as the Camera exemption above. The
+    // array producer still never becomes a region MEMBER (`build_region`
+    // below appends it as an external, exactly like a gather-consumed wire);
+    // this only stops the WIRE from forcing the whole node to Boundary.
+    // `INPUT_ACCESS` packs [texture accesses] ++ [array accesses] for a
+    // texture-domain atom with array inputs (see `input_port_access`'s D3
+    // comment) — offset by the atom's own texture-input count.
+    let buffer_index_ports: AHashSet<&str> = {
+        let tex_count = n.inputs().iter().filter(|i| is_texture_port(&i.ty)).count();
+        n.inputs()
+            .iter()
+            .filter(|i| matches!(i.ty, PortType::Array(_)))
+            .enumerate()
+            .filter(|(idx, _)| {
+                n.input_access().get(tex_count + idx) == Some(&InputAccess::BufferIndex)
+            })
+            .map(|(_, i)| i.name.as_ref())
+            .collect()
+    };
+    for w in &def.wires {
+        if w.to_node == node.id
+            && !tex_ports.contains(w.to_port.as_str())
+            && !scalar_params.contains(w.to_port.as_str())
+            && !camera_ports.contains(w.to_port.as_str())
+            && !buffer_index_ports.contains(w.to_port.as_str())
+        {
+            return NodeClass::Boundary;
+        }
+        if w.from_node == node.id && is_scalar_param_wire(def, registry, w) {
+            return NodeClass::Boundary;
+        }
+    }
+
+    // Feedback-loop precision (TEXTURE atoms only — buffer atoms were dispatched
+    // above and their f32 register threading is already bit-exact). A texture
+    // atom inside a feedback loop must NOT change its rounding when fused: the
+    // unfused editor stores each intermediate through its output texture (f16
+    // chain default, or fp32 via `outputFormats: rgba32float`), and a chaotic
+    // feedback sim amplifies any register-vs-store rounding gap until the look
+    // shifts when the editor closes. Two reconciliations, both fuse-eligible:
+    //   - fp32-marked: the unfused store is exact, matching the fused f32
+    //     register — fuses as-is.
+    //   - f16 (stencil tier A): the fused kernel reproduces the unfused f16
+    //     rounding in-register — `build_region` flags the member
+    //     `quantize_f16` and the codegen wraps its body call in a `q16`
+    //     pack2x16float/unpack2x16float round-trip (exact IEEE-half RTNE,
+    //     identical to an rgba16float store+load). Costs a few ALU per member;
+    //     no preset edit, no editor memory increase, no look change.
+    // Kill switch: `MANIFOLD_FREEZE_Q16=0` restores the pre-tier-A behaviour
+    // (in-loop f16 atoms stay boundaries) without touching fp32 admission.
+    if !q16_tier_enabled()
+        && node_on_cycle(node.id, def)
+        && !node.output_formats.values().any(|s| s.contains("32float"))
+    {
+        return NodeClass::Boundary;
+    }
+
+    // In-loop f16 texture atoms on a PARTICLE loop: boundary. The q16 round-
+    // trip reproduces store rounding but not cross-kernel body ULP noise (the
+    // out-of-loop probe measured this 1-ulp drift), and a loop that passes
+    // through a particle buffer + scatter amplifies one ulp of force into a
+    // visibly different field (FluidSim flow field, 2026-06-10: max_abs 0.73
+    // / 31% of pixels fused vs unfused; still 0.62 with only the pointwise
+    // pair fused). Pure-texture loops (OilyFluid's advection) stay smooth
+    // under the same ulp and keep fusing via tier A — its bit-exact proof
+    // stands. fp32-marked atoms keep fusing as-is (exact stores), but fp32 is
+    // an explicit data-texture opt-in now, never a compiler default.
+    if !node.output_formats.values().any(|s| s.contains("32float"))
+        && cycle_contains_array(node.id, def, registry)
+    {
+        return NodeClass::Boundary;
+    }
+
+    // Specialization tokens (QUALITY_LEVEL, WEIGHTING_MODE): the freeze paths
+    // bake the def's STATIC param value into the body text. A baked value must
+    // not be able to diverge from the live one, so a specialization param that
+    // an outer binding targets or a control wire drives keeps the atom a
+    // boundary (its run() keeps specializing per-dispatch as before).
+    for (_, sp_param) in n.wgsl_specialization() {
+        if param_is_binding_target(node, sp_param, def)
+            || def
+                .wires
+                .iter()
+                .any(|w| w.to_node == node.id && w.to_port == *sp_param)
+        {
+            return NodeClass::Boundary;
+        }
+    }
+
+    // Final gate: the body must produce a kernel the PLAIN pipeline compiler
+    // (naga) accepts — after substituting any declared specialization tokens
+    // exactly as the fused codegen will. An atom whose body still carries a
+    // free identifier (an undeclared token, a typo) fails the parse and stays
+    // a boundary; the substituted-and-parsed text is precisely what fusion
+    // compiles, so the gate remains sound. No hard-coded atom list.
+    let Some(body) = substituted_body(n.as_ref(), node) else {
+        return NodeClass::Boundary;
+    };
+    let standalone = crate::freeze::codegen::generate_standalone(
+        &crate::freeze::codegen::StandaloneKernelSpec {
+            fusion_kind: n.fusion_kind(),
+            body: &body,
+            inputs: n.inputs(),
+            params: n.parameters(),
+            input_access: n.input_access(),
+            derived_uniforms: n.derived_uniforms(),
+            outputs: n.outputs(),
+            stencil_fetch: n.stencil_fetch(),
+            includes: n.wgsl_includes(),
+        },
+    );
+    match standalone {
+        Ok(kernel) if naga::front::wgsl::parse_str(&kernel).is_ok() => NodeClass::Eligible,
+        _ => NodeClass::Boundary,
+    }
+}
+
+/// Validate the declared dense equivalent of an element schedule. Its omitted
+/// ports must be optional arrays that affect scheduling only, never values.
+pub(crate) fn dense_buffer_fusion(
+    n: &dyn crate::exec::effect_node::EffectNode,
+) -> Option<crate::exec::effect_node::DenseBufferFusion> {
+    if n.buffer_index().is_none() || !n.owned_outputs().is_empty() {
+        return None;
+    }
+    let dense = n.dense_buffer_fusion()?;
+    for &name in dense.schedule_inputs {
+        let input = n.inputs().iter().find(|input| input.name == name)?;
+        if input.required || !matches!(input.ty, PortType::Array(_)) {
+            return None;
+        }
+    }
+    Some(dense)
+}
+
+/// The atom's `wgsl_body` with its declared specialization tokens substituted
+/// by the def node's STATIC param values — the exact text every freeze path
+/// (classify parse gate, install, fused codegen) works from. `None` when the
+/// atom has no body, or a token's param value isn't a scalar it can bake.
+/// Enum/Bool/Int params bake as `u32` literals (the token comparison form the
+/// specialized pipelines use); Float bakes as a decimal literal.
+pub(crate) fn substituted_body(
+    n: &dyn crate::exec::effect_node::EffectNode,
+    node: &EffectGraphNode,
+) -> Option<std::borrow::Cow<'static, str>> {
+    use crate::parameters::ParamValue;
+    use manifold_core::effect_graph_def::SerializedParamValue;
+
+    let body = n.wgsl_body()?;
+    let spec = n.wgsl_specialization();
+    if spec.is_empty() {
+        return Some(std::borrow::Cow::Borrowed(body));
+    }
+    let mut text = body.to_string();
+    for (token, param) in spec {
+        let def_param = n.parameters().iter().find(|p| p.name == *param)?;
+        let literal = match node.params.get(*param) {
+            Some(SerializedParamValue::Enum { value }) => format!("{value}u"),
+            Some(SerializedParamValue::Bool { value }) => format!("{}u", u32::from(*value)),
+            Some(SerializedParamValue::Int { value }) => format!("{value}u"),
+            Some(SerializedParamValue::Float { value }) => format!("{value:?}"),
+            Some(_) => return None,
+            None => match &def_param.default {
+                ParamValue::Enum(v) => format!("{v}u"),
+                ParamValue::Bool(b) => format!("{}u", u32::from(*b)),
+                ParamValue::Float(f) => format!("{f:?}"),
+                _ => return None,
+            },
+        };
+        text = super::codegen::rename_ident(&text, token, &literal);
+    }
+    Some(std::borrow::Cow::Owned(text))
+}
+
+/// Classify a BUFFER-domain atom (writes an `Array<T>` — particle / instance /
+/// curve element) for fusion eligibility. The buffer twin of the texture gates
+/// in [`classify_node`]: the atom must match the buffer codegen contract
+/// ([`super::codegen::generate_fused`]'s buffer branch) — ≥1 Array input threaded
+/// as an element register, exactly one Array output (no texture output), no
+/// atomic output — and its non-Array wires must be region edges, gathered
+/// externals (a `BufferGather` array input or a sampled texture — the body
+/// indexes/samples them at element-computed coords, bound as `src_<slot>`
+/// externals, never threaded as registers), or re-anchorable scalar params,
+/// and it must not be a control PRODUCER. Anything else is a `Boundary`. The
+/// standalone naga-parse gate the texture path uses is NOT applied here (it
+/// threads no `wgsl_includes`, so a noise-based buffer body would falsely fail);
+/// the install pass naga-parses the FUSED kernel as the real guard, falling back
+/// to unfused.
+fn classify_buffer_node(
+    n: &dyn crate::exec::effect_node::EffectNode,
+    node: &EffectGraphNode,
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+) -> NodeClass {
+    if !n.owned_outputs().is_empty()
+        || (n.buffer_index().is_some() && dense_buffer_fusion(n).is_none())
+    {
+        return NodeClass::Boundary;
+    }
+    let arr_in = n.inputs().iter().filter(|i| matches!(i.ty, PortType::Array(_))).count();
+    let arr_out = n.outputs().iter().filter(|o| matches!(o.ty, PortType::Array(_))).count();
+    // Any atomic output — a scatter's sole output, or a side output next to a
+    // coincident one (BUG-agfh, Codegen: buffer atom with several outputs, one
+    // atomic) — is a cut. The body `atomicAdd`s at data-dependent cells, and the
+    // accumulator only holds its value after the whole dispatch, so nothing
+    // downstream can share the kernel. The standalone kernel still comes from
+    // `wgsl_body`; the atom is excused from fusion, not from codegen.
+    if !n.atomic_outputs().is_empty() {
+        return NodeClass::Boundary;
+    }
+    // v1 codegen shape: ≥1 Array input, exactly one Array output (fan-out buffer
+    // regions are a follow-on).
+    if arr_in < 1 || arr_out != 1 {
+        return NodeClass::Boundary;
+    }
+    // A texture OUTPUT from a buffer atom has no fused expression (the kernel
+    // writes element arrays) — boundary. Texture INPUTS fuse: the body samples
+    // the bound texture at a coord it computes from the element (the
+    // `*_at_particles` force-sampler family, anti_clump's modulator) — the
+    // buffer-domain analogue of the texture path's sampler-Gather. The fused
+    // codegen binds each as a `src_<slot>` texture + the shared `samp`, exactly
+    // like the standalone buffer kernel, so the sample is bit-identical. Gates:
+    //   - sampled `Texture2D` / `Texture3D` only: both bind through the fused
+    //     node (`node.wgsl_compute` introspects sampled 2D and 3D). 3D is what
+    //     lets the FluidSim3D integrator fuse whole — its force sampler
+    //     (sample_texture_3d_at_particles) reads the vector volume inline,
+    //     like the original fused `fluid_simulate_3d` kernel did;
+    //   - WIRED only: the fused node's texture port is required, and an unwired
+    //     port would silently kill its whole dispatch. The standalone atom binds
+    //     a dummy texture for an unwired optional; the fused path has no node to
+    //     do that, so unwired (even optional) stays a boundary.
+    if n.outputs().iter().any(|o| is_texture_port(&o.ty)) {
+        return NodeClass::Boundary;
+    }
+    for i in n.inputs().iter().filter(|i| is_texture_port(&i.ty)) {
+        if !matches!(i.ty, PortType::Texture2D | PortType::Texture3D) {
+            return NodeClass::Boundary;
+        }
+        if !def
+            .wires
+            .iter()
+            .any(|w| w.to_node == node.id && w.to_port == i.name)
+        {
+            return NodeClass::Boundary;
+        }
+    }
+    // A `BufferGather` input (neighbor_smooth, reflect_array) indexes its input
+    // array global itself — it can't thread one element register, so the
+    // gathered wire stays EXTERNAL: the finder never unions a gather-consumed
+    // wire (`wire_coincident_consumed`), `build_region` keeps the producer out
+    // of the region (bailing defensively if one ever landed inside), and the
+    // fused buffer codegen binds the wire as a read-only `src_<slot>` storage
+    // array the body indexes itself — the wire stays external, the NODE
+    // admits, exactly like a texture `Gather`. What still refuses downstream:
+    // a member whose array output capacity is a non-identity function of its
+    // inputs (the reflect_array 2x mirror multiplier) — probed in
+    // `build_region`, because the fused count/dst model only expresses
+    // one-output-element-per-input-element.
+    // Frame-derived-uniform integrators (euler_step's dt_scaled, the forces'
+    // frame_count, flatten_to_camera_plane's cam_fwd_x/_y/_z) FUSE: the fused
+    // buffer codegen emits each derived uniform as an `n{i}_<name>` Params field
+    // + body arg, and `node.wgsl_compute` recomputes its VALUE every frame via
+    // `derived_uniform_registry::recompute` (D7/P0 — the install-time
+    // `system.generator_input` control-wire whitelist this comment used to
+    // describe is deleted; see `docs/CINEMATIC_POST_DESIGN.md` D7). The
+    // in-place-loop hazard (fusing a region inside array_feedback's in==out
+    // loop) is handled at the install/region level: `region_output_aliases_external`
+    // + `external_is_inplace_loop` detect a feedback-loop region and the codegen
+    // writes back to the aliased `src_k` buffer in place, preserving the loop. So
+    // this per-node gate no longer excludes derived-uniform atoms; install bails
+    // to unfused only if a member's `type_id` has no registered recompute
+    // (`derived_uniform_registry::has_recompute`). Proven by
+    // `fluidsim_buffer_fusion_renders_like_unfused`.
+    //
+    // Wire gate: an Array input wire is a region edge (threads or stays external);
+    // a texture input wire is a gathered external (bound + sampled by the body);
+    // a scalar-param wire is re-anchored onto the fused port-shadow; any other
+    // wire into a non-Array non-texture non-scalar-param input cuts; a control
+    // PRODUCER stays a boundary so its scalar survives the rewrite to wire into
+    // the fused node.
+    let arr_ports: AHashSet<&str> = n
+        .inputs()
+        .iter()
+        .filter(|i| matches!(i.ty, PortType::Array(_)) || is_texture_port(&i.ty))
+        .map(|i| i.name.as_ref())
+        .collect();
+    let scalar_params: AHashSet<&str> = n
+        .parameters()
+        .iter()
+        .filter(|p| param_wgsl_type(p).is_ok())
+        .map(|p| p.name.as_ref())
+        .collect();
+    // D7/P0 exemption — same predicate as `classify_node`'s texture-domain wire
+    // gate above: a wire into a Camera-typed port no longer cuts, provided the
+    // atom declares a non-empty `derived_uniforms()` (consumes the struct
+    // entirely via recomputed scalar fields, never a GPU binding). This is what
+    // lets `node.flatten_to_camera_plane` — a real, shipped buffer atom already
+    // declaring `derived_uniforms: ["cam_fwd_x", "cam_fwd_y", "cam_fwd_z"]` and
+    // `fusion_kind: Pointwise` in anticipation of exactly this fix — actually
+    // fuse with a pointwise neighbour instead of being permanently stuck at
+    // Boundary by this gate.
+    let camera_ports: AHashSet<&str> = if n.derived_uniforms().is_empty() {
+        AHashSet::default()
+    } else {
+        n.inputs()
+            .iter()
+            .filter(|i| matches!(i.ty, PortType::Camera | PortType::Object))
+            .map(|i| i.name.as_ref())
+            .collect()
+    };
+    for w in &def.wires {
+        if w.to_node == node.id
+            && !arr_ports.contains(w.to_port.as_str())
+            && !scalar_params.contains(w.to_port.as_str())
+            && !camera_ports.contains(w.to_port.as_str())
+        {
+            return NodeClass::Boundary;
+        }
+        if w.from_node == node.id && is_scalar_param_wire(def, registry, w) {
+            return NodeClass::Boundary;
+        }
+    }
+    NodeClass::Eligible
+}
+
+/// Assemble a [`Region`] from a connected component's node set, or `Err` naming
+/// the first v1 expressibility gate it failed (too short, multi-output, or an
+/// unresolvable input — all left unfused). The reason string feeds the
+/// refusal census: a component can union cleanly and STILL not fuse,
+/// and without the reason that reads as a convexity bug (Watercolor's tail did,
+/// 2026-06-11 — see the element-space gate below).
+pub fn build_region(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    nodes: &[u32],
+    final_reachable: &AHashSet<u32>,
+    spaces: Option<&AHashMap<(u32, String), ElementSpace>>,
+) -> Result<Region, &'static str> {
+    // Singles ARE built here: a lone stencil atom (a blur) becomes worth fusing
+    // the moment the absorption pass folds a producer chain into its fetch.
+    // `partition_regions` drops chainless sub-MIN_REGION_LEN regions at the end.
+    if nodes.is_empty() {
+        return Err("empty component");
+    }
+    let node_set: AHashSet<u32> = nodes.iter().copied().collect();
+    // Texture vs buffer region — drives every port/wire filter below (a region is
+    // homogeneous: texture and Array ports never wire to each other).
+    let is_buffer = region_is_buffer(nodes, def, registry);
+
+    // Topo-sort the members by intra-region wires so every Member input refers to
+    // an earlier entry (the codegen threads registers in this order).
+    let order = topo_sort(nodes, def, registry, &node_set, is_buffer)
+        .ok_or("intra-region wires form a cycle")?;
+
+    // Resolve external inputs (deduped, first-seen order) + each member's inputs.
+    let mut externals: Vec<ExternalRef> = Vec::new();
+    let mut ext_index: AHashMap<(u32, String), usize> = AHashMap::default();
+    let mut members: Vec<RegionMember> = Vec::with_capacity(order.len());
+    for &doc_id in &order {
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.id == doc_id)
+            .ok_or("member id missing from def")?;
+        let constructed = configured_construct(registry, node).ok_or("unknown member type")?;
+        let tex_ports: Vec<&str> = constructed
+            .inputs()
+            .iter()
+            .filter(|i| region_port_is_member(&i.ty, is_buffer))
+            .map(|i| i.name.as_ref())
+            .collect();
+        let access_list = constructed.input_access();
+        let mut inputs: Vec<RegionInput> = Vec::with_capacity(tex_ports.len());
+        let mut input_access: Vec<InputAccess> = Vec::with_capacity(tex_ports.len());
+        for (idx, port) in tex_ports.iter().enumerate() {
+            let access = access_list.get(idx).copied().unwrap_or(InputAccess::Coincident);
+            if dense_buffer_fusion(constructed.as_ref())
+                .is_some_and(|dense| dense.schedule_inputs.contains(port))
+            {
+                // Keep declared port positions for capacity/alias analysis.
+                // The dense body does not read schedules; install omits this
+                // slot before codegen, whether the standalone schedule is wired
+                // or not. It must not become a data/capacity external.
+                inputs.push(RegionInput::Unwired);
+                input_access.push(access);
+                continue;
+            }
+            let Some(wire) = def
+                .wires
+                .iter()
+                .find(|w| w.to_node == doc_id && w.to_port == *port)
+            else {
+                // No wire into this port. An OPTIONAL coincident input fuses as
+                // `Unwired` (the body's injected use flag gates the read off, the
+                // same contract run() fulfils with a dummy bind) — this is what
+                // lets pack_channels fuse with only r/g wired. The same admit
+                // applies in BUFFER regions: an optional coincident array input
+                // (the mesh deformers' `weights`) has no buffer when unwired,
+                // and the codegen threads a zero element the body's
+                // `idx < weights_len` gate never reads (weights_len recomputes
+                // to 0, matching run()'s degrade). Required-unwired (the node
+                // wouldn't render anyway) and gather-unwired (the body needs a
+                // real texture/array to sample) drop the region — unfused,
+                // always correct.
+                let spec = constructed
+                    .inputs()
+                    .iter()
+                    .find(|i| i.name == *port)
+                    .ok_or("port missing from member spec")?;
+                if spec.required || access.is_gather() {
+                    return Err("required/gather input unwired");
+                }
+                inputs.push(RegionInput::Unwired);
+                input_access.push(access);
+                continue;
+            };
+            let resolved = if node_set.contains(&wire.from_node) {
+                // A gather input must read an external texture, never a region
+                // register (a register is one texel). The finder never unions
+                // across a gather-consumed wire, so a gathered producer should
+                // never be a member — bail defensively if one slipped through.
+                if access.is_gather() {
+                    return Err("gather input wired from a member");
+                }
+                // D4/P6: a multi-output producer (struct-return body, ≥2
+                // texture outputs) isn't a single register — the wire names
+                // WHICH BodyOutputs field threads. Zero for every buffer-array
+                // producer and every single-texture-output atom, so this stays
+                // `Member(u32)` — byte-identical — for every region that
+                // existed before this phase.
+                if producer_tex_output_count(registry, def, wire.from_node) > 1 {
+                    RegionInput::MemberPort(wire.from_node, wire.from_port.clone())
+                } else {
+                    RegionInput::Member(wire.from_node)
+                }
+            } else {
+                let key = (wire.from_node, wire.from_port.clone());
+                let slot = *ext_index.entry(key).or_insert_with(|| {
+                    externals.push(ExternalRef {
+                        from_node: wire.from_node,
+                        from_port: wire.from_port.clone(),
+                    });
+                    externals.len() - 1
+                });
+                RegionInput::External(slot)
+            };
+            inputs.push(resolved);
+            input_access.push(access);
+        }
+        // BUFFER members: append each texture input as a gathered EXTERNAL after
+        // the array entries — the buffer analogue of the texture path's sampler-
+        // Gather (the body samples the bound texture at an element-computed
+        // coord). Array entries stay first so array-port indexing (the in-place
+        // alias trace, the codegen's element registers) is untouched. Classify
+        // admitted only WIRED sampled 2D/3D texture inputs; a member can never
+        // produce a texture (buffer atoms with texture outputs are boundaries),
+        // so the producer is always external — bail defensively if violated.
+        if is_buffer {
+            for port in constructed.inputs().iter().filter(|i| is_texture_port(&i.ty)) {
+                if !matches!(port.ty, PortType::Texture2D | PortType::Texture3D) {
+                    return Err("buffer member samples a non-2D/3D texture");
+                }
+                let wire = def
+                    .wires
+                    .iter()
+                    .find(|w| w.to_node == doc_id && w.to_port == port.name)
+                    .ok_or("buffer member's texture input unwired")?;
+                if node_set.contains(&wire.from_node) {
+                    return Err("buffer member's texture produced inside the region");
+                }
+                let key = (wire.from_node, wire.from_port.clone());
+                let slot = *ext_index.entry(key).or_insert_with(|| {
+                    externals.push(ExternalRef {
+                        from_node: wire.from_node,
+                        from_port: wire.from_port.clone(),
+                    });
+                    externals.len() - 1
+                });
+                inputs.push(RegionInput::External(slot));
+                input_access.push(InputAccess::Gather);
+            }
+        }
+        // TEXTURE members with a `BufferIndex`-tagged Array input (D3, closes
+        // BUG-114): append each such input as a gathered EXTERNAL after the
+        // texture entries — the mirror image of the buffer-member append
+        // above (there array-first-texture-after; here texture-first-array-
+        // after, since texture is this member's PRIMARY domain). The array
+        // producer must never be a region member — classify_node's wire gate
+        // only stops the wire from forcing the whole node to Boundary, the
+        // "gather never unions" contract (`is_gather()`) still applies, so a
+        // producer that slipped in as a member here is a defensive bail, same
+        // as the ordinary gather check above.
+        if !is_buffer {
+            let tex_count = constructed.inputs().iter().filter(|i| is_texture_port(&i.ty)).count();
+            for (arr_idx, port) in constructed
+                .inputs()
+                .iter()
+                .filter(|i| matches!(i.ty, PortType::Array(_)))
+                .enumerate()
+            {
+                if access_list.get(tex_count + arr_idx) != Some(&InputAccess::BufferIndex) {
+                    continue; // not a BufferIndex-tagged array input on this atom
+                }
+                let wire = def
+                    .wires
+                    .iter()
+                    .find(|w| w.to_node == doc_id && w.to_port == port.name)
+                    .ok_or("BufferIndex input unwired")?;
+                if node_set.contains(&wire.from_node) {
+                    return Err("BufferIndex array produced inside the region");
+                }
+                let key = (wire.from_node, wire.from_port.clone());
+                let slot = *ext_index.entry(key).or_insert_with(|| {
+                    externals.push(ExternalRef {
+                        from_node: wire.from_node,
+                        from_port: wire.from_port.clone(),
+                    });
+                    externals.len() - 1
+                });
+                inputs.push(RegionInput::External(slot));
+                input_access.push(InputAccess::BufferIndex);
+            }
+        }
+        // f16-faithful rounding (stencil tier A): an in-loop member whose
+        // unfused output texture is f16 gets its fused register quantized to
+        // half precision after every body call — see the classify comment.
+        // Deliberately NOT extended to out-of-loop members: a 2026-06-10 probe
+        // (simplex→scale fused vs unfused) measured q16-everywhere WORSE than
+        // plain f32 registers (all-pixel 1-ulp drift vs half-pixel) — the
+        // residual out-of-loop gap is body-level FMA/inlining ULP noise across
+        // kernel contexts, which quantization can't reconcile, only amplify.
+        // Out-of-loop regions live with the documented ≈ulp tolerance; loops
+        // get q16 because there the inputs are identical by induction and the
+        // store rounding is the only gap.
+        let quantize_f16 = !is_buffer
+            && node_on_cycle(doc_id, def)
+            && !node.output_formats.values().any(|s| s.contains("32float"));
+        members.push(RegionMember { doc_id, inputs, input_access, quantize_f16,
+        });
+    }
+
+    // The region output(s): each member with ≥1 texture wire to a non-member. A
+    // single-output linear chain has one; a FAN-OUT region (an interior member
+    // feeds two distinct downstream boundaries) has several — each stored to its
+    // own `dst_<k>`. Every escaping consumer MUST be live (reach `final_output`):
+    // the executor only allocates a texture a live node reads, and the fused
+    // `WgslCompute` early-returns its WHOLE dispatch if any storage output is
+    // unbound — so a `dst_<k>` feeding a dead consumer would silently kill the
+    // live outputs too. If any escaping wire targets a dead consumer, drop the
+    // whole region (it renders unfused, always correct).
+    // D4/P6: dedup by (id, PORT) — not just id — so a multi-output member with
+    // TWO distinct ports each feeding a live external consumer gets two
+    // entries (its own `dst_<k>` each), while a single-output member (or a
+    // multi-output member escaping through only one of its ports) still gets
+    // exactly one, same as before.
+    let mut outputs: Vec<(u32, String)> = Vec::new();
+    for &id in nodes {
+        let mut escaping_ports: Vec<String> = Vec::new();
+        for w in &def.wires {
+            if w.from_node == id
+                && !node_set.contains(&w.to_node)
+                && is_region_wire(def, registry, w, is_buffer)
+            {
+                if !final_reachable.contains(&w.to_node) {
+                    return Err("escaping wire to a dead consumer");
+                }
+                if !escaping_ports.contains(&w.from_port) {
+                    escaping_ports.push(w.from_port.clone());
+                }
+            }
+        }
+        for port in escaping_ports {
+            outputs.push((id, port));
+        }
+    }
+    outputs.sort_unstable();
+    if outputs.is_empty() {
+        return Err("dead region — nothing leaves it");
+    }
+
+    // v1 buffer regions are single-output (the fused node writes one fresh `dst`
+    // array). Fan-out buffer regions are a follow-on. Texture regions allow
+    // multi-output (fan-out) as before.
+    if is_buffer && outputs.len() != 1 {
+        return Err("fan-out buffer region (v1 is single-output)");
+    }
+
+    // BufferGather output-capacity admission (BUG-x72p + BUG-orm4): a gathered
+    // array external joins the region, so the fused count — min over the ARRAY
+    // externals, which is also how `node.wgsl_compute` sizes the fresh `dst`
+    // — must be EVERY member's unfused dispatch count. Each member DECLARES
+    // its capacity shape (`FusedOutputCapacity`, via the `primitive!`
+    // `output_capacity:` field): `MinInputs` (identity — one output element
+    // per dispatched element, every shipped identity buffer atom) composes a
+    // `Min` over its input sources; `MultipleOf { input, factor }`
+    // (reflect_array's 2x mirror, analytic_echo_instances' 8x stride)
+    // composes `Mul(factor, Slot(e))` over its gathered external and WIDENS
+    // the region's count so the mirrored/echoed range is actually dispatched
+    // and written. The declaration is verified against the black-box
+    // `array_output_capacity` on distinct ascending synthetic capacities —
+    // the declaration selects the expression, the probe keeps it honest; a
+    // disagreement (e.g. ordered_recon_mesh's conditional identity, `Some`
+    // only when `in` == `reference`) refuses the region, which renders
+    // unfused (always correct). Fail closed at every step.
+    let mut output_capacity: Option<CapacityExpr> = None;
+    // A lattice-sized member (`ParamProduct`) counts by its params, never by
+    // its inputs' lengths, so its region always takes the composed count,
+    // gathered or not. Each member's configured params, keyed by the fused
+    // uniform field (`n<position>_<param>`) its `Param` leaves name.
+    let mut region_params: crate::exec::effect_node::ParamValues = AHashMap::default();
+    let mut lattice_sized = false;
+    if is_buffer {
+        for (pos, &doc_id) in order.iter().enumerate() {
+            let node = def.nodes.iter().find(|n| n.id == doc_id).ok_or("member id missing from def")?;
+            let constructed = configured_construct(registry, node).ok_or("unknown member type")?;
+            lattice_sized |= matches!(constructed.fused_output_capacity(), FusedOutputCapacity::ParamProduct { .. });
+            for (name, value) in configured_params(constructed.as_ref(), node) {
+                region_params.insert(format!("n{pos}_{name}").into(), value);
+            }
+        }
+    }
+    if is_buffer
+        && (lattice_sized
+            || members
+                .iter()
+                .any(|m| m.input_access.contains(&InputAccess::BufferGather)))
+    {
+        // Per-member composed capacity expression, indexed by POSITION in
+        // `order` (topo order — a member's register producers are always
+        // earlier, so composition is a single forward pass).
+        let mut member_expr: Vec<Option<CapacityExpr>> = vec![None; order.len()];
+        // Doc ids of the region's MultipleOf members (the widened gates
+        // below admit gathered reads only on these members' named inputs).
+        let mut multiplier_docs: Vec<u32> = Vec::new();
+        let mut widened = false;
+        let mut selected_input_count = false;
+        // Array external slots some member pre-reads at `[idx]`: a
+        // lattice-sized count is clamped by each one's length.
+        let mut coincident_slots: Vec<usize> = Vec::new();
+        // Synthetic capacities for the probe: one DISTINCT ASCENDING value
+        // per external SLOT (`CapacityExpr::Slot(e)` renders as `src_<e>`,
+        // the same key `eval` looks up). Slot-distinct catches the non-min
+        // selector families (max, conditional) the way input-distinct probes
+        // did pre-BUG-orm4.
+        // The probe runs twice, ascending and descending: a member whose
+        // capacity selects one input (not the min) would pass as MinInputs
+        // whenever that input happened to hold the smallest synthetic.
+        let synthetics = |descending: bool| -> Vec<(String, u32)> {
+            let last = externals.len().saturating_sub(1);
+            externals
+                .iter()
+                .enumerate()
+                .map(|(e, _)| {
+                    let rank = if descending { last - e } else { e };
+                    (format!("src_{e}"), 1009u32.saturating_add(1000 * rank as u32))
+                })
+                .collect()
+        };
+        let (slot_synthetics, reversed_synthetics) = (synthetics(false), synthetics(true));
+        let slot_syn_refs: Vec<(&str, u32)> =
+            slot_synthetics.iter().map(|(n, c)| (n.as_str(), *c)).collect();
+        let reversed_syn_refs: Vec<(&str, u32)> =
+            reversed_synthetics.iter().map(|(n, c)| (n.as_str(), *c)).collect();
+        for (pos, &doc_id) in order.iter().enumerate() {
+            let member = members
+                .iter()
+                .find(|m| m.doc_id == doc_id)
+                .ok_or("member id missing from members")?;
+            let node = def
+                .nodes
+                .iter()
+                .find(|n| n.id == doc_id)
+                .ok_or("member id missing from def")?;
+            let constructed = configured_construct(registry, node).ok_or("unknown member type")?;
+            let arr_inputs: Vec<(&str, bool)> = constructed
+                .inputs()
+                .iter()
+                .filter(|i| matches!(i.ty, PortType::Array(_)))
+                .map(|i| (i.name.as_ref(), i.required))
+                .collect();
+            let out_port = constructed
+                .outputs()
+                .iter()
+                .find(|o| matches!(o.ty, PortType::Array(_)))
+                .map(|o| o.name.as_ref())
+                .ok_or("member has no array output")?;
+            // The member's array input SOURCES, aligned to `arr_inputs`
+            // (buffer members resolve array inputs first — see the codegen's
+            // input-shape comment).
+            let sources: Vec<&RegionInput> = member.inputs.iter().take(arr_inputs.len()).collect();
+            for (k, source) in sources.iter().enumerate() {
+                let access = member.input_access.get(k).copied().unwrap_or_default();
+                if let RegionInput::External(e) = source
+                    && !access.is_gather()
+                    && !coincident_slots.contains(e)
+                {
+                    coincident_slots.push(*e);
+                }
+            }
+
+            let declared = constructed.fused_output_capacity();
+            let expr = match declared {
+                FusedOutputCapacity::ParamProduct { params, plus } => {
+                    let mut factors = Vec::with_capacity(params.len());
+                    for name in params {
+                        let param = constructed
+                            .parameters()
+                            .iter()
+                            .find(|p| p.name == *name)
+                            .ok_or("ParamProduct names an unknown param")?;
+                        if param.ty != crate::parameters::ParamType::Float {
+                            return Err("ParamProduct names a param that is not a Float");
+                        }
+                        let side = CapacityExpr::Param(format!("n{pos}_{name}"));
+                        factors.push(if plus == 0 { side } else { CapacityExpr::Add(plus, Box::new(side)) });
+                    }
+                    match factors.len() {
+                        1 => factors.pop().expect("one factor"),
+                        _ => CapacityExpr::Product(factors),
+                    }
+                }
+                FusedOutputCapacity::MinInputs => {
+                    // Identity: min over the member's own array input
+                    // capacities — external slots read directly, member
+                    // registers composing the producer's expression. A unary
+                    // min collapses to the child itself (a single-source
+                    // identity member inherits its producer's shape
+                    // unchanged — e.g. jitter-after-reflect composes to the
+                    // reflect's Mul, not Min([Mul])).
+                    //
+                    // OPTIONAL inputs contribute nothing: the optional-
+                    // weights deformer family (morph, ripple, taper, …)
+                    // dispatches on its REQUIRED inputs alone — `weights`
+                    // only modulates per-element values (`run()` bounds the
+                    // dispatch by min over the mesh inputs, never the
+                    // weights buffer; the body's `idx < weights_len` gate
+                    // degrades past it). Including an optional source would
+                    // compose a MORE conservative count than the member's
+                    // real dispatch, the honesty probe below would refuse
+                    // the region, and the wired-optional pre-read keeps the
+                    // same bounds contract the unfused wrapper has. An atom
+                    // whose capacity genuinely binds on an optional input
+                    // fails the probe on distinct synthetics — fail closed.
+                    let mut children: Vec<CapacityExpr> = Vec::with_capacity(sources.len());
+                    for ((_, required), src) in arr_inputs.iter().zip(sources.iter()) {
+                        if !required {
+                            match src {
+                                RegionInput::Unwired => {}
+                                RegionInput::External(_) | RegionInput::Member(_) => continue,
+                                _ => return Err("identity member with a non-register array input"),
+                            }
+                            continue;
+                        }
+                        match src {
+                            RegionInput::External(e) => children.push(CapacityExpr::Slot(*e)),
+                            RegionInput::Member(producer) => {
+                                let ppos = order
+                                    .iter()
+                                    .position(|id| id == producer)
+                                    .ok_or("register producer not a region member")?;
+                                children.push(
+                                    member_expr[ppos]
+                                        .as_ref()
+                                        .ok_or("register producer lacks a capacity expression")?
+                                        .clone(),
+                                );
+                            }
+                            // An OPTIONAL UNWIRED array input has no buffer —
+                            // it contributes no capacity (run() treats it as
+                            // absent). A BufferGather source never unions (the
+                            // finder keeps the producer external) — reaching
+                            // one here is a finder bug; refuse rather than guess.
+                            RegionInput::Unwired => {}
+                            _ => return Err("identity member with a non-register array input"),
+                        }
+                    }
+                    match children.len() {
+                        1 => children.pop().expect("one child"),
+                        _ => CapacityExpr::Min(children),
+                    }
+                }
+                FusedOutputCapacity::FromInput { input } => {
+                    let selected = arr_inputs
+                        .iter()
+                        .position(|(name, _)| *name == input)
+                        .ok_or("FromInput names an unknown array input")?;
+                    if member.input_access.len() < arr_inputs.len() {
+                        return Err("FromInput lacks array read-access declarations");
+                    }
+                    for (index, access) in member
+                        .input_access
+                        .iter()
+                        .take(arr_inputs.len())
+                        .enumerate()
+                    {
+                        let expected = if index == selected {
+                            InputAccess::Coincident
+                        } else {
+                            InputAccess::BufferGather
+                        };
+                        if *access != expected {
+                            return Err(
+                                "FromInput requires one coincident anchor and bounds-checked gathers",
+                            );
+                        }
+                    }
+                    selected_input_count = true;
+                    match sources.get(selected) {
+                        Some(RegionInput::External(e)) => CapacityExpr::Slot(*e),
+                        Some(RegionInput::Member(producer)) => {
+                            let position = order
+                                .iter()
+                                .position(|id| id == producer)
+                                .ok_or("FromInput producer is not a region member")?;
+                            member_expr[position]
+                                .clone()
+                                .ok_or("FromInput producer lacks a capacity expression")?
+                        }
+                        _ => return Err("FromInput anchor is not an external or register"),
+                    }
+                }
+                FusedOutputCapacity::MultipleOf { input, factor } => {
+                    // The named port must be the member's ONLY array input,
+                    // tagged BufferGather, wired to an external slot: the
+                    // body indexes that array whole at self-computed indices
+                    // (its own guards keep any dispatched idx in bounds), and
+                    // the widened count is factor × the slot's live length.
+                    if arr_inputs.len() != 1 || arr_inputs.first().map(|(n, _)| *n) != Some(input) {
+                        return Err("MultipleOf names a port that is not the member's only array input",
+                        );
+                    }
+                    match sources.first() {
+                        Some(RegionInput::External(e))
+                            if member.input_access.first() == Some(&InputAccess::BufferGather) =>
+                        {
+                            widened = true;
+                            multiplier_docs.push(doc_id);
+                            CapacityExpr::Mul(factor, Box::new(CapacityExpr::Slot(*e)))
+                        }
+                        _ => return Err("MultipleOf input is not a gathered external"),
+                    }
+                }
+            };
+
+            // Probe honesty: the black-box capacity fn must AGREE with the
+            // composed expression on the synthetic slot capacities — the
+            // declaration selects the expression, the probe keeps it honest.
+            // The black-box probe is keyed by PORT NAME: a port fed by an
+            // external slot gets that slot's synthetic; a port fed by a
+            // member register gets the producer's composed synthetic. A
+            // conditional identity (ordered_recon_mesh: `Some` only when
+            // `in` == `reference`) answers None on distinct slots and
+            // refuses here.
+            for syn_refs in [&slot_syn_refs, &reversed_syn_refs] {
+                let port_caps: Vec<(&str, u32)> = {
+                    let mut caps = Vec::with_capacity(sources.len());
+                    for ((name, _), src) in arr_inputs.iter().zip(sources.iter()) {
+                        let cap = match src {
+                            RegionInput::External(e) => syn_refs
+                                .get(*e)
+                                .map(|(_, c)| *c)
+                                .ok_or("array input names an unknown external slot")?,
+                            RegionInput::Member(producer) => {
+                                let ppos = order
+                                    .iter()
+                                    .position(|id| id == producer)
+                                    .ok_or("register producer not a region member")?;
+                                member_expr[ppos]
+                                    .as_ref()
+                                    .ok_or("register producer lacks a capacity expression")?
+                                    .eval_with(syn_refs, &region_params)
+                                    .ok_or("register producer capacity does not evaluate")?
+                            }
+                            // Unwired optional: absent, no synthetic capacity.
+                            RegionInput::Unwired => continue,
+                            _ => return Err("member has a non-register array input"),
+                        };
+                        caps.push((*name, cap));
+                    }
+                    caps
+                };
+                let composed = expr.eval_with(syn_refs, &region_params);
+                // A lattice-sized member answers from its configured params.
+                let black_box_params = match declared {
+                    FusedOutputCapacity::ParamProduct { .. } => configured_params(constructed.as_ref(), node),
+                    _ => Default::default(),
+                };
+                match (composed, constructed.array_output_capacity(out_port, &black_box_params, &port_caps),
+                ) {
+                    (Some(a), Some(b)) if a == b => {}
+                    _ => return Err("array output capacity disagrees with the declared fused shape"),
+                }
+            }
+            member_expr[pos] = Some(expr);
+        }
+
+        // Widened-region soundness gates. The dispatch count now exceeds the
+        // gathered input's length, so reads that were safe at the identity
+        // count are not, in general, safe at the widened one:
+        //  - a COINCIDENT array external read (`src_e[idx]` pre-read) would
+        //    run off the end of an input shorter than the widened count;
+        //  - another member's BufferGather self-indexing (neighbor_smooth's
+        //    `buf_in[idx ± 1]`) is only bounds-safe at ITS OWN dispatch
+        //    count, which the region count no longer is.
+        // Only a MultipleOf member's own named input may be a gathered
+        // array external, and no array external may be read coincidently;
+        // every other array input threads a register from an earlier member
+        // (whose capacity composes to the widened count — sound). Texture
+        // inputs are unaffected (sampler-clamped, index-free).
+        if widened {
+            for member in &members {
+                let is_multiplier = multiplier_docs.contains(&member.doc_id);
+                // Only the ARRAY-input prefix is gated — texture inputs are
+                // sampled (index-free, sampler-clamped) and unaffected by the
+                // widened count.
+                let node = def
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == member.doc_id)
+                    .ok_or("member id missing from def")?;
+                let constructed = configured_construct(registry, node).ok_or("unknown member type")?;
+                let arr_len = constructed
+                    .inputs()
+                    .iter()
+                    .filter(|i| matches!(i.ty, PortType::Array(_)))
+                    .count();
+                for (k, src) in member.inputs.iter().take(arr_len).enumerate() {
+                    let gathered = member.input_access.get(k).copied().unwrap_or_default()
+                        == InputAccess::BufferGather;
+                    if gathered && !is_multiplier {
+                        return Err(
+                            "a gathered read by a non-multiplier member in a widened region",
+                        );
+                    }
+                    if !gathered && matches!(src, RegionInput::External(_)) {
+                        return Err("a coincident array external in a widened region");
+                    }
+                }
+            }
+        }
+
+        // The region's output expression: the output member's composed
+        // capacity. `None` (all-identity) keeps the legacy min-over-externals
+        // anchor; `Some` widens the count and reaches the codegen + the
+        // dst-sizing marker.
+        let out_doc = outputs[0].0;
+        let out_pos = order
+            .iter()
+            .position(|id| *id == out_doc)
+            .ok_or("region output not a member")?;
+        if selected_input_count {
+            let output = member_expr[out_pos]
+                .as_ref()
+                .ok_or("missing output capacity")?;
+            for expression in member_expr.iter().flatten() {
+                if !capacity_bounded_by(output, expression) {
+                    return Err("selected-input dispatch exceeds a member's capacity");
+                }
+            }
+        }
+        output_capacity = member_expr[out_pos]
+            .clone()
+            .filter(|_| widened || selected_input_count);
+        if lattice_sized {
+            output_capacity = Some(lattice_count(
+                member_expr[out_pos].as_ref().ok_or("missing output capacity")?,
+                &member_expr,
+                &coincident_slots,
+                &region_params,
+            )?);
+        }
+    }
+
+    // ── Tier 6: element-space uniformity. The fused kernel iterates one grid,
+    // so every member's unfused output must have resolved to the SAME space,
+    // and every coincident external (read via `textureLoad` at the kernel's
+    // own coordinate) must live at that space too. Gathered externals are
+    // exempt — the body samples them at a normalized UV through `samp`, which
+    // is resolution-independent by construction. Any mismatch drops the whole
+    // region (renders unfused, always correct). Buffer regions have no
+    // texture grid; their space is `None`. ──
+    let mut sampled_externals: Vec<usize> = Vec::new();
+    let space = if is_buffer {
+        None
+    } else {
+        let region_space = node_output_space(spaces, def, registry, order[0]);
+        for &id in &order {
+            if node_output_space(spaces, def, registry, id) != region_space {
+                return Err("member off the region's element space");
+            }
+        }
+        // CROSS-RESOLUTION externals (workstream 4 — the Watercolor/Bloom unlock).
+        // This gate — not convexity — is what split Watercolor's tail
+        // (luma_blur_v → dilute → guard → wet_dry): the component unions cleanly
+        // across the feedback loop (the guard → feedback state-capture wire IS
+        // correctly excluded as a back edge), but `dilute.mask` reads `mask_map`
+        // — the half-res flow field, rescaled — as a COINCIDENT external. A
+        // coincident read used to be a `textureLoad` at the fused kernel's own
+        // canvas coordinate, which on a half-res texture reads the wrong texel
+        // (or out of bounds), so the region dropped here.
+        //
+        // The fix mirrors the unfused graph exactly: a plain `Coincident` input
+        // is resolution-ROBUST by contract — the standalone atom reads it through
+        // a sampler at the fragment UV, and a sampler rescales across the seam
+        // (the stencil session proved sampler-based chain reads bit-exact). So a
+        // space-MISMATCHED `Coincident` external is now ADMITTED and its slot
+        // marked SAMPLED: the codegen reads it via `textureSampleLevel(src_e,
+        // samp, uv, 0.0)` — the identical standalone read — instead of the
+        // same-res textureLoad pre-read. Same-space externals stay textureLoad
+        // (byte-identical to v1). Scope guards: a `CoincidentTexel` external is
+        // texel-EXACT (dither's ordered-threshold pattern) and a rescaled sample
+        // would blend neighbours into garbage, so it stays same-res-gated — drop
+        // the region. Gathers are already exempt (they sample at a body-computed
+        // UV regardless of space). Resampling ATOMS (`output_canvas_scale` ≠ 1:1)
+        // never reach here — classify keeps them boundaries; we unlock cross-res
+        // READS into a region, not folding a resampler in.
+        for member in &members {
+            for (input, access) in member.inputs.iter().zip(&member.input_access) {
+                if access.is_gather() {
+                    continue;
+                }
+                if let RegionInput::External(slot) = input {
+                    let ext = &externals[*slot];
+                    if space_of(spaces, ext.from_node, &ext.from_port) != region_space {
+                        if *access == InputAccess::CoincidentTexel {
+                            return Err("texel-exact external off the region's element space");
+                        }
+                        if !sampled_externals.contains(slot) {
+                            sampled_externals.push(*slot);
+                        }
+                    }
+                }
+            }
+        }
+        sampled_externals.sort_unstable();
+        Some(region_space)
+    };
+
+    Ok(Region {
+        members,
+        externals,
+        outputs,
+        space,
+        sampled_externals,
+        virtual_chains: Vec::new(),
+        output_capacity,
+    })
+}
+
+/// The element space of `id`'s (single) texture output in the unfused plan —
+/// [`ElementSpace::Canvas`] when the node is unknown, has no texture output,
+/// or the spaces map is unavailable.
+fn node_output_space(
+    spaces: Option<&AHashMap<(u32, String), ElementSpace>>,
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    id: u32,
+) -> ElementSpace {
+    let Some(node) = def.nodes.iter().find(|n| n.id == id) else {
+        return ElementSpace::Canvas;
+    };
+    let Some(constructed) = configured_construct(registry, node) else {
+        return ElementSpace::Canvas;
+    };
+    let Some(port) = constructed
+        .outputs()
+        .iter()
+        .find(|o| is_texture_port(&o.ty))
+        .map(|o| o.name.clone())
+    else {
+        return ElementSpace::Canvas;
+    };
+    space_of(spaces, id, port.as_ref())
+}
+
+/// Kahn topo-sort of a region's members by intra-region texture wires. `None` on
+/// a cycle (feedback never appears in a pure region, but fail closed).
+fn topo_sort(
+    nodes: &[u32],
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    node_set: &AHashSet<u32>,
+    is_buffer: bool,
+) -> Option<Vec<u32>> {
+    let mut indeg: AHashMap<u32, u32> = nodes.iter().map(|&id| (id, 0)).collect();
+    let mut adj: AHashMap<u32, Vec<u32>> = AHashMap::default();
+    for w in &def.wires {
+        if node_set.contains(&w.from_node)
+            && node_set.contains(&w.to_node)
+            && w.from_node != w.to_node
+            && is_region_wire(def, registry, w, is_buffer)
+        {
+            adj.entry(w.from_node).or_default().push(w.to_node);
+            *indeg.get_mut(&w.to_node)? += 1;
+        }
+    }
+    let mut queue: Vec<u32> = nodes.iter().copied().filter(|id| indeg[id] == 0).collect();
+    queue.sort_unstable();
+    let mut order: Vec<u32> = Vec::with_capacity(nodes.len());
+    while let Some(id) = queue.pop() {
+        order.push(id);
+        if let Some(succs) = adj.get(&id) {
+            let mut ready: Vec<u32> = Vec::new();
+            for &s in succs {
+                let d = indeg.get_mut(&s)?;
+                *d -= 1;
+                if *d == 0 {
+                    ready.push(s);
+                }
+            }
+            ready.sort_unstable();
+            for s in ready.into_iter().rev() {
+                queue.push(s);
+            }
+        }
+    }
+    (order.len() == nodes.len()).then_some(order)
+}
+
+/// The read-access of `node`'s texture input `port` (Coincident if the atom
+/// is unknown or the port isn't one of its texture inputs). `input_access()` is
+/// aligned to the atom's TEXTURE inputs in `inputs()` order.
+///
+/// CONFIGURED construct (BUG-007 sibling): a fragment-form `node.wgsl_compute`
+/// declares its input ports + their access modes only after `wgsl_source` is
+/// parsed — a bare construct sees the default kernel, so a gather input would read
+/// as coincident and wrongly union into a region.
+fn input_port_access(registry: &PrimitiveRegistry, node: &EffectGraphNode, port: &str,
+) -> InputAccess {
+    let Some(node) = configured_construct(registry, node) else {
+        return InputAccess::Coincident;
+    };
+    // `input_access` aligns to the SAME-domain inputs in declaration order:
+    // texture inputs for a texture atom, Array inputs for a buffer atom (the
+    // buffer codegen's `is_gather(i)` indexes the filtered Array inputs). Resolve
+    // the port's index among inputs of its own kind so a `BufferGather` Array
+    // input is detected (not silently treated as coincident).
+    //
+    // D3 (BUG-114) extends this for a TEXTURE-domain atom (no Array OUTPUT —
+    // `is_buffer_atom` below) that also carries an Array INPUT (the `draw_*`
+    // family's detections array): the flat `INPUT_ACCESS` const packs
+    // [texture-input accesses] ++ [array-input accesses] for such an atom, so
+    // an array port's slot is offset past the texture-input count. Every
+    // existing atom has array inputs ONLY when it's buffer-domain (an Array
+    // OUTPUT), so `is_buffer_atom` is true and this offset is never applied to
+    // shipped atoms — additive, zero behavior change for anything but the new
+    // mixed shape.
+    let is_buffer_atom = node.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_)));
+    let port_ty = node.inputs().iter().find(|i| i.name == port).map(|i| i.ty);
+    let idx = match port_ty {
+        Some(ty) if is_texture_port(&ty) => node.inputs().iter().filter(|i| is_texture_port(&i.ty)).position(|i| i.name == port),
+        Some(PortType::Array(_)) if is_buffer_atom => node
+            .inputs()
+            .iter()
+            .filter(|i| matches!(i.ty, PortType::Array(_)))
+            .position(|i| i.name == port),
+        Some(PortType::Array(_)) => {
+            let tex_count = node.inputs().iter().filter(|i| is_texture_port(&i.ty)).count();
+            node.inputs()
+                .iter()
+                .filter(|i| matches!(i.ty, PortType::Array(_)))
+                .position(|i| i.name == port)
+                .map(|p| p + tex_count)
+        }
+        _ => None,
+    };
+    match idx {
+        Some(idx) => node.input_access().get(idx).copied().unwrap_or_default(),
+        None => InputAccess::Coincident,
+    }
+}
+
+/// Whether wire `w` is consumed COINCIDENTALLY by its target (a register-threaded
+/// read) rather than GATHERED (the target samples it at a coord it computes).
+/// Only coincident-consumed wires union two atoms into one region — see
+/// `partition_regions`.
+pub fn wire_coincident_consumed(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    w: &EffectGraphWire,
+) -> bool {
+    let Some(to) = def.nodes.iter().find(|n| n.id == w.to_node) else {
+        return false;
+    };
+    !input_port_access(registry, to, &w.to_port).is_gather()
+}
+
+/// Nodes with a directed path to a `final_output` node, over ALL wires (texture
+/// and control alike). A region output's downstream consumer must be in this set:
+/// the executor only allocates an output texture some live node reads, and the
+/// fused [`super::codegen::generate_fused`] kernel — a `node.wgsl_compute` —
+/// early-returns its WHOLE dispatch if any of its storage outputs is unbound. So a
+/// `dst_<k>` wired to a dead consumer would silently kill the region's live
+/// outputs too; `build_region` refuses to fuse a region with such a wire.
+///
+/// `final_output`-reachability is a safe SUBSET of the executor's full liveness
+/// (which also roots at `aliased_array_io` sims): a node we mark live here is
+/// always allocated, and an exotic live-but-not-final node only makes us skip the
+/// region (unfused), never miscompile.
+pub fn final_reachable_nodes(def: &EffectGraphDef) -> AHashSet<u32> {
+    // Reverse adjacency (consumer → producers), so a backward BFS from every
+    // final_output node visits exactly the nodes that can reach it.
+    let mut rev: AHashMap<u32, Vec<u32>> = AHashMap::default();
+    for w in &def.wires {
+        rev.entry(w.to_node).or_default().push(w.from_node);
+    }
+    let mut live: AHashSet<u32> = AHashSet::default();
+    let mut queue: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == FINAL_OUTPUT_TYPE_ID)
+        .map(|n| n.id)
+        .collect();
+    for &id in &queue {
+        live.insert(id);
+    }
+    while let Some(id) = queue.pop() {
+        if let Some(producers) = rev.get(&id) {
+            for &p in producers {
+                if live.insert(p) {
+                    queue.push(p);
+                }
+            }
+        }
+    }
+    live
+}
+
+/// Whether wire `w` is a CONTROL wire — it drives a scalar param port of its
+/// target (LFO → gain.gain), as opposed to feeding a texture input. The target's
+/// scalar params shadow as same-named input ports, and texture inputs have
+/// distinct names, so a `to_port` that names a scalar param is unambiguously a
+/// control wire. Used by `classify_node` to keep control PRODUCERS as boundaries
+/// (so they survive and can wire into the fused node's port-shadow) and by
+/// `install` to re-anchor those wires onto `n{i}_<param>`.
+fn is_scalar_param_wire(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    w: &EffectGraphWire,
+) -> bool {
+    let Some(to) = def.nodes.iter().find(|n| n.id == w.to_node) else {
+        return false;
+    };
+    let Some(node) = configured_construct(registry, to) else {
+        return false;
+    };
+    node.parameters()
+        .iter()
+        .any(|p| p.name == w.to_port && param_wgsl_type(p).is_ok())
+}
+
+/// Whether wire `w` feeds a STATE-CAPTURE input port of its target (a feedback
+/// node's captured input — last frame's value). The planner treats these as back
+/// edges that don't form cycles ([`Graph::is_state_capture_wire`] /
+/// `WireWalkMode::ForwardOnly`), so the convexity test excludes them too —
+/// otherwise a legal feedback loop reads as a cycle and we over-split.
+fn is_state_capture_wire(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    w: &EffectGraphWire,
+) -> bool {
+    let Some(to) = def.nodes.iter().find(|n| n.id == w.to_node) else {
+        return false;
+    };
+    let Some(node) = configured_construct(registry, to) else {
+        return false;
+    };
+    node.state_capture_input_ports().contains(&w.to_port.as_str())
+}
+
+/// The substep region each node belongs to: boundary and body nodes map to
+/// that region's boundary doc id, every other node is absent. Two nodes fuse
+/// only with equal sides, so no kernel crosses a region border. Membership is
+/// the plan compiler's own [`crate::node_graph::substeps::region_body`] over
+/// the same forward wires, so the finder and the executor agree on every
+/// border. Regions the compiler refuses (one boundary inside another's body,
+/// or two bodies sharing a node) give every node its own side: nothing fuses.
+fn substep_sides(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    forward: &[(u32, u32)],
+) -> AHashMap<u32, u32> {
+    let mut sides = AHashMap::default();
+    let boundaries: Vec<(u32, Vec<u32>)> = def
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            let ports = configured_construct(registry, n).and_then(|node| node.substep_boundary())?;
+            let producers = def
+                .wires
+                .iter()
+                .filter(|w| w.to_node == n.id && ports.capture_ports().any(|p| p == w.to_port))
+                .map(|w| w.from_node)
+                .collect();
+            Some((n.id, producers))
+        })
+        .collect();
+    if boundaries.is_empty() {
+        return sides;
+    }
+    let mut fwd: AHashMap<u32, Vec<u32>> = AHashMap::default();
+    let mut rev: AHashMap<u32, Vec<u32>> = AHashMap::default();
+    for &(from, to) in forward {
+        fwd.entry(from).or_default().push(to);
+        rev.entry(to).or_default().push(from);
+    }
+    let is_boundary = |node: u32| boundaries.iter().any(|(b, _)| *b == node);
+    for (boundary, producers) in &boundaries {
+        let body = crate::exec::substeps::region_body(*boundary, producers, &fwd, &rev);
+        if body.iter().any(|&node| is_boundary(node) || sides.contains_key(&node)) {
+            sides.clear();
+            for node in &def.nodes {
+                sides.insert(node.id, node.id);
+            }
+            return sides;
+        }
+        sides.insert(*boundary, *boundary);
+        for node in body {
+            sides.insert(node, *boundary);
+        }
+    }
+    sides
+}
+
+/// Whether the collapsed forward graph has a directed cycle. `key` maps each def
+/// node to its collapsed identity — an eligible node to its region rep, a boundary
+/// to itself — so a self-edge (both endpoints in one region) is dropped and an
+/// inter-identity edge is kept. Iterative three-colour DFS; the graphs are tiny
+/// (one effect's nodes), so rebuilding per tentative merge is free.
+fn collapsed_has_cycle(forward: &[(u32, u32)], key: &impl Fn(u32) -> u32) -> bool {
+    let mut adj: AHashMap<u32, Vec<u32>> = AHashMap::default();
+    let mut nodes: AHashSet<u32> = AHashSet::default();
+    for &(u, v) in forward {
+        let (ku, kv) = (key(u), key(v));
+        nodes.insert(ku);
+        nodes.insert(kv);
+        if ku != kv {
+            adj.entry(ku).or_default().push(kv);
+        }
+    }
+    // 0 = white (unvisited), 1 = grey (on stack), 2 = black (done).
+    let mut color: AHashMap<u32, u8> = nodes.iter().map(|&n| (n, 0u8)).collect();
+    for &start in &nodes {
+        if color[&start] != 0 {
+            continue;
+        }
+        let mut stack: Vec<(u32, usize)> = vec![(start, 0)];
+        color.insert(start, 1);
+        while let Some(&(n, idx)) = stack.last() {
+            if let Some(succs) = adj.get(&n)
+                && idx < succs.len()
+            {
+                stack.last_mut().unwrap().1 += 1;
+                let m = succs[idx];
+                match color[&m] {
+                    1 => return true,                          // grey → back edge → cycle
+                    0 => {
+                        color.insert(m, 1);
+                        stack.push((m, 0));
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            color.insert(n, 2);
+            stack.pop();
+        }
+    }
+    false
+}
+
+/// Whether a wire carries a texture (vs a scalar/control value), determined by
+/// the producer's output port type.
+fn is_texture_wire(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    w: &EffectGraphWire,
+) -> bool {
+    let Some(from) = def.nodes.iter().find(|n| n.id == w.from_node) else {
+        return false;
+    };
+    // Boundary endpoints (source) always emit a texture on `out`.
+    if from.type_id == SOURCE_TYPE_ID {
+        return true;
+    }
+    // Configured so a fragment-form `node.wgsl_compute` producer reports its real
+    // output port (`dst`) rather than the default kernel's.
+    let Some(node) = configured_construct(registry, from) else {
+        return false;
+    };
+    node.outputs()
+        .iter()
+        .find(|o| o.name == w.from_port)
+        .map(|o| is_texture_port(&o.ty))
+        .unwrap_or(false)
+}
+
+fn is_texture_port(ty: &PortType) -> bool {
+    matches!(
+        ty,
+        PortType::Texture2D | PortType::Texture2DTyped(_) | PortType::Texture3D
+    )
+}
+
+/// Whether a wire carries an `Array<T>` (buffer / particle / instance / curve)
+/// value, by the producer's output port type. The buffer-domain analogue of
+/// [`is_texture_wire`]; the region grower unions over coincident wires of EITHER
+/// kind so a particle pipeline (Array wires) fuses just like a pixel chain.
+fn is_array_wire(def: &EffectGraphDef, registry: &PrimitiveRegistry, w: &EffectGraphWire) -> bool {
+    let Some(from) = def.nodes.iter().find(|n| n.id == w.from_node) else {
+        return false;
+    };
+    let Some(node) = configured_construct(registry, from) else {
+        return false;
+    };
+    node.outputs()
+        .iter()
+        .find(|o| o.name == w.from_port)
+        .map(|o| matches!(o.ty, PortType::Array(_)))
+        .unwrap_or(false)
+}
+
+/// A region's data domain. Texture regions thread `vec4` texel registers and
+/// dispatch over a texture grid; buffer regions thread element-struct registers
+/// and dispatch 1D over an Array length. A region is homogeneous (texture and
+/// Array ports never wire to each other), so one flag drives every port/wire
+/// filter in [`build_region`] / [`topo_sort`].
+pub(crate) fn region_port_is_member(ty: &PortType, is_buffer: bool) -> bool {
+    if is_buffer {
+        matches!(ty, PortType::Array(_))
+    } else {
+        is_texture_port(ty)
+    }
+}
+
+fn is_region_wire(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    w: &EffectGraphWire,
+    is_buffer: bool,
+) -> bool {
+    if is_buffer {
+        is_array_wire(def, registry, w)
+    } else {
+        is_texture_wire(def, registry, w)
+    }
+}
+
+/// Whether an outer-card binding in the def's preset metadata targets
+/// (`node`, `param`). Addressed by stable `node_id`, falling back to the
+/// handle for defs minted before node-id targeting (same resolution rule as
+/// the install pass's `resolve_node_id`).
+fn param_is_binding_target(node: &EffectGraphNode, param: &str, def: &EffectGraphDef) -> bool {
+    let Some(meta) = &def.preset_metadata else {
+        return false;
+    };
+    let stable = if node.node_id.is_empty() {
+        node.handle.clone().unwrap_or_default()
+    } else {
+        node.node_id.as_str().to_string()
+    };
+    meta.bindings.iter().any(|b| {
+        matches!(
+            &b.target,
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: p }
+                if node_id.as_str() == stable && p == param
+        )
+    })
+}
+
+/// Whether node `id` is a BUFFER-domain atom (writes an `Array<T>` output).
+/// Drives the union guard: a texture wire into such an atom is a gathered
+/// external, never a register-threading union edge.
+fn node_is_buffer_atom(def: &EffectGraphDef, registry: &PrimitiveRegistry, id: u32) -> bool {
+    // CONFIGURED construct (BUG-007 sibling): a full-kernel `node.wgsl_compute`
+    // with a `var<storage, read_write> array<T>` output only reports that Array
+    // port after its `wgsl_source` is applied — a bare construct sees the default
+    // kernel and would miss the buffer domain, mis-driving the gather-vs-union
+    // guard.
+    def.nodes
+        .iter()
+        .find(|n| n.id == id)
+        .and_then(|n| configured_construct(registry, n))
+        .map(|c| {
+            c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_)))
+        })
+        .unwrap_or(false)
+}
+
+/// Whether a region's members are buffer-domain (their fused output is an
+/// `Array<T>`). Determined from any member's constructed output ports.
+fn region_is_buffer(nodes: &[u32], def: &EffectGraphDef, registry: &PrimitiveRegistry) -> bool {
+    nodes.iter().any(|&id| {
+        // CONFIGURED construct (BUG-007 sibling) — see `node_is_buffer_atom`: a
+        // full-kernel `node.wgsl_compute` reports its Array output only after
+        // `wgsl_source` is applied, so a bare construct would pick the wrong
+        // (texture) codegen path for a buffer region.
+        def.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .and_then(|n| configured_construct(registry, n))
+            .map(|c| {
+                c.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_)))
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// Minimal union-find over a fixed node set (region growing). Path-halving +
+/// union-by-size; ids are def doc-ids.
+struct UnionFind {
+    parent: AHashMap<u32, u32>,
+    size: AHashMap<u32, u32>,
+}
+
+impl UnionFind {
+    fn new(ids: &AHashSet<u32>) -> Self {
+        UnionFind {
+            parent: ids.iter().map(|&id| (id, id)).collect(),
+            size: ids.iter().map(|&id| (id, 1)).collect(),
+        }
+    }
+
+    fn find(&mut self, mut x: u32) -> u32 {
+        while self.parent[&x] != x {
+            let grand = self.parent[&self.parent[&x]];
+            *self.parent.get_mut(&x).unwrap() = grand; // path halving
+            x = grand;
+        }
+        x
+    }
+
+    fn union(&mut self, a: u32, b: u32) {
+        let (mut ra, mut rb) = (self.find(a), self.find(b));
+        if ra == rb {
+            return;
+        }
+        if self.size[&ra] < self.size[&rb] {
+            std::mem::swap(&mut ra, &mut rb);
+        }
+        *self.parent.get_mut(&rb).unwrap() = ra;
+        *self.size.get_mut(&ra).unwrap() += self.size[&rb];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registry() -> PrimitiveRegistry {
+        let mut registry = PrimitiveRegistry::with_builtin();
+        crate::testkit::fusion_fixtures::register_fusion_test_nodes(&mut registry);
+        registry
+    }
+
+    #[test]
+    fn selected_input_capacity_requires_a_bound_for_every_fused_member() {
+        let source = CapacityExpr::Slot(0);
+        let map = CapacityExpr::Slot(1);
+        assert!(!capacity_bounded_by(&map, &source));
+        assert!(!capacity_bounded_by(&source, &map));
+        let count = CapacityExpr::Min(vec![source.clone(), map.clone()]);
+        assert!(capacity_bounded_by(&count, &source));
+        assert!(capacity_bounded_by(&count, &map));
+        assert!(!capacity_bounded_by(&map, &count));
+    }
+
+
+
+
+
+
+
+
+
+
+
+    /// A true boundary in the middle splits the graph into TWO regions — the
+    /// headline generalisation. source → gain → contrast → multi_blend(boundary)
+    /// → saturation → clamp → final yields {gain, contrast} feeding the blend,
+    /// then {saturation, clamp} reading the blend's output. (`node.multi_blend`
+    /// is a self-synthesizing router — a PERMANENT boundary by design, so this
+    /// fixture can't silently start fusing when vocabulary atoms gain bodies —
+    /// unlike a gather such as `gaussian_blur`, which tier 3 folds IN; see the
+    /// gather tests below.)
+    #[test]
+    fn boundary_splits_into_two_regions() {
+        let json = r#"{
+            "version": 1, "name": "split", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "contrast" },
+                { "id": 3, "typeId": "test.fusion_boundary", "nodeId": "thresh" },
+                { "id": 4, "typeId": "test.fusion_map", "nodeId": "sat" },
+                { "id": 5, "typeId": "test.fusion_map", "nodeId": "clamp" },
+                { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+                { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
+                { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let mut regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 2, "the threshold boundary splits the graph in two");
+        regions.sort_by_key(|r| r.members[0].doc_id);
+
+        // Region 1: gain(1) → contrast(2), reads the source, output = contrast.
+        let r1 = &regions[0];
+        assert_eq!(r1.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(r1.externals.len(), 1, "region 1 reads the source");
+        assert_eq!(r1.externals[0].from_node, 0);
+        assert_eq!(r1.outputs, vec![(2, "out".to_string())], "contrast feeds the threshold");
+
+        // Region 2: saturation(4) → clamp(5), reads the threshold, output = clamp.
+        let r2 = &regions[1];
+        assert_eq!(r2.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(r2.externals.len(), 1, "region 2 reads the threshold output");
+        assert_eq!(r2.externals[0].from_node, 3, "the threshold is region 2's external");
+        assert_eq!(r2.outputs, vec![(5, "out".to_string())], "clamp feeds final_output");
+    }
+
+    /// Tier 3 — a gather atom folds INTO a region (it does NOT split it). source →
+    /// gain → sharpen(Gather) → invert → final fuses into ONE region: gain threads
+    /// to sharpen, sharpen gathers gain's register? No — a gather can't read a
+    /// register, so the finder does NOT union gain→sharpen (a gather-consumed
+    /// wire), leaving gain a lone 1-node region (dropped), and {sharpen, invert}
+    /// the real region where sharpen gathers gain's output as an EXTERNAL and
+    /// threads its result to invert.
+    #[test]
+    fn gather_atom_folds_into_a_region() {
+        let json = r#"{
+            "version": 1, "name": "warp", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_gather", "nodeId": "sharp" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "invert" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "sharpen (gather) + invert are one region");
+        let r = &regions[0];
+        assert_eq!(r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(r.externals.len(), 1, "sharpen gathers the source as an external");
+        assert_eq!(r.externals[0].from_node, 0);
+        // sharpen's one input is Gather, resolved to the external; invert reads
+        // sharpen's register coincidentally.
+        let sharp = r.members.iter().find(|m| m.doc_id == 1).unwrap();
+        assert_eq!(sharp.input_access, vec![InputAccess::Gather]);
+        assert_eq!(sharp.inputs, vec![RegionInput::External(0)]);
+        let invert = r.members.iter().find(|m| m.doc_id == 2).unwrap();
+        assert_eq!(invert.inputs, vec![RegionInput::Member(1)]);
+    }
+
+    /// A gather never unions across its gathered wire: gain → sharpen, where
+    /// sharpen GATHERS gain, must NOT pull gain into sharpen's region (a register
+    /// can't carry a whole texture). gain is left a lone atom (dropped), so the
+    /// only region is {sharpen, invert} from the test above — here we assert the
+    /// negative directly: a chain gain → sharpen with nothing downstream produces
+    /// no region (both are 1-node after the gather cut).
+    #[test]
+    fn gather_wire_does_not_union() {
+        let json = r#"{
+            "version": 1, "name": "cut", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 2, "typeId": "test.fusion_gather", "nodeId": "sharp" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        assert!(
+            partition_regions(&def, &registry()).is_empty(),
+            "the gather cut leaves gain and sharpen as lone atoms — neither fuses"
+        );
+    }
+
+
+    /// A lone fusable atom is not a region (fusing one node changes nothing). The
+    /// MIN_REGION_LEN gate drops it; the card renders unfused.
+    #[test]
+    fn single_atom_is_not_a_region() {
+        let json = r#"{
+            "version": 1, "name": "solo", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 2, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        assert!(
+            partition_regions(&def, &registry()).is_empty(),
+            "a single atom is below MIN_REGION_LEN — not worth fusing"
+        );
+    }
+
+    /// A graph with no fusable atoms at all yields no regions (the common case
+    /// today, always safe).
+    #[test]
+    fn all_boundary_graph_has_no_regions() {
+        let json = r#"{
+            "version": 1, "name": "edge", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_boundary", "nodeId": "edge" },
+                { "id": 2, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        assert!(partition_regions(&def, &registry()).is_empty());
+    }
+
+    /// Tier 2 — a Source generator heads a region. checkerboard (0 texture
+    /// inputs, fusion_kind Source) → invert (Pointwise) form one region whose
+    /// head reads NO external (it produces from position); invert threads the
+    /// generator's register. The fused codegen already calls a 0-input body as
+    /// `body(uv, dims, params)`, so this is purely a finder unlock.
+    #[test]
+    fn source_generator_heads_a_region() {
+        let json = r#"{
+            "version": 1, "name": "gen", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_source", "nodeId": "checker" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "invert" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "the generator + invert form one region");
+        let r = &regions[0];
+        assert_eq!(r.members.len(), 2, "checkerboard + invert");
+        assert!(r.externals.is_empty(), "a pure-generator region reads no external texture");
+        assert_eq!(r.outputs, vec![(2, "out".to_string())], "invert feeds final_output");
+        let checker = r.members.iter().find(|m| m.doc_id == 1).unwrap();
+        assert!(checker.inputs.is_empty(), "the Source head reads nothing");
+        let invert = r.members.iter().find(|m| m.doc_id == 2).unwrap();
+        assert_eq!(invert.inputs, vec![RegionInput::Member(1)], "invert threads the generator");
+    }
+
+    /// A Source generator blended with the incoming source texture: the system
+    /// source feeds `mix` as an EXTERNAL while the generator feeds it as a
+    /// region member. Exercises a region that has both a Source head and an
+    /// external input (the common "overlay a pattern" shape).
+    #[test]
+    fn source_plus_external_in_one_region() {
+        let json = r#"{
+            "version": 1, "name": "overlay", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_source", "nodeId": "checker" },
+                { "id": 2, "typeId": "test.fusion_join", "nodeId": "mix" },
+                { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "a" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "checkerboard + mix are one region");
+        let r = &regions[0];
+        assert_eq!(r.members.len(), 2, "checkerboard + mix");
+        assert_eq!(r.externals.len(), 1, "the system source is the one external");
+        assert_eq!(r.externals[0].from_node, 0);
+        assert_eq!(r.outputs, vec![(2, "out".to_string())], "mix feeds final_output");
+    }
+
+    /// Fan-out — an interior member feeds two distinct downstream boundaries, so
+    /// the region has TWO outputs (each stored to its own `dst_<k>`). gain forks
+    /// into invert and contrast; each feeds its own `threshold` boundary, which
+    /// re-merge at a `mix` before final. {gain, invert, contrast} is one region
+    /// whose outputs are invert + contrast (gain is purely interior). Both
+    /// thresholds reach final, so both outputs are live (allocatable).
+    #[test]
+    fn fanout_region_has_two_outputs() {
+        let json = r#"{
+            "version": 1, "name": "fanout", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "invert" },
+                { "id": 3, "typeId": "test.fusion_map", "nodeId": "contrast" },
+                { "id": 4, "typeId": "test.fusion_boundary", "nodeId": "thr_a" },
+                { "id": 5, "typeId": "test.fusion_boundary", "nodeId": "thr_b" },
+                { "id": 6, "typeId": "test.fusion_join", "nodeId": "mix" },
+                { "id": 7, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "in" },
+                { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "a" },
+                { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "b" },
+                { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        // mix reads two boundaries, so it's a lone 1-node component (dropped);
+        // the thresholds are boundaries. Exactly one real region: the fork.
+        assert_eq!(regions.len(), 1, "the gain fork is the one region (mix is dropped)");
+        let r = &regions[0];
+        assert_eq!(
+            r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "gain (head) + the two forked atoms"
+        );
+        assert_eq!(r.externals.len(), 1, "only the source enters the region");
+        assert_eq!(r.externals[0].from_node, 0);
+        assert_eq!(
+            r.outputs,
+            vec![(2, "out".to_string()), (3, "out".to_string())],
+            "invert and contrast each escape to their own threshold — two outputs"
+        );
+    }
+
+    /// A fan-out output whose consumer is DEAD (doesn't reach final_output) makes
+    /// the whole region unfusable: the executor wouldn't allocate that output's
+    /// texture, and the fused kernel early-returns its whole dispatch on the
+    /// unbound store — killing the live output too. So the finder drops it
+    /// (renders unfused, always correct) rather than emit an unallocated `dst_<k>`.
+    #[test]
+    fn fanout_to_dead_consumer_is_not_fused() {
+        // gain → invert → final (live) ; gain → contrast → threshold (DEAD: the
+        // threshold goes nowhere, never reaching final_output).
+        let json = r#"{
+            "version": 1, "name": "deadfork", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "invert" },
+                { "id": 3, "typeId": "test.fusion_map", "nodeId": "contrast" },
+                { "id": 4, "typeId": "test.fusion_boundary", "nodeId": "dead" },
+                { "id": 5, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 5, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        assert!(
+            partition_regions(&def, &registry()).is_empty(),
+            "a region with an escaping wire to a dead consumer must not fuse"
+        );
+    }
+
+    /// Convexity — two register-adjacent atoms that ALSO have an external path
+    /// between them (out through a boundary and back) must NOT land in one region:
+    /// collapsing them would make the boundary both read from and write to the
+    /// fused node, a cycle the graph builder rejects (Watercolor's real failure).
+    /// gain forks into invert and a downstream mix; invert runs through a
+    /// `threshold` boundary into contrast, and contrast also feeds the mix. A naive
+    /// connected-component grouping unions {gain, invert, contrast, mix}, but
+    /// invert→threshold→contrast makes that non-convex. The convex partition splits
+    /// it: {gain, invert} before the threshold, {contrast, mix} after.
+    #[test]
+    fn convexity_splits_a_region_that_would_cycle() {
+        let json = r#"{
+            "version": 1, "name": "convex", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "invert" },
+                { "id": 3, "typeId": "test.fusion_boundary", "nodeId": "thr" },
+                { "id": 4, "typeId": "test.fusion_map", "nodeId": "contrast" },
+                { "id": 5, "typeId": "test.fusion_join", "nodeId": "mix" },
+                { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "a" },
+                { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
+                { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let mut regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 2, "the non-convex group splits at the threshold");
+        regions.sort_by_key(|r| r.members[0].doc_id);
+        assert_eq!(
+            regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 2],
+            "gain + invert before the threshold"
+        );
+        assert_eq!(
+            regions[1].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![4, 5],
+            "contrast + mix after the threshold"
+        );
+    }
+
+
+
+    /// A specialization param that an outer binding targets keeps the atom a
+    /// BOUNDARY — the baked token value could diverge from the live binding.
+    #[test]
+    fn binding_targeted_specialization_param_stays_boundary() {
+        let json = r#"{
+            "version": 1, "name": "specbind", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 2, "typeId": "node.variable_blur", "nodeId": "blur" },
+                { "id": 3, "typeId": "node.invert", "nodeId": "inv_b" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "width" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ],
+            "presetMetadata": {
+                "id": "specbind", "displayName": "Spec Bind", "category": "Stylize",
+                "oscPrefix": "specbind",
+                "params": [],
+                "bindings": [
+                    { "id": "outer_quality", "label": "Quality", "defaultValue": 1.0,
+                      "target": { "kind": "node", "nodeId": "blur", "param": "quality" },
+                      "convert": { "type": "Float" } }
+                ]
+            }
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        assert!(
+            partition_regions(&def, &registry()).is_empty(),
+            "a binding-targeted specialization param keeps the blur a boundary"
+        );
+    }
+
+
+    /// A producer with a SECOND consumer (the blur and a mix both read the
+    /// gain) is NOT absorbed — its texture must still exist for the other
+    /// consumer, so recomputing it inside the fetch would only add work.
+    #[test]
+    fn shared_producer_is_not_absorbed() {
+        let json = r#"{
+            "version": 1, "name": "shared", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.gaussian_blur", "nodeId": "blur" },
+                { "id": 3, "typeId": "node.mix", "nodeId": "mix" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "a" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "b" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert!(
+            regions.iter().all(|r| r.virtual_chains.is_empty()),
+            "a producer with two consumers keeps its texture"
+        );
+    }
+
+    /// A two-atom run upstream of a blur keeps fusing as its OWN pointwise
+    /// region (the v1 absorption cap is stranded singles — see
+    /// MAX_VIRTUAL_CHAIN); the blur stays standalone.
+    #[test]
+    fn two_atom_chain_keeps_its_own_region() {
+        let json = r#"{
+            "version": 1, "name": "pair", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "contrast" },
+                { "id": 3, "typeId": "test.fusion_boundary", "nodeId": "blur" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "the gain+contrast pair fuses; the blur stays standalone");
+        assert_eq!(
+            regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(regions[0].virtual_chains.is_empty());
+    }
+
+
+
+
+
+
+
+    /// A control wire into a scalar PARAM no longer cuts the consumer — it fuses,
+    /// and the producer stays a boundary. `texture_dimensions` (a scalar reducer,
+    /// boundary) drives `gain.gain`; gain + invert still form one region. The
+    /// producer being a control producer keeps it surviving so install can route
+    /// its scalar onto the fused node's port-shadow.
+    #[test]
+    fn control_wired_param_atom_still_fuses() {
+        let json = r#"{
+            "version": 1, "name": "ctrl", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.texture_size", "nodeId": "dims" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 3, "typeId": "test.fusion_map", "nodeId": "invert" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
+                { "fromNode": 1, "fromPort": "aspect", "toNode": 2, "toPort": "gain" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        assert_eq!(regions.len(), 1, "gain (control-wired) + invert are one region");
+        assert_eq!(
+            regions[0].members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+            vec![2, 3],
+            "gain + invert fuse; texture_dimensions stays a boundary producer"
+        );
+    }
+
+
+
+
+
+
+
+
+    /// A lattice's params, `n` a side, as def params.
+    fn lattice_params(n: [f64; 3]) -> serde_json::Value {
+        serde_json::json!({
+            "nodes_x": {"type": "Float", "value": n[0]},
+            "nodes_y": {"type": "Float", "value": n[1]},
+            "nodes_z": {"type": "Float", "value": n[2]},
+        })
+    }
+
+    /// A face lattice's count, `member` the fused position: Π (n + 1).
+    fn face_lattice_product(member: usize) -> CapacityExpr {
+        CapacityExpr::Product(
+            ["nodes_x", "nodes_y", "nodes_z"]
+                .map(|p| CapacityExpr::Add(1, Box::new(CapacityExpr::Param(format!("n{member}_{p}")))))
+                .to_vec(),
+        )
+    }
+
+    /// BUG-u8io (fft-water-fusion-param-capacity): a lattice-sized member
+    /// (`ParamProduct`) fuses with what reads it, and the region counts its
+    /// lattice from the fused uniforms, clamped by every lattice that does
+    /// not provably bound it and by every array it pre-reads at `[idx]`. A
+    /// graph whose clamp would bite at its configured params refuses. One
+    /// face lattice feeds the next one's faces.
+    #[test]
+    fn lattice_sized_region_counts_and_clamps_its_lattice() {
+        use crate::testkit::test_face_lattice_fixture::{TYPE_ID, TestFaceLattice};
+        let def = |first_x: f64| -> EffectGraphDef {
+            serde_json::from_value(serde_json::json!({
+                "version": 3,
+                "nodes": [
+                    {"id": 1, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                    {"id": 2, "nodeId": "first", "typeId": TYPE_ID, "params": lattice_params([first_x, 8.0, 8.0])},
+                    {"id": 3, "nodeId": "second", "typeId": TYPE_ID, "params": lattice_params([8.0; 3])},
+                    {"id": 4, "nodeId": "sink", "typeId": "test.face_sink"},
+                    {"id": 5, "nodeId": "output", "typeId": "system.final_output"},
+                    {"id": 6, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}}
+                ],
+                "wires": [
+                    {"fromNode": 6, "fromPort": "out", "toNode": 2, "toPort": "faces"},
+                    {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "water"},
+                    {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "faces"},
+                    {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "water"},
+                    {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "values"},
+                    {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in"}
+                ]
+            }))
+            .expect("face lattice fixture")
+        };
+        let mut registry = registry();
+        crate::testkit::substep_nodes::register_substep_test_nodes(&mut registry);
+        registry.register(TYPE_ID, || Box::new(TestFaceLattice));
+        let regions = partition_regions(&def(8.0), &registry);
+        assert_eq!(regions.len(), 1, "the two face lattices fuse");
+        let region = &regions[0];
+        assert_eq!(region.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![2, 3]);
+        let open = region.externals.iter().position(|e| e.from_node == 6).expect("the open faces are an external");
+        assert_eq!(
+            region.output_capacity,
+            Some(CapacityExpr::Min(vec![face_lattice_product(1), face_lattice_product(0), CapacityExpr::Slot(open)])),
+            "the second lattice, clamped by the first lattice and the faces it pre-reads"
+        );
+        assert!(partition_regions(&def(6.0), &registry).is_empty(), "a first lattice smaller than the second refuses");
+    }
+
+}
+
+pub mod census;
+
+#[cfg(any(test, feature = "testkit"))]
+#[doc(hidden)]
+pub mod testkit;

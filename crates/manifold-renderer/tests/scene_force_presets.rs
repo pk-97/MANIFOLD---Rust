@@ -9,16 +9,11 @@ use manifold_core::scene_modifier_preset::{
 };
 use manifold_core::{Beats, Seconds};
 use manifold_physics::interaction::VectorField;
-use manifold_renderer::node_graph::EffectGraphDefExt;
-use manifold_renderer::node_graph::ports::{
-    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
-};
+use manifold_node_engine::persistence::EffectGraphDefExt;
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-use manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers;
-use manifold_renderer::node_graph::{
-    EffectNode, EffectNodeContext, EffectNodeType, Executor, FrameTime, ParamValue,
-    PrimitiveRegistry, compile,
-};
+use manifold_node_engine::load::expand::prepare_scene_modifiers;
+use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, exec::execution::Executor, exec::effect_node::FrameTime, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::compile};
 
 const PHYSICS_SOLIDS: &str = include_str!("../assets/generator-presets/PhysicsSolids.json");
 
@@ -361,8 +356,8 @@ struct FieldObserver {
 }
 
 impl EffectNode for FieldObserver {
-    fn depth_rule(&self) -> manifold_renderer::node_graph::depth_rule::DepthRule {
-        manifold_renderer::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
 
     fn type_id(&self) -> &EffectNodeType {
@@ -403,7 +398,7 @@ impl EffectNode for FieldObserver {
         &OUTPUTS
     }
 
-    fn parameters(&self) -> &[manifold_renderer::node_graph::ParamDef] {
+    fn parameters(&self) -> &[manifold_node_engine::parameters::ParamDef] {
         &[]
     }
 
@@ -424,8 +419,8 @@ struct ScalarSink {
 }
 
 impl EffectNode for ScalarSink {
-    fn depth_rule(&self) -> manifold_renderer::node_graph::depth_rule::DepthRule {
-        manifold_renderer::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
 
     fn type_id(&self) -> &EffectNodeType {
@@ -460,7 +455,7 @@ impl EffectNode for ScalarSink {
         &[]
     }
 
-    fn parameters(&self) -> &[manifold_renderer::node_graph::ParamDef] {
+    fn parameters(&self) -> &[manifold_node_engine::parameters::ParamDef] {
         &[]
     }
 

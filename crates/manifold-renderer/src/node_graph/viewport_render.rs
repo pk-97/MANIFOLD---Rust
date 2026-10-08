@@ -33,12 +33,12 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
-use crate::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use crate::headless_readback::readback_tonemapped_rgba8;
-use crate::node_graph::persistence::PrimitiveRegistry;
-use crate::node_graph::viewport_camera::ViewportCamera;
-use crate::preset_context::PresetContext;
-use crate::preset_runtime::{JsonGeneratorLoadError, PresetRuntime};
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::scene::viewport_camera::ViewportCamera;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::{JsonGeneratorLoadError, PresetRuntime};
 
 /// `type_id` the splice injects — the same primitive `node.free_camera`
 /// (`docs/REALTIME_3D_DESIGN.md` D6) every other free-look camera source
@@ -164,7 +164,7 @@ pub fn render_viewport_frame(
         None,
     )?;
 
-    let target = crate::render_target::RenderTarget::new(&device, width, height, format, "viewport-editor-preview");
+    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(&device, width, height, format, "viewport-editor-preview");
 
     // Two committed frames, same convention `render_scene_shadows.rs` uses:
     // the first frame pays pipeline warm-up, `commit_and_wait_completed`

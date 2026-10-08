@@ -17,11 +17,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `t` param (f32), `blend_frames` (u32),
 /// then the derived `weights_len` and codegen-injected `dispatch_count`.
@@ -36,7 +36,7 @@ struct MorphUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MorphMesh,
     type_id: "node.morph_mesh",
     purpose: "Static two-mesh lerp between two Array<MeshVertex>s, by index. n = min(count_a, count_b); pos = mix(a, b, t * w), normal = normalize(mix(a.normal, b.normal, t * w)), uv from `a`. `w` is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). `blend_frames` opts into interpolated, orthonormalized normals and tangents for same-topology variants; partial frames are an approximate interpolation, not recomputed shading. Correspondence is by index — meaningful between variants of one mesh (a low-poly and a scanned-detail version of the same object) or as a deliberate scramble-morph between unrelated meshes of similar vertex count; both are stage-valid. This is the static two-mesh lerp only — glTF morph-target playback is a separate future design, not an extension of this atom.",
@@ -91,7 +91,7 @@ crate::primitive! {
 // `run()` does). The marker carries the member→fused-port mapping for the
 // `weights` port (fused kernels rename inputs to `src_<k>`).
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.morph_mesh",
         array_ports: &["weights"],
         recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
@@ -108,7 +108,7 @@ impl Primitive for MorphMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -128,10 +128,8 @@ impl Primitive for MorphMesh {
     /// output capacity is `min(in, b)` (see `array_output_capacity`
     /// above) — connectivity can change when EITHER input's topology
     /// changes, so topology depends on both and positions are Written.
-    fn mesh_output_rule(&self, port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
-        use crate::node_graph::mesh_change::{
-            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
-        };
+    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule};
         if port == "out" {
             return MeshOutputRule {
                 topology: MeshRevisionRule::Dependencies(&[
@@ -232,7 +230,7 @@ mod tests {
 
     #[test]
     fn morph_mesh_output_follows_smaller_of_in_and_b() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = MorphMesh::new();
         let params = ParamValues::default();
         let inputs = [("in", 36_u32), ("b", 20_u32)];
@@ -254,8 +252,8 @@ mod gpu_tests {
     //! parity is against a hand-written Rust reference of the committed
     //! formula, element-wise, per DECOMPOSING_GENERATORS.md section 9.
     use super::*;
-    use crate::node_graph::freeze::codegen::{generate_fused, FusionRegion, InputSource, RegionNode};
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::freeze::codegen::{generate_fused, FusionRegion, InputSource, RegionNode};
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3], uv: [f32; 2]) -> MeshVertex {
         MeshVertex {
@@ -272,7 +270,7 @@ mod gpu_tests {
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<MorphMesh>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<MorphMesh>()
             .expect("morph_mesh buffer codegen")
     }
 
@@ -307,7 +305,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "morph-mesh-test",
         );
         let a_buf = device.create_buffer_shared(std::mem::size_of_val(a) as u64);
@@ -371,7 +369,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "morph-mesh-fused-test",
         );
         let a_buf = device.create_buffer_shared(std::mem::size_of_val(a) as u64);
@@ -437,7 +435,7 @@ mod gpu_tests {
 
     #[test]
     fn matches_hand_formula_analytically_and_uv_from_a() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let a = vec![
             mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.11, 0.22]),
@@ -471,7 +469,7 @@ mod gpu_tests {
 
     #[test]
     fn count_and_order_are_preserved_at_t_zero_and_one() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let a = vec![
             mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.1, 0.2]),
@@ -501,7 +499,7 @@ mod gpu_tests {
 
     #[test]
     fn short_weights_degrade_to_one_for_the_tail() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let a: Vec<MeshVertex> = (0..12)
             .map(|_| mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]))
@@ -548,7 +546,7 @@ mod gpu_tests {
 
     #[test]
     fn overnight_modifier_opted_in_frames_have_gpu_neutral_midframe_and_hand_parity() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let generated = generated_wgsl();
         let hand = include_str!("shaders/morph_mesh.wgsl");
         let a = vec![MeshVertex {
@@ -594,12 +592,12 @@ mod gpu_tests {
 
     #[test]
     fn overnight_modifier_fused_and_unfused_opted_in_outputs_match() {
-        let device = crate::test_device();
-        let id = crate::node_graph::effect_node::NodeInstanceId;
+        let device = manifold_gpu::testkit::test_device();
+        let id = manifold_node_engine::exec::effect_node::NodeInstanceId;
         let region = FusionRegion {
             nodes: vec![RegionNode {
                 node_id: id(0),
-                fusion_kind: crate::node_graph::freeze::classify::FusionKind::Pointwise,
+                fusion_kind: manifold_node_engine::freeze::classify::FusionKind::Pointwise,
                 body: MorphMesh::WGSL_BODY.unwrap(),
                 params: MorphMesh::PARAMS,
                 inputs: vec![

@@ -4,11 +4,11 @@
 //! codegen buffer kernels bind only params and arrays, and a Transform wire
 //! into a GPU atom is a fusion cut. CPU-only.
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TransformComponents,
     type_id: "node.transform_components",
     purpose: "Split a Transform into its nine scalars: position X/Y/Z, rotation X/Y/Z (radians, XYZ Euler) and scale X/Y/Z. The inverse of node.transform_3d, with the same port names. An unwired input publishes the identity transform.",
@@ -51,11 +51,11 @@ impl Primitive for TransformComponents {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
-    use crate::node_graph::effect_node::{FrameTime, ParamValues};
-    use crate::node_graph::transform::Transform;
-    use crate::node_graph::{MockBackend, PortType, ResourceId, ScalarType};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs};
+    use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
+    use manifold_node_engine::scene::transform::Transform;
+    use manifold_node_engine::{exec::backend::MockBackend, ports::PortType, exec::execution_plan::ResourceId, ports::ScalarType};
     use manifold_core::{Beats, Seconds};
 
     fn run(input: Option<Transform>) -> Vec<(&'static str, f32)> {

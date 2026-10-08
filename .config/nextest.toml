@@ -47,7 +47,8 @@ gpu = { max-threads = 1 }
 filter = '''
     package(manifold-gpu)
   | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
-  | (binary_id(manifold-renderer) & test(/^node_graph::(execution::tests::aliased_output_assertion_fires_on_silent_primitive|gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node|graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan)|validate::tests::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
+  | (binary_id(manifold-renderer) & test(/^node_graph::(gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
+  | (binary_id(manifold-node-engine) & test(/^(exec::execution::tests::aliased_output_assertion_fires_on_silent_primitive|load::graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan))$/))
   | binary_id(manifold-renderer::ableton_picker_scroll_proof)
   | binary_id(manifold-renderer::dropdown_clip_proof)
   | binary_id(manifold-renderer::scene_loop_probe)
@@ -64,7 +65,8 @@ test-group = "gpu"
 filter = '''
     package(manifold-gpu)
   | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
-  | (binary_id(manifold-renderer) & test(/^node_graph::(execution::tests::aliased_output_assertion_fires_on_silent_primitive|gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node|graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan)|validate::tests::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
+  | (binary_id(manifold-renderer) & test(/^node_graph::(gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
+  | (binary_id(manifold-node-engine) & test(/^(exec::execution::tests::aliased_output_assertion_fires_on_silent_primitive|load::graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan))$/))
   | binary_id(manifold-renderer::ableton_picker_scroll_proof)
   | binary_id(manifold-renderer::dropdown_clip_proof)
   | binary_id(manifold-renderer::scene_loop_probe)

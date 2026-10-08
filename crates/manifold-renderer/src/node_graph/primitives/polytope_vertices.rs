@@ -30,11 +30,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::{MeshVertex, PLATONIC_MAX_VERTS, PLATONIC_SHAPES};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::{MeshVertex, PLATONIC_MAX_VERTS, PLATONIC_SHAPES};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `shape` Enum param (u32) then the
 /// codegen-injected `dispatch_count` (= vertex capacity, the guard), padded to
@@ -67,7 +67,7 @@ pub(crate) fn read_shape(ctx: &EffectNodeContext<'_, '_>) -> u32 {
     raw.min(PLATONIC_SHAPES.len() as u32 - 1)
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: PolytopeVertices,
     type_id: "node.platonic_solid_points",
     purpose: "Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. Curated-enum atom — one GPU dispatch with closed-form per-shape coordinates baked into WGSL, normalised to magnitude 0.25 (the legacy screen-friendly default). Pair with node.platonic_solid_edges (driving both from the same shape scalar) and feed both into node.rotate_3d → node.flatten_3d → node.draw_lines for a 3D wireframe.",
@@ -107,7 +107,7 @@ impl Primitive for PolytopeVertices {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "vertices" {
@@ -180,20 +180,13 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::mesh::{MeshVertex, PLATONIC_MAX_VERTS};
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::effect_node::{
-        EffectNode, EffectNodeContext, EffectNodeType,
-    };
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::parameters::ParamDef;
-    use crate::node_graph::ports::{
-        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
-    };
-    use crate::node_graph::{
-        ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue,
-        compile,
-    };
+    use manifold_node_engine::mesh::{MeshVertex, PLATONIC_MAX_VERTS};
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::parameters::ParamDef;
+    use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
+    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
 
     use super::PolytopeVertices;
 
@@ -221,7 +214,7 @@ mod gpu_tests {
     }
 
     impl EffectNode for VertexSink {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -346,7 +339,7 @@ mod gpu_tests {
     }
 
     fn run_polytope_vertices(shape: u32) -> Vec<MeshVertex> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();

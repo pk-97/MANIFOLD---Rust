@@ -1,0 +1,629 @@
+//! `Material` — port-data type carried on [`PortType::Material`](crate::node_graph::ports::PortType::Material) wires.
+//!
+//! One material source primitive (`node.{unlit,pbr,cel}_material`) emits
+//! a fully-populated struct each frame; downstream consumers — the bundled 3D
+//! mesh renderers ([`render_3d_mesh`](crate::node_graph::primitives::render_3d_mesh),
+//! [`render_instanced_3d_mesh`](crate::node_graph::primitives::render_instanced_3d_mesh))
+//! — take it as a single `material: Material` input and pick a per-kind
+//! compiled shader pipeline instead of binding scattered surface scalars.
+//!
+//! Like [`Camera`](crate::node_graph::camera::Camera) and
+//! [`Light`](crate::node_graph::light::Light), this is plain CPU data — no GPU
+//! resource. Backends carry it through the same `(Slot → value)` map shape
+//! that scalars / cameras / lights use; the executor drains
+//! `pending_material_writes` after each node's `evaluate` returns, parallel
+//! to the camera and light drains.
+//!
+//! The kind discriminator [`MaterialKind`] is the dispatch axis: the renderer
+//! holds an `AHashMap<MaterialKind, GpuRenderPipeline>` and gets-or-compiles
+//! the matching pipeline lazily. Fields not relevant to the wired kind are
+//! inert (e.g. `metallic` is unread when `kind = Unlit`); material atoms only
+//! expose their kind's outer-card params, so users never see the superset.
+//!
+//! Emission is stored premultiplied with intensity (`rgb × intensity`) — same
+//! convention as [`Light::color`](crate::node_graph::light::Light) — so the
+//! consumer-side shading math is one multiply lighter. Atoms apply the
+//! intensity at emission; downstream reads see the already-multiplied value
+//! in `emission.rgb`. The alpha channel of `emission` is reserved (currently
+//! `1.0`).
+
+/// Per-map-family sampler settings (GLB_XFAIL_BURNDOWN_DESIGN.md D3):
+/// glTF's `wrapS`/`wrapT`/`magFilter`/`minFilter`, read straight off the
+/// texture's own `sampler` object rather than a single scene-wide REPEAT
+/// sampler. Reuses [`manifold_gpu::GpuAddressMode`]/[`manifold_gpu::GpuFilterMode`]
+/// directly — no local re-encoding — since `render_scene`'s consumer needs
+/// exactly this shape to build a `GpuSamplerDesc`.
+///
+/// Default (`Repeat`/`Repeat`/`Linear`/`Linear`/`Linear` mip) is the glTF spec's own
+/// implicit default when a texture has no `sampler` index, and is
+/// byte-identical to the pre-D3 hardcoded `material_sampler` — so any
+/// material that never sets these fields renders exactly as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MapSamplerDesc {
+    pub wrap_u: manifold_gpu::GpuAddressMode,
+    pub wrap_v: manifold_gpu::GpuAddressMode,
+    pub mag_filter: manifold_gpu::GpuFilterMode,
+    pub min_filter: manifold_gpu::GpuFilterMode,
+    /// `None` for explicit non-mip minification filters; `Some` preserves
+    /// nearest versus linear mip selection.
+    pub mip_filter: Option<manifold_gpu::GpuFilterMode>,
+}
+
+impl Default for MapSamplerDesc {
+    fn default() -> Self {
+        Self {
+            wrap_u: manifold_gpu::GpuAddressMode::Repeat,
+            wrap_v: manifold_gpu::GpuAddressMode::Repeat,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: Some(manifold_gpu::GpuFilterMode::Linear),
+        }
+    }
+}
+
+/// Folded metadata for one material texture family. This is immutable,
+/// trivially copyable data carried alongside [`Material`] so map consumers can
+/// select authored UV sets and samplers without per-frame allocation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MaterialMapInfo {
+    pub uv_transform: [f32; 6],
+    pub tex_coord: u32,
+    pub sampler: MapSamplerDesc,
+}
+
+impl Default for MaterialMapInfo {
+    fn default() -> Self {
+        Self {
+            uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            tex_coord: 0,
+            sampler: MapSamplerDesc::default(),
+        }
+    }
+}
+
+/// Subsurface transport model used by the PBR material. The renderer owns
+/// the implementation; this shared value only carries the authored controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SubsurfaceMode {
+    /// Cheap diffusion approximation for realtime surfaces.
+    #[default]
+    Diffusion,
+    /// Higher-cost volumetric random-walk scattering.
+    RandomWalk,
+}
+
+/// Shared subsurface-scattering controls carried by [`Material`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Subsurface {
+    /// Fraction of the surface response that participates in subsurface transport.
+    pub weight: f32,
+    /// World-space transport mean-free path for red, green, and blue channels.
+    pub radius: [f32; 3],
+    /// Single-scattering albedo for red, green, and blue channels.
+    pub color: [f32; 3],
+    /// Henyey-Greenstein anisotropy parameter.
+    pub anisotropy: f32,
+    pub mode: SubsurfaceMode,
+    pub samples: u32,
+}
+
+impl Default for Subsurface {
+    fn default() -> Self {
+        Self {
+            weight: 0.0,
+            radius: [0.01, 0.005, 0.0025],
+            color: [0.9, 0.8, 0.7],
+            anisotropy: 0.0,
+            mode: SubsurfaceMode::Diffusion,
+            samples: 8,
+        }
+    }
+}
+
+/// Discriminator for the material's shading model. Open enum — each added
+/// kind ships with: (a) a new variant here, (b) a new material atom primitive
+/// that emits it, (c) a new arm in each renderer's per-kind pipeline cache
+/// and `conditional_requirements` list, (d) a new fragment shader.
+///
+/// The GPU material-table ABI reserves numeric tag 1; its explicit mapping
+/// keeps PBR at 2 and Cel at 3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MaterialKind {
+    /// Flat colour passthrough. No lighting math. The renderer does NOT
+    /// require a `light` input when this kind is wired.
+    Unlit,
+    /// Cook-Torrance microfacet specular (D_GGX × G_Smith × F_Schlick) +
+    /// IBL reflection. The workhorse for realistic surfaces. The renderer
+    /// requires a `light` input AND an `envmap` texture.
+    Pbr,
+    /// Cel-shaded — Lambert N·L quantized into N discrete bands.
+    /// Stylised look; the DigitalPlants aesthetic. The renderer requires a
+    /// `light` input.
+    Cel,
+}
+
+/// Alpha coverage model for the surface (glTF `alphaMode`).
+/// [`Opaque`](AlphaMode::Opaque): alpha is ignored for coverage — every
+/// rasterised fragment is written. [`Mask`](AlphaMode::Mask): a fragment
+/// whose resolved alpha is below [`Material::alpha_cutoff`] is `discard`ed
+/// (cutout), so foliage cards and decals punch holes instead of rendering
+/// as opaque rectangles. [`Blend`](AlphaMode::Blend): the object draws in a
+/// second, sorted, depth-write-off pass in `render_scene` — glTF `BLEND` and
+/// `KHR_materials_transmission` materials import as this (IMPORT_FIDELITY_DESIGN.md
+/// D8/F-P5, superseding MATERIAL M6-D3's "out of scope" call). `render_mesh`
+/// and `render_copies` use the same colour pass through their single-object
+/// adapters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AlphaMode {
+    /// Alpha ignored for coverage; all fragments written.
+    Opaque,
+    /// Cutout: fragments with `alpha < alpha_cutoff` are discarded.
+    Mask,
+    /// Sorted back-to-front blend pass, depth test on / write off
+    /// (shared by all three colour renderers).
+    Blend,
+}
+
+/// Material struct flowing through [`PortType::Material`](crate::node_graph::ports::PortType::Material)
+/// wires. Built once per frame in each material atom's `run()`; passed by
+/// value to every downstream consumer.
+///
+/// Trivially copyable, including fixed-size texture metadata. The struct is
+/// the superset of every kind's params; fields not relevant to the wired
+/// `kind` are inert on the renderer side. Each atom only exposes its kind's outer-card
+/// params, so the inert-field shape is implementation detail.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Material {
+    /// Shading-model dispatch.
+    pub kind: MaterialKind,
+
+    // ---- Always-present surface scalars (every kind respects these). ----
+    /// Linear-space surface colour. `rgb` is the diffuse / base colour; `a`
+    /// is coverage for Mask and Blend; Opaque ignores alpha for coverage.
+    pub base_color: [f32; 4],
+    /// Linear-space emission, PREMULTIPLIED with intensity. A consumer
+    /// reading `emission.rgb` gets the final emissive contribution directly
+    /// — no second intensity multiply needed. `emission.a` is reserved
+    /// (currently `1.0`).
+    pub emission: [f32; 4],
+    /// Lambert ambient floor in `[0, 1]`. Unread by `Unlit` (no lighting
+    /// math). Unread by `Cel` (which uses `band_low` as its shadow band
+    /// instead). For PBR, mixed in via
+    /// `lit = lambert * (1 - ambient) + ambient`.
+    pub ambient: f32,
+
+    // ---- PBR-specific. Inert when `kind != Pbr`. ----
+    /// `0` = dielectric (F0 ≈ 4%), `1` = metal (F0 = `base_color`).
+    pub metallic: f32,
+    /// Microfacet roughness `[0.01, 1.0]`. Lower = sharper highlight.
+    pub roughness: f32,
+    /// glTF `normalTexture.scale` (default `1.0`). Signed values are
+    /// preserved for authored normal-map strength.
+    pub normal_scale: f32,
+    /// glTF `clearcoatNormalTexture.scale` (default `1.0`).
+    pub clearcoat_normal_scale: f32,
+    /// glTF `occlusionTexture.strength` (default `1.0`).
+    pub occlusion_strength: f32,
+
+    // ---- Cel-specific. Inert when `kind != Cel`. ----
+    /// Number of quantization bands `[2, 16]`.
+    pub cel_bands: u32,
+    /// Lowest band value — the "shadow side" colour multiplier.
+    pub band_low: f32,
+    /// Highest band value — the "lit side" colour multiplier.
+    pub band_high: f32,
+
+    // ---- Alpha coverage (all kinds respect these). ----
+    /// Coverage model. [`AlphaMode::Opaque`] writes every fragment;
+    /// [`AlphaMode::Mask`] discards fragments with resolved alpha below
+    /// [`Self::alpha_cutoff`]. Set post-construction by the material atoms.
+    pub alpha_mode: AlphaMode,
+    /// Cutout threshold in `[0, 1]`, used only when `alpha_mode == Mask`.
+    pub alpha_cutoff: f32,
+
+    // ---- PBR dielectric F0 (GLB_CONFORMANCE_DESIGN.md G-P4/D5). Inert
+    // when `kind != Pbr` — same "unread by other kinds" pattern as
+    // `metallic`/`roughness` above. Defaults reproduce the pre-G-P4
+    // hardcoded F0 = 0.04 exactly: `((1.5-1)/(1.5+1))^2 * 1.0 * [1,1,1] =
+    // [0.04, 0.04, 0.04]`. ----
+    /// glTF `KHR_materials_ior`'s `ior` (default `1.5`, glTF's implicit
+    /// default when the extension is absent).
+    pub ior: f32,
+    /// glTF `KHR_materials_specular`'s `specularFactor` (default `1.0`) —
+    /// scales the dielectric F0 term.
+    pub specular_factor: f32,
+    /// glTF `KHR_materials_specular`'s `specularColorFactor` (default
+    /// `[1,1,1]`) — tints the dielectric F0 term.
+    pub specular_tint: [f32; 3],
+
+    // ---- Per-map UV transforms (GLB_CONFORMANCE_DESIGN.md G-P4/D5).
+    // `KHR_texture_transform`, one folded 2×3 affine per map family —
+    // `[m00, m01, m10, m11, tx, ty]` s.t. `uv' = (m00*u + m01*v + tx,
+    // m10*u + m11*v + ty)`, folded ONCE at import (never per frame).
+    // Default identity (`[1,0,0,1,0,0]`) is exactly inert. Per-map (not
+    // one shared transform) because real assets differ per slot: the AMG
+    // GT3 carries transforms on 9 normalTexture infos and only 1
+    // baseColorTexture. base-color applies in every kind's
+    // `resolve_albedo`; the other four apply in their dedicated resolve
+    // fns (PBR-path maps). ----
+    pub base_color_uv_transform: [f32; 6],
+    pub normal_uv_transform: [f32; 6],
+    pub mr_uv_transform: [f32; 6],
+    pub occlusion_uv_transform: [f32; 6],
+    pub emissive_uv_transform: [f32; 6],
+    /// Core map UV sets in base, normal, metallic-roughness, occlusion,
+    /// emissive order. Kept separate from the legacy transform fields for
+    /// serialized compatibility.
+    pub core_tex_coords: [u32; 5],
+
+    // ---- Clearcoat second specular lobe (GLB_CONFORMANCE_DESIGN.md
+    // G-P5/D5). Inert when `kind != Pbr` — same "unread by other kinds"
+    // pattern as `metallic`/`roughness`. Both default to `0.0`, which is
+    // glTF `KHR_materials_clearcoat`'s own implicit default AND makes the
+    // shader's energy-compensation weight `Fc = clearcoat * fresnel` exactly
+    // zero — byte-identical to pre-G-P5 output on every material without
+    // the extension. Coat factor, roughness and normal maps are carried
+    // by SceneObject alongside this material. ----
+    /// glTF `KHR_materials_clearcoat`'s `clearcoatFactor` (default `0.0`)
+    /// — the coat layer's intensity, `[0, 1]`.
+    pub clearcoat: f32,
+    /// glTF `KHR_materials_clearcoat`'s `clearcoatRoughnessFactor` (default
+    /// `0.0`) — the coat layer's own microfacet roughness, independent of
+    /// the base layer's `roughness`. Clamped to the same `0.01` numerical
+    /// floor as `roughness` wherever it's constructed (a GGX landmine at
+    /// exactly zero).
+    pub clearcoat_roughness: f32,
+
+    // ---- Sheen / iridescence / anisotropy / dispersion / transmission +
+    // volume (GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1). Inert when
+    // `kind != Pbr`, same pattern as clearcoat above. Every field defaults
+    // to glTF's own implicit default (0.0/[0,0,0] factors are inert;
+    // iridescence_ior/thickness and volume_attenuation_color default to
+    // their spec-neutral values). The shared raster colour pass consumes
+    // these fields; RT secondary-hit support is tracked separately. ----
+    /// `KHR_materials_sheen`'s `sheenColorFactor` (default `[0,0,0]`,
+    /// inert).
+    pub sheen_color_factor: [f32; 3],
+    /// `KHR_materials_sheen`'s `sheenRoughnessFactor` (default `0.0`).
+    pub sheen_roughness_factor: f32,
+    /// `KHR_materials_iridescence`'s `iridescenceFactor` (default `0.0`,
+    /// inert).
+    pub iridescence_factor: f32,
+    /// `KHR_materials_iridescence`'s `iridescenceIor` (default `1.3`).
+    pub iridescence_ior: f32,
+    /// `KHR_materials_iridescence`'s `iridescenceThicknessMinimum`
+    /// (default `100.0`, nanometres).
+    pub iridescence_thickness_minimum: f32,
+    /// `KHR_materials_iridescence`'s `iridescenceThicknessMaximum`
+    /// (default `400.0`, nanometres).
+    pub iridescence_thickness_maximum: f32,
+    /// `KHR_materials_anisotropy`'s `anisotropyStrength` (default `0.0`,
+    /// inert).
+    pub anisotropy_strength: f32,
+    /// `KHR_materials_anisotropy`'s `anisotropyRotation` (default `0.0`,
+    /// radians).
+    pub anisotropy_rotation: f32,
+    /// `KHR_materials_dispersion`'s single `dispersion` factor (default
+    /// `0.0`, inert).
+    pub dispersion: f32,
+    /// RAYTRACING_DESIGN.md section 16 TL3: thin-surface translucency for
+    /// backlit foliage — one scalar factor `[0, 1]`, default `0.0` (inert).
+    /// Populated from `KHR_materials_diffuse_transmission`'s
+    /// `diffuseTransmissionFactor` at import time; dialable on the
+    /// `pbr_material` card for scans that carry no extension data.
+    pub translucency: f32,
+    /// `KHR_materials_diffuse_transmission`'s `diffuseTransmissionColorFactor`
+    /// (default `[1,1,1]`, neutral).
+    pub diffuse_transmission_color: [f32; 3],
+    /// `KHR_materials_transmission`'s `transmissionFactor` (default `0.0`,
+    /// inert). Already imported and folded into `alpha_mode`/`base_color.a`
+    /// at import time (IMPORT_FIDELITY_DESIGN.md D8); this is the SAME
+    /// factor carried through to the uniform for E2's real refraction pass
+    /// to read directly, rather than reverse-engineering it from alpha.
+    pub transmission_factor: f32,
+    /// `KHR_materials_volume`'s `thicknessFactor` (default `0.0` —
+    /// thin-walled).
+    pub volume_thickness_factor: f32,
+    /// `KHR_materials_volume`'s `attenuationDistance`. glTF's own implicit
+    /// default is `+infinity` ("no attenuation"); MANIFOLD substitutes the
+    /// finite `VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION`
+    /// sentinel at import time (`f32::INFINITY` is not `serde_json`-safe
+    /// and every import without an explicit value would hit it), so this
+    /// field is never non-finite. A hand-authored material leaves it at
+    /// that same finite "no attenuation" default.
+    pub volume_attenuation_distance: f32,
+    /// `KHR_materials_volume`'s `attenuationColor` (default `[1,1,1]`,
+    /// neutral).
+    pub volume_attenuation_color: [f32; 3],
+    /// Enables the screen-space geometric-volume approximation for this
+    /// material. Disabled by default so existing materials are unchanged.
+    pub volume_geometry: bool,
+    /// Homogeneous volume extinction/scattering density per world metre.
+    pub volume_scattering_density: f32,
+    /// RGB tint applied by the geometric-volume scattering approximation.
+    pub volume_scattering_color: [f32; 3],
+    /// Additional localized density contributed by embedded particle sources.
+    pub volume_particle_density: f32,
+
+    /// Shared subsurface-scattering controls. Inert until a renderer enables
+    /// the corresponding transport path.
+    pub subsurface: Subsurface,
+
+    // ---- Per-map-family samplers (GLB_XFAIL_BURNDOWN_DESIGN.md D3).
+    // Replaces `render_scene`'s single hardcoded REPEAT `material_sampler`
+    // (`85b5bb9d`) — each map family samples with its OWN glTF sampler
+    // settings. Default (`MapSamplerDesc::default()`) reproduces the old
+    // hardcoded REPEAT+linear behavior exactly, so a material that never
+    // sets these renders byte-identical to before this field existed. ----
+    pub base_color_sampler: MapSamplerDesc,
+    pub normal_sampler: MapSamplerDesc,
+    pub mr_sampler: MapSamplerDesc,
+    pub occlusion_sampler: MapSamplerDesc,
+    pub emissive_sampler: MapSamplerDesc,
+    /// Extension map metadata in fixed order: sheen colour, sheen roughness,
+    /// iridescence, iridescence thickness, anisotropy, clearcoat, clearcoat
+    /// roughness, clearcoat normal, specular, specular colour, transmission,
+    /// volume thickness, diffuse transmission, diffuse transmission colour.
+    pub extension_maps: [MaterialMapInfo; 14],
+}
+
+impl Material {
+    /// Identity-ish unlit-white default. Provided as a no-op fallback for
+    /// test fixtures and for the very-narrow case where a backend exposes
+    /// the slot before a producer has run. Production renderers MUST NOT
+    /// silently substitute this — a missing `material` wire is a structured
+    /// error, per the design doc's section 2 "no silent fallbacks" rule.
+    pub fn default_unlit_white() -> Self {
+        Self {
+            kind: MaterialKind::Unlit,
+            base_color: [1.0, 1.0, 1.0, 1.0],
+            emission: [0.0, 0.0, 0.0, 1.0],
+            ambient: 0.0,
+            metallic: 0.0,
+            roughness: 0.5,
+            normal_scale: 1.0,
+            clearcoat_normal_scale: 1.0,
+            occlusion_strength: 1.0,
+            cel_bands: 4,
+            band_low: 0.08,
+            band_high: 1.0,
+            alpha_mode: AlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            ior: 1.5,
+            specular_factor: 1.0,
+            specular_tint: [1.0, 1.0, 1.0],
+            base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            occlusion_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            emissive_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            core_tex_coords: [0; 5],
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.0,
+            sheen_color_factor: [0.0, 0.0, 0.0],
+            sheen_roughness_factor: 0.0,
+            iridescence_factor: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness_minimum: 100.0,
+            iridescence_thickness_maximum: 400.0,
+            anisotropy_strength: 0.0,
+            anisotropy_rotation: 0.0,
+            dispersion: 0.0,
+            translucency: 0.0,
+            diffuse_transmission_color: [1.0, 1.0, 1.0],
+            transmission_factor: 0.0,
+            volume_thickness_factor: 0.0,
+            volume_attenuation_distance:
+                VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_geometry: false,
+            volume_scattering_density: 0.0,
+            volume_scattering_color: [1.0, 1.0, 1.0],
+            volume_particle_density: 0.0,
+            subsurface: Subsurface::default(),
+            base_color_sampler: MapSamplerDesc::default(),
+            normal_sampler: MapSamplerDesc::default(),
+            mr_sampler: MapSamplerDesc::default(),
+            occlusion_sampler: MapSamplerDesc::default(),
+            emissive_sampler: MapSamplerDesc::default(),
+            extension_maps: [MaterialMapInfo::default(); 14],
+        }
+    }
+
+    /// Build an Unlit material from the standard outer-card surface.
+    /// `emission_rgb` is the un-multiplied colour; this function
+    /// premultiplies `emission_intensity` into the stored `emission`.
+    pub fn unlit(color_rgba: [f32; 4], emission_rgb: [f32; 3], emission_intensity: f32) -> Self {
+        let mut m = Self::default_unlit_white();
+        m.kind = MaterialKind::Unlit;
+        m.base_color = color_rgba;
+        m.emission = premultiply_emission(emission_rgb, emission_intensity);
+        m
+    }
+
+    /// Build a PBR material from the standard outer-card surface.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pbr(
+        color_rgba: [f32; 4],
+        ambient: f32,
+        metallic: f32,
+        roughness: f32,
+        emission_rgb: [f32; 3],
+        emission_intensity: f32,
+    ) -> Self {
+        let mut m = Self::default_unlit_white();
+        m.kind = MaterialKind::Pbr;
+        m.base_color = color_rgba;
+        m.ambient = ambient;
+        m.metallic = metallic;
+        m.roughness = roughness.max(0.01);
+        m.emission = premultiply_emission(emission_rgb, emission_intensity);
+        m
+    }
+
+    /// Build a Cel material from the standard outer-card surface.
+    /// `cel_bands` is clamped to `[2, 16]` — too few bands degenerates to a
+    /// silhouette, too many degrades to smooth shading and defeats the
+    /// stylised look.
+    #[allow(clippy::too_many_arguments)]
+    pub fn cel(
+        color_rgba: [f32; 4],
+        cel_bands: u32,
+        band_low: f32,
+        band_high: f32,
+        emission_rgb: [f32; 3],
+        emission_intensity: f32,
+    ) -> Self {
+        let mut m = Self::default_unlit_white();
+        m.kind = MaterialKind::Cel;
+        m.base_color = color_rgba;
+        m.cel_bands = cel_bands.clamp(2, 16);
+        m.band_low = band_low;
+        m.band_high = band_high;
+        m.emission = premultiply_emission(emission_rgb, emission_intensity);
+        m
+    }
+
+    /// Whether the renderer needs a `light` input wired when this material
+    /// is in use. Mirrors the per-kind requirement table in the design doc
+    /// (section 5 "Conditional requirements"). Renderer-side validation reads this
+    /// at runtime; preset-load validation (when the material's source is
+    /// statically resolvable) reads it via the same helper.
+    pub fn requires_light(&self) -> bool {
+        match self.kind {
+            MaterialKind::Unlit => false,
+            MaterialKind::Pbr | MaterialKind::Cel => true,
+        }
+    }
+
+    /// Whether the renderer needs an `envmap` texture wired when this
+    /// material is in use. Only PBR currently requires one (IBL reflection
+    /// is non-optional for the Cook-Torrance path; without it the lit term
+    /// is just direct light, which looks degenerate for the workhorse PBR
+    /// preset).
+    pub fn requires_envmap(&self) -> bool {
+        matches!(self.kind, MaterialKind::Pbr)
+    }
+}
+
+fn premultiply_emission(rgb: [f32; 3], intensity: f32) -> [f32; 4] {
+    [
+        rgb[0] * intensity,
+        rgb[1] * intensity,
+        rgb[2] * intensity,
+        1.0,
+    ]
+}
+
+/// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: finite stand-in for
+/// `KHR_materials_volume`'s `attenuationDistance` spec default of
+/// `+infinity` ("no attenuation beneath the surface"). Chosen large
+/// enough that Beer-Lambert transmittance
+/// (`exp(-distance_travelled / attenuation_distance)`, E2's shading math)
+/// is indistinguishable from `1.0` — no attenuation — at any distance a
+/// real MANIFOLD scene can produce (world units are typically single/low
+/// double digits; this is six orders of magnitude beyond that), so it's a
+/// byte-identical-in-effect substitute for the spec's true infinity, not
+/// an approximation that changes behavior. A true `f32::INFINITY` is not
+/// usable here: `serde_json` errors serializing a non-finite float, and
+/// this is the default for every glTF import that doesn't carry an
+/// explicit `attenuationDistance` — i.e. almost every asset.
+pub const VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION: f32 = 1.0e6;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approx_eq(a: f32, b: f32, eps: f32) -> bool {
+        (a - b).abs() < eps
+    }
+
+    #[test]
+    fn default_unlit_white_is_inert_passthrough() {
+        let m = Material::default_unlit_white();
+        assert_eq!(m.kind, MaterialKind::Unlit);
+        assert_eq!(m.base_color, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(m.emission, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(m.ambient, 0.0);
+    }
+
+    #[test]
+    fn unlit_constructor_premultiplies_emission() {
+        let m = Material::unlit([0.5, 0.6, 0.7, 1.0], [0.5, 0.4, 0.3], 2.0);
+        assert_eq!(m.kind, MaterialKind::Unlit);
+        assert_eq!(m.base_color, [0.5, 0.6, 0.7, 1.0]);
+        assert!(approx_eq(m.emission[0], 1.0, 1e-5));
+        assert!(approx_eq(m.emission[1], 0.8, 1e-5));
+        assert!(approx_eq(m.emission[2], 0.6, 1e-5));
+        assert_eq!(m.emission[3], 1.0);
+    }
+
+    #[test]
+    fn pbr_constructor_clamps_roughness_floor() {
+        // Roughness exactly zero is a numerical landmine in the GGX
+        // denominator — clamp to a safe floor at constructor time so
+        // downstream shaders never see it.
+        let m = Material::pbr([0.8, 0.8, 0.82, 1.0], 0.05, 1.0, 0.0, [0.0; 3], 0.0);
+        assert_eq!(m.kind, MaterialKind::Pbr);
+        assert!(m.roughness >= 0.01);
+        assert_eq!(m.metallic, 1.0);
+    }
+
+    #[test]
+    fn cel_constructor_clamps_band_count() {
+        // 2..=16 is the design's documented valid range; anything outside
+        // wraps to that range so downstream shader assumptions hold.
+        let too_few = Material::cel([0.4, 0.6, 0.3, 1.0], 1, 0.08, 1.0, [0.0; 3], 0.0);
+        assert_eq!(too_few.cel_bands, 2);
+        let too_many = Material::cel([0.4, 0.6, 0.3, 1.0], 999, 0.08, 1.0, [0.0; 3], 0.0);
+        assert_eq!(too_many.cel_bands, 16);
+        let just_right = Material::cel([0.4, 0.6, 0.3, 1.0], 4, 0.08, 1.0, [0.0; 3], 0.0);
+        assert_eq!(just_right.cel_bands, 4);
+        assert_eq!(just_right.kind, MaterialKind::Cel);
+    }
+
+    #[test]
+    fn unlit_does_not_require_light_or_envmap() {
+        let m = Material::default_unlit_white();
+        assert!(!m.requires_light());
+        assert!(!m.requires_envmap());
+    }
+
+    #[test]
+    fn cel_requires_light_but_not_envmap() {
+        let m = Material::cel([0.4, 0.6, 0.3, 1.0], 4, 0.08, 1.0, [0.0; 3], 0.0);
+        assert!(m.requires_light());
+        assert!(!m.requires_envmap());
+    }
+
+    #[test]
+    fn pbr_requires_both_light_and_envmap() {
+        let m = Material::pbr([0.8, 0.8, 0.82, 1.0], 0.05, 1.0, 0.05, [0.0; 3], 0.0);
+        assert!(m.requires_light());
+        assert!(m.requires_envmap());
+    }
+
+    #[test]
+    fn material_constructors_disable_subsurface_by_default() {
+        let materials = [
+            Material::default_unlit_white(),
+            Material::unlit([1.0; 4], [0.0; 3], 0.0),
+            Material::pbr([1.0; 4], 0.1, 0.0, 0.5, [0.0; 3], 0.0),
+            Material::cel([1.0; 4], 4, 0.1, 1.0, [0.0; 3], 0.0),
+        ];
+        for material in materials {
+            assert_eq!(material.subsurface, Subsurface::default());
+            assert_eq!(material.subsurface.mode, SubsurfaceMode::Diffusion);
+        }
+    }
+
+    #[test]
+    fn emission_with_zero_intensity_is_black() {
+        // Zero intensity should produce black emission regardless of the
+        // un-multiplied colour — the multiply-at-emission convention means
+        // the consumer never has to worry about an "off" knob being
+        // overridden by a non-zero RGB.
+        let m = Material::unlit([1.0; 4], [1.0, 0.5, 0.25], 0.0);
+        assert_eq!(m.emission, [0.0, 0.0, 0.0, 1.0]);
+    }
+}

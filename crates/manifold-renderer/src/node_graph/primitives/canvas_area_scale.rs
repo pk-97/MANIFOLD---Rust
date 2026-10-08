@@ -16,11 +16,11 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CanvasAreaScale,
     type_id: "node.canvas_area_scale",
     purpose: "Emit (width * height) / reference_area as a scalar. The brightness compensation atom for splat-based density displays — wire `width` from `system.generator_input.output_width` and `height` from `system.generator_input.output_height`, then multiply the result into a tone-map's `intensity` so the canvas stays equally bright across output resolutions.",
@@ -119,7 +119,8 @@ impl Primitive for CanvasAreaScale {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use manifold_node_engine::validation::validate;
+use super::*;
 
     /// Default-params output is `1.0` for 1920×1080 against the
     /// same reference area. This is what a graph sees if the user
@@ -127,7 +128,7 @@ mod tests {
     /// not a div-by-zero or zero-brightness surprise.
     #[test]
     fn default_params_evaluate_to_unity() {
-        use crate::node_graph::{Graph, compile, validate, Executor, FrameTime};
+        use manifold_node_engine::{graph::Graph, exec::execution_plan::compile, exec::execution::Executor, exec::effect_node::FrameTime};
         use manifold_core::{Beats, Seconds};
 
         let mut g = Graph::new();

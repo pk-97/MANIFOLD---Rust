@@ -33,10 +33,8 @@ use manifold_core::scene_modifier_preset::{
 use manifold_gpu::GpuDevice;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-use manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers;
-use manifold_renderer::node_graph::{
-    PrimitiveRegistry, ValidateKind, ValidationReport, validate_def,
-};
+use manifold_node_engine::load::expand::prepare_scene_modifiers;
+use manifold_node_engine::{persistence::PrimitiveRegistry, validate::ValidateKind, validate::ValidationReport, validate::validate_def};
 
 const EFFECT_SUBDIR: &str = "assets/effect-presets";
 const GENERATOR_SUBDIR: &str = "assets/generator-presets";
@@ -144,7 +142,7 @@ fn main() {
                 Err(msg) => failures.push((
                     path,
                     ValidationReport {
-                        errors: vec![manifold_renderer::node_graph::ValidationIssue {
+                        errors: vec![manifold_node_engine::validate::ValidationIssue {
                             node_id: None,
                             type_id: None,
                             port: None,

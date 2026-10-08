@@ -14,9 +14,9 @@ use half::f16;
 use manifold_core::AudioSendId;
 use manifold_gpu::{GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const WAVEFORM_CAPACITY: u32 = 512;
 const SPECTRUM_WIDTH: u32 = 512;
@@ -36,7 +36,7 @@ fn read_send(ctx: &EffectNodeContext<'_, '_>, cached: &mut Option<AudioSendId>) 
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: AudioWaveform,
     type_id: "node.audio_waveform",
     purpose: "Read one live audio send's recent waveform into a fixed 512-sample Array<f32>. `send` selects a send by stable AudioSendId; empty selects the first configured send. `window_ms` chooses a 5–100 ms view and `trigger` aligns it to a rising zero crossing when possible. Numeric inputs shadow same-named params when wired.",
@@ -91,7 +91,7 @@ impl Primitive for AudioWaveform {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "out").then_some(WAVEFORM_CAPACITY)
@@ -135,7 +135,7 @@ impl Primitive for AudioWaveform {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: AudioSpectrum,
     type_id: "node.audio_spectrum",
     purpose: "Read one live audio send's recent spectrum into a fixed 512×256 Texture2D. The CPU history is laid out oldest-left/newest-right and high-frequency-top; this source reuses a three-entry CPU-upload staging ring per node and copies it into the graph output each frame. The seconds input shadows the same-named param when wired.",
@@ -189,7 +189,7 @@ impl Primitive for AudioSpectrum {
         port: &str,
         _canvas_dims: (u32, u32),
         _input_dims: &[(&str, (u32, u32))],
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         (port == "out").then_some((SPECTRUM_WIDTH, SPECTRUM_HEIGHT))
     }
@@ -268,7 +268,7 @@ impl Primitive for AudioSpectrum {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::Primitive;
+    use manifold_node_engine::primitive::Primitive;
 
     #[test]
     fn waveform_has_fixed_capacity() {

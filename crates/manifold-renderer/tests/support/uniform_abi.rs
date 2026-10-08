@@ -1,10 +1,102 @@
 //! Compare the byte layout of production Rust uniforms with the actual WGSL.
 //! Unsupported Rust syntax fails closed; this is deliberately not a Rust compiler.
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 use syn::{
     Expr, Type,
     visit::{self, Visit},
 };
+
+use super::source_roots::WGSL_SRC_ROOTS;
+
+/// Source trees referenced by the extended ABI cases. These include the
+/// non-primitive engine helpers whose shader declarations are proved here.
+pub const ABI_SOURCE_ROOTS: &[&str] = &[
+    "../manifold-node-engine/src/water/liquid",
+    "../manifold-node-engine/src/exec",
+    "../manifold-node-engine/src/testkit",
+];
+
+pub fn abi_source_roots() -> Result<Vec<PathBuf>, String> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let extra = ABI_SOURCE_ROOTS
+        .iter()
+        .map(|relative| {
+            let path = manifest.join(relative);
+            if path.is_dir() {
+                path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))
+            } else {
+                Err(format!("missing ABI case source root: {}", path.display()))
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut roots = super::source_roots::primitive_source_roots()?;
+    roots.extend(extra);
+    Ok(roots)
+}
+
+pub fn resolve_source_path(source: &str) -> Result<PathBuf, String> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let roots = abi_source_roots()?;
+    let mut candidates = Vec::with_capacity(roots.len() + 1);
+    candidates.push(manifest.join("src/node_graph/primitives").join(source));
+    candidates.extend(roots.into_iter().map(|root| root.join(source)));
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .map(|path| path.canonicalize().map_err(|e| format!("{}: {e}", path.display())))
+        .transpose()?
+        .ok_or_else(|| format!("missing ABI case source: {source}"))
+}
+
+fn find_shader_file(root: &Path, shader: &Path) -> Result<Option<PathBuf>, String> {
+    for entry in std::fs::read_dir(root).map_err(|e| format!("{}: {e}", root.display()))? {
+        let path = entry
+            .map_err(|e| format!("{}: {e}", root.display()))?
+            .path();
+        if path.is_dir() {
+            if let Some(found) = find_shader_file(&path, shader)? {
+                return Ok(Some(found));
+            }
+        } else if path.extension().is_some_and(|ext| ext == "wgsl")
+            && path.ends_with(shader)
+        {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+pub fn resolve_shader_path(source: &Path, shader: &str) -> Result<PathBuf, String> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let shader_file = Path::new(shader)
+        .strip_prefix("shaders")
+        .unwrap_or_else(|_| Path::new(shader));
+    let direct = source
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(shader);
+    if direct.is_file() {
+        let path = direct;
+        return path
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", path.display()));
+    }
+    for root in WGSL_SRC_ROOTS {
+        let root = manifest.join(root);
+        if !root.is_dir() {
+            return Err(format!("missing WGSL crate source root: {}", root.display()));
+        }
+        if let Some(path) = find_shader_file(&root, shader_file)? {
+            return path
+                .canonicalize()
+                .map_err(|e| format!("{}: {e}", path.display()));
+        }
+    }
+    Err(format!("missing ABI case shader: {shader}"))
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct Leaf {

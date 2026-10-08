@@ -23,15 +23,23 @@ use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGra
 use manifold_core::effects::{RelightField, RelightHeightFrom, RelightParams};
 use manifold_core::NodeId;
 
-use crate::node_graph::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
-use crate::node_graph::depth_rule::DepthRule;
-use crate::node_graph::persistence::PrimitiveRegistry;
-use crate::node_graph::ports::PortType;
+use manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
+use manifold_node_engine::scene::depth_rule::DepthRule;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::ports::PortType;
 
 /// Handle/id-space prefix for every node the relight template mints. Also
 /// doubles as the idempotence guard: [`relight_augment`] refuses to run on a
 /// def that already carries one.
 const RL_PREFIX: &str = "rl_";
+
+inventory::submit! {
+    manifold_node_engine::load::augmentation::RelightAugmentation {
+        augment: relight_augment,
+        targets: relight_field_targets,
+    }
+}
+
 
 fn is_texture(ty: PortType) -> bool {
     matches!(ty, PortType::Texture2D | PortType::Texture2DTyped(_))
@@ -45,50 +53,44 @@ fn enum_val(v: u32) -> SerializedParamValue {
     SerializedParamValue::Enum { value: v }
 }
 
-/// Maps a live D3 knob to the `(handle, param)` of the template node it
-/// drives, plus any value scaling the template applies at mint time so the
-/// live write matches. Handles are `rl_`-prefixed and deterministic, so this
-/// mapping is static and can be resolved against a spliced graph (unfused
-/// handles) or a fused retarget map (fused uniform fields).
-pub struct RelightTarget {
-    pub node_handle: &'static str,
-    pub param_name: &'static str,
-    /// Multiplier applied to the raw field value before writing. The template
-    /// bakes `relief * 12.0` into `surface_bumps.z_scale`, so the Relief
-    /// knob's `rl_normal` target uses `12.0`; all others are `1.0`.
-    pub scale: f32,
-}
+use manifold_node_engine::load::augmentation::RelightTarget;
 
 pub fn relight_field_targets(field: RelightField) -> &'static [RelightTarget] {
-    match field {
-        RelightField::LightX => &[
+    static LIGHT_X: [RelightTarget; 2] = [
             RelightTarget { node_handle: "rl_lambert", param_name: "light_x", scale: 1.0 },
             RelightTarget { node_handle: "rl_shadow", param_name: "light_x", scale: 1.0 },
-        ],
-        RelightField::LightY => &[
+        ];
+    static LIGHT_Y: [RelightTarget; 2] = [
             RelightTarget { node_handle: "rl_lambert", param_name: "light_y", scale: 1.0 },
             RelightTarget { node_handle: "rl_shadow", param_name: "light_y", scale: 1.0 },
-        ],
-        RelightField::Relief => &[
+        ];
+    static RELIEF: [RelightTarget; 3] = [
             RelightTarget { node_handle: "rl_normal", param_name: "z_scale", scale: 12.0 },
             RelightTarget { node_handle: "rl_ao", param_name: "relief", scale: 1.0 },
             RelightTarget { node_handle: "rl_shadow", param_name: "relief", scale: 1.0 },
-        ],
-        RelightField::AoIntensity => &[RelightTarget {
+        ];
+    static AO_INTENSITY: [RelightTarget; 1] = [RelightTarget {
             node_handle: "rl_ao",
             param_name: "intensity",
             scale: 1.0,
-        }],
-        RelightField::ShadowSoftness => &[RelightTarget {
+        }];
+    static SHADOW_SOFTNESS: [RelightTarget; 1] = [RelightTarget {
             node_handle: "rl_shadow",
             param_name: "softness",
             scale: 1.0,
-        }],
-        RelightField::Gain => &[RelightTarget {
+        }];
+    static GAIN: [RelightTarget; 1] = [RelightTarget {
             node_handle: "rl_exposure",
             param_name: "gain",
             scale: 1.0,
-        }],
+        }];
+    match field {
+        RelightField::LightX => &LIGHT_X,
+        RelightField::LightY => &LIGHT_Y,
+        RelightField::Relief => &RELIEF,
+        RelightField::AoIntensity => &AO_INTENSITY,
+        RelightField::ShadowSoftness => &SHADOW_SOFTNESS,
+        RelightField::Gain => &GAIN,
     }
 }
 
@@ -439,7 +441,7 @@ pub fn relight_augment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
+    use manifold_node_engine::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
     use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION, EffectGraphDef};
 
     fn registry() -> PrimitiveRegistry {
@@ -593,11 +595,11 @@ mod tests {
     #[test]
     fn every_bundled_preset_validates_after_relight_augmentation() {
         use crate::node_graph::bundled_presets::bundled_preset_def;
-        use crate::node_graph::validate::{ValidateKind, validate_def};
+        use manifold_node_engine::validate::{ValidateKind, validate_def};
         use manifold_core::preset_def::PresetKind;
 
         let reg = registry();
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let device_arc = device.arc();
         let mut checked = 0usize;
         for (kind, validate_kind) in [
@@ -638,11 +640,11 @@ mod tests {
     /// the graph directly asserts the actual invariant this test exists for.
     #[test]
     fn relight_off_matches_pre_relight_effect_graph_for_every_bundled_preset() {
-        use crate::node_graph::boundary_nodes::{FinalOutput, Source};
+        use manifold_node_engine::scene::boundary_nodes::{FinalOutput, Source};
         use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
-        use crate::node_graph::chain_spec::splice_def_into_chain;
-        use crate::node_graph::graph::Graph;
-        use crate::node_graph::graph_loader::{BoundaryHandling, HandleScope, instantiate_def};
+        use manifold_node_engine::load::chain_spec::splice_def_into_chain;
+        use manifold_node_engine::graph::Graph;
+        use manifold_node_engine::load::graph_loader::{BoundaryHandling, HandleScope, instantiate_def};
         use manifold_core::preset_def::PresetKind;
 
         type NodeSig = (u32, String, String, String);
@@ -683,7 +685,7 @@ mod tests {
             // Path A: the production wrapper, relight OFF.
             let mut graph_a = Graph::new();
             let src_a = graph_a.add_node(Box::new(Source::new()));
-            let Some(result_a) = splice_def_into_chain(&mut graph_a, (src_a, "out"), def, &reg, None, &crate::node_graph::mesh_change::PreparedMeshRules::default()) else {
+            let Some(result_a) = splice_def_into_chain(&mut graph_a, (src_a, "out"), def, &reg, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) else {
                 continue; // a preset that fails to splice fails identically on both paths; skip rather than false-fail
             };
             let final_a = graph_a.add_node(Box::new(FinalOutput::new()));
@@ -701,7 +703,7 @@ mod tests {
                 BoundaryHandling::Splice {
                     source_endpoint: (src_b, "out"),
                 },
-            &crate::node_graph::mesh_change::PreparedMeshRules::default())
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
             .expect("instantiate_def B");
             let final_b = graph_b.add_node(Box::new(FinalOutput::new()));
             graph_b
@@ -716,5 +718,29 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0, "expected at least one bundled effect preset to check");
+    }
+}
+
+#[cfg(test)]
+mod augmentation_source_tests {
+    use super::*;
+    #[test]
+    fn relight_registration_preserves_augmentation_and_targets() {
+        let registry = PrimitiveRegistry::with_builtin();
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            "nodes": [{"id": 0, "typeId": "system.source"}, {"id": 1, "typeId": "system.final_output"}],
+            "wires": [{"fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in"}]
+        })).unwrap();
+        let params = RelightParams::default();
+        assert!(relight_augment(&def, &registry, &params).nodes.len() > def.nodes.len());
+        assert_eq!(serde_json::to_value(relight_augment(&def, &registry, &params)).unwrap(),
+            serde_json::to_value(manifold_node_engine::load::augmentation::relight_augment(&def, &registry, &params)).unwrap());
+        for field in [RelightField::LightX, RelightField::LightY, RelightField::Relief,
+            RelightField::AoIntensity, RelightField::ShadowSoftness, RelightField::Gain] {
+            let direct = relight_field_targets(field);
+            let registered = manifold_node_engine::load::augmentation::relight_field_targets(field);
+            assert!(std::ptr::eq(direct, registered));
+        }
     }
 }

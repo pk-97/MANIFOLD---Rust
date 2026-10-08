@@ -15,9 +15,9 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -34,7 +34,7 @@ struct UvUniform {
     _pad1: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ColorSample,
     type_id: "node.color_sample",
     purpose: "Read a single pixel from the input texture at the configured `uv`. Emits `out` (Vec3 RGB) and `luma` (Rec.709-weighted brightness scalar). Bridge for pulling representative colours or per-region brightness out of an image. One frame of latency.",
@@ -177,18 +177,14 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::ColorSample;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::effect_node::{
-        EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,
-    };
-    use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId, compile};
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::parameters::{ParamDef, ParamValue};
-    use crate::node_graph::ports::{
-        NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
-    };
-    use crate::node_graph::{Executor, MetalBackend, Source};
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId};
+    use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::parameters::{ParamDef, ParamValue};
+    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+    use manifold_node_engine::{exec::execution::Executor, exec::metal_backend::MetalBackend, scene::boundary_nodes::Source};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -217,7 +213,7 @@ mod gpu_tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<[f32; 3]>>>,
     }
     impl EffectNode for Capture {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -248,7 +244,7 @@ mod gpu_tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
     }
     impl EffectNode for CaptureFloat {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -280,7 +276,7 @@ mod gpu_tests {
     /// runtime.
     #[test]
     fn solid_color_round_trips_through_scalar_wire() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 16u32);
         let format = GpuTextureFormat::Rgba16Float;
         let color = [0.7_f32, 0.3, 0.2];
@@ -299,7 +295,7 @@ mod gpu_tests {
 
         let r_src = output_resource(&plan, src, "out");
         let src_target = RenderTarget::new(&device, w, h, format, "test-cs-src");
-        crate::clear_texture_committed(
+        manifold_node_engine::testkit::gpu::clear_texture_committed(
             &device,
             &src_target.texture,
             [color[0] as f64, color[1] as f64, color[2] as f64, 1.0],
@@ -342,7 +338,7 @@ mod gpu_tests {
     /// single definition of "brightness".
     #[test]
     fn luma_port_emits_rec709_brightness() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 16u32);
         let format = GpuTextureFormat::Rgba16Float;
         // Rec.709 luma of a deeply saturated green is dominated by the
@@ -366,7 +362,7 @@ mod gpu_tests {
 
         let r_src = output_resource(&plan, src, "out");
         let src_target = RenderTarget::new(&device, w, h, format, "test-cs-luma-src");
-        crate::clear_texture_committed(
+        manifold_node_engine::testkit::gpu::clear_texture_committed(
             &device,
             &src_target.texture,
             [color[0] as f64, color[1] as f64, color[2] as f64, 1.0],

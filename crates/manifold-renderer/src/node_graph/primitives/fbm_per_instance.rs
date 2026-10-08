@@ -17,10 +17,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`scale`,
 /// `z`, `offset_x`, `offset_y`, `octaves` Int → i32, `lacunarity`, `gain`) then
@@ -41,7 +41,7 @@ struct Uniforms {
 
 const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: FbmPerInstance,
     type_id: "node.fractal_noise_per_copy",
     purpose: "Sample fractal Brownian motion (multi-octave 3D simplex) at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.noise. For each idx: out[idx] = fbm(vec3(uv * scale + offset, z), octaves, lacunarity, gain). The internal loop matches noise_common.wgsl::fbm byte-for-byte; with the defaults (octaves=5, lacunarity=1.5, gain=0.8) the output is bit-identical to the legacy fbm — DigitalPlants's petal-noise pass relies on this. Port-shadow on scale / z / offset_* so the noise field can be animated from time and LFO wires.",
@@ -130,7 +130,7 @@ impl Primitive for FbmPerInstance {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -212,7 +212,7 @@ impl Primitive for FbmPerInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn fbm_per_instance_defaults_match_legacy_noise_common() {

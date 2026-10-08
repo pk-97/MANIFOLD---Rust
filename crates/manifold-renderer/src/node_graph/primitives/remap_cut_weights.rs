@@ -2,12 +2,12 @@
 //! triangle/barycentric cut map so Math View and geometry masks keep the same
 //! logical layout as remapped mesh/reference data.
 
-use crate::mesh::Vec4Vertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::freeze::classify::FusedOutputCapacity;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::Vec4Vertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::freeze::classify::FusedOutputCapacity;
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RemapCutWeights,
     type_id: "node.remap_cut_weights",
     purpose: "Interpolate an Array<f32> of source per-vertex weights through an Array<Vec4Vertex> cut map. Map x/y/z are barycentrics and map w is the exact source triangle index; invalid or padded map entries emit zero.",
@@ -37,7 +37,7 @@ impl Primitive for RemapCutWeights {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "out")

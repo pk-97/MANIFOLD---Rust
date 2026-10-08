@@ -26,12 +26,12 @@ use manifold_gpu::{
     GpuAddressMode, GpuBinding, GpuFilterMode, GpuLoadAction, GpuSamplerDesc, GpuTextureFormat,
 };
 
-use crate::mesh::InstanceTransform;
-use crate::mesh::pipeline::{look_at_rh, mat4_mul, ortho_rh};
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::mesh::pipeline::{look_at_rh, mat4_mul, ortho_rh};
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const CUBE_VERTEX_COUNT: u32 = 36;
 const SHADOW_MAP_SIZE: u32 = 2048;
@@ -52,7 +52,7 @@ struct ShadowUniforms {
     light_view_proj: [[f32; 4]; 4],
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: DigitalPlantsRender,
     type_id: "node.digital_plants_render",
     purpose: "Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-tap PCF shadow sampling. Hardcoded 36-vert cube geometry (no Array<MeshVertex> input). Pair upstream with node.arrange_copies (or any procedural compute that produces InstanceTransforms — DigitalPlants's procedural compute is one such producer).",
@@ -359,11 +359,11 @@ impl Primitive for DigitalPlantsRender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn digital_plants_render_declares_instance_camera_in_and_color_out() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
+        use manifold_node_engine::ports::{ArrayType, PortType, ScalarType};
         let layout = ArrayType::of_known::<InstanceTransform>();
         assert_eq!(DigitalPlantsRender::TYPE_ID, "node.digital_plants_render");
 

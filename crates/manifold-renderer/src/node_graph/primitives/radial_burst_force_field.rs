@@ -20,10 +20,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -44,7 +44,7 @@ struct BurstUniforms {
 /// burst integrate cleanly with simplex-based velocity fields.
 const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RadialBurstForceField,
     type_id: "node.explosion_force",
     purpose: "Produces a per-pixel vec2 force texture for a radial impulse burst around (point_x, point_y) within `radius`. Combines radial outward push, tangent curl, noise-perturbed radial direction, and a `(1-t²)²` falloff envelope, multiplied by `amplitude * envelope`. Sum into a velocity field via node.mix(Add) and let the downstream particle integrator pick up the impulse. Reusable for any 'impulse around a point' — snaps, beat shoves, audio splashes, fluid clip-trigger inject.",

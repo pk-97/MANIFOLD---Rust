@@ -28,10 +28,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 // Standalone-codegen uniform layout: PARAMS order (vol_res, vol_depth, curl_
 // strength, slope_strength, ref_axis_x/y/z) padded to 32 bytes — contiguous,
@@ -50,7 +50,7 @@ struct CurlSlope3DUniforms {
     _pad: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CurlSlopeForce3D,
     type_id: "node.swirl_force_3d",
     purpose: "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a rotating reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). force = cross(gradient, ref_axis) * curl_strength + gradient * slope_strength; ref_axis is normalized CPU-side and applies to the whole volume (rotate it over time upstream so the swirl's quiet pole wanders). Writes a vec3 force Texture3D. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.edge_slope_3d.",
@@ -205,9 +205,9 @@ impl Primitive for CurlSlopeForce3D {
             // (codegen::VOLUME_WORKGROUP_3D), not the hand shader's 8x8x8 -
             // div_ceil(8) covered only an eighth of the volume.
             [
-                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
-                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
-                vol_depth.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_depth.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
             ],
             "node.swirl_force_3d",
         );

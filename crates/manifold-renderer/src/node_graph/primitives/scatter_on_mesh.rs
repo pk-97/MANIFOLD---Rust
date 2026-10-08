@@ -26,10 +26,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::{InstanceTransform, MeshVertex};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -48,7 +48,7 @@ struct ScatterOnMeshUniforms {
     capacity: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ScatterOnMesh,
     type_id: "node.scatter_on_mesh",
     purpose: "Scatter an Array<InstanceTransform> across a mesh's own surface (Array<MeshVertex>), area-weighted so instance density is uniform regardless of triangulation — the instance-producing sibling of node.spawn_from_mesh's surface mode, same 3-pass area/scan/place dispatch. Each instance gets a barycentric-sampled surface position, a uniform scale hashed into [scale_min, scale_max], and either a random upright yaw or (when align_to_normal is set) a rotation that additionally tilts the instance's local +Y onto the sampled triangle's flat face normal. Deterministic for a fixed (seed, mesh) — no true randomness. Pair with node.render_copies to draw the scattered instances: a field of scanned flowers on a terrain is terrain mesh -> node.scatter_on_mesh -> node.render_copies.",
@@ -144,7 +144,7 @@ impl Primitive for ScatterOnMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "instances" {
@@ -326,13 +326,13 @@ impl ScatterOnMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
     /// `max_capacity` > 0 must win;
     /// 0/absent falls back to count (Garden.json back-compat).
     #[test]
     fn max_capacity_overrides_count_as_ceiling() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = ScatterOnMesh::new();
         let node: &dyn EffectNode = &prim;
         let mut params: ParamValues = ParamValues::default();
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn array_output_capacity_reads_count_param() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = ScatterOnMesh::new();
         let node: &dyn EffectNode = &prim;
         let mut params: ParamValues = ParamValues::default();
@@ -456,7 +456,7 @@ mod gpu_tests {
 
     #[test]
     fn same_seed_and_mesh_gives_identical_instance_buffer_across_two_runs() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
         let vertices = quad_mesh();
         let capacity = 128u32;
@@ -472,7 +472,7 @@ mod gpu_tests {
 
     #[test]
     fn different_seed_gives_different_placement() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
         let vertices = quad_mesh();
         let capacity = 128u32;
@@ -489,7 +489,7 @@ mod gpu_tests {
 
     #[test]
     fn instances_land_on_the_mesh_surface_within_scale_bounds() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
         let vertices = quad_mesh();
         let capacity = 64u32;
@@ -511,7 +511,7 @@ mod gpu_tests {
 
     #[test]
     fn align_to_normal_tilts_instances_on_a_sloped_triangle() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
 
         // A single triangle tilted 45 degrees off the XZ plane: its face
@@ -572,7 +572,7 @@ mod gpu_tests {
     /// place_main must park [count, capacity).
     #[test]
     fn slots_beyond_count_park_at_zero_scale() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
         let vertices = quad_mesh();
         let capacity = 64u32;
@@ -600,7 +600,7 @@ mod gpu_tests {
     /// upright (R·(0,1,0) ≈ (0,1,0)) for EVERY yaw the hash produces.
     #[test]
     fn align_on_flat_ground_keeps_instances_upright_and_finite() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
         let vertices = quad_mesh();
         let capacity = 256u32;
@@ -639,7 +639,7 @@ mod gpu_tests {
         // either way — the operationally meaningful fact (first live `run()`
         // is a cache hit, not a real compile) holds whether this call or an
         // earlier test's warmed the cache.
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         ScatterOnMesh::prewarm_pipelines(&device);
         const SHADER_SRC: &str = include_str!("shaders/scatter_on_mesh.wgsl");
         for (entry, label) in [

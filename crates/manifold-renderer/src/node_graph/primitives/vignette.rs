@@ -12,16 +12,16 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Display labels for the `shape` enum. Index = enum value:
 /// 0=Circle, 1=Ellipse, 2=Rectangle.
 pub const VIGNETTE_SHAPES: &[&str] = &["Circle", "Ellipse", "Rectangle"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Vignette,
     type_id: "node.vignette",
     purpose: "Soft fade-to-black border. Circle = aspect-corrected true circle (cinematic); Ellipse = canvas-fit oval; Rectangle = per-edge fade (hides hard sampling cutoffs in feedback / mirror / displacement chains). `size` sets the inner full-opacity boundary, `softness` is the fade width, `strength` blends the result back against the untouched input.",

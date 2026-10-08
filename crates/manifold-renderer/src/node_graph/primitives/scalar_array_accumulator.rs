@@ -16,11 +16,11 @@
 //! the legacy initial spread.
 
 use std::borrow::Cow;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ScalarArrayAccumulator,
     type_id: "node.sum_into_bins",
     purpose: "Add `increment` to every element of an internal Array<f32> accumulator on each clip trigger; emit the accumulator. Generic envelope-mode driver — pair with a trigger_count source to advance N parallel scalars synchronously. NestedCubes envelope mode is the first user.",
@@ -80,7 +80,7 @@ impl Primitive for ScalarArrayAccumulator {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "accumulated" {
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn array_output_capacity_reads_capacity_param() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = ScalarArrayAccumulator::new();
         let mut params = ParamValues::default();
         params.insert(std::borrow::Cow::Borrowed("capacity"), ParamValue::Float(7.0));

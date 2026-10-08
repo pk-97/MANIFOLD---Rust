@@ -17,12 +17,10 @@
 //! burst in flight.
 
 use std::borrow::Cow;
-use crate::node_graph::effect_node::{
-    EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
-};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use crate::node_graph::state_store::NodeState;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::state_store::NodeState;
 
 pub const INJECT_BURST_TYPE_ID: &str = "node.inject_burst";
 
@@ -123,14 +121,14 @@ impl Default for InjectBurst {
 }
 
 impl EffectNode for InjectBurst {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
-    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
-        Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
+    fn boundary_reason(&self) -> Option<manifold_node_engine::freeze::classify::BoundaryReason> {
+        Some(manifold_node_engine::freeze::classify::BoundaryReason::NonGpu)
     }
 
     fn inputs(&self) -> &[NodeInput] {
@@ -225,12 +223,12 @@ impl EffectNode for InjectBurst {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: INJECT_BURST_TYPE_ID,
         create: || Box::new(InjectBurst::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo {
+        picker: Some(manifold_node_engine::palette::PickerInfo {
             label: "Inject Burst",
-            category: crate::node_graph::palette::PaletteCategory::Driver,
+            category: manifold_node_engine::palette::PaletteCategory::Driver,
         }),
     }
 }

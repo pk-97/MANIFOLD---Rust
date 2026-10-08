@@ -4,8 +4,8 @@
 //! display-linear space) and encodes to PQ for HDR10 HEVC delivery.
 //! Uses a compute dispatch via manifold-gpu for zero TBDR overhead.
 
-use crate::gpu_encoder::GpuEncoder;
-use crate::render_target::RenderTarget;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 /// Uniform buffer layout for the PQ encoder shader. 16-byte aligned.
 #[repr(C)]

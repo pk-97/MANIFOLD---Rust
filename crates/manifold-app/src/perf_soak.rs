@@ -1062,7 +1062,7 @@ fn run_profile(
 
         let cpu_by_tag: std::collections::HashMap<
             &str,
-            &manifold_renderer::node_graph::StepProfile,
+            &manifold_node_engine::exec::execution::StepProfile,
         > = cpu_profiles.iter().map(|p| (p.tag.as_str(), p)).collect();
 
         let (rt_updates, rt_dispatches, rt_history_resets) =

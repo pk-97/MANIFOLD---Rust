@@ -13,10 +13,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -27,7 +27,7 @@ struct RadialFoldUvUniforms {
     _pad0: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RadialFoldUv,
     type_id: "node.kaleidoscope",
     purpose: "Kaleidoscope coordinate generator: folds the plane into `segments` mirrored wedges around (cx, cy) and emits the per-pixel sample UV (R = folded_u, G = folded_v). Pair with node.remap (Clamp) to resample a source at the folded coordinates, then node.mix (Lerp) to crossfade — the TD coordinate → remap → blend shape that replaces the fused node.kaleidoscope kernel. Reusable for any radial-symmetry warp.",

@@ -14,10 +14,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Display labels for the `mode` enum. Index = enum value, matching the
 /// legacy Strobe mode discriminants (0=Opacity, 1=White, 2=Gain).
@@ -32,7 +32,7 @@ struct FlashUniforms {
     _pad1: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Flash,
     type_id: "node.flash",
     purpose: "Modulate image brightness by a scalar `amount` in one of three modes: Opacity (col*(1-amount), toward black), White (mix toward white), Gain (col*mix(1,3,amount), brighten 3x). The brightness-apply half of Strobe with the gate factored out — wire node.beat_gate into `amount` for a beat-synced strobe, or an LFO/audio/MIDI for any pulsing flash. `amount` port-shadows the param for live modulation.",

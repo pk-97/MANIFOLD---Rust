@@ -19,8 +19,8 @@
 //! move with the navigation camera) and rasterized with a plain
 //! integer-stepped line draw.
 
-use crate::node_graph::camera::Camera;
-use crate::node_graph::fluid::FluidDomainLayout;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::water::fluid::FluidDomainLayout;
 
 /// One overlay line segment in world space, with its RGBA8 color.
 #[derive(Debug, Clone, Copy)]
@@ -134,10 +134,10 @@ pub fn light_billboard_lines(pos: [f32; 3], size: f32) -> Vec<WorldLine> {
 /// plane corners, plus the far-plane rectangle itself.
 pub fn camera_frustum_lines(cam: &Camera, aspect: f32, far_visual: f32) -> Vec<WorldLine> {
     let half_h = match cam.mode {
-        crate::node_graph::camera::CameraMode::Perspective { fov_y } => {
+        manifold_node_engine::scene::camera::CameraMode::Perspective { fov_y } => {
             (fov_y * 0.5).tan() * far_visual
         }
-        crate::node_graph::camera::CameraMode::Orthographic { half_height } => half_height,
+        manifold_node_engine::scene::camera::CameraMode::Orthographic { half_height } => half_height,
     };
     let half_w = half_h * aspect;
     let center = [
@@ -275,7 +275,7 @@ fn put_pixel(pixels: &mut [u8], w: u32, h: u32, x: f32, y: f32, color: [u8; 4]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::camera::Camera;
+    use manifold_node_engine::scene::camera::Camera;
 
     #[test]
     fn grid_lines_are_symmetric_and_include_axes() {

@@ -1,0 +1,625 @@
+//! Fusion classification metadata (design doc section 12, section 3).
+//!
+//! Every primitive declares — via the `primitive!` macro, defaulting to the
+//! conservative [`FusionKind::Boundary`] — whether and how it can fold into a
+//! fused kernel. The fusion region-grower reads this off each node (through
+//! [`EffectNode::fusion_kind`](crate::node_graph::effect_node::EffectNode::fusion_kind))
+//! to grow maximal same-domain pure regions and cut at the rest. Conservative
+//! by construction: an unclassified atom never fuses.
+
+use crate::exec::effect_node::ParamValues;
+use crate::parameters::ParamValue;
+
+/// How a primitive participates in fusion.
+///
+/// For v1 (texture-pointwise), the two fusable kinds carry an implied
+/// contract that keeps the classifier simple: both iterate **output-sized**
+/// (grid from the destination) and read every input at the **same element**
+/// (own pixel / coincident UV). Richer per-input read-semantics — a
+/// texel-load atom (dither) that can't cross a resolution seam, or a
+/// dependent gather — get their own variants + per-input markers when the
+/// first such atom is converted; adding them is additive and does not
+/// invalidate existing `Pointwise`/`MultiInputCoincident` atoms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FusionKind {
+    /// Not fusable — the default for every primitive until it opts in.
+    /// CPU/control nodes, stateful nodes (feedback/accumulators), gathers,
+    /// resamples, IO endpoints. A region is cut at every boundary, so the
+    /// compiler only ever fuses what an atom explicitly declares fusable.
+    #[default]
+    Boundary,
+    /// Reads only its own element (own pixel / own particle) and writes one
+    /// element. Output-sized iteration, same-element read. The textbook
+    /// fusable atom — gain, contrast, saturation, hue_saturation, colorize,
+    /// clamp_texture.
+    Pointwise,
+    /// Reads the SAME element from N≥2 inputs (coincident) and writes one.
+    /// Output-sized iteration. Fusable when all inputs resolve to the same
+    /// element-space (the DD10 resolution-seam guard enforces this). e.g.
+    /// `node.mix` — `a` and `b` sampled at the same UV.
+    MultiInputCoincident,
+    /// Generator: reads NO texture input, produces one element from the
+    /// fragment's position + params (checkerboard, uv_field, gradients, noise,
+    /// voronoi, the fold coordinate-fields). The body is `fn body(uv, dims,
+    /// ...params)` — no colour arg. Output-sized iteration. The standalone kernel
+    /// binds no textures/sampler beyond its output (and no uniform if paramless).
+    /// A Source atom CAN head a region as its producer — the region-grower
+    /// admits a 0-input generator as the region's sole entry point and threads
+    /// its output to downstream members as a register
+    /// (`source_generator_heads_a_region`); buffer-domain generators fuse the
+    /// same way into buffer regions (FluidSim, DigitalPlants).
+    Source,
+}
+
+impl FusionKind {
+    /// Whether this primitive can be folded into a fused kernel at all.
+    /// `Boundary` is the only non-fusable kind.
+    pub fn is_fusable(self) -> bool {
+        !matches!(self, FusionKind::Boundary)
+    }
+}
+
+/// How a single texture input is READ by a fusable atom's body — the
+/// read-semantics axis, orthogonal to the channel/type axis (what's *on* the
+/// wire). A fusable atom tags each texture input with one of these via
+/// `INPUT_ACCESS` (aligned to the TEXTURE inputs in `INPUTS` order); the codegen
+/// emits one read-path per kind, and the region-grower enforces each kind's
+/// fusion constraint. This is the unit that lets a new atom slot in by "tag your
+/// inputs" instead of growing a bespoke node category each time.
+///
+/// GPU input access is a CLOSED, small set, extended additively as each new
+/// read-path is built — never a re-tag of the atoms already shipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputAccess {
+    /// Read at the fragment's own coordinate, resolution-ROBUST: the codegen
+    /// samples through a sampler at the fragment UV (standalone) or threads the
+    /// in-region register (fused). The default for every texture input — covers
+    /// pointwise (own pixel) and coincident multi-input (mix). A differently
+    /// sized producer is rescaled by the sampler, so it fuses across a resolution
+    /// seam safely.
+    #[default]
+    Coincident,
+    /// Read at the fragment's own integer texel, EXACT (`textureLoad`, no
+    /// filter). Correct only when the producer matches the output resolution —
+    /// sampling would blend neighbours and corrupt the value (e.g. dither's
+    /// ordered-threshold pattern, where each texel IS a distinct threshold). The
+    /// region-grower must refuse to fuse a `CoincidentTexel` input across a
+    /// resolution seam (design section 11.B / line 147).
+    CoincidentTexel,
+    /// Read at a coordinate the BODY computes — a dependent sample (the UV-warp
+    /// family: remap, chromatic_displace, uv_displace_by_flow). The codegen
+    /// CANNOT pre-sample this into a register (it doesn't know the coord), so the
+    /// body receives the texture + sampler as ARGS and samples them itself,
+    /// owning the exact filter/address-mode of the unfused atom ("pure modulo
+    /// declared sampled-texture args", design section 11.B / line 156). A node with a
+    /// Gather input CAN be a region member — the region-grower just refuses to
+    /// union the WIRE feeding it (a gather-consumed wire never merges into a
+    /// threaded register; the gathered producer stays an external the body
+    /// samples via its own sampler), not the node itself. Stencil absorption
+    /// (`absorb_virtual_chains`) goes further and can fold a short producer
+    /// chain into the fetch, recomputed at each tap instead of a canvas
+    /// round-trip.
+    Gather,
+    /// Like [`Gather`], but the body reads via INTEGER `textureLoad` at a voxel/
+    /// texel coordinate it computes — NO sampler, no filtering. The neighbourhood
+    /// finite-difference / toroidal-wrap family that loads exact integer texels
+    /// (gradient_central_diff_3d, curl_slope_force_3d, the wrap-modulo fields). The
+    /// codegen binds the texture but no sampler, and the body receives only the
+    /// texture handle (it computes the integer coord from `uv`/`dims`). Same
+    /// region-boundary treatment as `Gather`.
+    GatherTexel,
+    /// Buffer-domain gather: the body reads arbitrary elements of an input
+    /// storage `array` (grid neighbours, scatter targets, random-access lookups).
+    /// It references the codegen-emitted input array global `buf_<port>` and
+    /// computes its own element indices, so — exactly like the texture
+    /// [`Gather`] — the wire feeding it never unions into a threaded register;
+    /// the gathered array stays a bound `var<storage, read>` input the body
+    /// indexes itself. Buffer atoms DO fuse into multi-node buffer regions
+    /// (`classify_buffer_node` in `region.rs`) — FluidSim / FluidSim3D /
+    /// DigitalPlants ship as fused, bit-exact buffer regions (freeze section 7.3); a
+    /// `BufferGather` input just means that one wire stays external, same as
+    /// texture `Gather`.
+    BufferGather,
+    /// TEXTURE-domain read of a storage `Array`/`Channels` input, by indices
+    /// the body computes — the array-into-texture read path. Only ever tags an `Array`-typed input
+    /// on an otherwise texture-domain atom (the `draw_*` family: a soft dot /
+    /// marker / tick / gauge / scanline / connection layer that reads a
+    /// detections array while writing the output pixel). Semantically this is
+    /// [`BufferGather`]'s convention — the body references the codegen-emitted
+    /// global `buf_<port>` directly and indexes it itself, no pre-read, no
+    /// body arg — just HOSTED IN a texture-domain kernel instead of a buffer
+    /// one. The region-grower never unions across a `BufferIndex`-consumed
+    /// wire (same "gather never unions" contract as texture `Gather` and
+    /// `BufferGather`): the array producer stays external, bound as
+    /// `var<storage, read> buf_<port>: array<ExtK>` (standalone) or
+    /// `src_<slot>` (fused, riding the existing external-slot numbering
+    /// texture externals already use — an external is just a producer +
+    /// element-type pair, texture or array). `ExtK` is synthesized from the
+    /// port's `Channels[…]` layout by the same helpers the buffer codegen
+    /// path already uses (`buffer_element_type`/`emit_buffer_struct`), so the
+    /// mechanism generalizes to every `draw_*` atom's own detections/marks
+    /// signature, not just `draw_dots`' `Detection`.
+    BufferIndex,
+}
+
+/// A buffer atom's DECLARED fused output-capacity shape (BUG-orm4,
+/// output-capacity-multiplier): how many output elements the atom produces
+/// per element of its array inputs, as a small closed expression the region
+/// builder can compose, the codegen can emit into the fused count anchor, and
+/// `node.wgsl_compute` can mirror into the fresh `dst` sizing. Declared via
+/// the `primitive!` macro's `output_capacity:` field; the region builder
+/// still PROBES the black-box [`EffectNode::array_output_capacity`] against
+/// the declared shape on synthetic capacities and refuses on any disagreement
+/// — the declaration selects the expression, the probe keeps it honest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FusedOutputCapacity {
+    /// One output element per dispatched element: the output capacity is the
+    /// minimum over the member's wired array input capacities (every shipped
+    /// identity buffer atom: in-capacity or min-clamped). The fused count
+    /// anchor is `min(arrayLength(&src_e), …)` over the region's array
+    /// externals — the pre-BUG-orm4 behavior, byte-identical.
+    MinInputs,
+    /// One output per element of the named coincident input. Other array
+    /// inputs are bounds-checked gathers whose lengths do not limit dispatch
+    /// (for example, a cut map gathering a smaller source mesh).
+    FromInput { input: &'static str },
+    /// Output capacity is `factor` × the named array input's capacity
+    /// (reflect_array's 2x mirror half, analytic_echo_instances' 8x echo
+    /// stride). The named port MUST be tagged [`InputAccess::BufferGather`]
+    /// and be the member's ONLY array input: the body indexes the input whole
+    /// at self-computed indices (its own modulo/division guards keep any
+    /// dispatched idx in bounds), so widening the dispatch count past the
+    /// input's length is safe — a coincident pre-read at the widened `idx`
+    /// would run off the end.
+    MultipleOf { input: &'static str, factor: u32 },
+    /// One output per lattice node: the product of the named Float params,
+    /// each rounded (a lattice atom's `nodes_x × nodes_y × nodes_z`), however
+    /// long its array inputs are. The body guards its own gathers and
+    /// returns a value past its lattice; a coincident array external is
+    /// pre-read at `[idx]`, so the region clamps its count by that
+    /// external's length. `plus` is added to each rounded param first: a
+    /// face grid holds `(nodes + 1)` per axis.
+    ParamProduct { params: &'static [&'static str], plus: u32 },
+}
+
+/// A region output's capacity expression over the ARRAY external slots,
+/// composed at `build_region` from the members' declared
+/// [`FusedOutputCapacity`] shapes (identity members compose `Min` over their
+/// input sources; a `MultipleOf` member composes `Mul(factor, Slot)` over its
+/// gathered external). Emitted verbatim into the fused kernel's count anchor
+/// and mirrored to `node.wgsl_compute` through the
+/// `// @fused_output_capacity:` marker so the fresh `dst` buffer is sized
+/// EXACTLY to the kernel's dispatch count — a widened region whose dst fell
+/// back to the min-over-inputs default would leave the mirrored tail outside
+/// the buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapacityExpr {
+    /// `min(...)` over the child expressions — an identity member's capacity
+    /// is the minimum over its array inputs' capacities. A single child
+    /// renders as the child itself (matches the legacy single-external text).
+    Min(Vec<CapacityExpr>),
+    /// `factor` × the child — a `MultipleOf` member's declared shape.
+    Mul(u32, Box<CapacityExpr>),
+    /// The live length of ARRAY external slot `usize` (`arrayLength(&src_n)`).
+    Slot(usize),
+    /// A fused uniform param (`n<member>_<param>`, a Float lattice length),
+    /// rounded half to even as WGSL's `round` does, and never below 0.
+    Param(String),
+    /// The product of the children — a `ParamProduct` member's lattice.
+    Product(Vec<CapacityExpr>),
+    /// `n` + the child — a padded lattice side (`ParamProduct`'s `plus`).
+    Add(u32, Box<CapacityExpr>),
+}
+
+impl CapacityExpr {
+    /// Render as the WGSL count-anchor expression (u32 arithmetic,
+    /// `arrayLength(&src_n)` leaves, left-folded `min` — the same fold the
+    /// legacy identity anchor used, so a plain min-over-slots tree renders
+    /// byte-identically to pre-BUG-orm4 text).
+    pub fn to_wgsl(&self) -> String {
+        match self {
+            CapacityExpr::Slot(n) => format!("arrayLength(&src_{n})"),
+            CapacityExpr::Mul(f, x) => format!("{f}u * {}", x.to_wgsl()),
+            CapacityExpr::Add(n, x) => format!("({}u + {})", n, x.to_wgsl()),
+            CapacityExpr::Min(v) => {
+                let mut it = v.iter();
+                let first = it.next().map(CapacityExpr::to_wgsl).unwrap_or_default();
+                it.fold(first, |acc, e| format!("min({acc}, {})", e.to_wgsl()))
+            }
+            CapacityExpr::Param(field) => format!("u32(max(round(params.{field}), 0.0))"),
+            CapacityExpr::Product(v) => {
+                let factors: Vec<String> = v.iter().map(CapacityExpr::to_wgsl).collect();
+                format!("({})", factors.join(" * "))
+            }
+        }
+    }
+
+    /// Whether any leaf reads a uniform param.
+    pub fn reads_params(&self) -> bool {
+        match self {
+            CapacityExpr::Slot(_) => false,
+            CapacityExpr::Param(_) => true,
+            CapacityExpr::Mul(_, x) | CapacityExpr::Add(_, x) => x.reads_params(),
+            CapacityExpr::Min(v) | CapacityExpr::Product(v) => v.iter().any(CapacityExpr::reads_params),
+        }
+    }
+
+    /// Render as the `// @fused_output_capacity:` marker payload — a compact
+    /// grammar (`min(<e>,…)`, `mul(<u32>,<e>)`, `s<slot>`), single-sourced
+    /// with [`Self::parse_marker_payload`]; `Marker::emit`/`Marker::parse`
+    /// delegate to these so the wire grammar lives in one place.
+    pub fn to_marker_payload(&self) -> String {
+        match self {
+            CapacityExpr::Slot(n) => format!("s{n}"),
+            CapacityExpr::Mul(f, x) => format!("mul({f},{})", x.to_marker_payload()),
+            CapacityExpr::Add(n, x) => format!("add({n},{})", x.to_marker_payload()),
+            CapacityExpr::Min(v) => {
+                let inner: Vec<String> = v.iter().map(CapacityExpr::to_marker_payload).collect();
+                format!("min({})", inner.join(","))
+            }
+            CapacityExpr::Param(field) => format!("par({field})"),
+            CapacityExpr::Product(v) => {
+                let inner: Vec<String> = v.iter().map(CapacityExpr::to_marker_payload).collect();
+                format!("prod({})", inner.join(","))
+            }
+        }
+    }
+
+    /// Parse a [`Self::to_marker_payload`] rendering back (the marker
+    /// consumer's half of the single-sourced grammar). `None` on any
+    /// malformed or trailing input — introspection then treats the marker as
+    /// absent (fail closed: the loader refuses the unsized output loudly).
+    pub fn parse_marker_payload(text: &str) -> Option<CapacityExpr> {
+        let (expr, rest) = Self::parse_payload_node(text)?;
+        rest.trim().is_empty().then_some(expr)
+    }
+
+    /// Parse one node, returning the expression and the unconsumed remainder.
+    fn parse_payload_node(text: &str) -> Option<(CapacityExpr, &str)> {
+        let text = text.trim_start();
+        if let Some(rest) = text.strip_prefix("min(") {
+            let (children, rest) = Self::parse_payload_list(rest)?;
+            Some((CapacityExpr::Min(children), rest))
+        } else if let Some(rest) = text.strip_prefix("prod(") {
+            let (children, rest) = Self::parse_payload_list(rest)?;
+            Some((CapacityExpr::Product(children), rest))
+        } else if let Some(rest) = text.strip_prefix("par(") {
+            let (field, rest) = rest.split_once(')')?;
+            let field = field.trim();
+            let identifier = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            identifier.then(|| (CapacityExpr::Param(field.to_string()), rest))
+        } else if let Some((add, rest)) = text.strip_prefix("mul(").map(|r| (false, r)).or_else(|| text.strip_prefix("add(").map(|r| (true, r))) {
+            let (f_str, rest) = rest.split_once(',')?;
+            let factor: u32 = f_str.trim().parse().ok()?;
+            let (child, rest) = Self::parse_payload_node(rest)?;
+            let rest = rest.trim_start().strip_prefix(')')?;
+            let child = Box::new(child);
+            Some((if add { CapacityExpr::Add(factor, child) } else { CapacityExpr::Mul(factor, child) }, rest))
+        } else if let Some(rest) = text.strip_prefix('s') {
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() {
+                return None;
+            }
+            let n: usize = digits.parse().ok()?;
+            Some((CapacityExpr::Slot(n), &rest[digits.len()..]))
+        } else {
+            None
+        }
+    }
+
+    /// A comma-separated child list up to its closing `)`.
+    fn parse_payload_list(text: &str) -> Option<(Vec<CapacityExpr>, &str)> {
+        let mut children = Vec::new();
+        let mut rest = text;
+        loop {
+            let (child, after) = Self::parse_payload_node(rest)?;
+            children.push(child);
+            let after = after.trim_start();
+            if let Some(next) = after.strip_prefix(',') {
+                rest = next;
+            } else {
+                return after.strip_prefix(')').map(|next| (children, next));
+            }
+        }
+    }
+
+    /// Evaluate over named input capacities (`("src_0", cap), …` — the
+    /// `array_output_capacity` convention). `None` when a referenced slot has
+    /// no wired capacity, the expression reads a param, or a multiplication
+    /// overflows (mirroring `analytic_echo_instances`' own overflow → `None`
+    /// contract).
+    pub fn eval(&self, input_capacities: &[(&str, u32)]) -> Option<u32> {
+        self.eval_with(input_capacities, &ParamValues::default())
+    }
+
+    /// [`Self::eval`] with the fused node's params for `Param` leaves.
+    /// `None` when a param is missing, not a Float, or not finite.
+    pub fn eval_with(&self, input_capacities: &[(&str, u32)], params: &ParamValues) -> Option<u32> {
+        let all = |v: &[CapacityExpr]| -> Option<Vec<u32>> {
+            v.iter().map(|e| e.eval_with(input_capacities, params)).collect()
+        };
+        match self {
+            CapacityExpr::Slot(n) => {
+                let name = format!("src_{n}");
+                input_capacities.iter().find(|(p, _)| *p == name).map(|(_, c)| *c)
+            }
+            CapacityExpr::Mul(f, x) => x.eval_with(input_capacities, params)?.checked_mul(*f),
+            CapacityExpr::Add(n, x) => x.eval_with(input_capacities, params)?.checked_add(*n),
+            CapacityExpr::Min(v) => all(v)?.into_iter().min(),
+            CapacityExpr::Param(field) => match params.get(field.as_str()) {
+                Some(ParamValue::Float(value)) if value.is_finite() => {
+                    let rounded = value.round_ties_even().max(0.0);
+                    (rounded <= u32::MAX as f32).then_some(rounded as u32)
+                }
+                _ => None,
+            },
+            CapacityExpr::Product(v) => all(v)?.into_iter().try_fold(1u32, u32::checked_mul),
+        }
+    }
+}
+
+/// Why a Boundary primitive is excused from the codegen-path mandate
+/// (`docs/ADDING_PRIMITIVES.md` section "The codegen path is mandatory",
+/// `docs/GRAPH_TOOLING_DESIGN.md` D4). A closed enum: every currently-Boundary
+/// primitive declares exactly one of these reasons (via the `primitive!`
+/// macro's `boundary_reason:` field, or a direct
+/// [`EffectNode::boundary_reason`](crate::node_graph::effect_node::EffectNode::boundary_reason)
+/// override for hand-impl primitives). The compiler stays
+/// conservative — `FusionKind` still defaults to `Boundary` — this enum is
+/// the POLICY layer that makes every atom's excuse for staying Boundary
+/// visible and enforced (`every_boundary_atom_declares_its_reason`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundaryReason {
+    /// CPU / control-rate op — no GPU kernel to fuse at all (value, math,
+    /// lfo, camera/light/material param setters, CPU array ops).
+    NonGpu,
+    /// Workgroup-barrier reduction or multi-pass scan/reduce — a single
+    /// dispatch would need `var<workgroup>` + barriers, which the
+    /// no-fused-monolith rule forbids folding into one kernel (`peak`,
+    /// `luminance`, `spawn_from_mesh`, `scatter_on_mesh`). Also the
+    /// sequential-dependency flavor: an internal prefilter mip chain
+    /// (`bokeh_gather`) — each level depends on the previous, and a fused
+    /// gather input has no mip levels to sample.
+    BarrieredReduction,
+    /// Cross-frame GPU state — the primitive's output must materialize in
+    /// VRAM to survive into next frame's input, so there is no VRAM
+    /// round-trip to fuse away (`node.feedback`, `node.array_feedback`).
+    CrossFrameState,
+    /// Upload, readback, or DNN/FFI bridge — the data enters or leaves the
+    /// GPU and is not purely a function of GPU inputs (`image_folder`,
+    /// `gltf_texture_source`, `gltf_mesh_source`, `color_sample`,
+    /// depth-estimator / blob-detector / optical-flow / person-segment
+    /// atoms, `wgsl_compute`'s user-authored full kernel).
+    IoBridge,
+    /// `render_*` rasterization pass — a draw call, not a compute dispatch.
+    DrawCall,
+    /// Fused bundle awaiting decomposition into atoms — dies with the bundle
+    /// (`cylinder_wrap_field`, `torus_wrap_field`, `digital_plants_render`,
+    /// `nested_cubes_geometry`).
+    FusedBundle,
+    /// Passes the barrier-free per-element scope test, but the codegen
+    /// can't yet express one of its inputs (the `draw_*` family's
+    /// array-into-texture read — tracked BUG-114/115). BLOCKED is not
+    /// exempt: the debt lives in the compiler, not the atom.
+    Blocked,
+    /// Owed a `wgsl_body` conversion — legal ONLY for the `type_id`s in
+    /// `CONVERSION_DEBT_LEDGER`.
+    /// Converting an atom removes it from the ledger; the meta-test fails
+    /// if a listed atom becomes fusable (stale ledger) or if an
+    /// undeclared atom claims this reason without a ledger entry.
+    ConversionDebt,
+}
+
+/// The exact set of `type_id`s legally allowed to declare
+/// `BoundaryReason::ConversionDebt` (design doc D5). Converting an atom removes it from
+/// this list — a deliberate, review-visible edit; adding an atom without
+/// converting it is not permitted (the meta-test below checks both
+/// directions).
+pub const CONVERSION_DEBT_LEDGER: &[&str] = &[
+    // watercolor — NOT a mechanical wgsl_body conversion candidate: this is
+    // a 7-pass sequential composite (grain+max, flow-gen, displace,
+    // diffusion blur, slope displace, luma blur into persistent
+    // cross-frame feedback, wet/dry blend), not a single barrier-free
+    // per-element function. It fails the codegen-path scope test on two
+    // independent grounds — cross-frame GPU state (the `feedback` texture
+    // must survive into next frame, matching `BoundaryReason::CrossFrameState`'s
+    // own `node.feedback` example) and multi-pass dependent composition
+    // (matching `BoundaryReason::FusedBundle`'s "awaiting decomposition
+    // into atoms" — `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md`
+    // already tracks the real fix: decompose into `flow_field_noise` +
+    // `uv_displace_by_flow` (both registered, unused) + existing
+    // blur/displace atoms, composed as a graph). Left in this ledger
+    // rather than reclassified, pending that
+    // decomposition design — same category as DigitalPlants/NestedCubes,
+    // explicitly out of scope for a mechanical wgsl_body conversion.
+    "node.watercolor",
+];
+
+impl InputAccess {
+    /// Whether the body computes its own read coordinate / index (a dependent
+    /// read the region-grower can't thread as a register). Both texture gather
+    /// flavours and the buffer gather qualify.
+    pub fn is_gather(self) -> bool {
+        matches!(
+            self,
+            InputAccess::Gather
+                | InputAccess::GatherTexel
+                | InputAccess::BufferGather
+                | InputAccess::BufferIndex
+        )
+    }
+
+    /// Whether this access reads through an EXACT `textureLoad` (or the
+    /// buffer-domain equivalent, an indexed storage-array read) rather than a
+    /// filtering sampler. `docs/DEPTH_RELIGHT_DESIGN.md` D6(a): only these
+    /// variants are safe to back with a non-filterable `Rgba32Float`
+    /// intermediate on Apple GPUs — `Coincident`/`Gather` bind a real
+    /// sampler (`textureSampleLevel`) that a non-filterable format can't
+    /// serve.
+    pub fn is_texel_exact(self) -> bool {
+        matches!(
+            self,
+            InputAccess::CoincidentTexel
+                | InputAccess::GatherTexel
+                | InputAccess::BufferGather
+                | InputAccess::BufferIndex
+        )
+    }
+
+    /// Whether this access reads through a FILTERING sampler
+    /// (`textureSampleLevel` with a possibly-linear filter) — the converse
+    /// of [`is_texel_exact`](Self::is_texel_exact) for the two texture-domain
+    /// variants a non-filterable `Rgba32Float` producer cannot serve.
+    pub fn is_filtering_sampler(self) -> bool {
+        matches!(self, InputAccess::Coincident | InputAccess::Gather)
+    }
+}
+
+/// The [`InputAccess`] a specific texture input port actually uses, resolved
+/// the same way the fusion codegen resolves it: `node.input_access()` is
+/// aligned to the node's TEXTURE-typed inputs in declaration order (scalar/
+/// control ports skipped), defaulting to [`InputAccess::Coincident`] for any
+/// port past the end of the declared list (`PrimitiveSpec::INPUT_ACCESS`'s
+/// own documented default). Returns `None` if `port_name` doesn't name a
+/// texture input on this node at all.
+pub fn input_access_of(
+    node: &dyn crate::exec::effect_node::EffectNode,
+    port_name: &str,
+) -> Option<InputAccess> {
+    let access = node.input_access();
+    let mut texture_index = 0usize;
+    for input in node.inputs() {
+        if !matches!(
+            input.ty,
+            crate::ports::PortType::Texture2D
+                | crate::ports::PortType::Texture2DTyped(_)
+                | crate::ports::PortType::Texture3D
+        ) {
+            continue;
+        }
+        if input.name.as_ref() == port_name {
+            return Some(access.get(texture_index).copied().unwrap_or_default());
+        }
+        texture_index += 1;
+    }
+    None
+}
+
+/// Render a node's fusion classification as the single stable string both
+/// `catalog_gen` (the `fusion` catalog field, design D3) and `graph_tool
+/// fusion` (design D2/D10) print — one implementation, so the catalog and
+/// the CLI can never disagree about what a `FusionKind`/`BoundaryReason`
+/// pair means: `"pointwise"` | `"source"` | `"multi_input_coincident"` |
+/// `"boundary:<reason_snake_case>"`.
+pub fn fusion_kind_str(node: &dyn crate::exec::effect_node::EffectNode) -> String {
+    match node.fusion_kind() {
+        FusionKind::Pointwise => "pointwise".to_string(),
+        FusionKind::Source => "source".to_string(),
+        FusionKind::MultiInputCoincident => "multi_input_coincident".to_string(),
+        FusionKind::Boundary => match node.boundary_reason() {
+            Some(BoundaryReason::NonGpu) => "boundary:non_gpu".to_string(),
+            Some(BoundaryReason::BarrieredReduction) => "boundary:barriered_reduction".to_string(),
+            Some(BoundaryReason::CrossFrameState) => "boundary:cross_frame_state".to_string(),
+            Some(BoundaryReason::IoBridge) => "boundary:io_bridge".to_string(),
+            Some(BoundaryReason::DrawCall) => "boundary:draw_call".to_string(),
+            Some(BoundaryReason::FusedBundle) => "boundary:fused_bundle".to_string(),
+            Some(BoundaryReason::Blocked) => "boundary:blocked".to_string(),
+            Some(BoundaryReason::ConversionDebt) => "boundary:conversion_debt".to_string(),
+            None => "boundary:undeclared".to_string(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FusionKind;
+    use crate::exec::effect_node::EffectNode;
+    use crate::primitives::gain::Gain;
+
+    /// A lattice count renders to WGSL over the fused params, round-trips the
+    /// marker grammar, and evaluates as WGSL would: rounded half to even,
+    /// clamped at 0, `None` for a missing or non-finite param or on overflow.
+    #[test]
+    fn param_product_renders_parses_and_evaluates() {
+        use super::CapacityExpr;
+        use crate::exec::effect_node::ParamValues;
+        use crate::parameters::ParamValue;
+
+        let lattice = CapacityExpr::Product(["n0_nodes_x", "n0_nodes_y", "n0_nodes_z"].map(|f| CapacityExpr::Param(f.to_string())).to_vec());
+        let clamped = CapacityExpr::Min(vec![lattice.clone(), CapacityExpr::Slot(1)]);
+        assert_eq!(
+            clamped.to_wgsl(),
+            "min((u32(max(round(params.n0_nodes_x), 0.0)) * u32(max(round(params.n0_nodes_y), 0.0)) * u32(max(round(params.n0_nodes_z), 0.0))), arrayLength(&src_1))"
+        );
+        let payload = clamped.to_marker_payload();
+        assert_eq!(payload, "min(prod(par(n0_nodes_x),par(n0_nodes_y),par(n0_nodes_z)),s1)");
+        assert_eq!(CapacityExpr::parse_marker_payload(&payload), Some(clamped.clone()));
+        assert_eq!(CapacityExpr::parse_marker_payload("par(n0 x)"), None);
+        assert_eq!(CapacityExpr::parse_marker_payload("prod(par(a),"), None);
+
+        let params = |x: f32, y: f32, z: f32| -> ParamValues {
+            [("n0_nodes_x", x), ("n0_nodes_y", y), ("n0_nodes_z", z)].into_iter().map(|(k, v)| (k.into(), ParamValue::Float(v))).collect()
+        };
+        assert_eq!(lattice.eval_with(&[], &params(64.0, 32.0, 2.0)), Some(4096));
+        assert_eq!(lattice.eval_with(&[], &params(64.5, 1.0, 1.0)), Some(64), "half to even, as WGSL rounds");
+        assert_eq!(lattice.eval_with(&[], &params(-3.0, 1.0, 1.0)), Some(0));
+        assert_eq!(lattice.eval_with(&[], &params(f32::NAN, 1.0, 1.0)), None);
+        assert_eq!(lattice.eval_with(&[], &params(65536.0, 65536.0, 1.0)), None, "overflow");
+        assert_eq!(clamped.eval_with(&[("src_1", 100)], &params(64.0, 64.0, 64.0)), Some(100));
+        assert_eq!(lattice.eval(&[]), None, "no params, no lattice");
+
+        // A face grid: one more than the lattice per axis.
+        let padded = CapacityExpr::Product(
+            ["n0_nodes_x", "n0_nodes_y", "n0_nodes_z"].map(|f| CapacityExpr::Add(1, Box::new(CapacityExpr::Param(f.to_string())))).to_vec(),
+        );
+        assert!(padded.to_wgsl().starts_with("((1u + u32(max(round(params.n0_nodes_x), 0.0))) * "));
+        let payload = padded.to_marker_payload();
+        assert_eq!(payload, "prod(add(1,par(n0_nodes_x)),add(1,par(n0_nodes_y)),add(1,par(n0_nodes_z)))");
+        assert_eq!(CapacityExpr::parse_marker_payload(&payload), Some(padded.clone()));
+        assert_eq!(padded.eval_with(&[], &params(4.0, 3.0, 2.0)), Some(60));
+        assert_eq!(CapacityExpr::Add(1, Box::new(CapacityExpr::Slot(0))).eval(&[("src_0", u32::MAX)]), None, "overflow");
+    }
+
+
+
+
+
+
+
+
+
+    #[test]
+    fn default_is_boundary() {
+        assert_eq!(FusionKind::default(), FusionKind::Boundary);
+        assert!(!FusionKind::Boundary.is_fusable());
+        assert!(FusionKind::Pointwise.is_fusable());
+        assert!(FusionKind::MultiInputCoincident.is_fusable());
+    }
+
+    /// The macro slot propagates a converted atom's kind + body through the
+    /// `EffectNode` trait object (the surface the region-grower + codegen read).
+    #[test]
+    fn converted_atom_exposes_kind_and_body() {
+        let g = Gain::new();
+        let node: &dyn EffectNode = &g;
+        assert_eq!(node.fusion_kind(), FusionKind::Pointwise);
+        let body = node.wgsl_body().expect("converted gain exposes a fusable body");
+        assert!(body.contains("fn body"), "body fragment must define `fn body`");
+        assert!(body.contains("gain"), "gain body must reference the gain param");
+    }
+
+
+
+    /// `BufferIndex` is gather-shaped for the region-grower's
+    /// "never unions a gather-consumed wire" contract, same as `Gather` /
+    /// `GatherTexel` / `BufferGather`.
+    #[test]
+    fn buffer_index_is_gather() {
+        use super::InputAccess;
+        assert!(InputAccess::BufferIndex.is_gather());
+    }
+
+
+
+
+}

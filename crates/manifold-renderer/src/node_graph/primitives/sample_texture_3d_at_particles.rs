@@ -16,11 +16,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{standalone_pipeline, active_elements};
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: the `active_count` param (Int → i32) then
 /// the codegen-injected `dispatch_count`, padded to 16 bytes.
@@ -33,7 +33,7 @@ struct SampleUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SampleTexture3DAtParticles,
     type_id: "node.sample_volume_at_particles",
     purpose: "Per-particle trilinear sample of a vec3 Texture3D at each particle's position.xyz. Output: Array<[f32; 3]> of the volume's RGB per particle (overwrite, not add — seeds the per-particle force buffer). The 3D sibling of node.sample_image_at_particles; the generic volumetric field-read atom for any 3D particle pipeline. Decomposed out of the fused node.fluid_simulate_3d.",
@@ -71,7 +71,7 @@ impl Primitive for SampleTexture3DAtParticles {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

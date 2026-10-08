@@ -28,12 +28,12 @@ use manifold_gpu::{
     GpuTextureFormat, GpuTextureUsage,
 };
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use std::borrow::Cow;
-use super::standalone_pipeline::{standalone_pipeline, active_elements};
+use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`strength`
 /// f32, `active_count` Int → i32), then the derived `frame_count` (u32), then the
@@ -53,7 +53,7 @@ struct AntiClumpUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: AntiClumpParticles,
     type_id: "node.anti_clump_particles",
     purpose: "Modulator-weighted Brownian kick on each live particle's position.xy. With a `strength_modulator` texture wired, samples it at the particle's UV and applies `kick = (hash3(i, frame) − 0.5) * strength * capped(m)` where `capped = m / (1 + m)`. Without a modulator, applies plain `kick = (hash3) * strength` uniformly. Canonical FluidSim use wires density (kick concentrates where particles cluster); equally useful with audio amplitude maps, masks, depth slices, or any scalar texture. Sibling to node.spread_out (which kicks velocity, un-weighted) — separate atoms because the math, the state field, and the modulator weighting differ.",
@@ -103,7 +103,7 @@ crate::primitive! {
 // D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
 // region's `frame_count` field. Matches `run()`'s own computation below.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.anti_clump_particles",
         array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.frame_count as f32]),
@@ -114,7 +114,7 @@ impl Primitive for AntiClumpParticles {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

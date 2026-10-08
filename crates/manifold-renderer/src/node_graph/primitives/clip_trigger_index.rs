@@ -16,12 +16,12 @@
 
 use std::borrow::Cow;
 
-use crate::generators::clip_trigger::ClipTriggerCycle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::clip_trigger::ClipTriggerCycle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ClipTriggerIndex,
     type_id: "node.clip_trigger_index",
     purpose: "Emit `trigger_count % modulus` as a scalar via the idempotence-safe ClipTriggerCycle gate. The graph-level counterpart to a primitive's internal clip-trigger cycling (Plasma does this inline). Use as `mux_texture.selector` to swap between N upstream variants on each clip retrigger; pair with `mux_scalar` and a static-axis param to support both manual and trigger-driven modes from one outer-card toggle.",
@@ -83,7 +83,7 @@ impl Primitive for ClipTriggerIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
     /// BUG-104 — see `frequency_ratio`'s equivalent test for the full
     /// rationale; `clear_state()` releases the idempotence cache through

@@ -24,9 +24,9 @@ use manifold_gpu::{
     GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const MAX_QUADS: usize = 512;
 const FORMATS: &[&str] = &["Index", "Hex", "Coord", "Float3"];
@@ -101,7 +101,7 @@ fn push_digits_3(
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RenderValueOverlay,
     type_id: "node.value_overlay",
     purpose: "Lightweight bitmap-font numeric labels at multiple positions, composited onto a source texture. Embedded 5×7 glyph atlas (0-9, A-F, hex, coords). Format enum selects display: Index (decimal), Hex (0Xnn), Coord (xxx,yyy from X/Y channels), Float3 (value×1000). For diagnostic HUDs, data-viz annotation layers, debug overlays.",

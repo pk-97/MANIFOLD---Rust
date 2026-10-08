@@ -5,10 +5,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -19,7 +19,7 @@ struct FractUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: FractTexture,
     type_id: "node.wrap",
     purpose: "Per-pixel fract(input.rgb * scale). Returns x - floor(x). Multiplying before fract is the classic 'tile a smooth field into N repeating stripes' trick — e.g. fract(uv.x * 10) → 10 vertical stripes from 0 to 1.",

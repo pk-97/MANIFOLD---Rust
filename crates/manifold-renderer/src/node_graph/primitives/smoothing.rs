@@ -15,12 +15,10 @@
 //! [`StateStore`]: crate::node_graph::StateStore
 
 use std::borrow::Cow;
-use crate::node_graph::effect_node::{
-    EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
-};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use crate::node_graph::state_store::NodeState;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::state_store::NodeState;
 
 pub const SMOOTHING_TYPE_ID: &str = "node.smoothing";
 
@@ -107,14 +105,14 @@ struct SmoothingState {
 impl NodeState for SmoothingState {}
 
 impl EffectNode for Smoothing {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
-    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
-        Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
+    fn boundary_reason(&self) -> Option<manifold_node_engine::freeze::classify::BoundaryReason> {
+        Some(manifold_node_engine::freeze::classify::BoundaryReason::NonGpu)
     }
     fn inputs(&self) -> &[NodeInput] {
         &SMOOTHING_INPUTS
@@ -206,12 +204,12 @@ impl EffectNode for Smoothing {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: SMOOTHING_TYPE_ID,
         create: || Box::new(Smoothing::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo {
+        picker: Some(manifold_node_engine::palette::PickerInfo {
             label: "Smoothing",
-            category: crate::node_graph::palette::PaletteCategory::Driver,
+            category: manifold_node_engine::palette::PaletteCategory::Driver,
         }),
     }
 }
@@ -222,13 +220,13 @@ mod tests {
     use manifold_core::{Beats, Seconds};
     use std::sync::{Arc, Mutex};
 
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::effect_node::FrameTime;
-    use crate::node_graph::execution_plan::compile;
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::primitives::Value;
-    use crate::node_graph::state_store::StateStore;
-    use crate::node_graph::Executor;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::effect_node::FrameTime;
+    use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::primitives::value::Value;
+    use manifold_node_engine::state_store::StateStore;
+    use manifold_node_engine::exec::execution::Executor;
 
     fn frame_time(dt_secs: f32) -> FrameTime {
         FrameTime {
@@ -244,7 +242,7 @@ mod tests {
         seen: Arc<Mutex<Option<f32>>>,
     }
     impl EffectNode for Capture {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -279,7 +277,7 @@ mod tests {
         // CPU-only primitive but execute_frame_with_state still wants a
         // real GpuEncoder. Construct one against the shared test device;
         // Smoothing won't dispatch anything through it.
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let seen = Arc::new(Mutex::new(None));
         let mut g = Graph::new();
         let val = g.add_node(Box::new(Value::new()));
@@ -350,7 +348,7 @@ mod tests {
     /// dt = tau; expect ~0.6321.
     #[test]
     fn single_step_at_tau_reaches_about_63_percent() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let seen = Arc::new(Mutex::new(None));
         let mut g = Graph::new();
         let val = g.add_node(Box::new(Value::new()));

@@ -17,7 +17,7 @@
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use crate::gpu_encoder::GpuEncoder;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_gpu::denoiser::GpuDenoiser;
     use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 

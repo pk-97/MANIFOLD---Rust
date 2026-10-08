@@ -1,6 +1,6 @@
 //! Optional geometry-based subsurface pass; see SUBSURFACE_MATERIAL_DESIGN.md.
 use super::*;
-use crate::node_graph::material::SubsurfaceMode;
+use manifold_node_engine::scene::material::SubsurfaceMode;
 use manifold_gpu::raytrace::{SubsurfaceMaterial, SubsurfaceParams};
 
 #[derive(Default)]
@@ -58,7 +58,7 @@ impl SubsurfacePass {
         } else {
             0
         } + if grow { table_bytes } else { 0 };
-        crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+        manifold_node_engine::load::expand::admit_candidate_bytes(
             device.modifier_memory_snapshot(),
             additional_bytes,
         )

@@ -8,10 +8,10 @@
 use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: PARAMS order — `color` (Color param → 4
 /// consecutive f32 fields, reassembled as `vec4<f32>` at the body call
@@ -34,7 +34,7 @@ struct GaugeUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: DrawGauge,
     type_id: "node.draw_gauge",
     purpose: "Draw an outlined readout bar below every detection in a Channels[X, Y, WIDTH, HEIGHT] array, additively over the source. The bar fills in proportion to the detection's area (fill_scale maps area to the 0..1 fill), so bigger objects read as fuller bars. Pixel params are 1080p-referenced. The size-readout layer of a tracking HUD.",

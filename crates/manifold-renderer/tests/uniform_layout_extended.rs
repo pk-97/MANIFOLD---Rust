@@ -1,7 +1,9 @@
 //! BUG-m3af: extended ABI proof for every primitive-owned uniform mirror.
 //! Complements the existing scalar buffer proof; no GPU is needed.
+use manifold_renderer as _;
 mod support {
     pub mod custom_abi_cases;
+    pub mod source_roots;
     pub mod texture_abi_cases;
     pub mod uniform_abi;
 }
@@ -32,9 +34,10 @@ mod blob_v2 {
         path::Path,
     };
 
-    use manifold_renderer::node_graph::PrimitiveRegistry;
-    use manifold_renderer::node_graph::freeze::codegen::standalone_for_node;
-    use support::uniform_abi::{assert_wgsl_layout, shader_declaration};
+    use manifold_node_engine::persistence::PrimitiveRegistry;
+    use manifold_node_engine::freeze::codegen::standalone_for_node;
+    use support::uniform_abi::{assert_wgsl_layout, resolve_source_path};
+    use support::uniform_abi::shader_declaration;
 
     #[test]
     fn blob_v2_uniform_mirrors_match_generated_or_custom_layout() {
@@ -49,7 +52,7 @@ mod blob_v2 {
                 "mask_extrema.rs" => "node.mask_extrema",
                 _ => unreachable!("all Blob V2 mirror cases have a type id"),
             };
-            let path = root.join(source);
+            let path = resolve_source_path(source).expect("Blob V2 ABI source");
             let result = if source == "mask_extrema.rs" {
                 std::fs::read_to_string(root.join("shaders/mask_extrema.wgsl"))
                     .map_err(|error| error.to_string())
@@ -124,17 +127,15 @@ mod blob_v2 {
 
 mod texture {
     use super::support;
-    use std::path::Path;
 
-    use manifold_renderer::node_graph::PrimitiveRegistry;
-    use manifold_renderer::node_graph::freeze::codegen::standalone_for_node;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
+    use manifold_node_engine::freeze::codegen::standalone_for_node;
     use support::texture_abi_cases::CASES;
-    use support::uniform_abi::assert_wgsl_layout;
+    use support::uniform_abi::{assert_wgsl_layout, resolve_source_path};
 
     #[test]
     fn standalone_texture_and_resolve_uniforms_match_hand_layouts() {
         let registry = PrimitiveRegistry::with_builtin();
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
         let mut failures = Vec::new();
         for case in CASES {
             let Some(node) = registry.construct(case.type_id) else {
@@ -151,7 +152,7 @@ mod texture {
             for (token, _) in node.wgsl_specialization() {
                 wgsl = wgsl.replace(token, "1u");
             }
-            let path = root.join(case.source);
+            let path = resolve_source_path(case.source).expect("texture ABI source");
             if let Err(error) = assert_wgsl_layout(
                 &path,
                 case.rust_struct,
@@ -172,7 +173,12 @@ mod texture {
 mod custom {
     use super::support;
     use std::{collections::BTreeSet, path::Path};
-    use support::{custom_abi_cases, texture_abi_cases, uniform_abi::*};
+    use support::{
+        custom_abi_cases,
+        source_roots::verify_wgsl_roots,
+        texture_abi_cases,
+        uniform_abi::*,
+    };
 
     const INLINE_CASES: &[(&str, &str, &str, &str)] = &[
         (
@@ -194,22 +200,33 @@ mod custom {
             "U",
         ),
     ];
+
+    fn source_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("ABI source root") {
+            let path = entry.expect("ABI source entry").path();
+            if path.is_dir() {
+                source_files(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
+        }
+    }
     #[test]
     fn custom_gpu_uniforms_match_their_actual_shader_declarations() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
         let mut failures = Vec::new();
         for case in custom_abi_cases::CASES {
             let result = (|| {
-                let source =
-                    std::fs::read_to_string(root.join(case.source)).map_err(|e| e.to_string())?;
+                let source_path = resolve_source_path(case.source)?;
+                let source = std::fs::read_to_string(&source_path).map_err(|e| e.to_string())?;
                 if !source.contains(case.shader) {
                     return Err("mapped shader no longer appears in host source".into());
                 }
-                let shader =
-                    std::fs::read_to_string(root.join(case.shader)).map_err(|e| e.to_string())?;
+                let shader_path = resolve_shader_path(&source_path, case.shader)?;
+                let shader = std::fs::read_to_string(&shader_path).map_err(|e| e.to_string())?;
                 let declaration = shader_declaration(&shader, case.shader_struct)?;
                 assert_wgsl_layout(
-                    &root.join(case.source),
+                    &source_path,
                     case.rust_struct,
                     &declaration,
                     case.shader_struct,
@@ -244,7 +261,7 @@ mod custom {
 
     #[test]
     fn cut_map_primitives_use_the_reflected_shared_custom_abi() {
-        let registry = manifold_renderer::node_graph::PrimitiveRegistry::with_builtin();
+        let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
         for type_id in custom_abi_cases::CUT_MAP_TYPE_IDS {
             assert!(
                 registry.construct(type_id).is_some(),
@@ -255,17 +272,18 @@ mod custom {
             .iter()
             .find(|case| case.rust_struct == "CutMapUniforms")
             .expect("shared cut-map custom ABI case");
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
-        let source = std::fs::read_to_string(root.join(case.source)).expect("cut-map source");
+        let source_path = resolve_source_path(case.source).expect("cut-map source");
+        let source = std::fs::read_to_string(&source_path).expect("cut-map source");
         assert!(
             source.contains(case.shader),
             "cut-map source must include its shader"
         );
-        let shader = std::fs::read_to_string(root.join(case.shader)).expect("cut-map shader");
+        let shader_path = resolve_shader_path(&source_path, case.shader).expect("cut-map shader");
+        let shader = std::fs::read_to_string(&shader_path).expect("cut-map shader");
         let declaration =
             shader_declaration(&shader, case.shader_struct).expect("Params declaration");
         assert_wgsl_layout(
-            &root.join(case.source),
+            &source_path,
             case.rust_struct,
             &declaration,
             case.shader_struct,
@@ -276,32 +294,69 @@ mod custom {
 
     #[test]
     fn every_production_primitive_mirror_has_a_proof() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
+        verify_wgsl_roots().expect("WGSL source-root inventory");
         let mut expected: BTreeSet<(String, String)> = texture_abi_cases::CASES
             .iter()
-            .map(|c| (c.source.into(), c.rust_struct.into()))
+            .map(|c| {
+                (
+                    resolve_source_path(c.source)
+                        .expect("texture ABI source")
+                        .display()
+                        .to_string(),
+                    c.rust_struct.into(),
+                )
+            })
             .chain(
                 custom_abi_cases::CASES
                     .iter()
-                    // Shared helpers outside primitives are checked by the custom
-                    // ABI proof above, but are outside this directory census.
-                    .filter(|c| !c.source.starts_with("../"))
-                    .map(|c| (c.source.into(), c.rust_struct.into())),
+                    .map(|c| {
+                        (
+                            resolve_source_path(c.source)
+                                .expect("custom ABI source")
+                                .display()
+                                .to_string(),
+                            c.rust_struct.into(),
+                        )
+                    }),
             )
             .chain(
                 INLINE_CASES
                     .iter()
-                    .map(|(f, h, _, _)| ((*f).into(), (*h).into())),
+                    .map(|(f, h, _, _)| {
+                        (
+                            resolve_source_path(f)
+                                .expect("inline ABI source")
+                                .display()
+                                .to_string(),
+                            (*h).into(),
+                        )
+                    }),
             )
             .chain(
                 super::BLOB_V2_UNIFORM_MIRRORS
                     .iter()
-                    .map(|(f, h)| ((*f).into(), (*h).into())),
+                    .map(|(f, h)| {
+                        (
+                            resolve_source_path(f)
+                                .expect("Blob V2 ABI source")
+                                .display()
+                                .to_string(),
+                            (*h).into(),
+                        )
+                    }),
             )
             .chain(
                 super::BLOB_V2_WIRE_MIRRORS
                     .iter()
-                    .map(|(f, h)| ((*f).into(), (*h).into())),
+                    .map(|(f, h)| {
+                        (
+                            resolve_source_path(f)
+                                .expect("Blob V2 ABI source")
+                                .display()
+                                .to_string(),
+                            (*h).into(),
+                        )
+                    }),
             )
             .collect();
         // Not uniforms: two vertex payloads, whose vertex descriptor owns the
@@ -309,33 +364,81 @@ mod custom {
         // (proven in its module). The fixture files are compiled only under
         // cfg(test).
         let exclusions: BTreeSet<(String, String)> = [
-            ("render_lines.rs".into(), "EdgeInstance".into()),
-            ("render_value_overlay.rs".into(), "GlyphQuad".into()),
             (
-                "whitewater_obstacle_source.rs".into(),
+                resolve_source_path("render_lines.rs")
+                    .expect("render_lines source")
+                    .display()
+                    .to_string(),
+                "EdgeInstance".into(),
+            ),
+            (
+                resolve_source_path("render_value_overlay.rs")
+                    .expect("render_value_overlay source")
+                    .display()
+                    .to_string(),
+                "GlyphQuad".into(),
+            ),
+            (
+                resolve_source_path(
+                    "../../../../manifold-node-engine/src/water/primitives/whitewater_obstacle_source.rs",
+                )
+                .expect("whitewater obstacle source")
+                .display()
+                .to_string(),
                 "WhitewaterSource".into(),
             ),
             (
-                "test_camera_pointwise_fixture.rs".into(),
+                resolve_source_path("test_camera_pointwise_fixture.rs")
+                    .expect("camera fixture source")
+                    .display()
+                    .to_string(),
                 "TestCameraPointwiseUniforms".into(),
             ),
             (
-                "test_multi_output_atomic_fixture.rs".into(),
+                resolve_source_path("test_multi_output_atomic_fixture.rs")
+                    .expect("atomic fixture source")
+                    .display()
+                    .to_string(),
                 "Uniforms".into(),
+            ),
+            (
+                // FusedGainU is a local proof fixture for the freeze renderer,
+                // not a production uniform upload or shader ABI mirror.
+                resolve_source_path("proof_support.rs")
+                    .expect("proof support source")
+                    .display()
+                    .to_string(),
+                "FusedGainU".into(),
+            ),
+            (
+                // LiquidBody and LiquidShape are storage records owned by the
+                // liquid atlas upload contract, not uniform declarations.
+                resolve_source_path("bodies.rs")
+                    .expect("liquid bodies source")
+                    .display()
+                    .to_string(),
+                "LiquidBody".into(),
+            ),
+            (
+                resolve_source_path("bodies.rs")
+                    .expect("liquid bodies source")
+                    .display()
+                    .to_string(),
+                "LiquidShape".into(),
             ),
         ]
         .into();
         let mut seen_exclusions = BTreeSet::new();
         let mut missing = Vec::new();
         let mut scalar_count = 0;
-        for file in std::fs::read_dir(&root).unwrap() {
-            let file = file.unwrap().path();
-            if file.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            let filename = file.file_name().unwrap().to_str().unwrap();
+        let mut files = Vec::new();
+        for root in abi_source_roots().expect("ABI case source roots") {
+            source_files(&root, &mut files);
+        }
+        for file in files {
+            let file_key = file.display().to_string();
             for (name, dispatch_count) in host_structs(&file).unwrap() {
-                let key = (filename.into(), name);
+                let key = (file_key.clone(), name);
                 if exclusions.contains(&key) {
                     seen_exclusions.insert(key);
                 } else if expected.remove(&key) {
@@ -364,14 +467,12 @@ mod custom {
 
 #[cfg(test)]
 mod dispatch_regression {
-    use manifold_renderer::node_graph::freeze::codegen::{
-        standalone_for_node, standalone_for_spec,
-    };
+    use manifold_node_engine::freeze::codegen::{standalone_for_node, standalone_for_spec};
     use manifold_renderer::node_graph::primitives::{
         BlobOverlayRender, DrawConnections, DrawDots, DrawGauge, DrawMarkers, DrawTicks,
     };
 
-    fn same<P: manifold_renderer::node_graph::primitive::Primitive + Default + 'static>() {
+    fn same<P: manifold_node_engine::primitive::Primitive + Default + 'static>() {
         let typed = standalone_for_spec::<P>().expect("typed standalone codegen");
         let dynamic = standalone_for_node(&P::default()).expect("dynamic standalone codegen");
         assert_eq!(dynamic, typed);

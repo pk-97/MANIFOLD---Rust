@@ -29,12 +29,12 @@ use manifold_gpu::{
 };
 use manifold_native::depth_estimator::DepthEstimator;
 
-use crate::background_worker::BackgroundWorker;
-use crate::gpu_encoder::GpuEncoder;
+use manifold_node_engine::runtime::background_worker::BackgroundWorker;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 struct FlowRequest {
     /// The CURRENT frame's RGBA8 pixels at analysis resolution.
@@ -114,7 +114,7 @@ struct FlowState {
     clear_texture_pending: bool,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: OpticalFlowEstimate,
     type_id: "node.optical_flow",
     purpose: "Dense optical flow (Farneback + global motion compensation) via the MiDaS native plugin. Wraps FfiDepthEstimator::compute_flow on a background worker that holds the previous frame internally and pairs it with the current. Input: any Texture2D. Outputs: (a) Rgba16Float flow map with R=flow_x, G=confidence, B=flow_y, A=valid_mask (R/B layout matches node.flow_field_noise and node.uv_displace_by_flow); (b) scalar cut_score — global-motion-compensated frame-difference, crosses ~0.28 on hard scene cuts, near zero on continuous motion.",

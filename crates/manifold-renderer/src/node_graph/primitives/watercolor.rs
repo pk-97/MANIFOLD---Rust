@@ -28,11 +28,11 @@ use std::sync::OnceLock;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc, GpuTextureFormat};
 
-use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use crate::node_graph::primitive::PrimitiveDescription;
-use crate::render_target::RenderTarget;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::primitive::PrimitiveDescription;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const WATERCOLOR_WGSL: &str = include_str!("../../effects/shaders/fx_watercolor_compute.wgsl");
 
@@ -330,14 +330,14 @@ impl Watercolor {
 }
 
 impl EffectNode for Watercolor {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Warp
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Warp
     }
     fn type_id(&self) -> &EffectNodeType {
         cached_type_id()
     }
-    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
-        Some(crate::node_graph::freeze::classify::BoundaryReason::ConversionDebt)
+    fn boundary_reason(&self) -> Option<manifold_node_engine::freeze::classify::BoundaryReason> {
+        Some(manifold_node_engine::freeze::classify::BoundaryReason::ConversionDebt)
     }
     fn inputs(&self) -> &[NodeInput] {
         &WATERCOLOR_INPUTS
@@ -524,7 +524,7 @@ impl EffectNode for Watercolor {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: WATERCOLOR_TYPE_ID,
         create: || Box::new(Watercolor::new()),
         picker: None,
@@ -540,7 +540,7 @@ fn read_f32(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> f32 {
 
 #[allow(clippy::too_many_arguments)]
 fn dispatch_watercolor(
-    gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
+    gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
     pipeline: &GpuComputePipeline,
     source_a: &manifold_gpu::GpuTexture,
     source_b: &manifold_gpu::GpuTexture,

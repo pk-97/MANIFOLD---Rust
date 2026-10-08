@@ -12,12 +12,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::mesh_source::MeshSource;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::scene::mesh_source::MeshSource;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Number of triangle vertices in a cube mesh (6 faces × 2 triangles × 3 vertices).
 /// Use this when sizing buffers for downstream consumers.
@@ -36,7 +36,7 @@ struct CubeUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GenerateCubeMesh,
     type_id: "node.cube_mesh",
     purpose: "Emit a unit cube as 36 triangle-list MeshVertex entries (6 faces × 2 triangles × 3 vertices) with per-face outward normals. The cube-shape building block for NestedCubes / DigitalPlants and any instanced-cube graph: pair with node.arrange_copies + node.render_copies to draw a field of cubes.",
@@ -126,3 +126,6 @@ impl Primitive for GenerateCubeMesh {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

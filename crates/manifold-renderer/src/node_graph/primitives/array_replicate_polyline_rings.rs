@@ -21,10 +21,10 @@
 
 use std::borrow::Cow;
 
-use crate::mesh::{CurvePoint, EdgePair};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::{CurvePoint, EdgePair};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Largest legal ring count. Sets the output capacity multiplier at
 /// plan time; 32 matches the legacy `concentric_outlines` cap and
@@ -37,7 +37,7 @@ pub const REPLICATE_MAX_RINGS: u32 = 32;
 /// ConcentricTunnel with margin.
 const REPLICATE_INLINE_SCRATCH: usize = 128;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ArrayReplicatePolylineRings,
     type_id: "node.repeat_outline",
     purpose: "Stack K transformed copies of a polyline (outline + edge topology) into one concatenated polyline. Per-ring uniform scale on the outline; per-ring index shift on the edges (sentinel-preserving). The K-fold replication atom for line-based generators: pair a single polygon / Lissajous / Rose curve outline + edges with a `scales` Array<f32> (from generate_range + array_math) to produce concentric, parallax, or stacked variations of the source polyline. The ring count is `min(scales.capacity, max_rings)`; output capacity is `input.capacity * max_rings` so the chain build pre-allocates the full stack at plan time.",
@@ -79,7 +79,7 @@ impl Primitive for ArrayReplicatePolylineRings {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         let max_rings = match params.get("max_rings") {
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn output_capacity_scales_with_max_rings() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = ArrayReplicatePolylineRings::new();
 
         let default_params = ParamValues::default();

@@ -20,10 +20,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: no params, so just the codegen-injected
 /// `dispatch_count` (= vertex count; one thread per vertex) padded to a 16-byte
@@ -38,7 +38,7 @@ struct FacetUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: FacetNormals,
     type_id: "node.facet_normals",
     purpose: "Recompute exact per-triangle flat normals for an Array<MeshVertex> flat triangle list. One thread PER VERTEX: thread idx reads its triangle's 3 verts (base = 3*(idx/3)) via a buffer gather, computes n = normalize(cross(v1.pos - v0.pos, v2.pos - v0.pos)), and writes vertex idx with that normal. Positions and uv pass through unchanged. A trailing partial triangle (base+2 >= vertex_count) passes through with its existing normal unchanged. The v1 normal-policy reset (D4): wire downstream of a heavy push_along_normals or morph_mesh to trade their approximate/unchanged normals for an exact faceted look.",
@@ -68,7 +68,7 @@ impl Primitive for FacetNormals {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -82,10 +82,8 @@ impl Primitive for FacetNormals {
     /// position and uv (`shaders/facet_normals_body.wgsl`) — so topology
     /// tracks input `in` topology and positions track input `in`
     /// positions.
-    fn mesh_output_rule(&self, port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
-        use crate::node_graph::mesh_change::{
-            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
-        };
+    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule};
         if port == "out" {
             return MeshOutputRule {
                 topology: MeshRevisionRule::Dependencies(&[MeshDependency {
@@ -178,14 +176,14 @@ mod gpu_tests {
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<FacetNormals>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<FacetNormals>()
             .expect("facet_normals buffer codegen")
     }
 
     fn dispatch_facet(device: &manifold_gpu::GpuDevice, wgsl: &str, src: &[MeshVertex]) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "facet-normals-test",
         );
         let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
@@ -218,7 +216,7 @@ mod gpu_tests {
 
     #[test]
     fn analytic_normal_on_a_right_triangle() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         // Same right-triangle fixture as spawn_from_mesh.rs's gpu_tests:
         // v0=(0,0,0), v1=(4,0,0), v2=(0,3,0) — analytic normal (0,0,1).
@@ -243,7 +241,7 @@ mod gpu_tests {
 
     #[test]
     fn trailing_partial_triangle_passes_through_unchanged() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         // 4 vertices: verts 0-2 form a full triangle, vert 3 is a trailing
         // partial group of size 1 — must pass through with its ORIGINAL
         // normal (arbitrary, non-recomputed value), not the triangle's.
@@ -269,7 +267,7 @@ mod gpu_tests {
 
     #[test]
     fn count_is_preserved() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let src = vec![
             mk_vertex([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0]),
             mk_vertex([1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 0.0]),

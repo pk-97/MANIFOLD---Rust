@@ -10,10 +10,17 @@
 //! Scope: the standalone buffer path (the `dispatch_count` family). The texture
 //! path's hand structs (write-gate/table family) are a follow-up.
 
+use manifold_renderer as _;
 use std::path::{Path, PathBuf};
 
-use manifold_renderer::node_graph::freeze::codegen::standalone_for_node;
-use manifold_renderer::node_graph::{EffectNode, ParamType, PortType, PrimitiveRegistry};
+use manifold_node_engine::freeze::codegen::standalone_for_node;
+use manifold_node_engine::{exec::effect_node::EffectNode, parameters::ParamType, ports::PortType, persistence::PrimitiveRegistry};
+
+mod support {
+    pub mod source_roots;
+}
+
+use support::source_roots::{primitive_source_roots, verify_wgsl_roots};
 
 /// One expected struct field: name as the hand struct spells it (raw param
 /// name — the WGSL-side reserved-word prefixing is a text concern, not a byte
@@ -306,10 +313,6 @@ fn reflect_shader(wgsl: &str) -> Result<ShaderLayout, String> {
     })
 }
 
-fn primitives_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives")
-}
-
 fn primitive_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("primitives dir") {
         let path = entry.expect("dir entry").path();
@@ -325,13 +328,16 @@ const CFG_TEST_FIXTURES: &[&str] = &["test_multi_output_atomic_fixture.rs"];
 
 #[test]
 fn hand_uniform_structs_match_codegen_layout() {
+    verify_wgsl_roots().expect("WGSL source-root inventory");
     let registry = PrimitiveRegistry::with_builtin();
     let mut failures: Vec<String> = Vec::new();
     let mut matched_type_ids: Vec<String> = Vec::new();
     let mut struct_count = 0usize;
 
     let mut files = Vec::new();
-    primitive_files(&primitives_dir(), &mut files);
+    for root in primitive_source_roots().expect("ABI primitive source roots") {
+        primitive_files(&root, &mut files);
+    }
     files.sort();
 
     for path in &files {
@@ -499,8 +505,11 @@ fn generated_fields(registry: &PrimitiveRegistry, type_id: &str, raw: &[Field]) 
 /// relax_surface_mesh's (also smooth_surface_mesh's) and surface_mesh_normals'.
 #[test]
 fn surface_mesh_pass_uniforms_match_every_kernel_it_dispatches() {
-    let text = std::fs::read_to_string(primitives_dir().join("relax_surface_mesh.rs"))
-        .expect("relax_surface_mesh.rs");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../manifold-node-engine/src/water/primitives/relax_surface_mesh.rs");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("{}: {error}", path.display())
+    });
     let (_, structs) = parse_source(&text);
     let hand = structs
         .iter()

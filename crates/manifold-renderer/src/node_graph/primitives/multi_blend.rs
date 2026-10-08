@@ -16,9 +16,9 @@ use std::borrow::Cow;
 use ahash::AHashMap;
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 
 pub const MULTI_BLEND_TYPE_ID: &str = "node.multi_blend";
 
@@ -165,14 +165,14 @@ struct MultiBlendUniforms {
 }
 
 impl EffectNode for MultiBlend {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::CombineNearest
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::CombineNearest
     }
     fn type_id(&self) -> &EffectNodeType {
         cached_type_id()
     }
-    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
-        Some(crate::node_graph::freeze::classify::BoundaryReason::Blocked)
+    fn boundary_reason(&self) -> Option<manifold_node_engine::freeze::classify::BoundaryReason> {
+        Some(manifold_node_engine::freeze::classify::BoundaryReason::Blocked)
     }
 
     /// PARAM_RANGE_CONTRACT_DESIGN.md D6/section 2 mechanical grant: `num_inputs`
@@ -287,12 +287,12 @@ impl EffectNode for MultiBlend {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: MULTI_BLEND_TYPE_ID,
         create: || Box::new(MultiBlend::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo {
+        picker: Some(manifold_node_engine::palette::PickerInfo {
             label: "Multi Blend",
-            category: crate::node_graph::palette::PaletteCategory::Atom,
+            category: manifold_node_engine::palette::PaletteCategory::Atom,
         }),
     }
 }
@@ -346,7 +346,7 @@ mod gpu_tests {
 
     #[test]
     fn generated_shaders_compile_for_every_input_count() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         for k in 1..=MAX_INPUTS {
             let src = MultiBlend::shader_for(k);
             let _ = device.create_compute_pipeline(&src, "cs_main", "node.multi_blend test");

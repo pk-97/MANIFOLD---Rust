@@ -13,18 +13,14 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effects::PresetInstance;
 use manifold_core::id::EffectId;
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder;
-use manifold_renderer::node_graph::fluid::{FluidDomainSnapshot, FluidDomainState};
-use manifold_renderer::node_graph::physics::PhysicsStepScope;
-use manifold_renderer::node_graph::ports::{
-    NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
-};
-use manifold_renderer::node_graph::{
-    EffectNode, EffectNodeContext, EffectNodeType, ParamDef, PrimitiveRegistry,
-};
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::{ChainBuildInputs, PresetRuntime};
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::water::fluid::{FluidDomainSnapshot, FluidDomainState};
+use manifold_node_engine::water::physics::PhysicsStepScope;
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef, persistence::PrimitiveRegistry};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::{ChainBuildInputs, PresetRuntime};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 use crate::harness;
 
@@ -48,8 +44,8 @@ impl EffectNode for ScalarLivenessObserver {
         &self.0
     }
 
-    fn depth_rule(&self) -> manifold_renderer::node_graph::depth_rule::DepthRule {
-        manifold_renderer::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
 
     fn inputs(&self) -> &[NodeInput] {

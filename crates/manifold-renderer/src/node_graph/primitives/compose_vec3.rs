@@ -5,11 +5,11 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ComposeVec3,
     type_id: "node.compose_vec3",
     purpose: "Construct a ScalarVec3 from three independently wired scalar components. Each component falls back to its same-named float parameter when unwired.",
@@ -72,12 +72,12 @@ impl Primitive for ComposeVec3 {
 mod tests {
     use super::*;
 
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::{FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::ports::{PortType, ScalarType};
-    use crate::node_graph::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::{PortType, ScalarType};
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {

@@ -1,11 +1,11 @@
 //! P3 cross-atom proofs. CPU tests exercise the real preset partitioner;
 //! device tests compare generated fused and standalone presentation paths.
 
-use super::{InterpolateParticleFrames, ParticlesToCopies, PushOutOfSolid};
-use crate::node_graph::effect_node::NodeInstanceId;
-use crate::node_graph::freeze::classify::CapacityExpr;
-use crate::node_graph::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
-use crate::node_graph::primitive::PrimitiveSpec;
+use {super::InterpolateParticleFrames, super::ParticlesToCopies, manifold_node_engine::water::primitives::push_out_of_solid::PushOutOfSolid};
+use manifold_node_engine::exec::effect_node::NodeInstanceId;
+use manifold_node_engine::freeze::classify::CapacityExpr;
+use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
+use manifold_node_engine::primitive::PrimitiveSpec;
 
 fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
     RegionNode {
@@ -70,7 +70,7 @@ fn fluid_particle_blend_fused_codegen_validates() {
 
 /// Pass-2 CPU reference fixtures, not proof of the current GPU publisher.
 pub(super) mod publication_contract {
-    use crate::node_graph::fluid_particles::FluidParticle;
+    use manifold_node_engine::water::fluid_particles::FluidParticle;
 
     struct ReferenceIds {
         next: u64,
@@ -189,7 +189,7 @@ pub(super) mod publication_contract {
 
 #[test]
 fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
-    use crate::node_graph::{PrimitiveRegistry, fusion_report};
+    use manifold_node_engine::{persistence::PrimitiveRegistry, freeze::fusion_report};
     use manifold_core::effect_graph_def::EffectGraphDef;
     let registry = PrimitiveRegistry::with_builtin();
     for text in [
@@ -284,11 +284,11 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
 
 #[cfg(feature = "gpu-proofs")]
 mod gpu_tests {
-    use super::super::liquid_surface_tests::{Harness, params, read};
+    use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
     use super::*;
-    use crate::mesh::InstanceTransform;
-    use crate::node_graph::fluid_particles::FluidParticle;
-    use crate::node_graph::freeze::codegen::ENTRY;
+    use manifold_node_engine::mesh::InstanceTransform;
+    use manifold_node_engine::water::fluid_particles::FluidParticle;
+    use manifold_node_engine::freeze::codegen::ENTRY;
     use manifold_gpu::GpuBinding;
 
     #[test]

@@ -35,9 +35,9 @@ use half::f16;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::decode_cache::cached_load_hdri;
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -103,7 +103,7 @@ pub(crate) fn load_hdri(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
     Ok((w, h, out))
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: HdriSource,
     type_id: "node.hdri_source",
     purpose: "Read a linear-HDR equirectangular environment map (.exr) off disk and emit it as a Texture2D wire, so node.render_scene's envmap input can be lit by a real-world HDRI capture instead of the procedural node.bake_environment studio. No color_space param — EXR is always linear light, full stop. width/height set the output resolution (default 2048x1024): the decoded source is stretch-blit into that slot every frame, so a lower output resolution trades reflection sharpness for prefilter-convolution cost on node.render_scene's envmap-sampling passes.",
@@ -443,7 +443,7 @@ impl HdriSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
     fn params_at(width: f32, height: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
@@ -640,7 +640,7 @@ mod gpu_tests {
 
     #[test]
     fn prewarm_pipeline_populates_the_shared_compute_cache() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         HdriSource::prewarm_pipeline(&device);
         let after = device.compute_pipeline_cache_len();
         assert!(
@@ -660,7 +660,7 @@ mod gpu_tests {
     /// GPU round-trip unchanged (linear, no gamma anywhere on this path).
     #[test]
     fn decoded_exr_uploads_and_blits_without_gamma_or_clamping() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
 
         let dir = std::env::temp_dir().join(format!(
             "manifold-hdri-gputest-{}-{}",
@@ -762,12 +762,12 @@ mod gpu_tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gate_gpu_tests {
     use super::*;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::{FrameTime, MetalBackend};
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
@@ -880,7 +880,7 @@ mod gate_gpu_tests {
     #[test]
     fn settled_frame_matches_previous_and_declares_unchanged() {
         let path = write_fixture_exr("static", 32, 16, [1.5, 0.5, 2.0]);
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (32u32, 16u32);
         let format = GpuTextureFormat::Rgba16Float;
         let mut backend = MetalBackend::new(device.arc(), w, h, format);
@@ -909,7 +909,7 @@ mod gate_gpu_tests {
     fn path_change_is_not_skipped_and_matches_fresh_load() {
         let path_1 = write_fixture_exr("path-a", 32, 16, [1.0, 1.0, 1.0]);
         let path_2 = write_fixture_exr("path-b", 32, 16, [3.0, 0.25, 0.75]);
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (32u32, 16u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -945,3 +945,6 @@ mod gate_gpu_tests {
         let _ = std::fs::remove_dir_all(path_2.parent().unwrap());
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

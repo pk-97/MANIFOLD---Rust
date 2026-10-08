@@ -15,11 +15,11 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{standalone_pipeline, active_elements};
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order
 /// (`active_count` Int → i32, `speed` f32), then the derived `dt_scaled`
@@ -34,7 +34,7 @@ struct EulerUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: EulerStepParticles,
     type_id: "node.move_particles",
     purpose: "Apply one Euler integration step to each live particle's position.xy by a per-particle 2D force. `position.xy += forces[i] * speed * (delta * 60)`. Frame-rate-normalised via the `* 60` scale so the same `speed` value gives consistent motion across frame rates (matches the legacy fluid_simulate's `dt_scale = dt * 60`). Dead particles (life <= 0) pass through unchanged. No boundary handling — pair with `node.wrap_around` for the toroidal policy.",
@@ -84,10 +84,10 @@ crate::primitive! {
 // instead of the deleted install-time `system.generator_input` control wire.
 // Matches `run()`'s own `dt_scaled` computation below exactly.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.move_particles",
         array_ports: &[],
-        recompute: |ctx| Some(vec![crate::node_graph::physics::particle_frame_duration(ctx.frame.delta)]),
+        recompute: |ctx| Some(vec![manifold_node_engine::water::physics::particle_frame_duration(ctx.frame.delta)]),
     }
 }
 
@@ -95,7 +95,7 @@ impl Primitive for EulerStepParticles {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {
@@ -121,7 +121,7 @@ impl Primitive for EulerStepParticles {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let active_count = ctx.scalar_or_param("active_count", 100_000.0).round().max(0.0) as u32;
         let speed = ctx.scalar_or_param("speed", 1.0);
-        let dt_scaled = crate::node_graph::physics::particle_frame_duration(ctx.time.delta);
+        let dt_scaled = manifold_node_engine::water::physics::particle_frame_duration(ctx.time.delta);
 
         let Some(particles) = ctx.inputs.array("in") else {
             return;

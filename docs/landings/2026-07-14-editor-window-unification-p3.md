@@ -21,7 +21,7 @@ crates/manifold-app/src/ui_snapshot/mod.rs:1751/1755: (doc comments, not calls)
 crates/manifold-app/src/ui_snapshot/mod.rs:1857:                renderer.render_sub_region(&ui.tree, start, end, false);
 crates/manifold-app/src/ui_snapshot/mod.rs:1859:                renderer.render_tree_range(&ui.tree, start, end);
 ```
-Definitions: only in `crates/manifold-renderer/src/ui_renderer.rs` (`fn render_tree_range` / `fn render_sub_region`), confirmed by `rg -n "fn render_tree_range|fn render_sub_region" crates/`.
+Definitions: only in `crates/manifold-ui-paint/src/ui_renderer.rs` (`fn render_tree_range` / `fn render_sub_region`), confirmed by `rg -n "fn render_tree_range|fn render_sub_region" crates/`.
 
 **Divergence from D7's design-time baked inventory:** D7 listed `ui_frame.rs:702,710` as still needing to move into `tree_passes.rs` at P3-impl-time. That move already happened — in P1, not P3 (see the P1 landing report: P1's `tree_passes.rs` was extracted verbatim from `ui_frame.rs:646-716`+`:889-891`). `rg` today finds **zero** raw call sites left in `ui_frame.rs` — the file no longer needs an allowlist entry for this guard at all. I built the allowlist from what actually exists, not from the stale design-time inventory:
 

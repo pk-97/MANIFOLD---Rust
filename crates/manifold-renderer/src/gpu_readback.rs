@@ -39,12 +39,12 @@ impl Default for ReadbackRequest {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod tests {
     use super::*;
-    use crate::{gpu_encoder::GpuEncoder, render_target::RenderTarget};
+    use manifold_node_engine::gpu::{gpu_encoder::GpuEncoder, render_target::RenderTarget};
     use manifold_gpu::GpuTextureFormat;
 
     #[test]
     fn gpu_readback_reuses_gpu_and_cpu_storage_after_consume_and_cancel() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let target = RenderTarget::new(
             &device,
             5,
@@ -105,7 +105,7 @@ impl ReadbackRequest {
     /// try_read() on the next frame to consume the result.
     pub fn submit(
         &mut self,
-        gpu: &mut crate::gpu_encoder::GpuEncoder,
+        gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder,
         texture: &manifold_gpu::GpuTexture,
         width: u32,
         height: u32,

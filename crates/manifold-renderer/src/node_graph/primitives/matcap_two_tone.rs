@@ -9,10 +9,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -23,7 +23,7 @@ struct MatcapUniforms {
     color_x_high: [f32; 4],
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MatcapTwoTone,
     type_id: "node.matcap_two_tone",
     purpose: "Cross-axis 4-colour matcap from a tangent-space normal map. Per pixel: mc=n.xy*0.5+0.5, base=mix(y_low, y_high, mc.y), side=mix(x_low, x_high, mc.x), out=(base+side)*0.5. Two 2-tone gradients per axis combined for a 4-corner matcap look. Defaults reproduce oily-fluid's PBR base palette (deep purple → pale blue Y axis, magenta → teal X axis).",

@@ -11,11 +11,11 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order
 /// (`active_count`, `vol_res`, `vol_depth`, `scaled_energy` Int → i32), then
@@ -38,7 +38,7 @@ struct Splat3DUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ScatterParticles3D,
     type_id: "node.draw_particles_3d",
     purpose: "Atomic-add splat of an Array<Particle> into a u32 3D accumulator buffer sized vol_res × vol_res × vol_depth. Each live particle's nearest-voxel cell receives `scaled_energy` via atomicAdd. Pair with node.resolve_scatter_3d to lift the u32 grid into a float Texture3D for downstream volumetric primitives like blur_3d, gradient_curl_3d, project_particles_3d.",
@@ -103,7 +103,7 @@ impl Primitive for ScatterParticles3D {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "accum" {

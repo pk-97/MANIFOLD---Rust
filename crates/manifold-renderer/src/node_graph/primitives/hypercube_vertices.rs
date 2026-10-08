@@ -33,11 +33,11 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::Vec4Vertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::Vec4Vertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 pub const HYPERCUBE_VERTEX_COUNT: u32 = 16;
 
@@ -53,7 +53,7 @@ struct Uniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: HypercubeVertices,
     type_id: "node.hypercube_points",
     purpose: "Emit the 16 corner vertices of a 4D hypercube as Array<Vec4Vertex>, with a continuous `dimension` control (1..4) that collapses the higher axes toward zero so the shape morphs point → line → square → cube → tesseract. At dimension=4 it is the full tesseract. Pair with node.hypercube_edges and feed both into node.rotate_4d → node.flatten_4d → node.draw_lines (with the `edges` input wired). The 4D counterpart of node.platonic_solid_points.",
@@ -92,7 +92,7 @@ impl Primitive for HypercubeVertices {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "vertices" {
@@ -158,18 +158,13 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::mesh::Vec4Vertex;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::parameters::ParamDef;
-    use crate::node_graph::ports::{
-        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType,
-    };
-    use crate::node_graph::{
-        ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue,
-        compile,
-    };
+    use manifold_node_engine::mesh::Vec4Vertex;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::parameters::ParamDef;
+    use manifold_node_engine::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
+    use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
 
     use super::{HYPERCUBE_VERTEX_COUNT, HypercubeVertices};
 
@@ -195,7 +190,7 @@ mod gpu_tests {
     }
 
     impl EffectNode for VertexSink {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -249,7 +244,7 @@ mod gpu_tests {
     }
 
     fn run_hypercube_vertices(dimension: f32) -> Vec<Vec4Vertex> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();

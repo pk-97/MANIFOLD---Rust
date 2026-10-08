@@ -20,10 +20,10 @@
 //! OFF leg uses — the diff collapses to zero.
 
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::PrimitiveRegistry;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 

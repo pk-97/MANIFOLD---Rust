@@ -670,6 +670,8 @@ def main() -> int:
         print("GPU-PROOFS MODE: all (--all: every test binary, no scoping)", flush=True)
         runs = [{"targets": None, "lib": False, "filters": args.filter, "skips": args.skip,
                  "budgeted": False, "full": True},
+                {"package": "manifold-node-engine", "targets": None, "lib": False,
+                 "filters": args.filter, "skips": args.skip, "budgeted": False, "full": True},
                 {"package": "manifold-ui-paint", "targets": None, "lib": False,
                  "filters": args.filter, "skips": args.skip, "budgeted": False, "full": True}]
     elif explicit:

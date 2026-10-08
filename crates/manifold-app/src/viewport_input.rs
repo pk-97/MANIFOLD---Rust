@@ -22,7 +22,7 @@
 //! the OS into a Ctrl-modified scroll absent a native magnify-gesture
 //! handler; a bare `PixelDelta` is a two-finger trackpad pan).
 
-use manifold_renderer::node_graph::ViewportCamera;
+use manifold_node_engine::scene::viewport_camera::ViewportCamera;
 use winit::event::MouseButton;
 
 /// Gizmo projection operates in texture pixels; pointer events arrive in

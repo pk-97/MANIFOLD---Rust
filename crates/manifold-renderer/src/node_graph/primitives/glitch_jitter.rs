@@ -11,11 +11,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
 
@@ -36,7 +36,7 @@ struct GlitchJitterUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GlitchJitter,
     type_id: "node.glitch_jitter",
     purpose: "Per-vertex stepped-hash glitch of an Array<MeshVertex>. step = floor(time * rate); pos += (hash(vert_id XOR step*K) - 0.5) * amount * w. `w` is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). Normals, uv, and tangent pass through unchanged. `time` is port-shadowed and defaults to the playback clock when unwired; `seed` changes the hash pattern.",
@@ -107,7 +107,7 @@ crate::primitive! {
 // Per-frame recompute for a FUSED region's `time` field — `run()` packs
 // `ctx.time.seconds.0` into the `time` uniform when the input is unwired.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.glitch_jitter",
         array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32]),
@@ -120,7 +120,7 @@ impl Primitive for GlitchJitter {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -225,7 +225,7 @@ mod gpu_tests {
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<GlitchJitter>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<GlitchJitter>()
             .expect("glitch_jitter buffer codegen")
     }
 
@@ -243,7 +243,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "glitch-jitter-test",
         );
         let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
@@ -297,7 +297,7 @@ mod gpu_tests {
 
     #[test]
     fn amount_zero_is_identity() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src = vec![
             mk_vertex([0.5, -0.3, 1.2], [0.267, 0.535, 0.802], [0.1, 0.2]),
@@ -317,7 +317,7 @@ mod gpu_tests {
 
     #[test]
     fn non_zero_amount_actually_moves_vertices() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src: Vec<MeshVertex> = (0..64)
             .map(|i| mk_vertex([(i % 8) as f32 * 0.25, (i / 8) as f32 * 0.25, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0]))
@@ -343,7 +343,7 @@ mod gpu_tests {
 
     #[test]
     fn time_stepping_changes_output() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src: Vec<MeshVertex> = (0..32)
             .map(|i| mk_vertex([(i % 8) as f32 * 0.25, (i / 8) as f32 * 0.25, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0]))
@@ -367,7 +367,7 @@ mod gpu_tests {
 
     #[test]
     fn short_weights_degrade_to_one_for_the_tail() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src: Vec<MeshVertex> = (0..12)
             .map(|_| mk_vertex([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0]))

@@ -62,11 +62,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Generated-codegen uniform layout: the `max_blur_px` param (f32, PARAMS
 /// order), the `enabled` param (Bool → u32), then the one DERIVED field
@@ -83,7 +83,7 @@ struct MotionBlurUniforms {
     _pad0: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MotionBlur,
     type_id: "node.motion_blur",
     purpose: "Velocity-directed gather motion blur (thin-shutter model, docs/CINEMATIC_POST_DESIGN.md D4): smear_px = velocity_ndc * 0.5 * viewport * (shutter_angle/360), clamped to +/- max_blur_px; output is the average of 8 equal-weight taps of `in`, evenly spaced from uv - smear_uv/2 to uv + smear_uv/2. shutter_angle = 0 (pinhole default) collapses every tap onto the same texel, an exact pass-through. `velocity` expects render_scene's Rg16Float NDC-delta `velocity` output (own-texel read, never filtered). `camera` reads only the wired Camera's lens.shutter_angle (written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding, and this atom declares no port-shadowed scalar of its own (wire an LFO/beat envelope into node.camera_lens's own shutter_angle port for live control). `enabled = false` skips the node entirely (host-side `in → out` alias, zero GPU work); `shutter_angle = 0` short-circuits to a host-side texture copy (the kernel's taps already collapse at shutter 0, so the copy just skips the dispatch launch cost).",
@@ -139,7 +139,7 @@ crate::primitive! {
 // fn to factor out, unlike coc_from_depth/ssao_from_depth's multi-field
 // `derive_*_scalars`, because this atom reads exactly one field).
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.motion_blur",
         array_ports: &[],
         recompute: |ctx| ctx.camera.map(|c| vec![c.lens.shutter_angle]),
@@ -225,7 +225,7 @@ impl Primitive for MotionBlur {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
     #[test]
     fn skip_passthrough_aliases_in_to_out_only_when_enabled_false() {
@@ -411,7 +411,7 @@ mod gpu_tests {
 
     use super::cpu_reference::{motion_blur_texel, ColorBuffer};
     use super::{MotionBlur, MotionBlurUniforms};
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn upload_rgba16f(device: &GpuDevice, w: u32, h: u32, label: &str, px: &[f16]) -> GpuTexture {
         assert_eq!(px.len(), (w * h * 4) as usize);
@@ -543,7 +543,7 @@ mod gpu_tests {
     /// same committed spec, compared pixel-for-pixel).
     #[test]
     fn generated_motion_blur_matches_cpu_reference_on_synthetic_ramp() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (24u32, 16u32);
         let velocity = velocity_ramp(w, h);
         let velocity_tex = upload_velocity(&device, w, h, &velocity);
@@ -553,11 +553,11 @@ mod gpu_tests {
         let uniforms = mb_uniforms(max_blur_px, shutter_angle);
         let bytes = bytemuck::bytes_of(&uniforms);
 
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<MotionBlur>()
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MotionBlur>()
             .expect("node.motion_blur standalone codegen");
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "motion-blur-generated",
         );
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
@@ -589,7 +589,7 @@ mod gpu_tests {
     /// hiding behind an all-zero fixture).
     #[test]
     fn zero_shutter_angle_is_bit_clean_passthrough() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 16u32);
         let velocity = velocity_ramp(w, h);
         let velocity_tex = upload_velocity(&device, w, h, &velocity);
@@ -599,11 +599,11 @@ mod gpu_tests {
         let bytes = bytemuck::bytes_of(&uniforms);
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
 
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<MotionBlur>()
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MotionBlur>()
             .expect("node.motion_blur standalone codegen");
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "motion-blur-zero-shutter",
         );
         let got = dispatch(&device, &pipeline, &sampler, &color_tex, &velocity_tex, w, h, bytes);
@@ -622,3 +622,6 @@ mod gpu_tests {
         }
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

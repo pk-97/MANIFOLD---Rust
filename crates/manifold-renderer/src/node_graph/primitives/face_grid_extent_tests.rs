@@ -4,17 +4,17 @@
 //! allow. No GPU: every size comes from the functions the atoms size and
 //! dispatch with.
 
-use super::face_sample_component::FaceSampleComponent;
-use super::gpu_flip_step::face_bytes;
-use super::matter_face_component::{MatterFaceComponent, matter_cells};
-use crate::node_graph::effect_node::ParamValues;
-use crate::node_graph::fluid_particles::FaceSample;
-use crate::node_graph::fluid::domain_layout;
-use crate::node_graph::liquid::grid::{face_dims, face_len};
-use crate::node_graph::liquid::lattice::{LiquidLattice, PADDING_NODES};
-use crate::node_graph::matter::lattice_nodes;
-use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::water::primitives::face_sample_component::FaceSampleComponent;
+use manifold_node_engine::water::primitives::gpu_flip_step::face_bytes;
+use manifold_node_engine::water::primitives::matter_face_component::{MatterFaceComponent, matter_cells};
+use manifold_node_engine::exec::effect_node::ParamValues;
+use manifold_node_engine::water::fluid_particles::FaceSample;
+use manifold_node_engine::water::fluid::domain_layout;
+use manifold_node_engine::water::liquid::grid::{face_dims, face_len};
+use manifold_node_engine::water::liquid::lattice::{LiquidLattice, PADDING_NODES};
+use manifold_node_engine::water::matter::lattice_nodes;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::primitive::Primitive;
 
 fn axis_params(axis: u32) -> ParamValues {
     let mut params = ParamValues::default();
@@ -90,13 +90,13 @@ fn face_grid_extents_at_64() {
 /// fused-vs-unfused GPU proof covers the folded case.
 #[test]
 fn face_grid_fusion_in_host_graphs() {
-    use super::face_grid_scenes::matter_dam_break_faces;
-    use super::gpu_flip_preset::{FACE_NODES, WaterScene, water_def};
-    use crate::node_graph::FusionReport;
-    let mut registry = crate::node_graph::PrimitiveRegistry::with_builtin();
-    crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+    use manifold_node_engine::water::primitives::face_grid_scenes::matter_dam_break_faces;
+    use manifold_node_engine::water::primitives::gpu_flip_preset::{FACE_NODES, WaterScene, water_def};
+    use manifold_node_engine::freeze::FusionReport;
+    let mut registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
+    manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes(&mut registry);
     let report = |def| {
-        let report = crate::node_graph::fusion_report(&def, &registry);
+        let report = manifold_node_engine::freeze::fusion_report(&def, &registry);
         assert!(report.preparation_error.is_none(), "{:?}", report.preparation_error);
         report
     };
@@ -140,10 +140,10 @@ fn face_grid_fusion_in_host_graphs() {
 /// face grid is refused by name (GPU_WHITEWATER_DESIGN.md section 3.6).
 #[test]
 fn whitewater_refuses_unextended_faces() {
-    use crate::node_graph::whitewater::require_extended_faces;
-    assert!(require_extended_faces(super::gpu_flip_step::FACE_VALID_LAYERS as f32).is_ok());
+    use manifold_node_engine::water::whitewater::require_extended_faces;
+    assert!(require_extended_faces(manifold_node_engine::water::primitives::gpu_flip_step::FACE_VALID_LAYERS as f32).is_ok());
     assert!(require_extended_faces(1.0).is_ok());
-    let layers = super::matter_face_component::MATTER_FACE_VALID_LAYERS as f32;
+    let layers = manifold_node_engine::water::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS as f32;
     assert!(require_extended_faces(layers).expect_err("MPM refused").contains("needs at least 1"));
 }
 
@@ -153,8 +153,8 @@ fn whitewater_refuses_unextended_faces() {
 /// 64.
 #[test]
 fn matter_face_scene_covers_every_dispatch() {
-    use super::face_grid_scenes::matter_dam_break_faces;
-    use crate::node_graph::liquid::extent::{ExtentError, LiquidPreset};
+    use manifold_node_engine::water::primitives::face_grid_scenes::matter_dam_break_faces;
+    use manifold_node_engine::water::liquid::extent::{ExtentError, LiquidPreset};
     for collider in [false, true] {
         let mut preset = LiquidPreset::build(&matter_dam_break_faces(None, collider)).expect("the face scene builds");
         let mut ran = 0;

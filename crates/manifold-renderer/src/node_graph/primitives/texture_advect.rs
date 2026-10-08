@@ -13,10 +13,10 @@
 use std::borrow::Cow;
 use manifold_gpu::{GpuAddressMode, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 pub const TEXTURE_ADVECT_BOUNDARIES: &[&str] = &["Repeat", "Clamp"];
 
@@ -29,7 +29,7 @@ struct AdvectUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TextureAdvect,
     type_id: "node.texture_advect",
     purpose: "Backward (semi-Lagrangian) advection of a texture by a 2D velocity field. For each output pixel: sample the source at `uv - velocity.rg * dt / dims`. The universal fluid op — used for color advection by velocity, self-advection of velocity by itself, smoke / dye / paint transport. `dt` is in pixels-per-frame and resolution-independent.",

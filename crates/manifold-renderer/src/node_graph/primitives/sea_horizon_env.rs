@@ -11,10 +11,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -25,7 +25,7 @@ struct SeaHorizonUniforms {
     water_b: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SeaHorizonEnv,
     type_id: "node.sea_horizon_env",
     purpose: "Replaces an equirect environment's lower hemisphere with a calm sea: for a ray at depression φ below the horizon, out = F·sky(mirrored) + (1 − F)·water, F = Schlick(ior, cos θ = sin φ). The upper hemisphere passes through unchanged and alpha is 1. Uses the renderer's env convention (v = elevation/π + 0.5). Put it between an HDRI and render_scene's envmap (and node.camera_sky) for open-ocean scenes, so troughs reflect sky and sea instead of the ground under the HDRI's camera.",
@@ -106,12 +106,12 @@ mod gpu_tests {
     };
 
     use super::{SeaHorizonEnv, SeaHorizonUniforms};
-    use crate::node_graph::primitives::standalone_pipeline::standalone_pipeline;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     #[test]
     fn sea_horizon_env_matches_cpu() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 32u32);
         let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
         for y in 0..h {
@@ -185,3 +185,6 @@ mod gpu_tests {
         assert!(worst < 2e-3, "worst relative error {worst}");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

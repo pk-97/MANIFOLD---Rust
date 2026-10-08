@@ -18,11 +18,11 @@ use manifold_gpu::{
     GpuTextureUsage,
 };
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`amount`,
 /// `field_bias` f32), then the derived `weights_len` (u32 — 0 when unwired,
@@ -43,7 +43,7 @@ struct PushUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: PushAlongNormals,
     type_id: "node.push_along_normals",
     purpose: "Displace each vertex of an Array<MeshVertex> outward (or inward) along its own normal: pos += normal * amount * w * f. `w` is the optional per-vertex `weights` input (from node.mesh_ramp or any weights producer) — a short or unwired weights buffer degrades to 1.0 (full push), never to silent 0. `f` is an optional Texture2D `field` sampled bilinear at the vertex's own UV as (sample.r - field_bias), or 1.0 when unwired. Normals pass through unchanged — approximate at extremes, correct-looking for moderate organic-motion amounts; wire node.facet_normals downstream after a heavy push if the faceted look isn't wanted, or keep amount moderate to keep the source mesh's smooth normals.",
@@ -101,7 +101,7 @@ crate::primitive! {
 // `run()` does). The marker carries the member→fused-port mapping for the
 // `weights` port (fused kernels rename inputs to `src_<k>`).
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.push_along_normals",
         array_ports: &["weights"],
         recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
@@ -114,7 +114,7 @@ impl Primitive for PushAlongNormals {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -276,7 +276,7 @@ mod gpu_tests {
 
     /// The generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<PushAlongNormals>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<PushAlongNormals>()
             .expect("push_along_normals buffer codegen")
     }
 
@@ -299,7 +299,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "push-normals-test",
         );
         let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
@@ -383,7 +383,7 @@ mod gpu_tests {
 
     #[test]
     fn count_order_and_uv_are_preserved() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src = vec![
             mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.1, 0.2]),
@@ -400,7 +400,7 @@ mod gpu_tests {
 
     #[test]
     fn short_weights_degrade_to_one_for_the_tail() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         // 12 identical vertices (position 0, normal +Y) so displacement
         // magnitude along Y directly reads off the effective weight. The section 4
@@ -440,7 +440,7 @@ mod gpu_tests {
 
     #[test]
     fn matches_hand_formula_with_weights_only() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let src = vec![
             mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0]),
@@ -475,7 +475,7 @@ mod gpu_tests {
 
     #[test]
     fn matches_hand_formula_with_uniform_field() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         let tex = uniform_field_tex(&device, 8, 8, 0.75);
         let src = vec![

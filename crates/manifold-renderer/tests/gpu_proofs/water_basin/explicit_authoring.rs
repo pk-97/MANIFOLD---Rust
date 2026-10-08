@@ -52,13 +52,13 @@ impl EffectNode for Observe {
             },
             NodePort {
                 name: std::borrow::Cow::Borrowed("time"),
-                ty: PortType::Scalar(manifold_renderer::node_graph::ports::ScalarType::F32),
+                ty: PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
                 kind: PortKind::Input,
                 required: true,
             },
             NodePort {
                 name: std::borrow::Cow::Borrowed("particles"),
-                ty: PortType::Scalar(manifold_renderer::node_graph::ports::ScalarType::F32),
+                ty: PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
                 kind: PortKind::Input,
                 required: true,
             },

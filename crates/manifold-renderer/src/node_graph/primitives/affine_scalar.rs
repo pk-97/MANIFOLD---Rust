@@ -7,12 +7,12 @@
 //! `0.3 - 0.28 * contrast`, or `t * 0.3` would otherwise need. One
 //! node per affine remap instead of four.
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use std::borrow::Cow;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: AffineScalar,
     type_id: "node.scale_offset_value",
     purpose: "Scalar affine remap: out = a * scale + offset. The scalar counterpart of node.scale_offset_image — collapses Value+Math+Value+Math derivations like `3 + 5*x` or `0.3 - 0.28*x` into a single node. All three inputs are port-shadows-param: an inline param value drives the op when the wire is unwired.",

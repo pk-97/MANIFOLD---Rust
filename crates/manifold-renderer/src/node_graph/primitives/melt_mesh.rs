@@ -8,11 +8,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
 
@@ -33,7 +33,7 @@ struct MeltUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MeltMesh,
     type_id: "node.melt_mesh",
     purpose: "Per-vertex downward melt of an Array<MeshVertex>. pos.y -= amount * (simplex3(pos.x * frequency + seed, pos.z * frequency + seed, 0.0) * 0.5 + 0.5). `w` is the optional per-vertex `weights` input (a short or unwired weights buffer degrades to 1.0, never silent 0). Normals, uv, and tangent pass through unchanged — wire node.facet_normals downstream after a heavy melt if the unchanged normals start reading wrong under lighting.",
@@ -97,7 +97,7 @@ crate::primitive! {
 // `run()` does). The marker carries the member→fused-port mapping for the
 // `weights` port (fused kernels rename inputs to `src_<k>`).
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.melt_mesh",
         array_ports: &["weights"],
         recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
@@ -110,7 +110,7 @@ impl Primitive for MeltMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {

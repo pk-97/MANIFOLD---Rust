@@ -32,7 +32,7 @@ use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
 use manifold_ui_paint::clip_thumb_gpu::ClipThumbGpu;
 use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback, SrgbRgba8};
 use manifold_renderer::presentation::UI_FORMAT;
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_ui_paint::ui_cache_manager::UICacheManager;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 
@@ -499,7 +499,7 @@ pub fn render_graph_editor_to_png(
     if open_node_picker {
         use manifold_ui::panels::browser_popup::{BrowserPopupMode, BrowserPopupRequest};
         use manifold_ui::panels::picker_core::PickerItem;
-        let items: Vec<PickerItem> = manifold_renderer::node_graph::palette_atoms()
+        let items: Vec<PickerItem> = manifold_node_engine::palette::palette_atoms()
             .into_iter()
             .map(|a| PickerItem {
                 label: a.label,
@@ -754,8 +754,8 @@ pub fn render_transform_proof_to_png(path: &str) {
 /// dump enabled, holding the graph + executor alive so the dumped node textures
 /// stay valid. `texture_for` resolves a stable NodeId to its output texture.
 struct GraphNodeTextures {
-    graph: manifold_renderer::node_graph::Graph,
-    exec: manifold_renderer::node_graph::Executor,
+    graph: manifold_node_engine::graph::Graph,
+    exec: manifold_node_engine::exec::execution::Executor,
 }
 
 impl GraphNodeTextures {
@@ -785,11 +785,8 @@ fn render_graph_node_textures(
     device: &std::sync::Arc<GpuDevice>,
     def: &manifold_core::effect_graph_def::EffectGraphDef,
 ) -> Option<GraphNodeTextures> {
-    use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use manifold_renderer::node_graph::{
-        compile, EffectGraphDefExt, Executor, FrameTime, MetalBackend, PrimitiveRegistry,
-        GENERATOR_INPUT_TYPE_ID, SOURCE_TYPE_ID,
-    };
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::{exec::execution_plan::compile, persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, persistence::PrimitiveRegistry, scene::boundary_nodes::GENERATOR_INPUT_TYPE_ID, scene::boundary_nodes::SOURCE_TYPE_ID};
 
     // Square render dims for the node outputs; the blit stretches each into its
     // (possibly non-square) thumbnail rect with linear sampling.
@@ -801,7 +798,7 @@ fn render_graph_node_textures(
     // Final Output, Source) that a preset def references — a bare `new()` omits
     // them and `into_graph` fails with UnknownTypeId on `system.generator_input`.
     let registry = PrimitiveRegistry::with_builtin();
-    let mut graph = match def.clone().into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) {
+    let mut graph = match def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("ui-snap graph: into_graph failed: {e:?}");
@@ -883,10 +880,10 @@ fn render_graph_node_textures(
 /// The `ResourceId` of `node`'s named output port in `plan`, or `None`. Mirrors
 /// the parity harness's `resource_for_output`.
 fn resource_for_output(
-    plan: &manifold_renderer::node_graph::ExecutionPlan,
-    node: manifold_renderer::node_graph::NodeInstanceId,
+    plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan,
+    node: manifold_node_engine::exec::effect_node::NodeInstanceId,
     port: &str,
-) -> Option<manifold_renderer::node_graph::ResourceId> {
+) -> Option<manifold_node_engine::exec::execution_plan::ResourceId> {
     plan.steps()
         .iter()
         .find(|s| s.node == node)

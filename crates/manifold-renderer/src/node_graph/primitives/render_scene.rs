@@ -119,27 +119,25 @@ mod blend_snapshot_tests {
         }
     }
 }
-use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
-use crate::node_graph::mesh_change::MeshRevision;
-use crate::node_graph::ContentVersion;
+use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
+use manifold_node_engine::scene::mesh_change::MeshRevision;
+use manifold_node_engine::content_revision::ContentVersion;
 use manifold_gpu::raytrace::RtGeometryChange;
 use ahash::AHashMap;
 use manifold_gpu::GpuBinding;
 use manifold_gpu::raytrace::ShadowRayTracer;
 use manifold_gpu::denoiser::denoiser_available;
 
-use crate::mesh::{InstanceTransform, MeshVertex};
-use crate::node_graph::atmosphere::Atmosphere;
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::{
-    EffectNode, EffectNodeContext, EffectNodeType, ParamValues,
-};
-use crate::node_graph::temporal_reset::TemporalResetDetector;
-use crate::node_graph::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
-use crate::node_graph::scene_object::SceneObject;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
-use crate::node_graph::primitive::PrimitiveDescription;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
+use manifold_node_engine::scene::atmosphere::Atmosphere;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+use manifold_node_engine::exec::temporal_reset::TemporalResetDetector;
+use manifold_node_engine::scene::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind};
+use manifold_node_engine::scene::scene_object::SceneObject;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use manifold_node_engine::primitive::PrimitiveDescription;
 
 // Diagnostic handles only: the proof reads the actual indirect arguments after
 // commit/wait, before encoding another frame. No copy, extra encoder or heap
@@ -384,8 +382,8 @@ const SUN_CONE_VERY_SOFT_RADIANS: f32 = 0.06;
 /// does for free under ray tracing (penumbra widens with occluder
 /// distance), so the raster path's blocker-search `light_size` has no
 /// meaning here.
-fn sun_cone_half_angle(softness: crate::node_graph::light::ShadowSoftness) -> f32 {
-    use crate::node_graph::light::ShadowSoftness;
+fn sun_cone_half_angle(softness: manifold_node_engine::scene::light::ShadowSoftness) -> f32 {
+    use manifold_node_engine::scene::light::ShadowSoftness;
     match softness {
         ShadowSoftness::Hard => 0.0,
         ShadowSoftness::Soft | ShadowSoftness::Contact { .. } => SUN_CONE_SOFT_RADIANS,
@@ -850,8 +848,8 @@ struct MaterialMapUniform {
     sampling: [u32; 4],
 }
 
-impl From<crate::node_graph::material::MaterialMapInfo> for MaterialMapUniform {
-    fn from(info: crate::node_graph::material::MaterialMapInfo) -> Self {
+impl From<manifold_node_engine::scene::material::MaterialMapInfo> for MaterialMapUniform {
+    fn from(info: manifold_node_engine::scene::material::MaterialMapInfo) -> Self {
         use manifold_gpu::{GpuAddressMode as A, GpuFilterMode as F};
         let address = |a| match a { A::ClampToEdge => 0, A::Repeat => 1, A::MirrorRepeat => 2, A::ClampToZero => 3 };
         let linear = |f| u32::from(f == F::Linear);
@@ -872,7 +870,7 @@ fn material_map_uniforms(material: &Material) -> [MaterialMapUniform; 19] {
         material.mr_sampler, material.occlusion_sampler, material.emissive_sampler];
     std::array::from_fn(|i| {
         if i < 5 {
-            crate::node_graph::material::MaterialMapInfo {
+            manifold_node_engine::scene::material::MaterialMapInfo {
                 uv_transform: transforms[i], tex_coord: material.core_tex_coords[i], sampler: samplers[i],
             }.into()
         } else {
@@ -1518,7 +1516,7 @@ pub struct RenderScene {
     /// for this node's irradiance accumulator. Do not add a second one
     /// (the P2 brief's negative-`rg` gate enforces this).
     rt_reset_detector: TemporalResetDetector,
-    mesh_topology_history: crate::node_graph::scene_object::MeshTopologyHistory,
+    mesh_topology_history: manifold_node_engine::scene::scene_object::MeshTopologyHistory,
     /// Set by `ensure_rt_irradiance` when it just (re)allocated the
     /// history texture this frame (dimension change) — a fresh
     /// allocation's content is undefined, so the accumulate step OR's
@@ -1587,10 +1585,10 @@ fn shaft_step_count(quality: u32) -> u32 {
 /// transmission tint fills `out_svt` — the first Sun-mode caster under
 /// the RT caster cap (0 = none: `rt_flags.z` gets 0 and fs_pbr keeps the
 /// luma channel). A second sun falls back to luma (named honest cost).
-fn rt_svt_slot(casters: &[crate::node_graph::light::Light]) -> Option<u32> {
+fn rt_svt_slot(casters: &[manifold_node_engine::scene::light::Light]) -> Option<u32> {
     casters
         .iter()
-        .position(|l| matches!(l.mode, crate::node_graph::light::LightMode::Sun))
+        .position(|l| matches!(l.mode, manifold_node_engine::scene::light::LightMode::Sun))
         .filter(|&i| i < manifold_gpu::raytrace::MAX_RT_CASTERS)
         .map(|i| i as u32)
 }
@@ -1781,7 +1779,7 @@ struct ObjectDraw<'ctx> {
     weights: Option<&'ctx manifold_gpu::GpuBuffer>,
     uniforms: RenderSceneUniforms,
     map_uniforms: [MaterialMapUniform; 19],
-    subsurface: crate::node_graph::material::Subsurface,
+    subsurface: manifold_node_engine::scene::material::Subsurface,
     subsurface_binding: [f32; 4],
     pipeline: manifold_gpu::GpuRenderPipeline,
     base_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
@@ -1832,7 +1830,7 @@ struct ObjectDraw<'ctx> {
     /// Points-mode count: every vertex the buffer holds, or the bound.
     point_count: u32,
     /// The mesh's live extent, when its producer publishes one.
-    live_extent: Option<crate::node_graph::live_extent::LiveExtent>,
+    live_extent: Option<manifold_node_engine::scene::live_extent::LiveExtent>,
     indices: Option<&'ctx manifold_gpu::GpuBuffer>,
     indices_content: Option<ContentVersion>,
     /// This frame's GPU-written draw arguments (buffer, byte offset) for an
@@ -1956,9 +1954,9 @@ fn effective_instance_count(buffer_capacity: Option<u32>, requested: Option<f32>
 /// Gating here (not at the RT trace) keeps the gi_materials table and every
 /// RT uniform on the Rendered path, and makes the wireframe override inert
 /// the moment RT owns the scene, exactly the D4 contract.
-fn effective_render_mode(render_mode: &crate::node_graph::render_mode::RenderMode, rt_enabled: bool) -> crate::node_graph::render_mode::RenderMode {
+fn effective_render_mode(render_mode: &manifold_node_engine::scene::render_mode::RenderMode, rt_enabled: bool) -> manifold_node_engine::scene::render_mode::RenderMode {
     if rt_enabled {
-        crate::node_graph::render_mode::RenderMode::default()
+        manifold_node_engine::scene::render_mode::RenderMode::default()
     } else {
         *render_mode
     }
@@ -1969,7 +1967,7 @@ fn effective_render_mode(render_mode: &crate::node_graph::render_mode::RenderMod
 /// `pipeline_for`) — no shader change, no new pipeline, and the
 /// substitution happens here at material-gather time, upstream of
 /// `pipeline_for`, so pipeline caching is untouched.
-fn wireframe_material(render_mode: &crate::node_graph::render_mode::RenderMode) -> Material {
+fn wireframe_material(render_mode: &manifold_node_engine::scene::render_mode::RenderMode) -> Material {
     let b = render_mode.line_brightness;
     Material::unlit(
         [
@@ -1989,7 +1987,7 @@ fn wireframe_material(render_mode: &crate::node_graph::render_mode::RenderMode) 
 /// — no shader change, no new pipeline. The substitution happens at
 /// material-gather time, upstream of `pipeline_for`, so pipeline caching is
 /// untouched.
-fn clay_material(render_mode: &crate::node_graph::render_mode::RenderMode) -> Material {
+fn clay_material(render_mode: &manifold_node_engine::scene::render_mode::RenderMode) -> Material {
     Material::pbr(
         render_mode.clay_color,
         0.0,
@@ -2004,9 +2002,9 @@ fn clay_material(render_mode: &crate::node_graph::render_mode::RenderMode) -> Ma
 /// The depth prepass and shadow passes never read this — they force
 /// `Fill` in the encoder (INV-R3).
 fn color_pass_fill_mode(
-    render_mode: &crate::node_graph::render_mode::RenderMode,
+    render_mode: &manifold_node_engine::scene::render_mode::RenderMode,
 ) -> manifold_gpu::GpuTriangleFillMode {
-    if render_mode.mode == crate::node_graph::render_mode::RENDER_MODE_WIREFRAME {
+    if render_mode.mode == manifold_node_engine::scene::render_mode::RENDER_MODE_WIREFRAME {
         manifold_gpu::GpuTriangleFillMode::Lines
     } else {
         manifold_gpu::GpuTriangleFillMode::Fill
@@ -2017,9 +2015,9 @@ fn color_pass_fill_mode(
 /// otherwise. Mirrored shape to `color_pass_fill_mode` — one helper per
 /// per-draw encoder state the mode branch sets.
 fn color_pass_points(
-    render_mode: &crate::node_graph::render_mode::RenderMode,
+    render_mode: &manifold_node_engine::scene::render_mode::RenderMode,
 ) -> bool {
-    render_mode.mode == crate::node_graph::render_mode::RENDER_MODE_POINTS
+    render_mode.mode == manifold_node_engine::scene::render_mode::RENDER_MODE_POINTS
 }
 
 // ---- BUG-trh7 stage 2: the evaluate() pass frames. `FramePrelude` carries
@@ -2030,16 +2028,16 @@ fn color_pass_points(
 struct FramePrelude<'ctx> {
     probe_t0: Option<std::time::Instant>,
     objects: usize,
-    cam: crate::node_graph::camera::Camera,
+    cam: manifold_node_engine::scene::camera::Camera,
     envmap_wired: Option<&'ctx manifold_gpu::GpuTexture>,
     /// A pending envmap renders as absent (black image lighting); only a
     /// material that cannot draw without one abandons the frame.
     envmap_pending: bool,
-    atmosphere: crate::node_graph::atmosphere::Atmosphere,
-    render_mode: crate::node_graph::render_mode::RenderMode,
+    atmosphere: manifold_node_engine::scene::atmosphere::Atmosphere,
+    render_mode: manifold_node_engine::scene::render_mode::RenderMode,
     light_data: Vec<[f32; 4]>,
     light_count: u32,
-    casters: Vec<crate::node_graph::light::Light>,
+    casters: Vec<manifold_node_engine::scene::light::Light>,
     caster_table: Vec<[f32; 4]>,
     native_width: u32,
     native_height: u32,
@@ -2059,7 +2057,7 @@ struct FramePrelude<'ctx> {
     rt_ao_enabled: bool,
     rt_gi_enabled: bool,
     rt_firefly_clamp_enabled: bool,
-    rtq: crate::node_graph::effect_node::RtQuality,
+    rtq: manifold_node_engine::exec::effect_node::RtQuality,
     denoise_strength: f32,
     denoise_iterations: u32,
     rt_trace_w: u32,
@@ -2120,7 +2118,7 @@ impl RenderScene {
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
         pre: &FramePrelude<'ctx>,
-        port_index: &ahash::AHashMap<&'static str, crate::node_graph::bindings::Slot>,
+        port_index: &ahash::AHashMap<&'static str, manifold_node_engine::bindings::Slot>,
         single_object: Option<SceneObject>,
     ) -> Option<(Vec<ObjectDraw<'ctx>>, bool)> {
         let FramePrelude {
@@ -2274,9 +2272,9 @@ impl RenderScene {
             // ordinary per-kind pipeline cache picks the substitute's
             // shader and no shader changes.
             let material = match render_mode.mode {
-                crate::node_graph::render_mode::RENDER_MODE_WIREFRAME => wireframe_material(&render_mode),
-                crate::node_graph::render_mode::RENDER_MODE_SOLID => clay_material(&render_mode),
-                crate::node_graph::render_mode::RENDER_MODE_POINTS => wireframe_material(&render_mode),
+                manifold_node_engine::scene::render_mode::RENDER_MODE_WIREFRAME => wireframe_material(&render_mode),
+                manifold_node_engine::scene::render_mode::RENDER_MODE_SOLID => clay_material(&render_mode),
+                manifold_node_engine::scene::render_mode::RENDER_MODE_POINTS => wireframe_material(&render_mode),
                 _ => material,
             };
             if material.requires_envmap() && *envmap_pending {
@@ -3433,7 +3431,7 @@ impl RenderScene {
                             .ok_or(FrameRenderFailure::RtAllocation)?;
                     }
                 }
-                crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                manifold_node_engine::load::expand::admit_candidate_bytes(
                     gpu.device.modifier_memory_snapshot(), additional_bytes,
                 ).map_err(|error| {
                     log::error!("node.render_scene: RT candidate admission failed: {error}");
@@ -3614,15 +3612,15 @@ impl RenderScene {
                             );
                         }
                         let (dir_or_pos, cone_or_size, kind) = match l.mode {
-                            crate::node_graph::light::LightMode::Sun => (
+                            manifold_node_engine::scene::light::LightMode::Sun => (
                                 [-l.dir[0], -l.dir[1], -l.dir[2]],
                                 sun_cone_half_angle(l.shadow_softness),
                                 0u32,
                             ),
-                            crate::node_graph::light::LightMode::Point
-                            | crate::node_graph::light::LightMode::Spot => {
+                            manifold_node_engine::scene::light::LightMode::Point
+                            | manifold_node_engine::scene::light::LightMode::Spot => {
                                 let light_size = match l.shadow_softness {
-                                    crate::node_graph::light::ShadowSoftness::Contact { light_size } => {
+                                    manifold_node_engine::scene::light::ShadowSoftness::Contact { light_size } => {
                                         light_size
                                     }
                                     _ => 0.0,
@@ -5262,8 +5260,8 @@ impl RenderScene {
             }
 
             let fov_y = match cam.mode {
-                crate::node_graph::camera::CameraMode::Perspective { fov_y } => fov_y,
-                crate::node_graph::camera::CameraMode::Orthographic { .. } => {
+                manifold_node_engine::scene::camera::CameraMode::Perspective { fov_y } => fov_y,
+                manifold_node_engine::scene::camera::CameraMode::Orthographic { .. } => {
                     std::f32::consts::FRAC_PI_3
                 }
             };
@@ -5969,7 +5967,7 @@ impl RenderScene {
     fn frame_preliminaries<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
-        port_index: &ahash::AHashMap<&'static str, crate::node_graph::bindings::Slot>,
+        port_index: &ahash::AHashMap<&'static str, manifold_node_engine::bindings::Slot>,
     ) -> Option<FrameInit<'ctx>> {
         // PROBE: fine-grained CPU timing for BUG-iadf denoise attribution.
         // MANIFOLD_DENOISE_PROBE=1 prints per-frame ms at three points.
@@ -6010,7 +6008,7 @@ impl RenderScene {
         // either shadow budget still contribute direct illumination.
         let mut light_data: Vec<[f32; 4]> = Vec::with_capacity(lights_n * LIGHT_VEC4_STRIDE);
         let mut light_count: u32 = 0;
-        let mut casters: Vec<crate::node_graph::light::Light> =
+        let mut casters: Vec<manifold_node_engine::scene::light::Light> =
             Vec::with_capacity(manifold_gpu::raytrace::MAX_RT_CASTERS);
         // VOLUMETRIC_LIGHT_DESIGN.md D2 (P3): every wired light (Sun AND
         // Point) contributes to the march — 3-vec4-per-light packing,
@@ -6082,7 +6080,7 @@ impl RenderScene {
             // using `light_size` below" instead of the fixed PCF loop.
             let khw = l.shadow_softness.kernel_half_width() as f32;
             let light_size = match l.shadow_softness {
-                crate::node_graph::light::ShadowSoftness::Contact { light_size } => light_size,
+                manifold_node_engine::scene::light::ShadowSoftness::Contact { light_size } => light_size,
                 _ => 0.0,
             };
             let texel = 1.0 / l.shadow_resolution.clamp(256, 4096) as f32;
@@ -7583,7 +7581,7 @@ impl RenderScene {
         {
             return Ok(());
         }
-        crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+        manifold_node_engine::load::expand::admit_candidate_bytes(
             device.modifier_memory_snapshot(), u64::from(width) * u64::from(height) * 4,
         ).map_err(|error| format!("Glass depth resource admission failed: {error}"))?;
         self.transmissive_depth_scratch = Some(device.try_create_texture(&manifold_gpu::GpuTextureDesc {
@@ -8077,7 +8075,7 @@ impl RenderScene {
     /// metadata always recomputes. Physical input bindings are resolved afresh.
     fn run_ibl_convolution(
         &mut self,
-        gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
+        gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
         sampler: &manifold_gpu::GpuSampler,
         envmap: Option<&manifold_gpu::GpuTexture>,
         envmap_content: Option<ContentVersion>,
@@ -9044,15 +9042,15 @@ impl EffectNode for RenderScene {
         self.invalidate_temporal_history();
     }
 
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::SourceHeight
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::SourceHeight
     }
     fn type_id(&self) -> &EffectNodeType {
         cached_type_id()
     }
 
-    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
-        Some(crate::node_graph::freeze::classify::BoundaryReason::DrawCall)
+    fn boundary_reason(&self) -> Option<manifold_node_engine::freeze::classify::BoundaryReason> {
+        Some(manifold_node_engine::freeze::classify::BoundaryReason::DrawCall)
     }
 
     fn inputs(&self) -> &[NodeInput] {
@@ -9064,7 +9062,7 @@ impl EffectNode for RenderScene {
     }
 
     /// Return a fresh pass with its own renderer and render history, never this node's own state.
-    fn viewport_pass(&self) -> Option<Box<dyn crate::node_graph::scene_viewport::ViewportPass>> {
+    fn viewport_pass(&self) -> Option<Box<dyn manifold_node_engine::scene::scene_viewport::ViewportPass>> {
         Some(Box::new(scene_viewport::SceneViewportPass::new()))
     }
 
@@ -9112,7 +9110,7 @@ impl EffectNode for RenderScene {
     fn output_canvas_scale(
         &self,
         port: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         let temporal_upscale = matches!(params.get("temporal_upscale"), Some(ParamValue::Bool(true)));
         let denoise_feed = matches!(params.get("rt_denoise_feed"), Some(ParamValue::Bool(true)));
@@ -9157,7 +9155,7 @@ impl EffectNode for RenderScene {
     /// these outputs stay strictly lazy-by-wire (I-DN1: byte-identical).
     fn force_consumed_outputs(
         &self,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> &[&'static str] {
         let rt_enabled = matches!(params.get("rt_enabled"), Some(ParamValue::Bool(true)));
         let temporal_upscale =
@@ -9254,7 +9252,7 @@ impl RenderScene {
         let object = SceneObject {
             visible: true,
             cast_shadows: true,
-            transform: crate::node_graph::transform::Transform::default(),
+            transform: manifold_node_engine::scene::transform::Transform::default(),
             parent_transform: None,
             material: inputs.material("material"),
             mesh: inputs.slot_of("vertices"),
@@ -9632,12 +9630,12 @@ impl RenderScene {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: RENDER_SCENE_TYPE_ID,
         create: || Box::new(RenderScene::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo {
+        picker: Some(manifold_node_engine::palette::PickerInfo {
             label: "Render Scene",
-            category: crate::node_graph::palette::PaletteCategory::Atom,
+            category: manifold_node_engine::palette::PaletteCategory::Atom,
         }),
     }
 }
@@ -9662,3 +9660,6 @@ impl RenderScene {
         self.rt_probe.as_ref()
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

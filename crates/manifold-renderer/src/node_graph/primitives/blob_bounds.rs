@@ -1,9 +1,9 @@
 //! Exact bounds for indexed blob gathers. Shared by the field and its sparse
 //! schedule; spatial bins never impose a radius or quality limit.
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::fluid_particles::FluidBlob;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::water::fluid_particles::FluidBlob;
+use manifold_node_engine::primitive::Primitive;
 
 const SHADER: &str = include_str!("shaders/blob_bounds.wgsl");
 const THREADS: u32 = 256;
@@ -19,7 +19,7 @@ struct BoundsParams {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BlobBounds,
     type_id: "node.blob_bounds",
     purpose: "Reduce surface blobs to two exact conservative bounds: the largest kernel axis, and the largest 1.5-axis support plus centre displacement from the sorted particle. A barriered maximum reduction; no size cap or atomic operations.",
@@ -98,7 +98,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::primitives::liquid_surface_tests::{Harness, read};
+    use manifold_node_engine::testkit::liquid_surface::{Harness, read};
 
     fn reference(blobs: &[FluidBlob]) -> [u32; 2] {
         let mut bounds = [0.0f32; 2];
@@ -230,9 +230,9 @@ fn wire_blob_bounds(def: &mut EffectGraphDef) -> bool {
 
 
 inventory::submit! {
-    crate::node_graph::migration::GraphMigration {
+    manifold_node_engine::load::migration::GraphMigration {
         name: "wire_blob_bounds",
-        stage: crate::node_graph::migration::MigrationStage::AfterFlatten,
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
         order: 400,
         apply: wire_blob_bounds,
     }
@@ -241,9 +241,9 @@ inventory::submit! {
 #[cfg(test)]
 mod migration_tests {
     use super::*;
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::graph_loader::{instantiate_def, HandleScope, BoundaryHandling};
-    use crate::node_graph::persistence::PrimitiveRegistry;
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::load::graph_loader::{instantiate_def, HandleScope, BoundaryHandling};
+    use manifold_node_engine::persistence::PrimitiveRegistry;
 
     fn registry() -> PrimitiveRegistry {
         PrimitiveRegistry::with_builtin()
@@ -307,7 +307,7 @@ mod migration_tests {
             &registry(),
             HandleScope::Global,
             BoundaryHandling::Standalone,
-            &crate::node_graph::mesh_change::PreparedMeshRules::default(),
+            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(),
         )
         .expect("the old surface builds");
         let type_of = |id| graph.get_node(id).map(|n| n.node.type_id().as_str().to_owned());
@@ -330,7 +330,7 @@ mod migration_tests {
             }
         }
         assert_eq!(bounds_nodes.len(), 1, "one reduction serves both");
-        crate::node_graph::validation::validate(&graph).expect("the migrated surface validates");
+        manifold_node_engine::validation::validate(&graph).expect("the migrated surface validates");
 
         // Peter's saved water layer. Its other pre-1180 params need the project
         // loader's migrations before the renderer builds it, so its surface is
@@ -349,3 +349,6 @@ mod migration_tests {
     }
 
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

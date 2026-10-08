@@ -13,12 +13,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: PackChannels,
     type_id: "node.pack_rgba",
     purpose: "Pack four single-channel textures into one RGBA output by reading the R channel of each input into the matching output channel. Optional inputs default to the constant `default_a` (0.0 for r/g/b, 1.0 for a). Use when an atomic decomposition has computed each channel separately and downstream consumers expect packed data.",

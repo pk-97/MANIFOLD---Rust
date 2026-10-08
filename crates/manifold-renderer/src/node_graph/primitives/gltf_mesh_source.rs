@@ -14,15 +14,15 @@ use std::borrow::Cow;
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
 
-use crate::mesh::MeshVertex;
+use manifold_node_engine::mesh::MeshVertex;
 use crate::node_graph::decode_cache::cached_load_gltf_mesh;
-use crate::node_graph::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
-use crate::node_graph::mesh_source::MeshSource;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::physics_mesh::MeshSelection;
-use crate::node_graph::primitive::Primitive;
-use crate::node_graph::source_asset::{mesh_identity, LoadedAsset, SourceAssetIdentity};
+use manifold_node_engine::scene::mesh_source::MeshSource;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::scene::physics_mesh::MeshSelection;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::source_asset::{mesh_identity, LoadedAsset, SourceAssetIdentity};
 
 /// `fit` enum labels (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D7). Index 0
 /// (`none`) is the default and a strict no-op — every scan arrives at
@@ -126,7 +126,7 @@ fn apply_vertex_color_compat(mut verts: Vec<MeshVertex>, vertex_colors: bool) ->
     verts
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GltfMeshSource,
     type_id: "node.gltf_mesh_source",
     purpose: "Read a glTF/.glb file from disk and emit its geometry as a triangle-list Array(MeshVertex) wire. mesh_index=-1 (the default) world-combines the whole default scene — drop a model in and it renders. mesh_index >= 0 selects one mesh (optionally one primitive of it via primitive_index) in LOCAL space, undisplaced by node transforms, for callers that place it themselves via node.render_scene's per-object transform.",
@@ -333,7 +333,7 @@ impl Primitive for GltfMeshSource {
 
     fn source_asset_identity(
         &self,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> SourceAssetIdentity<'_> {
         let requested_path = match params.get("path") {
             Some(ParamValue::String(path)) => path.as_str(),
@@ -519,7 +519,7 @@ impl Primitive for GltfMeshSource {
                         .map(|verts| apply_mesh_fit(verts, fit_unit_box, recenter))
                         .map(|verts| apply_translate(verts, translate))
                         .and_then(|verts| {
-                            crate::node_graph::physics_mesh::select_fragment(
+                            manifold_node_engine::scene::physics_mesh::select_fragment(
                                 verts,
                                 fragment_count,
                                 fragment_index,
@@ -768,13 +768,13 @@ impl Primitive for GltfMeshSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::ports::PortType;
-    use crate::node_graph::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::primitive::PrimitiveSpec;
+    use manifold_node_engine::ports::PortType;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_core::{Beats, Seconds};
 
     #[test]
@@ -1164,14 +1164,14 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::effect_node::ParamValues;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::exec::effect_node::ParamValues;
     use crate::node_graph::gltf_load::load_gltf_mesh;
-    use crate::node_graph::{FrameTime, MetalBackend};
-    use crate::TestDevice;
+    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
+    use manifold_gpu::testkit::TestDevice;
     use manifold_core::{Beats, Seconds};
 
     const CAPACITY: u32 = 20_000;
@@ -1292,7 +1292,7 @@ mod gpu_tests {
             println!("frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping", path.display());
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (mut backend, r_out, slot) = make_buffer_backend(&device);
         let scratch: Vec<(&'static str, Slot)> = vec![("vertices", slot)];
 
@@ -1346,7 +1346,7 @@ mod gpu_tests {
             println!("fit_param_change_matches_fresh_executor: fixture not found at {}, skipping", path.display());
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
 
         let (backend_a, _r_out_a, slot_a) = make_buffer_backend(&device);
         let scratch_a: Vec<(&'static str, Slot)> = vec![("vertices", slot_a)];
@@ -1405,7 +1405,7 @@ mod gpu_tests {
         );
 
         let count = authored.len();
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (backend, _r_out, slot) = make_buffer_backend(&device);
         let scratch: Vec<(&'static str, Slot)> = vec![("vertices", slot)];
         let params_legacy = params_at(path.to_str().unwrap(), -1.0, CAPACITY as f32);
@@ -1460,3 +1460,74 @@ mod gpu_tests {
         assert!(explicit_false.iter().all(|vertex| vertex.color == [1.0; 4]));
     }
 }
+
+fn load_physics_mesh_asset(path: &std::path::Path, selection: &manifold_node_engine::scene::physics_mesh::MeshSelection) -> Result<Vec<MeshVertex>, String> {
+    use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
+    use crate::node_graph::decode_cache::cached_load_gltf_mesh;
+        let selector = if selection.material == DEFAULT_MATERIAL_MESH_PARAM {
+            GltfMeshSelector::DefaultMaterial
+        } else if selection.material >= 0 {
+            GltfMeshSelector::Material {
+                material_index: selection.material as u32,
+            }
+        } else if selection.mesh < 0 {
+            GltfMeshSelector::WholeScene
+        } else if selection.primitive < 0 {
+            GltfMeshSelector::Mesh {
+                mesh_index: selection.mesh as u32,
+            }
+        } else {
+            GltfMeshSelector::Primitive {
+                mesh_index: selection.mesh as u32,
+                primitive_index: selection.primitive as u32,
+            }
+        };
+        let vertices = cached_load_gltf_mesh(path, selector)?;
+        let vertices = apply_translate(
+            apply_mesh_fit(vertices, selection.fit, selection.recenter),
+            selection.translate,
+        );
+    Ok(vertices)
+}
+
+inventory::submit! {
+    manifold_node_engine::scene::mesh_asset_source::MeshAssetSource { load: load_physics_mesh_asset }
+}
+
+#[cfg(test)]
+mod mesh_asset_source_tests {
+    #[test]
+    fn mesh_asset_registration_preserves_selection_fit_and_translation() {
+        let dir = std::env::temp_dir().join(format!("manifold-mesh-seam-{}", manifold_core::short_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let positions = [[0.0_f32, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]];
+        std::fs::write(dir.join("positions.bin"), bytemuck::cast_slice(&positions)).unwrap();
+        let document = serde_json::json!({
+            "asset": {"version": "2.0"}, "scene": 0,
+            "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+            "buffers": [{"uri": "positions.bin", "byteLength": 36}],
+            "bufferViews": [{"buffer": 0, "byteLength": 36}],
+            "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3,
+                "type": "VEC3", "min": [0,0,0], "max": [2,2,0]}]
+        });
+        let path = dir.join("mesh.gltf");
+        std::fs::write(&path, document.to_string()).unwrap();
+        for (mesh, primitive) in [(-1, -1), (0, -1), (0, 0)] {
+            let selection = manifold_node_engine::scene::physics_mesh::MeshSelection {
+                mesh, primitive, material: -1, fit: true, recenter: true,
+                translate: [2.0, 3.0, 4.0], fragment_count: 1, fragment_index: 0, collider_parts: 1,
+            };
+            let direct = super::load_physics_mesh_asset(&path, &selection).unwrap();
+            let registered = manifold_node_engine::scene::mesh_asset_source::load_mesh(&path, &selection).unwrap();
+            let selected = selection.load(&path).unwrap();
+            assert_eq!(direct.len(), 3);
+            assert_eq!(bytemuck::cast_slice::<_, u8>(&direct), bytemuck::cast_slice::<_, u8>(&registered));
+            assert_eq!(bytemuck::cast_slice::<_, u8>(&direct), bytemuck::cast_slice::<_, u8>(&selected));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

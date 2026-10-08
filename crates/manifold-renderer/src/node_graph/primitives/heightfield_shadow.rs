@@ -10,10 +10,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Generated-codegen uniform layout: the seven PARAMS (`light_x`,
 /// `light_y`, `light_z`, `steps`, `strength`, `softness`, `relief`) in
@@ -32,7 +32,7 @@ struct HeightfieldShadowUniforms {
     _pad0: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: HeightfieldShadow,
     type_id: "node.heightfield_shadow",
     purpose: "Screen-space heightfield shadow raymarch (docs/DEPTH_RELIGHT_DESIGN.md D5): reads `height` as a raw [0,1] height map in the SAME ortho heightfield frame as node.ssao_gtao's Height Field mode (position = (uv.x*aspect, 1.0-uv.y, (1.0-raw)*relief)) and marches `steps` samples toward the light's XY direction, out to a max distance of relief*2 in uv units, tracking the deepest terrain-vs-ray penetration along the way. Fully lit (out=1.0) when no marched sample's terrain exceeds the ray; otherwise occlusion = smoothstep(0, softness*relief, penetration) * strength, out = clamp(1-occlusion, 0, 1) — soft penumbra via `softness`, hard shadows as softness approaches 0. Like node.ssao_gtao this atom NEVER modifies the color image — wire the grayscale output into a node.mix (Multiply mode) or sum it alongside an AO term next to node.basic_light's Lambert output. `light_x/y/z` use the same scene-toward-light convention and defaults as node.basic_light (0.4/0.6/0.7), port-shadowable for performance-time light orbiting.",
@@ -361,7 +361,7 @@ mod gpu_tests {
 
     use super::cpu_reference::{hfshadow_texel, HeightBuffer};
     use super::HeightfieldShadow;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn upload_rgba16f(device: &GpuDevice, w: u32, h: u32, label: &str, px: &[f16]) -> GpuTexture {
         assert_eq!(px.len(), (w * h * 4) as usize);
@@ -479,7 +479,7 @@ mod gpu_tests {
     /// `sqrt`/`smoothstep`'s cubic, not a tread-boundary class of error).
     #[test]
     fn generated_matches_cpu_reference() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (24u32, 16u32);
         let raw = height_ramp_2d(w, h);
         let height_tex = upload_height(&device, w, h, &raw);
@@ -489,11 +489,11 @@ mod gpu_tests {
         let uniforms = HfShadowUniforms { light_x, light_y, light_z, steps, strength, softness, relief, _pad0: 0.0 };
         let bytes = bytemuck::bytes_of(&uniforms);
 
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<HeightfieldShadow>()
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<HeightfieldShadow>()
             .expect("node.heightfield_shadow standalone codegen");
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "hfshadow-generated-vs-cpu",
         );
         let gen_out = dispatch(&device, &pipeline, &height_tex, w, h, bytes);
@@ -530,7 +530,7 @@ mod gpu_tests {
     /// dispatched on the real generated kernel.
     #[test]
     fn generated_flat_field_gives_full_visibility() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 16u32);
         let raw = vec![0.5f32; (w * h) as usize];
         let height_tex = upload_height(&device, w, h, &raw);
@@ -547,11 +547,11 @@ mod gpu_tests {
         };
         let bytes = bytemuck::bytes_of(&uniforms);
 
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<HeightfieldShadow>()
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<HeightfieldShadow>()
             .expect("node.heightfield_shadow standalone codegen");
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "hfshadow-flat",
         );
         let out = dispatch(&device, &pipeline, &height_tex, w, h, bytes);

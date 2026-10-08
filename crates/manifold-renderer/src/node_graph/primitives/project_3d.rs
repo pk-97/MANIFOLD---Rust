@@ -16,12 +16,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::{CurvePoint, MeshVertex};
-use crate::node_graph::camera::CameraMode;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
+use manifold_node_engine::scene::camera::CameraMode;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 pub const PROJECT_3D_MODES: &[&str] = &["Orthographic", "Perspective"];
 
@@ -60,7 +60,7 @@ struct Project3DUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Project3D,
     type_id: "node.flatten_3d",
     purpose: "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For Wireframe-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines. An optional camera: Camera port overrides both legacy modes (port-shadows-param, docs/CAMERA_AND_LENS_DESIGN.md D3): when wired, every point projects through the same right-handed camera convention node.render_scene uses, so the wireframe path agrees pixel-for-pixel with the scene-renderer family. Unwired, the legacy mode/proj_scale/proj_dist math is bit-identical to before — no migration for existing presets.",
@@ -135,7 +135,7 @@ impl Primitive for Project3D {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

@@ -5,8 +5,8 @@
 
 use manifold_gpu::{GpuTexture, GpuTextureDesc, GpuTextureFormat, GpuTextureUsage};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
 use crate::text_rasterizer::{HAlign, RasterizeOptions, TextRasterizer};
 
 pub(crate) const ATLAS_TILE_WIDTH: u32 = 32;
@@ -220,7 +220,7 @@ pub(crate) fn build_threshold_atlas_pixels(coverage: &[u8]) -> Vec<u8> {
     thresholds
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GlyphAtlas,
     type_id: "node.glyph_atlas",
     purpose: "Build the immutable 32 px Menlo ASCII coverage atlas for node.render_glyph_grid. Slots 0..94 contain printable ASCII 32..126, slot 95 is the solid inset cursor for codepoint 127, and the coverage space slot is blank. The threshold output ranks pixels around each glyph for tone-preserving code dithering.",
@@ -264,7 +264,7 @@ impl Primitive for GlyphAtlas {
         port: &str,
         _canvas_dims: (u32, u32),
         _input_dims: &[(&str, (u32, u32))],
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         matches!(port, "out" | "threshold").then_some((ATLAS_WIDTH, ATLAS_HEIGHT))
     }

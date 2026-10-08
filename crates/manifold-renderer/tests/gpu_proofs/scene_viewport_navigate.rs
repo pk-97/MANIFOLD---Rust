@@ -10,14 +10,11 @@
 //! `PresetRuntime`'s output byte-for-byte unchanged.
 
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::encode_rgba8_png;
-use manifold_renderer::node_graph::{
-    PrimitiveRegistry, ViewportCamera, ViewportOverlayConfig, build_overlay_lines,
-    composite_overlay_lines_rgba8, override_camera_def, project_lines, render_viewport_frame,
-};
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::viewport_camera::ViewportCamera, manifold_renderer::node_graph::ViewportOverlayConfig, manifold_renderer::node_graph::build_overlay_lines, manifold_renderer::node_graph::composite_overlay_lines_rgba8, manifold_renderer::node_graph::override_camera_def, manifold_renderer::node_graph::project_lines, manifold_renderer::node_graph::render_viewport_frame};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
@@ -96,7 +93,7 @@ fn ctx(h: &harness::ParityHarness, frame_count: i64) -> PresetContext {
 fn render_show_frame(
     runtime: &mut PresetRuntime,
     h: &harness::ParityHarness,
-    target: &manifold_renderer::render_target::RenderTarget,
+    target: &manifold_node_engine::gpu::render_target::RenderTarget,
     frame_count: i64,
 ) -> Vec<u8> {
     let c = ctx(h, frame_count);
@@ -169,7 +166,7 @@ fn viewport_render_is_isolated_and_produces_overlay_png() {
     // Overlays: grid + the SHOW camera's frustum (built from the show's
     // own orbit_camera params, independent of the splice) + the light.
     let editor_cam = vp_cam.to_camera();
-    let show_cam = manifold_renderer::node_graph::Camera::orbit_perspective(
+    let show_cam = manifold_node_engine::scene::camera::Camera::orbit_perspective(
         0.7, 0.6, 10.0, 0.8, 0.0, 0.0, 0.05, 200.0,
     );
     let overlay_cfg = ViewportOverlayConfig::default();

@@ -6,10 +6,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 // WGSL alignment: each vec3 occupies 16 bytes (12 data + 4 pad). Total 48.
 #[repr(C)]
@@ -32,7 +32,7 @@ struct BlinnUniforms {
     _pad0: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BlinnSpecular,
     type_id: "node.shininess",
     purpose: "Blinn-Phong specular from a tangent-space normal map + directional light + view: `h = normalize(light + view); spec = pow(max(dot(n, h), 0), power)`. ADDITIVE — sum with a base shading via `node.compose` mode=Add. Defaults match oily-fluid PBR (light=(0.35,0.55,0.75), view=(0,0,1), power=48, near-white tint). Wire a `node.light` into `light` to drive direction + colour from one source instead of scattered scalars; the wired light's colour multiplies the `color` tint param.",

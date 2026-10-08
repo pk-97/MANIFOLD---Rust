@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use manifold_renderer::node_graph::Transform;
+use manifold_node_engine::scene::transform::Transform;
 
 use crate::harness;
 use crate::matter_scene::{MatterScene, SceneSettings};

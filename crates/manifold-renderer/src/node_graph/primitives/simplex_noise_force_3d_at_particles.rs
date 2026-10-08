@@ -15,11 +15,11 @@
 use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`turbulence`,
 /// `anti_clump`, `turb_scale` f32, `active_count` Int → i32) then the derived
@@ -38,7 +38,7 @@ struct NoiseUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SimplexNoiseForce3DAtParticles,
     type_id: "node.turbulence_3d",
     purpose: "Per-particle 3D simplex noise advection added in-place to an Array<[f32; 3]> force buffer. 3D noise from SimplexNoise2D on three orthogonal planes (yz/xz/xy), density-adaptive amplitude (turbulence * (1 + capped(density) * anti_clump), capped = d/(1+d)). Samples a density Texture3D at the particle's position. Aliased force in/out — one physical buffer, in-place add. The 3D sibling of node.turbulence, decomposed from the fused node.fluid_simulate_3d.",
@@ -107,7 +107,7 @@ crate::primitive! {
 // D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
 // region's `time2` field. Matches `run()`'s own computation below.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.turbulence_3d",
         array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32]),
@@ -118,7 +118,7 @@ impl Primitive for SimplexNoiseForce3DAtParticles {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

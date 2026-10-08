@@ -1,0 +1,244 @@
+//! `SceneObject` — the CPU struct carried on [`PortType::Object`](crate::node_graph::ports::PortType::Object)
+//! wires.
+//!
+//! SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D2: an object today is "whatever named
+//! group happens to wrap the wires feeding `mesh_k`" — a UI-side convention
+//! `SceneVm` reverse-engineers. This struct makes it a typed fact instead:
+//! `node.scene_object` binds mesh + transform + material + maps + instances
+//! into one value, produced once per frame and read by `render_scene`
+//! through the same slot-resolution calls it already makes
+//! (`array_slot`, `texture_2d_slot`, `storage_revision_of` —
+//! `bindings.rs:190-196`, `render_scene.rs:2436-2450`) — the Object just
+//! changes where the slot comes from, not how it resolves.
+//!
+//! `Copy`, zero allocation — hot-path legal by construction, same cost
+//! class as [`Camera`](crate::node_graph::camera::Camera) /
+//! [`Light`](crate::node_graph::light::Light). CPU facts (`visible`,
+//! `transform`, `material`) are carried by value; GPU resources (mesh, maps,
+//! instances) are carried as [`Slot`]s, resolved by the consumer exactly as
+//! today.
+
+use crate::bindings::Slot;
+use crate::scene::material::Material;
+use crate::scene::transform::Transform;
+
+/// One scene object's full bundle — mesh + transform + material + maps +
+/// instances — carried on a single [`PortType::Object`](crate::node_graph::ports::PortType::Object)
+/// wire. See the module doc for the design rationale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneObject {
+    /// Whether this object draws (and casts shadows) this frame.
+    /// Port-shadowed on `node.scene_object`'s `visible` input — "mute the
+    /// statue on the drop" is a MIDI binding, not a feature request.
+    /// `false` = no draw AND no shadow cast (an invisible object leaves
+    /// no shadow).
+    pub visible: bool,
+    /// Whether this object casts shadows onto direct-light shadowing
+    /// (raster shadow maps + the RT shadow-ray pass). `false` removes it
+    /// ONLY from that: it still occludes AO, feeds GI, and appears in
+    /// reflections and primary hits, on both the raster and RT paths —
+    /// mirrors `node.light`'s `cast_shadows` param
+    /// (`primitives/light.rs`), same "float 0..1, modulatable" shape.
+    pub cast_shadows: bool,
+    /// Local TRS. Identity ([`Transform::default`]) when the `transform`
+    /// input port is unwired.
+    pub transform: Transform,
+    /// Optional parent TRS. The renderer composes this before `transform`,
+    /// preserving the full parent matrix (including shear introduced by
+    /// non-uniform scale and a rotated child).
+    pub parent_transform: Option<Transform>,
+    /// Shading description. `None` when the `material` input port is
+    /// unwired — consumers treat this the same as an unwired `material_k`
+    /// port does today (a structured error, per the Material design doc's
+    /// "no silent fallbacks" rule).
+    pub material: Option<Material>,
+    /// `Array<MeshVertex>` slot. `None` when the `vertices` input port is
+    /// unwired — consumers skip the draw the same way an unresolved
+    /// `mesh_k` slot is skipped today (`render_scene.rs:2437`).
+    pub mesh: Option<Slot>,
+    /// Optional u32 triangle indices into the vertex array.
+    pub indices: Option<Slot>,
+    /// Optional per-vertex appearance weights consumed by `render_scene`.
+    pub weights: Option<Slot>,
+    /// Cut-map slot. The renderer resolves its typed content metadata from
+    /// the slot, just as it does for mesh, weights, and map resources.
+    pub topology: Option<Slot>,
+    /// `Texture2D` slot — base colour map.
+    pub base_color_map: Option<Slot>,
+    /// `Texture2D` slot — normal map.
+    pub normal_map: Option<Slot>,
+    /// `Texture2D` slot — metallic/roughness map.
+    pub mr_map: Option<Slot>,
+    /// `Texture2D` slot — ambient occlusion map.
+    pub occlusion_map: Option<Slot>,
+    /// `Texture2D` slot — emissive map.
+    pub emissive_map: Option<Slot>,
+    /// `Texture2D` slot — sheen color map (GLTF_MATERIAL_EXTENSIONS_DESIGN
+    /// E3/E4/E5).
+    pub sheen_color_map: Option<Slot>,
+    /// `Texture2D` slot — sheen roughness map.
+    pub sheen_roughness_map: Option<Slot>,
+    /// `Texture2D` slot — iridescence map.
+    pub iridescence_map: Option<Slot>,
+    /// `Texture2D` slot — iridescence thickness map.
+    pub iridescence_thickness_map: Option<Slot>,
+    /// `Texture2D` slot — anisotropy map.
+    pub anisotropy_map: Option<Slot>,
+    /// `Texture2D` slot — clearcoat map (GLTF_MATERIAL_EXTENSIONS_DESIGN E6).
+    pub clearcoat_map: Option<Slot>,
+    /// `Texture2D` slot — clearcoat roughness map.
+    pub clearcoat_roughness_map: Option<Slot>,
+    /// `Texture2D` slot — clearcoat normal map.
+    pub clearcoat_normal_map: Option<Slot>,
+    /// `Texture2D` slot — specular map.
+    pub specular_map: Option<Slot>,
+    /// `Texture2D` slot — specular color map.
+    pub specular_color_map: Option<Slot>,
+    /// `Texture2D` slot — transmission map.
+    pub transmission_map: Option<Slot>,
+    /// `Texture2D` slot — diffuse-transmission factor map (A channel).
+    pub diffuse_transmission_map: Option<Slot>,
+    /// `Texture2D` slot — diffuse-transmission colour map (RGB channels).
+    pub diffuse_transmission_color_map: Option<Slot>,
+    /// `Texture2D` slot — volume thickness map.
+    pub volume_thickness_map: Option<Slot>,
+    /// `Array<InstanceTransform>` slot, for instanced draws. `None` for a
+    /// single-instance object.
+    pub instances: Option<Slot>,
+    /// Optional live instance count for an instanced draw. `None` preserves
+    /// the existing capacity-based behavior; wired values are clamped by the
+    /// renderer to the backing buffer's capacity.
+    pub instance_count: Option<f32>,
+    /// Per-object emissive-map strength multiplier. Lives on the object, not
+    /// the material, so a skin driving `emissive_map` can be dimmed without
+    /// touching the underlying material emission factor. Default 1.0.
+    pub emission_strength: f32,
+    /// Per-object appearance gain. Default 1.0.
+    pub gain: f32,
+}
+
+// Invariant (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md section 4): `SceneObject` stays
+// `Copy` — hot-path legal by construction, no per-frame allocation. A type
+// that stops being `Copy` fails this assertion at compile time instead of
+// silently degrading the hot path.
+const _: () = {
+    fn assert_copy<T: Copy>() {}
+    fn check(s: SceneObject) {
+        assert_copy::<SceneObject>();
+        let _ = s;
+    }
+    let _ = check;
+};
+
+/// Tracks connectivity independently from per-frame vertex positions.
+#[derive(Default)]
+pub struct MeshTopologyHistory(Option<u64>);
+
+impl MeshTopologyHistory {
+    pub fn update(
+        &mut self,
+        resource_epoch: u64,
+        revisions: impl Iterator<Item = impl std::hash::Hash>,
+    ) -> bool {
+        use std::hash::{Hash, Hasher};
+        let mut hash = ahash::AHasher::default();
+        resource_epoch.hash(&mut hash);
+        for (object, revision) in revisions.enumerate() {
+            object.hash(&mut hash);
+            revision.hash(&mut hash);
+        }
+        let current = hash.finish();
+        self.0
+            .replace(current)
+            .is_some_and(|previous| previous != current)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::content_revision::ContentVersion;
+
+    #[test]
+    fn cut_topology_resets_history_without_resetting_ordinary_motion() {
+        let mut history = MeshTopologyHistory::default();
+        let revision = Some(ContentVersion::new(1, crate::exec::execution_plan::ResourceId(4), 1));
+        assert!(!history.update(1, [None, revision].into_iter()));
+        // Deformation changes the mesh buffer, not this cut-map revision.
+        assert!(!history.update(1, [None, revision].into_iter()));
+        assert!(history.update(
+            1,
+            [None, Some(ContentVersion::new(1, crate::exec::execution_plan::ResourceId(4), 2))]
+                .into_iter(),
+        ));
+        assert!(!history.update(
+            1,
+            [None, Some(ContentVersion::new(1, crate::exec::execution_plan::ResourceId(4), 2))]
+                .into_iter(),
+        ));
+        // Recycled resources, changed object order and removal also reset.
+        assert!(history.update(2, [None, revision].into_iter()));
+        assert!(history.update(2, [revision, None].into_iter()));
+        assert!(history.update(2, [None::<ContentVersion>, None].into_iter()));
+        assert!(!history.update(2, [None::<ContentVersion>, None].into_iter()));
+    }
+
+    #[test]
+    fn general_topology_revision_resets_history_without_a_cut_map() {
+        let mut history = MeshTopologyHistory::default();
+        let object = (
+            Some(Slot(4)),
+            Some(1_u64),
+            None::<ContentVersion>,
+        );
+        assert!(!history.update(1, [object].into_iter()));
+        assert!(!history.update(1, [object].into_iter()));
+        assert!(history.update(1, [(object.0, Some(2_u64), object.2)].into_iter()));
+    }
+
+    #[test]
+    fn default_shaped_object_is_invisible_with_no_resources() {
+        // No `Default` impl is declared (every field's "sensible unwired
+        // value" already lives on the producing primitive's own defaults —
+        // `Transform::default()` for the identity transform, `None` for
+        // every optional resource); this test just documents the fully-
+        // empty construction reads as inert.
+        let obj = SceneObject {
+            visible: false,
+            cast_shadows: true,
+            transform: Transform::default(),
+            parent_transform: None,
+            material: None,
+            mesh: None,
+            indices: None,
+            weights: None,
+            topology: None,
+            base_color_map: None,
+            normal_map: None,
+            mr_map: None,
+            occlusion_map: None,
+            emissive_map: None,
+            sheen_color_map: None,
+            sheen_roughness_map: None,
+            iridescence_map: None,
+            iridescence_thickness_map: None,
+            anisotropy_map: None,
+            clearcoat_map: None,
+            clearcoat_roughness_map: None,
+            clearcoat_normal_map: None,
+            specular_map: None,
+            specular_color_map: None,
+            transmission_map: None,
+            diffuse_transmission_map: None,
+            diffuse_transmission_color_map: None,
+            volume_thickness_map: None,
+            instances: None,
+            instance_count: None,
+            emission_strength: 1.0,
+            gain: 1.0,
+        };
+        assert!(!obj.visible);
+        assert!(obj.mesh.is_none());
+        assert!(obj.material.is_none());
+    }
+}

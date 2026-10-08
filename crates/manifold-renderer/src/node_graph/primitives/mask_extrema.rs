@@ -10,13 +10,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuTextureFormat;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 pub const MASK_EXTREMA_AXES: &[&str] = &["X", "Y"];
 
-fn read_axis(params: &crate::node_graph::effect_node::ParamValues) -> u32 {
+fn read_axis(params: &manifold_node_engine::exec::effect_node::ParamValues) -> u32 {
     match params.get("axis") {
         Some(ParamValue::Enum(axis)) => (*axis).min(1),
         Some(ParamValue::Float(axis)) if axis.is_finite() => axis.round().clamp(0.0, 1.0) as u32,
@@ -41,7 +41,7 @@ struct MaskExtremaUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MaskExtrema,
     type_id: "node.mask_extrema",
     purpose: "Apply a signed one-axis morphology to a coverage mask. Positive radius takes the neighbourhood maximum (dilate), negative radius takes the neighbourhood minimum (erode), and zero is an exact bypass. Pair X then Y instances for a square expansion or erosion; samples outside the image are zero.",
@@ -138,7 +138,7 @@ impl Primitive for MaskExtrema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::effect_node::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
     #[test]
     fn declares_fixed_rgba16float_output_and_boundary_classification() {
@@ -150,11 +150,11 @@ mod tests {
         );
         assert_eq!(
             node.fusion_kind(),
-            crate::node_graph::freeze::classify::FusionKind::Boundary
+            manifold_node_engine::freeze::classify::FusionKind::Boundary
         );
         assert_eq!(
             node.boundary_reason(),
-            Some(crate::node_graph::freeze::classify::BoundaryReason::BarrieredReduction)
+            Some(manifold_node_engine::freeze::classify::BoundaryReason::BarrieredReduction)
         );
     }
 
@@ -176,7 +176,7 @@ mod gpu_tests {
         GpuBinding, GpuComputePipeline, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage,
     };
 
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn upload_mask(
         device: &manifold_gpu::GpuDevice,
@@ -320,7 +320,7 @@ mod gpu_tests {
 
     #[test]
     fn blob_v2_mask_pixels() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (5u32, 3u32);
         let values = vec![
             0.0, 0.2, 0.0, 0.0, 0.0, 0.0, 0.2, 1.0, 0.2, 0.0, 0.0, 0.2, 0.0, 0.2, 0.0,

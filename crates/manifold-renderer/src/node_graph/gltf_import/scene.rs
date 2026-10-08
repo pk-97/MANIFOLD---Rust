@@ -14,7 +14,7 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
-use crate::node_graph::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
+use manifold_node_engine::scene::boundary_nodes::{FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID};
 use crate::node_graph::gltf_load;
 use crate::node_graph::gltf_load::GltfImportSummary;
 use crate::node_graph::primitives::render_scene::OBJECT_SAFETY_MAX;

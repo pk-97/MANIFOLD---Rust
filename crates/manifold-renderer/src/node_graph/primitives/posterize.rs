@@ -11,10 +11,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -25,7 +25,7 @@ struct PosterizeUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Posterize,
     type_id: "node.posterize",
     purpose: "Posterize: quantize each RGB channel to `levels` discrete steps (round to nearest, endpoints included). Alpha pass-through. The standalone quantize atom (TD / Blender posterize) — `levels` is a port-shadowed scalar so a beat/LFO can crush the palette rhythmically. Dither composes from this.",

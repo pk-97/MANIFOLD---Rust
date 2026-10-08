@@ -23,10 +23,10 @@ use std::borrow::Cow;
 use ahash::AHashMap;
 use manifold_gpu::{GpuComputePipeline, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::dispatch_standalone_2d;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::dispatch_standalone_2d;
 
 pub const BLUR_VARIABLE_AXES: &[&str] = &["Horizontal", "Vertical"];
 pub const BLUR_VARIABLE_QUALITIES: &[&str] = &["Low", "Medium", "High"];
@@ -41,7 +41,7 @@ struct BlurUniforms {
     weighting_mode: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GaussianBlurVariableWidth,
     type_id: "node.variable_blur",
     purpose: "Separable Gaussian blur where the per-pixel kernel width is sampled from a `width` Texture2D's R channel. One dispatch handles one axis (horizontal or vertical); pair two with ping-pong textures for a 2D blur. Three quality levels (9-/17-/25-tap kernels at σ≈2/4/6) and an optional CoC-driven scatter-as-gather weighting that prevents sharp pixels bleeding into blurry regions — load-bearing for DoF-class effects.",
@@ -152,7 +152,7 @@ impl Primitive for GaussianBlurVariableWidth {
                 // tokens, so we still specialize the GENERATED WGSL per (quality,
                 // weighting) — dead tap branches flatten away, perf preserved.
                 // gaussian_blur_variable_width.wgsl is the parity oracle.
-                let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.variable_blur standalone codegen");
                 let quality_str = match quality {
                     0 => "0u",
@@ -165,7 +165,7 @@ impl Primitive for GaussianBlurVariableWidth {
                 );
                 gpu.device.create_specialized_compute_pipeline(
                     &wgsl,
-                    crate::node_graph::freeze::codegen::ENTRY,
+                    manifold_node_engine::freeze::codegen::ENTRY,
                     &[
                         ("QUALITY_LEVEL", quality_str),
                         ("WEIGHTING_MODE", weighting_str),
@@ -202,7 +202,7 @@ impl GaussianBlurVariableWidth {
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
         for quality in 0u32..3 {
             for weighting in 0u32..2 {
-                let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
+                let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<Self>()
                     .expect("node.variable_blur standalone codegen");
                 let quality_str = match quality {
                     0 => "0u",
@@ -213,7 +213,7 @@ impl GaussianBlurVariableWidth {
                 let label = format!("node.variable_blur.q{quality}.w{weighting}");
                 device.create_specialized_compute_pipeline(
                     &wgsl,
-                    crate::node_graph::freeze::codegen::ENTRY,
+                    manifold_node_engine::freeze::codegen::ENTRY,
                     &[("QUALITY_LEVEL", quality_str), ("WEIGHTING_MODE", weighting_str)],
                     &label,
                 );

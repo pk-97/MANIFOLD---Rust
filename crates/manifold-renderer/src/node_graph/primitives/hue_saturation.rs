@@ -12,10 +12,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -26,7 +26,7 @@ struct HueSaturationUniforms {
     _pad0: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: HueSaturation,
     type_id: "node.hue_saturation",
     purpose: "HSV colour adjust: rotate hue (degrees), scale saturation, scale value. RGB→HSV→adjust→RGB (TD HSV Adjust / Blender Hue-Saturation-Value). The standalone colour-rotation atom — saturation/value are multipliers (1.0 = unchanged). All three are port-shadowed scalars: wire an LFO / MIDI / driver to sweep hue live. Color Grade composes from this.",

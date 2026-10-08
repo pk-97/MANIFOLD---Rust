@@ -3,7 +3,7 @@
 //! Numerical GPU proofs live beside the primitive so they can share the
 //! renderer's `test_device` lock and the crate's GPU-only test configuration.
 
-use manifold_renderer::node_graph::freeze::codegen::standalone_for_spec;
+use manifold_node_engine::freeze::codegen::standalone_for_spec;
 use manifold_renderer::node_graph::primitives::AnalyticEchoInstances;
 
 #[test]

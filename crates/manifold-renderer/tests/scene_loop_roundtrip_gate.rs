@@ -11,8 +11,8 @@ use manifold_core::preset_type_id::PresetTypeId;
 use manifold_editing::command::Command;
 use manifold_editing::commands::graph::InsertSceneModifierCommand;
 use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-use manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers;
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::load::expand::prepare_scene_modifiers;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 
 #[path = "common/scene_modifier.rs"]
 mod common;

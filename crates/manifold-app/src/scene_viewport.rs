@@ -1,14 +1,6 @@
 //! Transient editor navigation and frame-matched observations of the live scene.
 use manifold_core::{GraphTarget, NodeId};
-use manifold_renderer::{
-    frame_status::FrameRenderStatus,
-    node_graph::{
-        ViewportCamera, WorldLine,
-        fluid::FluidDomainSnapshot,
-        scene_viewport::{SceneViewportConfig, SceneViewportHostError},
-    },
-    preset_runtime::ModifierPreviewContext,
-};
+use {manifold_node_engine::runtime::frame_status::FrameRenderStatus, manifold_node_engine::scene::viewport_camera::ViewportCamera, manifold_renderer::node_graph::WorldLine, manifold_node_engine::water::fluid::FluidDomainSnapshot, manifold_node_engine::scene::scene_viewport::SceneViewportConfig, manifold_node_engine::scene::scene_viewport::SceneViewportHostError, manifold_node_engine::runtime::ModifierPreviewContext};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -235,7 +227,7 @@ impl SceneViewportPaint<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_renderer::node_graph::fluid::{FluidDomainState, domain_layout};
+    use manifold_node_engine::water::fluid::{FluidDomainState, domain_layout};
 
     fn target() -> GraphTarget {
         GraphTarget::Generator(manifold_core::LayerId::new("water-layer"))

@@ -10,16 +10,16 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuSamplerDesc, GpuTextureFormat};
 
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const DEFAULT_MAX_DIM: u32 = 320;
 const MIN_MAX_DIM: u32 = 64;
 const MAX_MAX_DIM: u32 = 1024;
 
-fn read_max_dim(params: &crate::node_graph::effect_node::ParamValues) -> u32 {
+fn read_max_dim(params: &manifold_node_engine::exec::effect_node::ParamValues) -> u32 {
     let value = match params.get("max_dim") {
         Some(ParamValue::Float(value)) if value.is_finite() => value.round(),
         _ => DEFAULT_MAX_DIM as f32,
@@ -51,7 +51,7 @@ struct ResizeLimitUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ResizeLimit,
     type_id: "node.resize_limit",
     purpose: "Resize a Texture2D with bilinear filtering so its longest dimension is at most max_dim. The aspect ratio is preserved, smaller inputs are kept at their original size, and the Rgba16Float output is safe to feed into another composable texture primitive.",
@@ -94,7 +94,7 @@ impl Primitive for ResizeLimit {
         port: &str,
         _canvas_dims: (u32, u32),
         input_dims: &[(&str, (u32, u32))],
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         if port != "out" {
             return None;
@@ -109,7 +109,7 @@ impl Primitive for ResizeLimit {
     fn output_canvas_max_dim(
         &self,
         port: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<u32> {
         (port == "out").then(|| read_max_dim(params))
     }
@@ -153,9 +153,9 @@ impl Primitive for ResizeLimit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::effect_node::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
-    fn params(max_dim: f32) -> crate::node_graph::effect_node::ParamValues {
+    fn params(max_dim: f32) -> manifold_node_engine::exec::effect_node::ParamValues {
         let mut values = ahash::AHashMap::default();
         values.insert(Cow::Borrowed("max_dim"), ParamValue::Float(max_dim));
         values
@@ -219,8 +219,8 @@ mod gpu_tests {
     use half::f16;
     use manifold_gpu::{GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
 
-    use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn upload_source(device: &manifold_gpu::GpuDevice) -> manifold_gpu::GpuTexture {
         let mut pixels = vec![f16::from_f32(0.0); 3 * 2 * 4];
@@ -288,7 +288,7 @@ mod gpu_tests {
 
     #[test]
     fn blob_v2_standalone_bilinear_resampling_uses_the_full_source() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let source = upload_source(&device);
         let output = RenderTarget::new(
             &device,

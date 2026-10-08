@@ -463,14 +463,14 @@ fn render_ui_scene(
 fn run_graph_preset(preset: &str) {
     let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
 
-    let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
+    let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid) else {
         eprintln!(
             "ui-snap graph: no graph view for preset '{preset}' \
              (needs a JSON preset carrying presetMetadata)"
         );
         std::process::exit(2);
     };
-    let Some(rg_snap) = manifold_renderer::node_graph::snapshot_for_view(view) else {
+    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view) else {
         eprintln!("ui-snap graph: snapshot_for_view failed for '{preset}' (def failed to materialize)");
         std::process::exit(2);
     };
@@ -505,14 +505,14 @@ fn run_editor_preset(
     open_perf_hud: bool,
 ) {
     let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
-    let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
+    let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid) else {
         eprintln!(
             "ui-snap editor: no graph view for preset '{preset}' \
              (needs a JSON preset carrying presetMetadata)"
         );
         std::process::exit(2);
     };
-    let Some(rg_snap) = manifold_renderer::node_graph::snapshot_for_view(view) else {
+    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view) else {
         eprintln!("ui-snap editor: snapshot_for_view failed for '{preset}' (def failed to materialize)");
         std::process::exit(2);
     };
@@ -557,14 +557,14 @@ fn run_gltf_editor(want_dump: bool) {
     let target = manifold_core::GraphTarget::Generator(layer.layer_id.clone());
     let pid = layer.generator_type().clone();
 
-    let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
+    let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid) else {
         eprintln!(
             "ui-snap gltfeditor: no graph view for the imported preset id '{pid:?}' — \
              the embedded-overlay install in fixtures::gltf_scene() didn't take"
         );
         std::process::exit(2);
     };
-    let Some(rg_snap) = manifold_renderer::node_graph::snapshot_for_view(view) else {
+    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view) else {
         eprintln!("ui-snap gltfeditor: snapshot_for_view failed for the imported def");
         std::process::exit(2);
     };
@@ -645,7 +645,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
     const OBJECTS_BEFORE: u32 = 2;
     const LIGHTS_BEFORE: u32 = 1;
 
-    let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
+    let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid) else {
         eprintln!("ui-snap gltfeditor-add*: no graph view for the imported preset id '{pid:?}'");
         std::process::exit(2);
     };
@@ -658,7 +658,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
 
     // ── BEFORE: identical to plain `gltfeditor` (pristine import, no
     // per-instance override yet — the canonical def IS the effective graph).
-    let Some(rg_snap_before) = manifold_renderer::node_graph::snapshot_for_view(view) else {
+    let Some(rg_snap_before) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view) else {
         eprintln!("ui-snap gltfeditor-add*: snapshot_for_view failed (before)");
         std::process::exit(2);
     };
@@ -727,14 +727,14 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         .expect("AddSceneObjectCommand/AddSceneLightCommand lifts the graph on first edit");
     let mut d = override_def.clone();
     manifold_renderer::generators::registry::graft_preset_metadata_from_bundle(&mut d, &pid);
-    let rg_snap_after = manifold_renderer::node_graph::GraphSnapshot::from_def(&d)
+    let rg_snap_after = manifold_node_engine::snapshot::GraphSnapshot::from_def(&d)
         .expect("post-command def snapshots");
     let mut rg_snap_after = rg_snap_after;
     if let Some(meta) = d.preset_metadata.as_ref() {
         use manifold_core::effect_graph_def::BindingTarget;
-        use manifold_renderer::node_graph::{OuterParamRouting, OuterParamSource};
+        use manifold_node_engine::snapshot::{OuterParamRouting, OuterParamSource};
         let mut handle_by_id: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
-        manifold_renderer::node_graph::collect_node_handles(&d.nodes, &mut handle_by_id);
+        manifold_node_engine::load::loaded_preset_view::collect_node_handles(&d.nodes, &mut handle_by_id);
         rg_snap_after.outer_routings = meta
             .bindings
             .iter()
@@ -917,7 +917,7 @@ fn run_group_demo(want_dump: bool) {
     // harness anyway, per the "rendering structure only" log line) — any
     // loaded view supplies a well-formed `EffectGraphDef` for the type slot.
     let placeholder_pid = manifold_core::PresetTypeId::from_string("FluidSim2D".to_string());
-    let view = manifold_renderer::node_graph::loaded_preset_view_by_id(&placeholder_pid)
+    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&placeholder_pid)
         .expect("FluidSim2D preset view");
     let gv_snap = group_demo_snapshot();
 
@@ -1595,7 +1595,7 @@ mod editor_window_harness {
     //! no cache path to have a stale pixel in.
 
     use manifold_gpu::{GpuDevice, GpuTextureFormat};
-    use manifold_renderer::render_target::RenderTarget;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_ui_paint::ui_renderer::UIRenderer;
     use manifold_ui::graph_canvas::{GraphCanvas, GraphCanvasTargets, Rect as CanvasRect};
     use manifold_ui::hit_targets::HitTargets;
@@ -1615,9 +1615,9 @@ mod editor_window_harness {
     fn node_the_fixture_places_renders_at_its_declared_screen_rect() {
         let preset = "FluidSim2D";
         let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
-        let view = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid)
+        let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid)
             .expect("FluidSim2D preset must be loadable");
-        let rg_snap = manifold_renderer::node_graph::snapshot_for_view(view)
+        let rg_snap = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view)
             .expect("FluidSim2D snapshot must materialize");
         let (project, target, selection) = fixtures::generator_editor_fixture(preset)
             .expect("FluidSim2D is a generator preset");

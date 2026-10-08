@@ -22,7 +22,7 @@ stays fixed. Existing in-band zero-scale producers remain compatible.
 | RT scene shape | `crates/manifold-gpu/src/metal/raytrace.rs:67-112` | per-object BLAS + ONE TLAS over an instance-descriptor buffer; one descriptor per object, `accelerationStructureIndex = object index`, CPU-written (`build_instance_buffer` :385) |
 | instance_id = object index | `raytrace.rs:818-823` + kernels | `gi_materials[iid]`, `normal_sources[iid]`, `n4.w = float(primary_iid)` (:1610) all index by committed instance_id |
 | Object motion table | `raytrace.rs:3018-3028` | `obj_motion[oid]` where `oid = n4.w` — breaks when instance_id expands past object count (D6) |
-| Instance type | `crates/manifold-renderer/src/generators/mesh_common.rs:96` `InstanceTransform` | 32 B: `pos_scale` (xyz pos, w uniform scale), `rot_pad` (xyz XYZ Euler, w mirror marker) |
+| Instance type | `crates/manifold-node-engine/src/mesh.rs:96` `InstanceTransform` | 32 B: `pos_scale` (xyz pos, w uniform scale), `rot_pad` (xyz XYZ Euler, w mirror marker) |
 | Mirror marker | SCENE_MIRROR_DESIGN.md D5 (mirror-reflection-math, P1-amended) | marker k>0 = mirrored across plane ⊥ component k−1; exact world = `R'(w·M·v)+t'`; raster fold at `render_scene.wgsl:770-813` (`msign` applied to position/normal/tangent BEFORE the stored Euler) |
 | Raster instance composition | `render_scene.wgsl:758-788` | `world = model_n · T_instance`; `T_instance`: `pos' = rot·((v·msign)·s) + t` — 3x3 = `rot·diag(msign·s)`, translation `t` |
 | Euler order | `render_scene.wgsl:455` (`euler_xyz`, bit-for-bit `render_instanced_3d_mesh.wgsl`'s) | `R = Rz·Ry·Rx`; any GPU-side replica must match exactly |

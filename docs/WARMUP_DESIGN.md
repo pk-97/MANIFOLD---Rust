@@ -41,7 +41,7 @@ first-play smoothness. See `MANIFOLD_GPU_ARCHITECTURE.md` for ownership and scop
 |---|---|---|
 | Atom codegen pipeline sweep | `crates/manifold-renderer/src/generators/registry.rs:135` (`prewarm_all_atom_codegen_pipelines`) | Runs at boot from `GeneratorRenderer::new` (`generator_renderer.rs:207`) |
 | Hand-written pipeline prewarms | `registry.rs:84-99` (RenderScene, GltfTextureSource, ScatterOnMesh, SeedParticlesFromTexture) | P4 deletes the ones pre-roll subsumes |
-| Plugin effect prewarm | `crates/manifold-renderer/src/plugin_prewarm.rs:52`, called at `layer_compositor.rs:600` | Post-process FFI effects |
+| Plugin effect prewarm | `crates/manifold-node-engine/src/runtime/plugin_prewarm.rs:52`, called at `layer_compositor.rs:600` | Post-process FFI effects |
 | Pipeline binary archive | `crates/manifold-app/src/app.rs:2382` load / `app.rs:2431` save, `~/Library/Caches/com.latentspace.manifold/pipeline_cache.metallib` | Cross-launch compile cache |
 | Fusion segment prewarm | `prewarm_project_chain_segments`, called at `content_commands.rs:444` | Background worker, enqueue-only |
 | Video decoder lookahead | `engine.rs:958` calls `compute_prewarm_candidates` (def `engine.rs:2517`) → `content_thread.rs:754` → `VideoRenderer::pre_warm_from_candidates` | **The house precedent**: engine computes what's about to play; decoders open ahead of activation |

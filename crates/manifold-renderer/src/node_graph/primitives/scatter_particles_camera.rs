@@ -23,12 +23,12 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 pub const SCATTER_CAMERA_MODES: &[&str] = &["Perspective", "Orthographic"];
 
@@ -66,7 +66,7 @@ struct ProjectedUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ScatterParticlesCamera,
     type_id: "node.draw_particles_camera",
     purpose: "Fused 3D→2D camera projection + atomic-add scatter. Takes 3D particles and a Camera; projects each particle through orthographic (with toroidal wrap) or perspective camera math; atomic-adds scaled_energy into a 2D u32 accumulator. Pair downstream with node.resolve_scatter → texture for display. Sibling to node.draw_particles (2D in/2D out) and node.draw_particles_3d (3D in/3D out) — this one bridges 3D in to 2D-grid out via a camera. Used by FluidSim3D's display path.",

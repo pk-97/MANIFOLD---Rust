@@ -58,7 +58,7 @@ missing symbol is an escalation.
 | Slot-level resource resolution | `bindings.rs:190-196` (`texture_2d_slot(Slot)`, `array_slot(Slot)`) — and `render_scene.rs:2436-2450` already resolves `mesh_k` port→Slot→buffer, reads `slot_generation_of(slot)` for its shadow cache | SHIPPED. `SceneObject` carrying `Slot`s changes *where the slot comes from*, not how it resolves |
 | Unbound-mesh & zero-vertex tolerance | `render_scene.rs:2437` (`let Some(vertices) = … else` skip), `:3078-3083` (vertex_count == 0 fallback) | SHIPPED — `visible: false` → skip-the-draw lands on existing tolerance |
 | Planner lifetime extension for dynamically-consumed inputs | `effect_node.rs:595-599` (`variadic_skip_passthrough_out`: "planner extends every wired texture input's lifetime to the output's last reader") | SHIPPED precedent for D2's `carries_resources` hook |
-| Fusion cut-rule exemption for CPU-struct wires | `docs/FREEZE_COMPILER_MAP.md` section 4 ("a wire into a `Camera`-typed CPU-struct port does NOT cut…"); code: `freeze/install.rs`, `freeze/region.rs` (`rg -n "PortType::Camera" crates/manifold-renderer/src/node_graph/freeze/`) | SHIPPED — `Object` joins the same list |
+| Fusion cut-rule exemption for CPU-struct wires | `docs/FREEZE_COMPILER_MAP.md` section 4 ("a wire into a `Camera`-typed CPU-struct port does NOT cut…"); code: `freeze/install.rs`, `freeze/region.rs` (`rg -n "PortType::Camera" crates/manifold-node-engine/src/freeze/`) | SHIPPED — `Object` joins the same list |
 | `render_scene` per-object dynamic ports | `render_scene.rs:742` (`rebuild(objects, lights)`), `:777-782` (`mesh_{i}` et al. port construction), `:1905` (full port list in `composition_notes`), `OBJECT_SAFETY_MAX` `:743` | SHIPPED — P2 rewrites the per-object list to `object_{i}` |
 | Def load-migration precedents | type-id level: `graph_loader.rs:243` (`migrate_def_type_ids`, runs at `instantiate_def:321`); model level at project load: `binding_migration.rs:40` (`migrate_user_param_bindings_to_node_id(&mut Project)`, called from `manifold-app/src/project_io.rs`); JSON ladder: `manifold-io/src/migrate.rs` (v-rung functions) | SHIPPED ×3. D5's migration is model/def-level (binding_migration's residency), NOT the io ladder — the panel reads unflattened defs from snapshots, so migration must land in the stored def, not only at instantiate |
 | Object identity today (the thing being replaced) | `scene_vm.rs:102-129` (`SceneObjectVm::Known` = group-output trace; `Custom` = everything else), SceneStarter.json (objects "Floor"/"Cube" are groups exporting `vertices`/`material`/`transform` group-output ports — the proto-bundle this design formalizes) | SHIPPED — the group-output port bundle is exactly `scene_object`'s input list, proven in every scene asset |
@@ -106,7 +106,7 @@ identity** — Peter, verbatim, this session: "feels like a bit of a hack." Grou
 cosmetic (GROUPING_GRAPHS restored).
 
 **D2 — `SceneObject` is a `Copy` CPU struct carrying values for CPU facts and `Slot`s for GPU
-resources.** Committed shape (new module `crates/manifold-renderer/src/node_graph/scene_object.rs`,
+resources.** Committed shape (new module `crates/manifold-node-engine/src/scene/scene_object.rs`,
 sibling of `camera.rs`/`light.rs`):
 
 ```rust
@@ -334,7 +334,7 @@ vocabulary now, not the importer's wrapping paper.
 | `SceneObject` stays `Copy` (hot-path: no per-frame allocation) | Compile-time: `const _: () = { fn assert_copy<T: Copy>() {} … };` in `scene_object.rs` |
 | Migration is idempotent and lossless | `migrate_scene_object_wires_idempotent` (apply twice, def-equality) + `migrate_unparseable_triple_left_intact` (a mangled def round-trips byte-identical); flatten-equivalence on a migrated grouped def |
 | An invisible object leaves no shadow | `gpu_tests` PNG pair in P2's gate: caster `visible` off → its shadow gone from the receiver |
-| Planner keeps carried resources alive | `carries_resources_extends_lifetimes` unit test on a synthetic plan: texture into scene_object, render_scene as last reader, assert no pool release between (shape it like the variadic-mux lifetime test — ⚠ VERIFY-AT-IMPL: `rg -n "variadic" crates/manifold-renderer/src/node_graph/execution_plan.rs` and mirror its test) |
+| Planner keeps carried resources alive | `carries_resources_extends_lifetimes` unit test on a synthetic plan: texture into scene_object, render_scene as last reader, assert no pool release between (shape it like the variadic-mux lifetime test — ⚠ VERIFY-AT-IMPL: `rg -n "variadic" crates/manifold-node-engine/src/exec/execution_plan.rs` and mirror its test) |
 | Panel introduces no new mutation path; one value, four surfaces (v1 section 4, carried forward) | Same gates: `rg -n "MutateProject\|Arc<Mutex\|Arc<RwLock" scene_setup_panel.rs` → 0; `scene_panel_slider_emits_card_identical_command` stays green |
 | `SceneVm` purity (v1 section 4, carried) | Same: takes `&EffectGraphDef` only; `rg -n "Project\b" scene_vm.rs` → 0 outside doc comments |
 | Every numeric value cell built by the dock registers all three gestures | Unit test `dock_numeric_cells_register_full_contract`: after a `build_docked` on the azalea-shaped synthetic Vm, every drag-armable cell id is also present in the type-in registration set (and vice versa) |
@@ -368,7 +368,7 @@ path · `cd` prefixes, `add -A`, unpathspec'd commits (house rules).
   `gpu_tests` graph: synthetic def wiring mesh→scene_object→(test consumer via
   `inputs.object`), asserts the struct arrives with correct slots and the mesh resolves.
   *Negative:* `rg -n "String" scene_object.rs` → no owned strings in the struct;
-  `rg -n "Arc<Mutex" crates/manifold-renderer/src/node_graph/scene_object*` → 0.
+  `rg -n "Arc<Mutex" crates/manifold-node-engine/src/scene/scene_object*` → 0.
   **Demo:** none — L1 (plumbing; the visible surface arrives with P2, same landing batch).
 - **Forbidden:** `skip_passthrough` on scene_object (D1 rejected the alias shape); touching
   `render_scene` (P2's).

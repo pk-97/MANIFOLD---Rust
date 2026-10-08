@@ -686,10 +686,10 @@ fn scene_ref_for_vm(
 }
 
 fn modifier_picker_reason(
-    error: &manifold_renderer::node_graph::scene_modifier_expand::SceneModifierExpandError,
+    error: &manifold_node_engine::load::expand::SceneModifierExpandError,
 ) -> String {
     log::debug!("scene modifier picker admission rejected recipe: {error}");
-    use manifold_renderer::node_graph::scene_modifier_expand::SceneModifierExpandError;
+    use manifold_node_engine::load::expand::SceneModifierExpandError;
     match error {
         SceneModifierExpandError::UnsupportedCoordinateFrame { detail, .. }
             if detail.contains("imported scene bounds") =>
@@ -733,7 +733,7 @@ fn scene_recipe_picker_entries(
     vm: &manifold_renderer::node_graph::scene_vm::SceneVm,
     forces: bool,
 ) -> Vec<manifold_ui::param_surface::ModifierPickerEntry> {
-    use manifold_renderer::preset_loader::SCENE_MODIFIER_CATALOG;
+    use manifold_node_engine::load::preset_loader::SCENE_MODIFIER_CATALOG;
     use manifold_ui::param_surface::ModifierPickerEntry;
     let catalog = SCENE_MODIFIER_CATALOG.load();
     let mut entries: Vec<_> = catalog.entries().filter_map(|(id, json)| {
@@ -821,7 +821,7 @@ pub(crate) fn modifier_surfaces(
         let legacy_scope = manifold_core::scene_modifier_math_view::has_legacy_scope_control(&instance.graph);
         let force = manifold_core::scene_modifier_preset::is_force_recipe(&instance.graph);
         let force_objects = if force {
-            Some(manifold_renderer::node_graph::scene_modifier_expand::force_objects_for_authoring(def, &instance.scene)
+            Some(manifold_node_engine::load::expand::force_objects_for_authoring(def, &instance.scene)
                 .unwrap_or_else(|error| {
                     log::error!("force {} targets unavailable: {error}", instance.id);
                     Vec::new()

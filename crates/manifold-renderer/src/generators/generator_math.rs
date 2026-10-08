@@ -1,9 +1,6 @@
 /// Shared projection scale for line generators.
 pub const PROJ_SCALE: f32 = 0.25;
 
-/// Default dot radius in normalized screen space.
-pub const DEFAULT_DOT_RADIUS: f32 = 0.005;
-
 /// 4D rotation in XY, ZW, XW planes (in-place).
 #[inline]
 pub fn rotate_4d(

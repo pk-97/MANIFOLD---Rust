@@ -17,7 +17,7 @@ use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 #[cfg(not(target_os = "macos"))]
 use manifold_playback::renderer::StubRenderer;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
-use manifold_renderer::gpu::GpuContext;
+use manifold_node_engine::gpu::context::GpuContext;
 use manifold_renderer::layer_compositor::LayerCompositor;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 
@@ -359,7 +359,7 @@ pub struct Application {
     /// re-translates, matching the canvas's own per-frame `set_snapshot`. Holds
     /// the source `Arc` alongside the translation purely for that identity check.
     pub(crate) editor_ui_graph: Option<(
-        std::sync::Arc<manifold_renderer::node_graph::GraphSnapshot>,
+        std::sync::Arc<manifold_node_engine::snapshot::GraphSnapshot>,
         std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>,
     )>,
     /// Right-sidebar checkbox panel for V2 user-exposed parameters.
@@ -654,7 +654,7 @@ impl Application {
             editor_mapping_popover: crate::mapping_popover::MappingPopover::new(),
             graph_node_clipboard: None,
             palette_atoms_cache: {
-                use manifold_renderer::node_graph::{Category, descriptor_for};
+                use manifold_node_engine::descriptor::{Category, descriptor_for};
                 let cat_of = |type_id: &str| {
                     descriptor_for(type_id)
                         .map(|d| d.category)
@@ -666,7 +666,7 @@ impl Application {
                         .position(|&x| x == c)
                         .unwrap_or(usize::MAX)
                 };
-                let mut atoms: Vec<_> = manifold_renderer::node_graph::palette_atoms()
+                let mut atoms: Vec<_> = manifold_node_engine::palette::palette_atoms()
                     .into_iter()
                     .map(|a| {
                         let category = cat_of(&a.type_id).label().to_string();
@@ -2616,7 +2616,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // and content tick paths — editing a preset `.json` on disk
             // refreshes the catalog + registry and rebuilds live chains
             // without a restart. Idempotent; a no-op if already started.
-            manifold_renderer::preset_loader::start_preset_watcher();
+            manifold_node_engine::load::preset_loader::start_preset_watcher();
         }
 
         self.gpu = Some(gpu);

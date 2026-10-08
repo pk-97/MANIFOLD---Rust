@@ -30,11 +30,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Same generous headroom as `node.gltf_morph_weights::MAX_TARGETS` —
 /// duplicated rather than shared across the two small A3 primitives (no
@@ -54,7 +54,7 @@ struct MorphTargetsBlendUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MorphTargetsBlend,
     type_id: "node.morph_targets_blend",
     purpose: "glTF additive N-ary morph-target blend: deforms Array(MeshVertex) `in` (the base mesh) by summing up to `target_count` weighted per-target deltas. deltas (Array(MeshVertex), flattened target-major: deltas[target * vertex_count + idx]) and weights (Array(f32), one per target) are both BufferGather — deltas from node.gltf_morph_deltas_source, weights from node.gltf_morph_weights. pos' = base.pos + sum(weight[t] * delta[t].pos); normal' = normalize(base.normal + sum(weight[t] * delta[t].normal)). The effective loop bound is min(target_count, weights_len, deltas_len / vertex_count) — a short or mismatched buffer truncates (skips the missing targets), never reads out of bounds. target_count == 0 is a strict base pass-through. Barrier-free per-element kernel — the codegen path (fusable), never a fusion-boundary WGSL include.",
@@ -96,7 +96,7 @@ impl Primitive for MorphTargetsBlend {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -177,7 +177,7 @@ mod gpu_tests {
 
     /// Generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<MorphTargetsBlend>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<MorphTargetsBlend>()
             .expect("morph_targets_blend buffer codegen")
     }
 
@@ -220,7 +220,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let wgsl = generated_wgsl();
         let pipeline =
-            device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "morph-targets-blend-test");
+            device.create_compute_pipeline(&wgsl, manifold_node_engine::freeze::codegen::ENTRY, "morph-targets-blend-test");
         let in_buf = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
         unsafe {
             in_buf.write(0, bytemuck::cast_slice(verts));
@@ -263,7 +263,7 @@ mod gpu_tests {
     /// exactly.
     #[test]
     fn generated_matches_hand_formula_single_target_full_weight() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
         assert!(gen_wgsl.contains("struct Element"), "element struct synthesized");
         assert!(gen_wgsl.contains("var<storage, read_write>"), "output bound read_write");
@@ -297,7 +297,7 @@ mod gpu_tests {
     /// just single-target pass-through.
     #[test]
     fn generated_matches_hand_formula_multi_target_blend() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let verts = vec![mk_vertex([2.0, 0.0, 0.0], [0.0, 0.0, 1.0])];
         // Target-major: deltas[0]=target0's delta for vertex 0, deltas[1]=target1's.
         let deltas = vec![
@@ -323,7 +323,7 @@ mod gpu_tests {
     /// pass-through — no delta ever applied.
     #[test]
     fn zero_target_count_is_base_pass_through() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let verts = vec![mk_vertex([5.0, -2.0, 1.0], [0.0, 1.0, 0.0])];
         let deltas = vec![mk_vertex([100.0, 100.0, 100.0], [1.0, 1.0, 1.0])];
         let weights = vec![1.0f32];
@@ -340,7 +340,7 @@ mod gpu_tests {
     /// hazard the A3 phase brief calls out explicitly.
     #[test]
     fn short_weights_buffer_truncates_the_blend_bound() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let verts = vec![mk_vertex([0.0, 0.0, 0.0], [0.0, 1.0, 0.0])];
         let deltas = vec![
             mk_vertex([10.0, 0.0, 0.0], [0.0, 0.0, 0.0]),

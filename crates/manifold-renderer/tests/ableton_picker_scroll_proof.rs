@@ -16,7 +16,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::{UIFlags, Vec2};
 use manifold_ui::panels::ableton_picker::{

@@ -6,7 +6,7 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
-use crate::node_graph::live_extent::LiveExtent;
+use manifold_node_engine::scene::live_extent::LiveExtent;
 
 /// Bytes of one object's draw arguments.
 pub(super) const ARGS_BYTES: u64 = 32;
@@ -144,7 +144,7 @@ mod tests {
     /// object's own aligned block.
     #[test]
     fn live_draw_args_are_whole_live_triangles_within_capacity() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut writer = LiveDrawArgs::default();
         for (triangles, expected) in [(4u32, 12u32), (7, 18)] {
             let counts = device.create_buffer_shared(8);
@@ -166,7 +166,7 @@ mod tests {
     /// reaches the end.
     #[test]
     fn trimmed_instances_end_after_the_last_non_hole() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut writer = LiveDrawArgs::default();
         let live = [1.0f32, 2.0, 3.0, 0.5, 0.0, 0.0, 0.0, 0.0];
         let hole = [0.0f32; 8];

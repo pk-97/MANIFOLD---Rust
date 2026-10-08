@@ -16,11 +16,11 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CycleTableRow,
     type_id: "node.cycle_table_row",
     purpose: "Cycle through a curated `Table` of f32 rows on each clip trigger, emitting the selected row as `Array<f32>`. row_idx = ClipTriggerCycle::step(trigger_count, table.row_count()): a repeated trigger_count returns the cached row (idempotent — same-frame callers don't re-roll); a new trigger_count emits trigger_count % row_count, unless that would repeat the previous emission (and row_count > 1), in which case it advances by +1 mod row_count instead — never fires the same row twice in a row. The generic preset-cycler primitive — pair with any consumer that takes a variable-length float buffer (per-instance angles, channel triplets, rhythm steps) plus a trigger source from generator_input. Output capacity = table.col_count(); rows are dimensionally consistent (enforced at JSON load). Unwired trigger_count stays on row 0.",
@@ -53,7 +53,7 @@ crate::primitive! {
     aliases: ["cycle table row", "sequence", "step"],
     boundary_reason: NonGpu,
     extra_fields: {
-        clip_trigger_cycle: crate::generators::clip_trigger::ClipTriggerCycle = crate::generators::clip_trigger::ClipTriggerCycle::new(),
+        clip_trigger_cycle: manifold_node_engine::clip_trigger::ClipTriggerCycle = manifold_node_engine::clip_trigger::ClipTriggerCycle::new(),
     },
 }
 
@@ -61,7 +61,7 @@ impl Primitive for CycleTableRow {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "row" {
@@ -127,7 +127,7 @@ impl Primitive for CycleTableRow {
     /// BUG-104: release the cycle's idempotence tracking. See
     /// `EffectNode::is_trigger_latch`.
     fn clear_state(&mut self) {
-        self.clip_trigger_cycle = crate::generators::clip_trigger::ClipTriggerCycle::new();
+        self.clip_trigger_cycle = manifold_node_engine::clip_trigger::ClipTriggerCycle::new();
     }
 
     fn is_trigger_latch(&self) -> bool {
@@ -138,12 +138,12 @@ impl Primitive for CycleTableRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::parameters::TableData;
+    use manifold_node_engine::parameters::TableData;
     use std::sync::Arc;
 
     #[test]
     fn array_output_capacity_reads_table_col_count() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = CycleTableRow::new();
         let table = Arc::new(
             TableData::new(vec![vec![0.0, 1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0, 9.0]])
@@ -159,7 +159,7 @@ mod tests {
     /// rationale.
     #[test]
     fn clear_state_releases_the_cycle_idempotence_cache() {
-        use crate::node_graph::EffectNode;
+        use manifold_node_engine::exec::effect_node::EffectNode;
         let mut prim = CycleTableRow::new();
         assert_eq!(prim.clip_trigger_cycle.step(0, 4), 0);
         assert_eq!(prim.clip_trigger_cycle.step(4, 4), 1); // would repeat 0 — advances

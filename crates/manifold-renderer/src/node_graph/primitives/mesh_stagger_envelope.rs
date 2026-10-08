@@ -5,11 +5,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const SAMPLE_MODES: &[&str] = &["Vertex", "Triangle Centroid"];
 
@@ -34,7 +34,7 @@ struct MeshStaggerEnvelopeUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MeshStaggerEnvelope,
     type_id: "node.mesh_stagger_envelope",
     purpose: "Generate an attack/hold/release weight envelope ordered by scene-relative mesh position. Order is clamp(0.5 + 0.5 * dot((sample_position + source_offset) / scene_radius, direction), 0, 1), where direction is the rotated Y axis; stagger_beats delays later positions. Vertex or triangle-centroid sampling is selectable, amount blends from identity to the envelope, and an optional incoming weights array multiplies the result.",
@@ -90,7 +90,7 @@ crate::primitive! {
 // `run()` does). The marker carries the member→fused-port mapping for the
 // `weights` port (fused kernels rename inputs to `src_<k>`).
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.mesh_stagger_envelope",
         array_ports: &["weights"],
         recompute: |ctx| Some(vec![(ctx.array_len)("weights").unwrap_or(0) as f32]),
@@ -101,7 +101,7 @@ impl Primitive for MeshStaggerEnvelope {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "weights")
@@ -197,12 +197,10 @@ impl Primitive for MeshStaggerEnvelope {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::effect_node::NodeInstanceId;
-    use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
-    };
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     fn vertex(position: [f32; 3]) -> MeshVertex {
         MeshVertex {
@@ -223,7 +221,7 @@ mod gpu_tests {
         u: MeshStaggerEnvelopeUniforms,
         label: &str,
     ) -> Vec<f32> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
         let src = device.create_buffer_shared(std::mem::size_of_val(src_vertices) as u64);
         unsafe {
@@ -315,7 +313,7 @@ mod gpu_tests {
             vertex([0.2, 0.4, 0.0]),
             vertex([0.0, 0.8, 0.0]),
         ];
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<MeshStaggerEnvelope>()
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MeshStaggerEnvelope>()
             .expect("envelope codegen");
         let idle = dispatch(
             &wgsl,
@@ -434,7 +432,7 @@ mod gpu_tests {
             "fused gathered envelope kernel parses:\n{}",
             g.wgsl
         );
-        use crate::node_graph::freeze::markers::Marker;
+        use manifold_node_engine::freeze::markers::Marker;
         let expected = Marker::DerivedUniformMember {
             first_field: "n0_weights_len".to_string(),
             words: 1,
@@ -449,14 +447,14 @@ mod gpu_tests {
             g.wgsl
         );
         let prim = MeshStaggerEnvelope::new();
-        let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+        let node: &dyn manifold_node_engine::exec::effect_node::EffectNode = &prim;
         assert_eq!(
             node.array_output_capacity("weights", &Default::default(), &[("in", 1009), ("weights", 2009)]),
             Some(1009),
             "identity capacity — passes the gather identity probe"
         );
         assert!(
-            crate::node_graph::freeze::derived_uniform_registry::has_recompute(
+            manifold_node_engine::freeze::derived_uniform_registry::has_recompute(
                 MeshStaggerEnvelope::TYPE_ID
             ),
             "weights_len has a registered recompute — install admits the region"

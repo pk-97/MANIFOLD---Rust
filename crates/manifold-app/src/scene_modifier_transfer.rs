@@ -276,7 +276,7 @@ pub(crate) fn transfer(
         }
         instance.mesh_frames.clear();
         instance.mesh_frames =
-            manifold_renderer::node_graph::scene_modifier_expand::resolve_modifier_mesh_frames(
+            manifold_node_engine::load::expand::resolve_modifier_mesh_frames(
                 &graph, &instance,
             )
             .map_err(|error| {

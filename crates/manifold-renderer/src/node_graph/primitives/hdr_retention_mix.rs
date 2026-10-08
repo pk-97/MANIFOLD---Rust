@@ -24,10 +24,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -38,7 +38,7 @@ struct HdrRetentionMixUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: HdrRetentionMix,
     type_id: "node.hdr_mix",
     purpose: "Preserve a reference texture's above-1.0 highlight energy through a compressed texture's gain adjustment. Per-pixel: SDR body from `compressed`, HDR portion lerps between compressed's HDR and reference's HDR by `retention`. retention=1 keeps the HDR ceiling anchored to reference; retention=0 passes compressed through unchanged.",

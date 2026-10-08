@@ -28,12 +28,10 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::material::{
-    AlphaMode, MapSamplerDesc, Material, MaterialKind, MaterialMapInfo, Subsurface, SubsurfaceMode,
-};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::scene::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind, MaterialMapInfo, Subsurface, SubsurfaceMode};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const ALPHA_MODES: &[&str] = &["Opaque", "Mask", "Blend"];
 // GLB_XFAIL_BURNDOWN_DESIGN.md D3: per-map-family sampler settings, same
@@ -53,7 +51,7 @@ fn finite_clamped(value: f32, fallback: f32, min: f32, max: f32) -> f32 {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: PbrMaterial,
     type_id: "node.pbr_material",
     purpose: "Physically based surface material with metallic/roughness, normal maps, clearcoat, sheen, anisotropy, iridescence, glass transmission, and subsurface scattering. Subsurface weight replaces diffuse reflection; colour is the scattering albedo and RGB radius is the transport mean-free path in world units. Diffusion is the cheaper approximation; Random Walk follows multiple scattering inside a closed mesh and can cost much more. Samples trade speed for noise. Both scattering modes require an opaque surface; open Random Walk geometry or an exhausted transport bound is shown in magenta. Surface highlights and emission are retained.",
@@ -471,7 +469,7 @@ crate::primitive! {
             label: "Volume Attenuation Distance",
             ty: ParamType::Float,
             default: ParamValue::Float(
-                crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+                manifold_node_engine::scene::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
             ),
             range: Some((0.001, 1.0e6)),
             enum_values: &[],
@@ -1309,7 +1307,7 @@ impl Primitive for PbrMaterial {
         let volume_thickness = ctx.scalar_or_param("volume_thickness", 0.0);
         let volume_attenuation_distance = ctx.scalar_or_param(
             "volume_attenuation_distance",
-            crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
+            manifold_node_engine::scene::material::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
         );
         let volume_attenuation_color_r = ctx.scalar_or_param("volume_attenuation_color_r", 1.0);
         let volume_attenuation_color_g = ctx.scalar_or_param("volume_attenuation_color_g", 1.0);
@@ -1880,15 +1878,15 @@ impl Primitive for PbrMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::ParamValues;
-    use crate::node_graph::material::MaterialKind;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::ParamValues;
+    use manifold_node_engine::scene::material::MaterialKind;
 
     fn run_material(params: ParamValues, bound_emission_r: Option<f32>) -> Material {
-        use crate::node_graph::execution_plan::ResourceId;
-        use crate::node_graph::ports::PortType;
-        use crate::node_graph::MockBackend;
+        use manifold_node_engine::exec::execution_plan::ResourceId;
+        use manifold_node_engine::ports::PortType;
+        use manifold_node_engine::exec::backend::MockBackend;
         use manifold_core::{Beats, Seconds};
 
         let mut backend = MockBackend::new();
@@ -1919,7 +1917,7 @@ mod tests {
             &mut render_mode_scratch,
             &mut object_scratch,
         );
-        let time = crate::node_graph::effect_node::FrameTime {
+        let time = manifold_node_engine::exec::effect_node::FrameTime {
             beats: Beats(0.0),
             seconds: Seconds(0.0),
             delta: Seconds(1.0 / 60.0),
@@ -2142,12 +2140,12 @@ mod tests {
 
     #[test]
     fn run_emits_pbr_material_and_clamps_roughness_floor() {
-        use crate::node_graph::backend::Backend;
-        use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::execution_plan::ResourceId;
-        use crate::node_graph::ports::PortType;
-        use crate::node_graph::MockBackend;
+        use manifold_node_engine::exec::backend::Backend;
+        use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+        use manifold_node_engine::exec::effect_node::ParamValues;
+        use manifold_node_engine::exec::execution_plan::ResourceId;
+        use manifold_node_engine::ports::PortType;
+        use manifold_node_engine::exec::backend::MockBackend;
         use manifold_core::{Beats, Seconds};
 
         let mut backend = MockBackend::new();
@@ -2247,7 +2245,7 @@ mod tests {
             &mut render_mode_scratch,
             &mut object_scratch,
         );
-        let time = crate::node_graph::effect_node::FrameTime {
+        let time = manifold_node_engine::exec::effect_node::FrameTime {
             beats: Beats(0.0),
             seconds: Seconds(0.0),
             delta: Seconds(1.0 / 60.0),
@@ -2280,12 +2278,12 @@ mod tests {
     /// branch in `run()` (this primitive is CPU-only, no GPU dispatch).
     #[test]
     fn material_inspector_baked_look_emission_off_stays_gated() {
-        use crate::node_graph::backend::Backend;
-        use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::execution_plan::ResourceId;
-        use crate::node_graph::ports::PortType;
-        use crate::node_graph::MockBackend;
+        use manifold_node_engine::exec::backend::Backend;
+        use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+        use manifold_node_engine::exec::effect_node::ParamValues;
+        use manifold_node_engine::exec::execution_plan::ResourceId;
+        use manifold_node_engine::ports::PortType;
+        use manifold_node_engine::exec::backend::MockBackend;
         use manifold_core::{Beats, Seconds};
 
         let run_with_baked_look = |baked_look: bool| -> (MaterialKind, [f32; 4]) {
@@ -2323,7 +2321,7 @@ mod tests {
                 &mut render_mode_scratch,
                 &mut object_scratch,
             );
-            let time = crate::node_graph::effect_node::FrameTime {
+            let time = manifold_node_engine::exec::effect_node::FrameTime {
                 beats: Beats(0.0),
                 seconds: Seconds(0.0),
                 delta: Seconds(1.0 / 60.0),

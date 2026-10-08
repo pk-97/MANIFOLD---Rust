@@ -19,11 +19,11 @@
 //! overhead and lands the data in shared MTLBuffer for downstream
 //! same-frame readers.
 
-use crate::mesh::Vec4Vertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::Vec4Vertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: PackVec4,
     type_id: "node.combine_xyzw",
     purpose: "Combine four Array<f32> (x, y, z, w channels) into one Array<Vec4Vertex>. The 4D analogue of node.combine_xy: zips axis-separated channels (built by generate_grid_uv → array_math chains) into the typed wire that node.rotate_4d / project_4d / render_lines consume. Pure structural transformation — no scale bake; per-shape magnitude normalisation is applied upstream via array_math(ScaleOffset) since the constant is shape-specific (0.125 for tesseract, 0.176776695 for duocylinder, …). Pair with generate_grid_uv + array_math(Cos|Sin) + edges_from_grid_uv to author any (u, v)-parametric 4D surface in pure JSON. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
@@ -52,7 +52,7 @@ impl Primitive for PackVec4 {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {

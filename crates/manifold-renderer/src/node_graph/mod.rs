@@ -7,110 +7,27 @@
 //! runtime (topological sort, execution plan, lifetime planner, resource
 //! bindings) lands in subsequent steps.
 
-pub mod atomic;
-mod backend;
-mod bindings;
-pub mod atmosphere;
-pub mod camera;
-pub mod light;
 pub mod material_inspector;
-pub mod material;
-pub mod live_extent;
-pub mod mesh_source;
-pub mod source_asset;
-pub mod render_mode;
 pub mod scene_exposure;
-pub mod scene_object;
-pub mod transform;
-pub mod viewport_camera;
 pub mod viewport_gizmo;
 pub mod viewport_overlay;
 pub mod viewport_render;
 pub mod viewport_session;
-pub mod scene_viewport;
-pub mod vector_field;
-mod binding_migration;
-pub mod content_revision;
-mod boundary_nodes;
-mod mesh_boundary;
-pub mod mesh_change;
-mod bound_graph;
-mod bundled_presets;
+pub(crate) mod bundled_presets;
 pub mod catalog_gen;
-mod chain_spec;
 pub mod composites;
-pub mod depth_rule;
 pub(crate) mod decode_cache;
-pub mod descriptor;
-pub mod preview_encoding;
-mod effect_node;
-pub(crate) mod execution;
-mod execution_plan;
-pub mod freeze;
-pub mod fluid;
-pub(crate) mod physics_scene;
-pub mod fluid_role;
-pub mod fluid_particles;
-pub mod liquid;
-pub mod whitewater;
-pub(crate) mod whitewater_handoff;
-#[cfg(feature = "gpu-proofs")]
-pub(crate) mod fluid_cache;
-#[cfg(feature = "gpu-proofs")]
-pub(crate) mod fluid_mesh_upload;
-pub(crate) mod instance_upload;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod fragment_mask_continuity_tests;
-mod graph;
-mod graph_loader;
-pub mod resource_allocation;
 mod gltf_anim_cache;
 mod gltf_anim_identity;
 pub mod gltf_import;
 mod gltf_load;
-mod loaded_preset_view;
-mod metal_backend;
-mod palette;
-mod param_binding;
-pub mod param_doc;
-mod param_tooltips_bulk;
-mod param_tooltips_table;
-mod parameters;
-mod persistence;
-pub mod ports;
-pub mod primitive;
 pub mod primitives;
 pub mod relight;
 pub mod scene_modifier_authoring;
-pub mod scene_modifier_expand;
 pub mod scene_modifier_legacy_migration;
 pub mod scene_vm;
-mod snapshot;
-mod state_store;
-pub mod matter;
-pub mod substeps;
-pub mod temporal_reset;
-pub mod trigger_shadow_lint;
-pub mod validate;
-mod validation;
 
-/// Canonical channel-name registry for the Channel type system. The
-/// `well_known_channels!` macro generates the constants and the
-/// collision-check test from a single source list; see the module
-/// docs and `docs/CHANNEL_TYPE_SYSTEM.md` section 7.
-pub mod channel_names;
 
-pub use backend::{Backend, MockBackend};
-pub use bindings::{NodeInputs, NodeOutputs, Slot};
-pub use content_revision::{ContentVersion, StorageRevision};
-pub use camera::{Camera, CameraMode};
-pub use light::{Light, LightMode, ShadowSoftness};
-pub use material::{Material, MaterialKind};
-pub use scene_object::SceneObject;
-pub use transform::Transform;
-pub use fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry, MAX_FLUID_ROLES};
-pub use mesh_source::MeshSource;
-pub use viewport_camera::ViewportCamera;
 pub use viewport_overlay::{
     ScreenLine, ViewportOverlayConfig, WorldLine, build_overlay_lines, camera_frustum_lines,
     composite_overlay_lines_rgba8, grid_lines, light_billboard_lines, project_lines,
@@ -121,91 +38,16 @@ pub use viewport_gizmo::{
 };
 pub use viewport_render::{ViewportRenderError, override_camera_def, render_viewport_frame};
 pub use viewport_session::ViewportSession;
-pub use boundary_nodes::{
-    FINAL_OUTPUT_TYPE_ID, FinalOutput, GENERATOR_INPUT_TYPE_ID, GeneratorInput, SOURCE_TYPE_ID,
-    Source,
-};
-pub use binding_migration::migrate_user_param_bindings_to_node_id;
-pub use bound_graph::{
-    BoundGraph, FusedRetarget, ShadowedDefParam, apply_inner_param_overrides,
-    audible_shadow_findings, find_shadowed_def_params, is_baseline_shadow,
-    shadow_baseline_entries, unretarget_shadow,
-};
 pub use bundled_presets::{
     bundled_preset_def, bundled_preset_json, bundled_preset_type_ids, loaded_presets_from_bundled,
     loaded_scene_modifier_presets_from_bundled,
 };
-pub use effect_node::{
-    intern_name, EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,
-    NodeRequires, NodeWire, ParamValues, RtQuality,
-};
-#[cfg(feature = "gpu-proofs")]
-pub use effect_node::NodeErrorTap;
-pub use execution::{Executor, StepProfile};
-pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};
-pub use chain_spec::{SpliceResult, splice_def_into_chain};
-pub use graph::{Graph, NodeInstance, WireWalkMode};
-pub use graph_loader::{
-    BoundaryHandling, GraphBuildError, HandleScope, NodeInstantiation, PreAllocationError,
-    WireSide as BuildWireSide, instantiate_def, log_build_error, pre_allocate_resources, allocate_resources,
-};
-pub(crate) use graph_loader::{has_retired_params, retire_params};
-pub use loaded_preset_view::{
-    LoadedPresetView, collect_node_handles, loaded_preset_view_by_id, outer_routings_from_view,
-    snapshot_for_view,
-};
-pub use metal_backend::MetalBackend;
-pub(crate) use metal_backend::PreparedMetalBackendResize;
-pub use mesh_change::{
-    MeshAspect, MeshDependency, MeshOutputRule, MeshRevision, MeshRevisionRule,
-    PreparedMeshOutputRule, PreparedMeshRevisionRule, PreparedMeshRules,
-};
-pub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};
-pub(crate) use param_binding::Reshape;
-pub use param_binding::{
-    BindingCacheEntry, BindingSource, LastAppliedCache, ParamBinding, ParamConvert, ParamId,
-    ParamTarget, ResolvedBinding, ResolvedTarget, apply_binding_defaults, apply_bindings,
-    binding_value, convert_param_value, outer_routings_from_bindings,
-};
-pub use parameters::{ParamDef, ParamType, ParamValue};
-pub use persistence::{
-    EffectGraphDefExt, GRAPH_DOCUMENT_VERSION, GraphDocument, LoadError, NodeConstructor,
-    NodeDocument, PrimitiveRegistry, SerializedParamValue, WireDocument, WireSide,
-};
-pub use ports::{
-    ArrayType, ChannelElementType, ChannelName, ChannelSpec, KnownItem, MatchMode, NodeInput,
-    NodeOutput, NodePort, PortKind, PortType, ScalarType, TextureChannels, std430_layout,
-    std430_stride, std430_stride_and_align,
-};
-pub use descriptor::{Category, NodeDescriptor, Role, descriptor_for};
-pub use preview_encoding::{LiveNodeParams, PreviewEncoding, PreviewScalarIo};
-pub use param_doc::{ParamDoc, tooltip_for};
-pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
-pub use physics_events::{ImpulseTarget, ResolvedNodeImpulse};
-pub use snapshot::{
-    ArrayMatchMode, ChannelSnapshot, GraphSnapshot, GroupSnapshot, NodeSnapshot, OuterParamRouting,
-    OuterParamSource, ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot,
-    WireSnapshot,
-};
-/// Crate-internal: the `ParamValue → f32` flattening the live-value tap shares
-/// with the structural snapshot, so frozen and live values format identically.
-pub(crate) use snapshot::param_default_to_f32;
-pub use freeze::{FusionReport, NodeFusionInfo, RegionSummary, fusion_report};
-pub use state_store::{NodeState, OwnerKey, StateStore};
-pub use validate::{ValidateKind, ValidationIssue, ValidationReport, validate_def};
-pub use validation::{
-    ChannelMismatchInfo, ChannelMismatchReason, GraphError, TextureChannelMismatchInfo,
-    TextureChannelMismatchReason, channels_compatible, texture_channels_compatible,
-    topological_sort, validate,
-};
-
-pub mod mesh_partition;
-pub mod physics_mesh;
-pub mod physics;
-pub mod physics_events;
-pub mod physics_metrics;
-
-pub(crate) mod migration;
-
 #[cfg(test)]
-mod builtins;
+mod catalog_tests;
+#[cfg(test)]
+mod scene_tests;
+#[cfg(test)]
+mod image_tests;
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub mod liquid_conformance_fixtures;

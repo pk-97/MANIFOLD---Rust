@@ -15,10 +15,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -42,7 +42,7 @@ struct Uniforms {
 /// any other shader that samples `simplex3d` from this library.
 const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SimplexPerInstance,
     type_id: "node.simplex_noise_per_copy",
     purpose: "Sample 3D Ashima simplex noise at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.noise (which samples per-pixel into a Texture2D). For each idx: out[idx] = simplex3d(vec3(uv[idx] * scale + offset, z)). All four shaping inputs (scale / z / offset_x / offset_y) are port-shadow-param so a time wire can drive `z` (animated noise field) or an LFO can pan `offset_*` (scrolling noise) without dragging extra Value nodes in.",
@@ -107,7 +107,7 @@ impl Primitive for SimplexPerInstance {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {

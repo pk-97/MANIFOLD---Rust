@@ -11,18 +11,15 @@ use std::cell::Cell;
 use half::f16;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::frame_status::{FrameRenderFailure, FrameRenderStatus};
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::{readback_raw_halves, readback_to_srgb_png};
-use manifold_renderer::node_graph::{
-    EffectNode, EffectNodeContext, EffectNodeType, NodeInput, NodeOutput, NodePort, ParamDef,
-    ParamValue, PortKind, PortType, PrimitiveRegistry, physics::PhysicsStepScope,
-};
-use manifold_renderer::node_graph::depth_rule::DepthRule;
-use manifold_renderer::node_graph::transform::Transform;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, ports::NodeInput, ports::NodeOutput, ports::NodePort, parameters::ParamDef, parameters::ParamValue, ports::PortKind, ports::PortType, persistence::PrimitiveRegistry, water::physics::PhysicsStepScope};
+use manifold_node_engine::scene::depth_rule::DepthRule;
+use manifold_node_engine::scene::transform::Transform;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 use crate::harness;
 
@@ -65,7 +62,7 @@ impl EffectNode for CoupledObserver {
         static INPUTS: [NodeInput; 3] = [
             NodePort {
                 name: std::borrow::Cow::Borrowed("time"),
-                ty: PortType::Scalar(manifold_renderer::node_graph::ports::ScalarType::F32),
+                ty: PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
                 kind: PortKind::Input,
                 required: true,
             },
@@ -77,7 +74,7 @@ impl EffectNode for CoupledObserver {
             },
             NodePort {
                 name: std::borrow::Cow::Borrowed("particles"),
-                ty: PortType::Scalar(manifold_renderer::node_graph::ports::ScalarType::F32),
+                ty: PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
                 kind: PortKind::Input,
                 required: true,
             },
@@ -88,7 +85,7 @@ impl EffectNode for CoupledObserver {
     fn outputs(&self) -> &[NodeOutput] {
         static OUTPUTS: [NodeOutput; 1] = [NodePort {
             name: std::borrow::Cow::Borrowed("visible"),
-            ty: PortType::Scalar(manifold_renderer::node_graph::ports::ScalarType::F32),
+            ty: PortType::Scalar(manifold_node_engine::ports::ScalarType::F32),
             kind: PortKind::Output,
             required: false,
         }];
@@ -738,7 +735,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
             }
         }
     }
-    let camera = manifold_renderer::node_graph::ViewportCamera {
+    let camera = manifold_node_engine::scene::viewport_camera::ViewportCamera {
         target: [0.0, 1.0, 0.0], ..Default::default()
     };
     let render_node = def.nodes.iter().find(|node| node.id == render_id).unwrap().node_id.clone();
@@ -813,7 +810,7 @@ fn scene_physics_modifier_impulse_changes_rendered_liquid() {
     use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
     use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
     use manifold_core::{Beats, NodeId, Seconds};
-    use manifold_renderer::node_graph::FrameTime;
+    use manifold_node_engine::exec::effect_node::FrameTime;
     use manifold_physics::VectorField;
 
     let mut raw: serde_json::Value = serde_json::from_str(WATER_BASIN_JSON).unwrap();

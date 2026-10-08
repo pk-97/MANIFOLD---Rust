@@ -12,10 +12,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -26,7 +26,7 @@ struct DitherUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Dither,
     type_id: "node.dither",
     purpose: "Luminance-preserving dither quantize driven by an external threshold pattern. Quantizes Rec.709 luma to 8->2 levels (by `amount`), dither-biased by the `pattern` input's R channel, preserves hue, and crossfades against the source. Pair with node.dither_pattern for the classic six patterns, or feed any threshold texture.",

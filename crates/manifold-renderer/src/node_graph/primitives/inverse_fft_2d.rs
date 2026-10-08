@@ -6,11 +6,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::{FftKind, GpuFft};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: InverseFft2d,
     type_id: "node.inverse_fft_2d",
     purpose: "Inverse 2D FFT of a batch of half spectra. `spectrum` holds B fields of N rows by N/2+1 columns of complex (re, im) values, row-major, field-major; `field` returns B real N×N fields, row-major, scaled by 1/N² so it exactly undoes a forward transform. Column is x, row is z. One backend FFT call per frame.",
@@ -56,7 +56,7 @@ impl Primitive for InverseFft2d {
     fn array_output_capacity(
         &self,
         port: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _inputs: &[(&str, u32)],
     ) -> Option<u32> {
         let get = |name: &str, default: f32| match params.get(name) {
@@ -93,3 +93,6 @@ impl Primitive for InverseFft2d {
         fft.encode(gpu.native_enc, spectrum, field);
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

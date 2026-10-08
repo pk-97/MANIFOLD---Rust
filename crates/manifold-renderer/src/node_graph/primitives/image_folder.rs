@@ -33,9 +33,9 @@ use std::sync::mpsc;
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -55,7 +55,7 @@ pub struct DecodedSlice {
     pub rgba: Vec<u8>,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ImageFolder,
     type_id: "node.image_folder",
     purpose: "Scrub through a folder of images via a position scalar (0..1). The host sets the folder path on the outer-card String binding; the primitive scans it, sorts alphabetically, and loads slices on demand in a background thread. Built-in aspect-fit + uv_scale matches the legacy MRI volume display so downstream primitives don't have to reinvent it.",

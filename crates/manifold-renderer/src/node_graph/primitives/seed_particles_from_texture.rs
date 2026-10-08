@@ -33,11 +33,11 @@
 use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuSamplerDesc};
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::active_elements;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::active_elements;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -52,7 +52,7 @@ struct SeedFromTextureUniforms {
     _pad: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SeedParticlesFromTexture,
     type_id: "node.spawn_from_image",
     purpose: "Exact-placement particle seeding from a Texture2D density mask. Two-pass dispatch: (1) compact — scan the mask, atomically append every bright texel's UV (R > 0.1) into a flat list; (2) place — assign each active particle a UV via round-robin (i mod bright_count) with sub-texel jitter. Guarantees every particle lands alive on the mask: zero dead particles regardless of mask sparsity. When active_count > bright_count, particles wrap-around the list (jittered so they don't stack). When the mask is empty every particle is parked dead at center.",
@@ -368,7 +368,7 @@ mod gpu_tests {
     /// call" is correct either way.
     #[test]
     fn prewarm_pipelines_populates_the_shared_compute_cache() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         SeedParticlesFromTexture::prewarm_pipelines(&device);
         const SHADER_SRC: &str = include_str!("shaders/seed_particles_from_texture.wgsl");
         for (entry, label) in [

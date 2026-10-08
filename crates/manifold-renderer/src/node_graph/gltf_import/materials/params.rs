@@ -9,7 +9,7 @@ use manifold_core::effect_graph_def::{EffectGraphNode, SerializedParamValue};
 use crate::node_graph::gltf_load::{
     GltfFilterMode, GltfMaterialInfo, GltfSamplerInfo, GltfWrapMode,
 };
-use crate::node_graph::material::MapSamplerDesc;
+use manifold_node_engine::scene::material::MapSamplerDesc;
 
 use super::super::assembly::{enum_val, float, int};
 

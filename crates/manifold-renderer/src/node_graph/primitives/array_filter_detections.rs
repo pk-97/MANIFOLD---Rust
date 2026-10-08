@@ -21,12 +21,12 @@
 //! of surviving items; rejected slots are compacted out and the tail
 //! zero-filled.
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use std::borrow::Cow;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ArrayFilterDetections,
     type_id: "node.array_filter_detections",
     purpose: "Reject degenerate items from a Channels[X, Y, WIDTH, HEIGHT] detection array by size, aspect ratio, and frame coverage — all bounds in the detector's normalised 0..1 coordinate space. Keeps an item only when min_width <= width <= max_width, min_height <= height <= max_height, min_aspect <= (width / height) <= max_aspect, and (width * height) <= max_area_frac. Drops frame-wide horizon strips (huge aspect), vertical slivers (tiny aspect), specks (below min size), and bbox-covers-everything regions (above max_area_frac). Sits between a detector and a tracker so identity tracking never locks onto garbage. Defaults (width/height bounded to [0,1], min_aspect=0, max_aspect=1000, max_area_frac=1) pass everything through; set bounds to taste. Output preserves the Channels type and the order of surviving items; rejected slots compact out and the tail zero-fills.",
@@ -123,7 +123,7 @@ impl Primitive for ArrayFilterDetections {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

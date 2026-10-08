@@ -303,7 +303,7 @@ Identical to what you'd get hand-wiring Blur+Mix. That equivalence is the headli
 
 ## 5. Integration point
 
-Single insertion in `crates/manifold-renderer/src/node_graph/graph_loader.rs`, at the very top of
+Single insertion in `crates/manifold-node-engine/src/load/graph_loader.rs`, at the very top of
 `instantiate_def`, before the Source/FinalOutput scan:
 
 ```rust
@@ -482,7 +482,7 @@ These shape Phase-1 choices so the deferred work is additive, nothing more:
 - `crates/manifold-core/src/flatten.rs` *(new)* — `flatten_groups`, `FlattenError`, the full section 7
   unit suite, and the `group_path`/`/`-split note from section 9.
 - `crates/manifold-core/src/lib.rs` — `pub mod flatten;`.
-- `crates/manifold-renderer/src/node_graph/graph_loader.rs` — the section 5 insertion + the
+- `crates/manifold-node-engine/src/load/graph_loader.rs` — the section 5 insertion + the
   `GraphBuildError::Flatten` variant + its `Display`/mapping.
 - `crates/manifold-renderer/tests/` (or lib) — `grouped_equals_handwired` parity test; grouped
   entry in the `bundled_presets` integration test.

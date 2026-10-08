@@ -32,10 +32,10 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use crate::node_graph::state_store::NodeState;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::state_store::NodeState;
 
 pub const TRIGGER_EASE_TO_TYPE_ID: &str = "node.trigger_ease_to";
 
@@ -145,14 +145,14 @@ fn current_visible(state: &EaseState, beat: f32, window_beats: f32) -> f32 {
 }
 
 impl EffectNode for TriggerEaseTo {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
-    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
-        Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
+    fn boundary_reason(&self) -> Option<manifold_node_engine::freeze::classify::BoundaryReason> {
+        Some(manifold_node_engine::freeze::classify::BoundaryReason::NonGpu)
     }
 
     fn inputs(&self) -> &[NodeInput] {
@@ -262,12 +262,12 @@ impl EffectNode for TriggerEaseTo {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: TRIGGER_EASE_TO_TYPE_ID,
         create: || Box::new(TriggerEaseTo::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo {
+        picker: Some(manifold_node_engine::palette::PickerInfo {
             label: "Trigger Ease To",
-            category: crate::node_graph::palette::PaletteCategory::Driver,
+            category: manifold_node_engine::palette::PaletteCategory::Driver,
         }),
     }
 }
@@ -277,16 +277,14 @@ mod tests {
     use super::*;
     use std::borrow::Cow;
 
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
-    use crate::node_graph::effect_node::{
-        EffectNode, FrameTime, NodeInstanceId, ParamValues, RtQuality,
-    };
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::parameters::ParamValue;
-    use crate::node_graph::ports::PortType;
-    use crate::node_graph::state_store::StateStore;
-    use crate::node_graph::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs};
+    use manifold_node_engine::exec::effect_node::{EffectNode, FrameTime, NodeInstanceId, ParamValues, RtQuality};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::parameters::ParamValue;
+    use manifold_node_engine::ports::PortType;
+    use manifold_node_engine::state_store::StateStore;
+    use manifold_node_engine::exec::backend::MockBackend;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time(beat: f32) -> FrameTime {

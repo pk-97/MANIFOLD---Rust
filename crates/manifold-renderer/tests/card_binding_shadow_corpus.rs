@@ -17,11 +17,7 @@
 //! two.
 
 use manifold_core::preset_def::PresetKind;
-use manifold_renderer::node_graph::{
-    Graph, PrimitiveRegistry, ResolvedBinding, ShadowedDefParam, bundled_preset_def,
-    bundled_preset_type_ids, find_shadowed_def_params, loaded_preset_view_by_id,
-    shadow_baseline_entries, splice_def_into_chain, unretarget_shadow,
-};
+use {manifold_node_engine::graph::Graph, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::param_binding::ResolvedBinding, manifold_node_engine::exec::bound_graph::ShadowedDefParam, manifold_renderer::node_graph::bundled_preset_def, manifold_renderer::node_graph::bundled_preset_type_ids, manifold_node_engine::exec::bound_graph::find_shadowed_def_params, manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id, manifold_node_engine::exec::bound_graph::shadow_baseline_entries, manifold_node_engine::load::chain_spec::splice_def_into_chain, manifold_node_engine::exec::bound_graph::unretarget_shadow};
 
 /// Effects splice into a chain, so build the graph the way the chain builder
 /// does — a bare `Source` upstream, then the canonical def — and resolve the
@@ -35,7 +31,7 @@ fn effect_findings(type_id: &manifold_core::PresetTypeId) -> Vec<ShadowedDefPara
     let mut graph = Graph::new();
     let source = graph.add_node_named(
         "source",
-        Box::new(manifold_renderer::node_graph::Source::new()),
+        Box::new(manifold_node_engine::scene::boundary_nodes::Source::new()),
     );
     let Some(splice) = splice_def_into_chain(
         &mut graph,
@@ -43,7 +39,7 @@ fn effect_findings(type_id: &manifold_core::PresetTypeId) -> Vec<ShadowedDefPara
         &view.canonical_def,
         &primitives,
         None,
-    &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) else {
+    &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) else {
         panic!("{}: canonical def must splice", type_id.as_str());
     };
     let node_map: Vec<_> = splice
@@ -68,7 +64,7 @@ fn generator_findings(type_id: &manifold_core::PresetTypeId) -> Vec<ShadowedDefP
     };
     let primitives = PrimitiveRegistry::with_builtin();
     let Ok(runtime) =
-        manifold_renderer::preset_runtime::PresetRuntime::from_def(def.clone(), &primitives, None)
+        manifold_node_engine::runtime::PresetRuntime::from_def(def.clone(), &primitives, None)
     else {
         // Load failures are another test's business.
         return Vec::new();
@@ -147,7 +143,7 @@ fn fused_effect_shadow_findings_map_back_to_the_baseline() {
         let Some(base) = loaded_preset_view_by_id(&id) else {
             continue;
         };
-        let Some(fused) = manifold_renderer::node_graph::freeze::install::fused_view_for(
+        let Some(fused) = manifold_node_engine::freeze::install::fused_view_for(
             &base.canonical_def,
             base,
         ) else {
@@ -156,7 +152,7 @@ fn fused_effect_shadow_findings_map_back_to_the_baseline() {
         let mut graph = Graph::new();
         let source = graph.add_node_named(
             "source",
-            Box::new(manifold_renderer::node_graph::Source::new()),
+            Box::new(manifold_node_engine::scene::boundary_nodes::Source::new()),
         );
         let Some(splice) = splice_def_into_chain(
             &mut graph,
@@ -164,7 +160,7 @@ fn fused_effect_shadow_findings_map_back_to_the_baseline() {
             &fused.canonical_def,
             &primitives,
             None,
-        &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) else {
+        &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) else {
             panic!("{}: fused def must splice", id.as_str());
         };
         let node_map: Vec<_> = splice

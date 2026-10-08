@@ -27,11 +27,8 @@ use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_gpu::GpuDevice;
 use manifold_renderer::headless_readback::encode_rgba8_png;
 use manifold_renderer::node_graph::scene_vm::SceneVm;
-use manifold_renderer::node_graph::{
-    GizmoMode, PrimitiveRegistry, ViewportOverlayConfig, ViewportSession, drag_write, gizmo_lines,
-    gizmo_target_for, pick_object,
-};
-use manifold_renderer::preset_context::PresetContext;
+use {manifold_renderer::node_graph::GizmoMode, manifold_node_engine::persistence::PrimitiveRegistry, manifold_renderer::node_graph::ViewportOverlayConfig, manifold_renderer::node_graph::ViewportSession, manifold_renderer::node_graph::drag_write, manifold_renderer::node_graph::gizmo_lines, manifold_renderer::node_graph::gizmo_target_for, manifold_renderer::node_graph::pick_object};
+use manifold_node_engine::runtime::preset_context::PresetContext;
 
 /// A `node.scene_object`-shaped scene (SCENE_OBJECT_AND_PANEL_V2_DESIGN
 /// D1/D12 — the shape `scene_vm::SceneVm::from_def` requires to resolve

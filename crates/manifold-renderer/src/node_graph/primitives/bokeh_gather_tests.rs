@@ -12,14 +12,11 @@ use manifold_gpu::{
 
 use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 use crate::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
-use crate::node_graph::backend::Backend;
-use crate::node_graph::bindings::Slot;
-use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId};
-use crate::node_graph::{
-    Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue, Source,
-    compile,
-};
-use crate::render_target::RenderTarget;
+use manifold_node_engine::exec::backend::Backend;
+use manifold_node_engine::bindings::Slot;
+use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId};
+use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use crate::tonemap::{TonemapMode, TonemapSettings};
 use manifold_core::{BlendMode, LayerId, LayerType};
 
@@ -186,7 +183,7 @@ fn run_with_settings_texture(
     });
     let mut native = device.create_encoder("bokeh-proof");
     {
-        let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut native, device);
+        let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, device);
         gather.encode(&mut gpu, src, width, &out, settings);
     }
     native.commit_and_wait_completed();
@@ -194,7 +191,7 @@ fn run_with_settings_texture(
 }
 
 fn composite_over_background(
-    device: &crate::TestDevice,
+    device: &manifold_gpu::testkit::TestDevice,
     foreground: &GpuTexture,
     background_rgb: [f32; 3],
 ) -> Vec<[f32; 4]> {
@@ -294,7 +291,7 @@ fn composite_over_background(
     let mut compositor = LayerCompositor::new(device, w, h);
     let mut encoder = device.create_encoder("bokeh-compositor-alpha-over");
     {
-        let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, device);
+        let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut encoder, device);
         compositor.render(&mut gpu, &frame);
     }
     encoder.commit_and_wait_completed();
@@ -319,7 +316,7 @@ fn output_resource(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> Re
 /// catch graph binding, allocation, skip/alias, and dispatch regressions that
 /// a primitive-only test cannot observe.
 fn run_graph(
-    device: &crate::TestDevice,
+    device: &manifold_gpu::testkit::TestDevice,
     src: &GpuTexture,
     width: &GpuTexture,
     settings: BokehSettings,
@@ -370,7 +367,7 @@ fn run_graph(
     let output_slot = Slot(backend.slot_count());
     let mut executor = Executor::new(Box::new(backend));
     {
-        let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut native, device);
+        let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, device);
         executor.execute_frame_with_gpu(
             &mut graph,
             &plan,
@@ -412,7 +409,7 @@ fn mixed_hdr_scene(w: u32, h: u32) -> (Vec<Pixel>, Vec<(f32, bool)>) {
 
 #[test]
 fn graph_executor_matches_direct_encode_on_mixed_hdr_odd_scene() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (65, 49);
     let (colors, coc) = mixed_hdr_scene(w, h);
     let src = texture(&device, w, h, &colors, "bokeh-graph-proof-mixed-src");
@@ -462,7 +459,7 @@ fn graph_executor_matches_direct_encode_on_mixed_hdr_odd_scene() {
 
 #[test]
 fn graph_executor_disabled_bokeh_is_hdr_identity_on_odd_scene() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (65, 49);
     let (colors, coc) = mixed_hdr_scene(w, h);
     let src = texture(&device, w, h, &colors, "bokeh-graph-proof-disabled-src");
@@ -686,7 +683,7 @@ fn oracle_uniform_far_output(source: &OraclePlane, radius: f32, coc: f32) -> Ora
 
 #[test]
 fn zero_coc_is_bit_exact_identity() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (37, 19);
     let src_pixels = (0..w * h)
         .map(|i| {
@@ -731,7 +728,7 @@ fn zero_coc_is_bit_exact_identity() {
 
 #[test]
 fn zero_radius_preserves_detail_across_near_far_edges() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (37, 19);
     let pixels: Vec<_> = (0..w * h)
         .map(|i| Pixel {
@@ -768,7 +765,7 @@ fn zero_radius_preserves_detail_across_near_far_edges() {
 
 #[test]
 fn blur_alpha_true_expands_opaque_silhouettes_without_dark_fringe() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (65, 33);
     for near in [false, true] {
         let mut colors = solid_pixels(w, h, [0.0, 0.0, 0.0, 0.0]);
@@ -830,7 +827,7 @@ fn blur_alpha_true_expands_opaque_silhouettes_without_dark_fringe() {
 
 #[test]
 fn blur_alpha_true_preserves_translucent_flat_hdr_near_and_far() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128, 64);
     let colors = solid_pixels(w, h, [6.0 * 0.37, 2.0 * 0.37, 0.5 * 0.37, 0.37]);
     let coc = (0..w * h)
@@ -880,7 +877,7 @@ fn blur_alpha_true_preserves_translucent_flat_hdr_near_and_far() {
 
 #[test]
 fn near_opacity_does_not_fade_during_focus_transition() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (32, 32);
     let colors = solid_pixels(w, h, [6.0 * 0.37, 2.0 * 0.37, 0.5 * 0.37, 0.37]);
     let src = texture(&device, w, h, &colors, "focus-opacity-source");
@@ -914,7 +911,7 @@ fn near_opacity_does_not_fade_during_focus_transition() {
 
 #[test]
 fn blur_alpha_true_stays_premultiplied_through_layer_compositor() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (96, 64);
     let hue = [0.8, 0.2, 0.05];
     let source_pixels = (0..w * h)
@@ -989,7 +986,7 @@ fn blur_alpha_true_stays_premultiplied_through_layer_compositor() {
 
 #[test]
 fn blur_alpha_true_ignores_hidden_rgb_in_transparent_far_texels() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (65, 33);
     let mut colors = solid_pixels(w, h, [0.0, 0.0, 0.0, 0.0]);
     colors[(h / 2 * w + w / 2) as usize] = Pixel {
@@ -1023,7 +1020,7 @@ fn blur_alpha_true_ignores_hidden_rgb_in_transparent_far_texels() {
 
 #[test]
 fn uniform_far_cpu_oracle_matches_even_and_odd_area_mips() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     for &(w, h) in &[(64u32, 48u32), (65u32, 49u32)] {
         let source_pixels = (0..w * h)
             .map(|i| {
@@ -1064,7 +1061,7 @@ fn uniform_far_cpu_oracle_matches_even_and_odd_area_mips() {
 
 #[test]
 fn flat_hdr_colour_keeps_alpha_and_energy() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (29, 17);
     let src = texture(
         &device,
@@ -1094,7 +1091,7 @@ fn flat_hdr_colour_keeps_alpha_and_energy() {
 
 #[test]
 fn thin_near_object_survives_half_res_prefilter() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (65, 33);
     let mut colors = solid_pixels(w, h, [0.0, 0.0, 0.0, 1.0]);
     let mut coc = vec![(0.0, false); (w * h) as usize];
@@ -1129,7 +1126,7 @@ fn thin_near_object_survives_half_res_prefilter() {
 
 #[test]
 fn bright_far_background_does_not_bleed_into_sharp_foreground() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (71, 35);
     let mut colors = solid_pixels(w, h, [8.0, 8.0, 8.0, 1.0]);
     let mut coc = vec![(0.8, false); (w * h) as usize];
@@ -1157,7 +1154,7 @@ fn bright_far_background_does_not_bleed_into_sharp_foreground() {
 
 #[test]
 fn rim_fixture_feathers_beyond_bright_rectangle_without_cliff() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (64, 64);
     let rect0 = 24;
     let rect1 = 40;
@@ -1222,7 +1219,7 @@ fn rim_fixture_feathers_beyond_bright_rectangle_without_cliff() {
 
 #[test]
 fn near_halo_overlays_edge_but_keeps_dark_bar_interior() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128, 64);
     let mut colors = solid_pixels(w, h, [0.0, 0.0, 0.0, 1.0]);
     let mut coc = vec![(0.0, false); (w * h) as usize];
@@ -1266,7 +1263,7 @@ fn near_halo_overlays_edge_but_keeps_dark_bar_interior() {
 
 #[test]
 fn tiny_odd_dimensions_and_radius_modulation_are_stable() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let mut gather = BokehGather::new();
     for &(w, h) in &[(1, 1), (2, 3), (3, 5), (7, 2), (17, 11)] {
         let src = texture(
@@ -1288,7 +1285,7 @@ fn tiny_odd_dimensions_and_radius_modulation_are_stable() {
 
 #[test]
 fn warm_resize_rebuilds_resources_and_keeps_modulation_finite() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let mut gather = BokehGather::new();
     for &(w, h) in &[(17, 9), (33, 15), (5, 3), (33, 15)] {
         let src = texture(
@@ -1310,7 +1307,7 @@ fn warm_resize_rebuilds_resources_and_keeps_modulation_finite() {
 
 #[test]
 fn quality_levels_preserve_constant_hdr_colour_across_layer_boundary() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (48, 24);
     let colors = solid_pixels(w, h, [6.0, 2.0, 0.5, 0.37]);
     let coc = (0..w * h)
@@ -1348,7 +1345,7 @@ fn quality_levels_preserve_constant_hdr_colour_across_layer_boundary() {
 
 #[test]
 fn aperture_shapes_change_bokeh_without_changing_flat_colour() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (81, 81);
     let mut colors = solid_pixels(w, h, [0.0, 0.0, 0.0, 1.0]);
     let centre = (h / 2 * w + w / 2) as usize;
@@ -1385,7 +1382,7 @@ fn aperture_shapes_change_bokeh_without_changing_flat_colour() {
 
 #[test]
 fn isolated_hdr_highlight_spreads_energy_over_a_bounded_footprint() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (96, 64);
     let mut colors = solid_pixels(w, h, [0.0, 0.0, 0.0, 1.0]);
     let coc = vec![(0.8, false); (w * h) as usize];
@@ -1448,7 +1445,7 @@ fn isolated_hdr_highlight_spreads_energy_over_a_bounded_footprint() {
 
 #[test]
 fn small_far_blur_is_independent_of_unreachable_tile_maximum() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (128, 128);
     let colors = (0..w * h)
         .map(|i| {
@@ -1489,7 +1486,7 @@ fn small_far_blur_is_independent_of_unreachable_tile_maximum() {
 
 #[test]
 fn focused_checkerboard_detail_survives_beside_blurred_region() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (80, 32);
     let mut colors = solid_pixels(w, h, [0.25, 0.25, 0.25, 1.0]);
     let mut coc = vec![(0.8, false); (w * h) as usize];
@@ -1546,7 +1543,7 @@ fn focused_checkerboard_detail_survives_beside_blurred_region() {
 
 #[test]
 fn small_alpha_blur_monotonically_sheds_high_frequency_detail() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (48, 32);
     let colors = (0..w * h)
         .map(|i| {
@@ -1618,7 +1615,7 @@ fn small_alpha_blur_monotonically_sheds_high_frequency_detail() {
 
 #[test]
 fn small_alpha_blur_rejects_unrelated_far_surface() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (33, 17);
     let mut colors = solid_pixels(w, h, [20.0, 0.0, 0.0, 1.0]);
     let mut coc = vec![(0.5, false); (w * h) as usize];
@@ -1659,7 +1656,7 @@ fn small_alpha_blur_rejects_unrelated_far_surface() {
 
 #[test]
 fn motion_and_focus_sweep_has_bounded_frame_to_frame_change() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (96, 48);
     let mut previous: Option<(Vec<[f32; 4]>, f32, f32)> = None;
     let background_luma = (0.01 + 0.02 + 0.04) / 3.0;
@@ -1732,7 +1729,7 @@ fn save_artifact(dir: &str, name: &str, pixels: &[[f32; 4]], w: u32, h: u32) {
 
 #[test]
 fn production_pipeline_baseline_fixture_emits_optional_visual_artifact() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let (w, h) = (320, 192);
     let mut colors = Vec::with_capacity((w * h) as usize);
     let mut coc = Vec::with_capacity((w * h) as usize);
@@ -1766,7 +1763,7 @@ fn bounded_gpu_benchmark_1080p_and_4k() {
     if std::env::var_os("MANIFOLD_DOF_BENCH").is_none() {
         return;
     }
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     for &(w, h) in &[(1920, 1080), (3840, 2160)] {
         let src = texture(
             &device,
@@ -1795,14 +1792,14 @@ fn bounded_gpu_benchmark_1080p_and_4k() {
         };
         for _ in 0..3 {
             let mut native = device.create_encoder("bokeh-proof-benchmark-warmup");
-            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut native, &device);
+            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, &device);
             gather.encode(&mut gpu, &src, &width, &out, settings);
             native.commit_and_wait_completed();
         }
         let mut samples = Vec::with_capacity(10);
         for _ in 0..10 {
             let mut native = device.create_encoder("bokeh-proof-benchmark-steady");
-            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut native, &device);
+            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, &device);
             gather.encode(&mut gpu, &src, &width, &out, settings);
             samples.push(native.commit_and_wait_completed_timed() * 1000.0);
         }

@@ -17,10 +17,10 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -51,7 +51,7 @@ pub const SCANLINE_MOTION: &[&str] = &["Tear", "Slide"];
 /// composite as transparent.
 pub const SPREAD_MODE: &[&str] = &["Shear", "Split"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ScanlineJitterField,
     type_id: "node.scanline_jitter_field",
     purpose: "Generator for a per-row horizontal-offset field. `motion` picks the character: Tear (default) hashes each scanline row with a sine-hash on quantised time and gates by `scanline` so only a fraction of rows JOLT (the VHS / horizontal-tearing building block); Slide drives every band with smooth value noise on continuous time for an organic, ungated drift (the Latent Space website mosh slide). `bands` sets the band count: in Tear it has no effect (Tear is always per pixel row); in Slide, 0 = no rows (the field outputs zero offset with full coverage, so a downstream flow/domain warp carries the motion without per-row slicing), and e.g. 36 = chunky strips. `spread` (Slide only) pushes the bands apart across the slice axis in band heights — `spread_mode` picks how: Shear resamples each band's window shifted, Split translates the band strips themselves and emits a coverage mask so the gaps can composite as transparent. `angle` (degrees, Slide only) rotates the whole slice frame: 0 = horizontal strips sliding sideways, 90 = vertical strips sliding vertically. Emits `offset` (R/G = signed UV shift per row/band, B = coverage mask (1 = covered, 0 = Split-mode gap), A=1). Feed `offset` into node.remap (Relative mode) — alone or summed with node.block_displace_field's offset via node.mix(Add) — and project B onto a mask for node.masked_mix when using Split. `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
@@ -155,7 +155,7 @@ crate::primitive! {
 // D7/P0: per-frame recompute for a FUSED region's `time` field — `run()` resolves
 // an unwired `time` input from `ctx.time.seconds.0`.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.scanline_jitter_field",
         array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32]),

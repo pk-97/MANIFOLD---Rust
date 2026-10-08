@@ -10,9 +10,9 @@ use manifold_core::scene_modifier_edit::{delete_scene_modifier, insert_scene_mod
 use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::NodeId;
 use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-use manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers;
-use manifold_renderer::node_graph::{ParamValue, PrimitiveRegistry};
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::load::expand::prepare_scene_modifiers;
+use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
+use manifold_node_engine::runtime::PresetRuntime;
 
 #[path = "common/scene_modifier.rs"]
 mod common;

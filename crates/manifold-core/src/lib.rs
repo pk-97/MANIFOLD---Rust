@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+/// Build-time identity of core tempo sources used by recorded physics results.
+pub const SOURCE_IDENTITY: &str = env!("MANIFOLD_CORE_SOURCE_IDENTITY");
+
 pub mod ableton_mapping;
 pub mod audio_clip_detection;
 pub mod audio_features;

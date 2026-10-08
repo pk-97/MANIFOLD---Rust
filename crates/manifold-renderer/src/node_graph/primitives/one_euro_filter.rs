@@ -14,9 +14,9 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// 1€ filter smoothing coefficient from cutoff frequency and timestep.
 /// α = 1 / (1 + τ/dt), where τ = 1/(2π·fc).
@@ -26,7 +26,7 @@ fn one_euro_alpha(dt: f32, cutoff: f32) -> f32 {
     1.0 / (1.0 + tau / dt)
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: OneEuroFilter,
     type_id: "node.one_euro_filter",
     purpose: "Adaptive temporal low-pass (1€ filter) on a Channels array. Low cutoff when the signal is still (heavy smoothing, eliminates jitter); raises cutoff when the signal moves fast (responsive tracking, no perceptible lag). Per-channel per-sample independent filter. Wire detection regions, DNN depth scalars, audio bins, or any noisy signal that needs temporal stabilisation.",
@@ -102,7 +102,7 @@ impl Primitive for OneEuroFilter {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

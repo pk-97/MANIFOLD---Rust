@@ -1,4 +1,4 @@
-use crate::node_graph::{ContentVersion, MeshRevision};
+use manifold_node_engine::{content_revision::ContentVersion, scene::mesh_change::MeshRevision};
 use manifold_gpu::raytrace::RtGeometryChange;
 
 /// Classify the per-object acceleration-structure update for one evaluated
@@ -82,14 +82,14 @@ mod tests {
     }
 
     fn slot_hint(slot: u32, generation: u64) -> Option<ContentVersion> {
-        Some(ContentVersion::new(1, crate::node_graph::ResourceId(slot), generation))
+        Some(ContentVersion::new(1, manifold_node_engine::exec::execution_plan::ResourceId(slot), generation))
     }
 
     #[test]
     fn appearance_tracks_content_identity_and_lifetime() {
         let key = |epoch, resource, revision| {
             let mut key = AppearanceKeyBuilder::default();
-            key.content(Some(ContentVersion::new(epoch, crate::node_graph::ResourceId(resource), revision)));
+            key.content(Some(ContentVersion::new(epoch, manifold_node_engine::exec::execution_plan::ResourceId(resource), revision)));
             key.parameter_bytes(&1.0_f32.to_bits().to_ne_bytes());
             key.finish()
         };

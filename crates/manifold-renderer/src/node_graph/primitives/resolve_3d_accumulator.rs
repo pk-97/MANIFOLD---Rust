@@ -12,10 +12,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `vol_res` / `vol_depth` Int params
 /// (→ i32) + pad to 16 bytes. The generated standalone kernel is single-entry,
@@ -33,7 +33,7 @@ struct Resolve3DUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Resolve3DAccumulator,
     type_id: "node.resolve_scatter_3d",
     purpose: "Read a u32 fixed-point 3D accumulator buffer (produced by node.draw_particles_3d), divide by fixed_point_scale (default 4096, FluidSim3D's legacy FIXED_POINT_MULTIPLIER), and write the result as a density Texture3D. Self-clears the accumulator to zero atomically as part of the same dispatch so the next frame starts fresh.",
@@ -142,9 +142,9 @@ impl Primitive for Resolve3DAccumulator {
                 },
             ],
             [
-                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
-                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
-                vol_depth.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_depth.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
             ],
             "node.resolve_scatter_3d",
         );
@@ -167,7 +167,7 @@ mod gpu_tests {
 
     #[test]
     fn generated_resolve_3d_divides_and_self_clears() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (vr, vd) = (4u32, 2u32); // dims (vr, vr, vd)
         let cells = (vr * vr * vd) as usize;
 
@@ -190,7 +190,7 @@ mod gpu_tests {
         });
 
         let gen_wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<Resolve3DAccumulator>()
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<Resolve3DAccumulator>()
                 .expect("resolve_3d_accumulator codegen");
         assert!(
             gen_wgsl.contains("array<atomic<u32>>"),
@@ -202,7 +202,7 @@ mod gpu_tests {
         );
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "resolve3d-oracle",
         );
 
@@ -221,9 +221,9 @@ mod gpu_tests {
                 GpuBinding::Texture { binding: 2, texture: &density },
             ],
             [
-                vr.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
-                vr.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
-                vd.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vr.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vr.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vd.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
             ],
             "resolve3d-oracle",
         );

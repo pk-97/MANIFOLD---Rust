@@ -6,9 +6,9 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 use super::region_types::{LegacyBox, MAX_REGIONS, Region, TrackRecord};
 
@@ -402,7 +402,7 @@ fn detection_from_region(region: Region) -> Option<Detection> {
     })
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TrackRegions,
     type_id: "node.track_regions",
     purpose: "Track up to 32 connected-component regions with stable runtime-local IDs, velocity and age. Fresh successful samples update identity; stale samples retain the last publication without aging it.",
@@ -461,7 +461,7 @@ impl Primitive for TrackRegions {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         match port_name {

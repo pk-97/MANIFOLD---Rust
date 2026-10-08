@@ -604,14 +604,13 @@ pub fn selection_region_to_core(r: &UiSelectionRegion) -> SelectionRegion {
 // renderer's `descriptor_for` / `tooltip_for`) and baked into the UI snapshot, so
 // the canvas reads them straight off the data.
 
-use manifold_renderer::node_graph as rg;
 use manifold_ui::graph_view as gv;
 
 /// Translate the renderer's editor-graph snapshot into the UI-local view-model
 /// the canvas consumes. The whole nested structure (group bodies, ports, params,
 /// wires, outer routings) is converted; `descriptor_for`/`tooltip_for` are
 /// applied per node so the catalog never leaves the renderer crate.
-pub fn graph_snapshot_to_ui(s: &rg::GraphSnapshot) -> gv::GraphSnapshot {
+pub fn graph_snapshot_to_ui(s: &manifold_node_engine::snapshot::GraphSnapshot) -> gv::GraphSnapshot {
     gv::GraphSnapshot {
         nodes: s.nodes.iter().map(graph_node_to_ui).collect(),
         wires: s.wires.iter().map(graph_wire_to_ui).collect(),
@@ -619,8 +618,8 @@ pub fn graph_snapshot_to_ui(s: &rg::GraphSnapshot) -> gv::GraphSnapshot {
     }
 }
 
-fn graph_node_to_ui(n: &rg::NodeSnapshot) -> gv::NodeSnapshot {
-    let descriptor = rg::descriptor_for(&n.type_id);
+fn graph_node_to_ui(n: &manifold_node_engine::snapshot::NodeSnapshot) -> gv::NodeSnapshot {
+    let descriptor = manifold_node_engine::descriptor::descriptor_for(&n.type_id);
     let category = descriptor
         .map(|d| category_to_ui(d.category))
         .unwrap_or(gv::Category::Uncategorized);
@@ -653,7 +652,7 @@ fn graph_node_to_ui(n: &rg::NodeSnapshot) -> gv::NodeSnapshot {
     }
 }
 
-fn graph_group_to_ui(g: &rg::GroupSnapshot) -> gv::GroupSnapshot {
+fn graph_group_to_ui(g: &manifold_node_engine::snapshot::GroupSnapshot) -> gv::GroupSnapshot {
     gv::GroupSnapshot {
         nodes: g.nodes.iter().map(graph_node_to_ui).collect(),
         wires: g.wires.iter().map(graph_wire_to_ui).collect(),
@@ -661,7 +660,7 @@ fn graph_group_to_ui(g: &rg::GroupSnapshot) -> gv::GroupSnapshot {
     }
 }
 
-fn graph_param_to_ui(type_id: &str, p: &rg::ParamSnapshot) -> gv::ParamSnapshot {
+fn graph_param_to_ui(type_id: &str, p: &manifold_node_engine::snapshot::ParamSnapshot) -> gv::ParamSnapshot {
     gv::ParamSnapshot {
         name: p.name.clone(),
         label: p.label.clone(),
@@ -676,18 +675,18 @@ fn graph_param_to_ui(type_id: &str, p: &rg::ParamSnapshot) -> gv::ParamSnapshot 
         vec_value: p.vec_value,
         string_value: p.string_value.clone(),
         table_value: p.table_value.clone(),
-        tooltip: rg::tooltip_for(type_id, &p.name).map(str::to_owned),
+        tooltip: manifold_node_engine::param_doc::tooltip_for(type_id, &p.name).map(str::to_owned),
     }
 }
 
-fn graph_port_to_ui(p: &rg::PortSnapshot) -> gv::PortSnapshot {
+fn graph_port_to_ui(p: &manifold_node_engine::snapshot::PortSnapshot) -> gv::PortSnapshot {
     gv::PortSnapshot {
         name: p.name.clone(),
         kind: port_kind_to_ui(&p.kind),
     }
 }
 
-fn graph_wire_to_ui(w: &rg::WireSnapshot) -> gv::WireSnapshot {
+fn graph_wire_to_ui(w: &manifold_node_engine::snapshot::WireSnapshot) -> gv::WireSnapshot {
     gv::WireSnapshot {
         from_node: w.from_node,
         from_port: w.from_port.clone(),
@@ -696,28 +695,28 @@ fn graph_wire_to_ui(w: &rg::WireSnapshot) -> gv::WireSnapshot {
     }
 }
 
-fn outer_routing_to_ui(r: &rg::OuterParamRouting) -> gv::OuterParamRouting {
+fn outer_routing_to_ui(r: &manifold_node_engine::snapshot::OuterParamRouting) -> gv::OuterParamRouting {
     gv::OuterParamRouting {
         outer_label: r.outer_label.clone(),
         outer_param_id: r.outer_param_id.clone(),
         node_handle: r.node_handle.clone(),
         inner_param: r.inner_param.clone(),
         source: match r.source {
-            rg::OuterParamSource::Static => gv::OuterParamSource::Static,
-            rg::OuterParamSource::User => gv::OuterParamSource::User,
+            manifold_node_engine::snapshot::OuterParamSource::Static => gv::OuterParamSource::Static,
+            manifold_node_engine::snapshot::OuterParamSource::User => gv::OuterParamSource::User,
         },
     }
 }
 
-fn port_kind_to_ui(k: &rg::PortKindSnapshot) -> gv::PortKindSnapshot {
+fn port_kind_to_ui(k: &manifold_node_engine::snapshot::PortKindSnapshot) -> gv::PortKindSnapshot {
     match k {
-        rg::PortKindSnapshot::Texture2D => gv::PortKindSnapshot::Texture2D,
-        rg::PortKindSnapshot::Texture2DTyped { slots } => gv::PortKindSnapshot::Texture2DTyped {
+        manifold_node_engine::snapshot::PortKindSnapshot::Texture2D => gv::PortKindSnapshot::Texture2D,
+        manifold_node_engine::snapshot::PortKindSnapshot::Texture2DTyped { slots } => gv::PortKindSnapshot::Texture2DTyped {
             slots: slots.clone(),
         },
-        rg::PortKindSnapshot::Texture3D => gv::PortKindSnapshot::Texture3D,
-        rg::PortKindSnapshot::Scalar => gv::PortKindSnapshot::Scalar,
-        rg::PortKindSnapshot::Array {
+        manifold_node_engine::snapshot::PortKindSnapshot::Texture3D => gv::PortKindSnapshot::Texture3D,
+        manifold_node_engine::snapshot::PortKindSnapshot::Scalar => gv::PortKindSnapshot::Scalar,
+        manifold_node_engine::snapshot::PortKindSnapshot::Array {
             channels,
             match_mode,
             item_size,
@@ -731,64 +730,64 @@ fn port_kind_to_ui(k: &rg::PortKindSnapshot) -> gv::PortKindSnapshot {
                 })
                 .collect(),
             match_mode: match match_mode {
-                rg::ArrayMatchMode::Exact => gv::ArrayMatchMode::Exact,
-                rg::ArrayMatchMode::Permissive => gv::ArrayMatchMode::Permissive,
+                manifold_node_engine::snapshot::ArrayMatchMode::Exact => gv::ArrayMatchMode::Exact,
+                manifold_node_engine::snapshot::ArrayMatchMode::Permissive => gv::ArrayMatchMode::Permissive,
             },
             item_size: *item_size,
             item_align: *item_align,
         },
-        rg::PortKindSnapshot::Camera => gv::PortKindSnapshot::Camera,
-        rg::PortKindSnapshot::Light => gv::PortKindSnapshot::Light,
-        rg::PortKindSnapshot::Material => gv::PortKindSnapshot::Material,
-        rg::PortKindSnapshot::Transform => gv::PortKindSnapshot::Transform,
-        rg::PortKindSnapshot::Atmosphere => gv::PortKindSnapshot::Atmosphere,
-        rg::PortKindSnapshot::RenderMode => gv::PortKindSnapshot::RenderMode,
-        rg::PortKindSnapshot::Object => gv::PortKindSnapshot::Object,
-        rg::PortKindSnapshot::RigidBody => gv::PortKindSnapshot::RigidBody,
-        rg::PortKindSnapshot::FluidRole => gv::PortKindSnapshot::FluidRole,
-        rg::PortKindSnapshot::MeshSource => gv::PortKindSnapshot::MeshSource,
-        rg::PortKindSnapshot::VectorField => gv::PortKindSnapshot::VectorField,
+        manifold_node_engine::snapshot::PortKindSnapshot::Camera => gv::PortKindSnapshot::Camera,
+        manifold_node_engine::snapshot::PortKindSnapshot::Light => gv::PortKindSnapshot::Light,
+        manifold_node_engine::snapshot::PortKindSnapshot::Material => gv::PortKindSnapshot::Material,
+        manifold_node_engine::snapshot::PortKindSnapshot::Transform => gv::PortKindSnapshot::Transform,
+        manifold_node_engine::snapshot::PortKindSnapshot::Atmosphere => gv::PortKindSnapshot::Atmosphere,
+        manifold_node_engine::snapshot::PortKindSnapshot::RenderMode => gv::PortKindSnapshot::RenderMode,
+        manifold_node_engine::snapshot::PortKindSnapshot::Object => gv::PortKindSnapshot::Object,
+        manifold_node_engine::snapshot::PortKindSnapshot::RigidBody => gv::PortKindSnapshot::RigidBody,
+        manifold_node_engine::snapshot::PortKindSnapshot::FluidRole => gv::PortKindSnapshot::FluidRole,
+        manifold_node_engine::snapshot::PortKindSnapshot::MeshSource => gv::PortKindSnapshot::MeshSource,
+        manifold_node_engine::snapshot::PortKindSnapshot::VectorField => gv::PortKindSnapshot::VectorField,
     }
 }
 
-fn param_kind_to_ui(k: rg::ParamSnapshotKind) -> gv::ParamSnapshotKind {
+fn param_kind_to_ui(k: manifold_node_engine::snapshot::ParamSnapshotKind) -> gv::ParamSnapshotKind {
     match k {
-        rg::ParamSnapshotKind::Float => gv::ParamSnapshotKind::Float,
-        rg::ParamSnapshotKind::Angle => gv::ParamSnapshotKind::Angle,
-        rg::ParamSnapshotKind::Frequency => gv::ParamSnapshotKind::Frequency,
-        rg::ParamSnapshotKind::Int => gv::ParamSnapshotKind::Int,
-        rg::ParamSnapshotKind::Bool => gv::ParamSnapshotKind::Bool,
-        rg::ParamSnapshotKind::Enum => gv::ParamSnapshotKind::Enum,
-        rg::ParamSnapshotKind::Trigger => gv::ParamSnapshotKind::Trigger,
-        rg::ParamSnapshotKind::Color => gv::ParamSnapshotKind::Color,
-        rg::ParamSnapshotKind::Vec2 => gv::ParamSnapshotKind::Vec2,
-        rg::ParamSnapshotKind::Vec3 => gv::ParamSnapshotKind::Vec3,
-        rg::ParamSnapshotKind::Vec4 => gv::ParamSnapshotKind::Vec4,
-        rg::ParamSnapshotKind::String => gv::ParamSnapshotKind::String,
-        rg::ParamSnapshotKind::Other => gv::ParamSnapshotKind::Other,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Float => gv::ParamSnapshotKind::Float,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Angle => gv::ParamSnapshotKind::Angle,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Frequency => gv::ParamSnapshotKind::Frequency,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Int => gv::ParamSnapshotKind::Int,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Bool => gv::ParamSnapshotKind::Bool,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Enum => gv::ParamSnapshotKind::Enum,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Trigger => gv::ParamSnapshotKind::Trigger,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Color => gv::ParamSnapshotKind::Color,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Vec2 => gv::ParamSnapshotKind::Vec2,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Vec3 => gv::ParamSnapshotKind::Vec3,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Vec4 => gv::ParamSnapshotKind::Vec4,
+        manifold_node_engine::snapshot::ParamSnapshotKind::String => gv::ParamSnapshotKind::String,
+        manifold_node_engine::snapshot::ParamSnapshotKind::Other => gv::ParamSnapshotKind::Other,
     }
 }
 
-fn category_to_ui(c: rg::Category) -> gv::Category {
+fn category_to_ui(c: manifold_node_engine::descriptor::Category) -> gv::Category {
     match c {
-        rg::Category::Uncategorized => gv::Category::Uncategorized,
-        rg::Category::ColorAndTone => gv::Category::ColorAndTone,
-        rg::Category::BlurAndSharpen => gv::Category::BlurAndSharpen,
-        rg::Category::DistortAndWarp => gv::Category::DistortAndWarp,
-        rg::Category::Stylize => gv::Category::Stylize,
-        rg::Category::Generate => gv::Category::Generate,
-        rg::Category::Noise => gv::Category::Noise,
-        rg::Category::Mask => gv::Category::Mask,
-        rg::Category::Composite => gv::Category::Composite,
-        rg::Category::Geometry3D => gv::Category::Geometry3D,
-        rg::Category::MaterialsAndLighting => gv::Category::MaterialsAndLighting,
-        rg::Category::Particles2D => gv::Category::Particles2D,
-        rg::Category::Particles3D => gv::Category::Particles3D,
-        rg::Category::Control => gv::Category::Control,
-        rg::Category::DetectionAndSampling => gv::Category::DetectionAndSampling,
-        rg::Category::MathAndConvert => gv::Category::MathAndConvert,
-        rg::Category::Routing => gv::Category::Routing,
-        rg::Category::FieldsAndCoordinates => gv::Category::FieldsAndCoordinates,
+        manifold_node_engine::descriptor::Category::Uncategorized => gv::Category::Uncategorized,
+        manifold_node_engine::descriptor::Category::ColorAndTone => gv::Category::ColorAndTone,
+        manifold_node_engine::descriptor::Category::BlurAndSharpen => gv::Category::BlurAndSharpen,
+        manifold_node_engine::descriptor::Category::DistortAndWarp => gv::Category::DistortAndWarp,
+        manifold_node_engine::descriptor::Category::Stylize => gv::Category::Stylize,
+        manifold_node_engine::descriptor::Category::Generate => gv::Category::Generate,
+        manifold_node_engine::descriptor::Category::Noise => gv::Category::Noise,
+        manifold_node_engine::descriptor::Category::Mask => gv::Category::Mask,
+        manifold_node_engine::descriptor::Category::Composite => gv::Category::Composite,
+        manifold_node_engine::descriptor::Category::Geometry3D => gv::Category::Geometry3D,
+        manifold_node_engine::descriptor::Category::MaterialsAndLighting => gv::Category::MaterialsAndLighting,
+        manifold_node_engine::descriptor::Category::Particles2D => gv::Category::Particles2D,
+        manifold_node_engine::descriptor::Category::Particles3D => gv::Category::Particles3D,
+        manifold_node_engine::descriptor::Category::Control => gv::Category::Control,
+        manifold_node_engine::descriptor::Category::DetectionAndSampling => gv::Category::DetectionAndSampling,
+        manifold_node_engine::descriptor::Category::MathAndConvert => gv::Category::MathAndConvert,
+        manifold_node_engine::descriptor::Category::Routing => gv::Category::Routing,
+        manifold_node_engine::descriptor::Category::FieldsAndCoordinates => gv::Category::FieldsAndCoordinates,
     }
 }
 

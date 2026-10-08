@@ -8,11 +8,11 @@ use std::{borrow::Cow, error::Error, fs, path::Path};
 use bytemuck::Zeroable;
 use manifold_foundation::{Beats, Bpm};
 use manifold_physics::{BodyConfig, BodyKind, PhysicsWorld, Seconds};
-use manifold_renderer::mesh::MeshVertex;
-use manifold_renderer::node_graph::physics_mesh::prepare_colliders;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::scene::physics_mesh::prepare_colliders;
 use serde_json::{Value, json};
 
-use manifold_renderer::node_graph::mesh_partition as fracture;
+use manifold_node_engine::scene::mesh_partition as fracture;
 
 struct Contributor {
     primitive: Value,

@@ -8,9 +8,9 @@
 //! into a shader.
 
 use std::borrow::Cow;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 pub const MATH_OPS: &[&str] = &[
     "Add",        // 0
@@ -30,7 +30,7 @@ pub const MATH_OPS: &[&str] = &[
     "Sqrt",       // 14 — unary, b ignored; sqrt(max(a, 0))
 ];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Math,
     type_id: "node.math",
     purpose: "Scalar arithmetic. Combines two control signals into one with the selected op (add / subtract / multiply / divide / min / max / atan2 / sin / cos / reciprocal / floor / ceil / modulo / exp2 / sqrt). Composition glue for control wires. `b` is unused for unary ops (sin, cos, reciprocal, floor, ceil, exp2, sqrt). Both `a` and `b` are port-shadows-param: when an input wire isn't connected the inline param value is used, so constants can be set on the node without dragging a Value node in.",
@@ -176,12 +176,12 @@ mod tests {
     use super::*;
     use manifold_core::{Beats, Seconds};
 
-    use crate::node_graph::effect_node::{EffectNode, EffectNodeType, FrameTime};
-    use crate::node_graph::execution_plan::compile;
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-    use crate::node_graph::primitives::Value;
-    use crate::node_graph::Executor;
+    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeType, FrameTime};
+    use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+    use manifold_node_engine::primitives::value::Value;
+    use manifold_node_engine::exec::execution::Executor;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -197,8 +197,8 @@ mod tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
     }
     impl EffectNode for Capture {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id

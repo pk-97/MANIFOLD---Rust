@@ -373,7 +373,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::tonemap::{TonemapMode, TonemapPipeline, TonemapSettings};
     use half::f16;
     use manifold_core::TonemapCurve;
@@ -500,7 +500,7 @@ mod gpu_tests {
 
     #[test]
     fn presentation_preserves_hdr_values_under_current_headroom() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let caps = DisplayCapabilities::new(
             PotentialHeadroom::new(8.0).unwrap(),
             CurrentHeadroom::new(4.0).unwrap(),
@@ -523,7 +523,7 @@ mod gpu_tests {
 
     #[test]
     fn presentation_sdr_uses_current_not_potential_headroom() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let caps = DisplayCapabilities::new(
             PotentialHeadroom::new(8.0).unwrap(),
             CurrentHeadroom::new(1.0).unwrap(),
@@ -543,7 +543,7 @@ mod gpu_tests {
 
     #[test]
     fn presentation_sdr_preserves_authored_colour_without_an_extra_curve() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let presentation = run_presentation(&device, [1.7, 0.6, 0.2, 0.75], sdr(), None);
         // Legacy SDR encoding of the linear HDR image: clip highlights,
         // preserve midtones, colour ratios below white, and alpha.
@@ -558,7 +558,7 @@ mod gpu_tests {
 
     #[test]
     fn presentation_sdr_selected_curves_are_distinct_and_bounded() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let input = [2.0, 0.7, 0.1, 0.75];
         let curves = [
             TonemapCurve::AcesNarkowicz,
@@ -596,7 +596,7 @@ mod gpu_tests {
 
     #[test]
     fn hdr_capability_keeps_edr_path_when_current_headroom_is_one() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let caps = DisplayCapabilities::new(
             PotentialHeadroom::new(4.0).unwrap(),
             CurrentHeadroom::new(1.0).unwrap(),
@@ -623,7 +623,7 @@ mod gpu_tests {
 
     #[test]
     fn presentation_curve_matches_compute_tonemap_pipeline() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let input = [2.0, 0.7, 0.1, 0.75];
         for curve in [
             TonemapCurve::AcesNarkowicz,
@@ -644,7 +644,7 @@ mod gpu_tests {
 
     #[test]
     fn presentation_keeps_sdr_white_stable_as_headroom_crosses_one() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         for headroom in [1.0, 1.001, 1.01, 1.1, 1.25, 2.0] {
             let caps = DisplayCapabilities::new(
                 PotentialHeadroom::new(4.0).unwrap(),
@@ -663,7 +663,7 @@ mod gpu_tests {
 
     #[test]
     fn presentation_highlights_follow_headroom_without_a_reversal() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let input = [8.0, 2.0, 1.01, 0.75];
         let mut previous = [1.0; 3];
         for headroom in [1.0, 1.00001, 1.001, 1.01, 1.1, 1.249, 1.25, 1.251, 2.0, 4.0] {
@@ -687,7 +687,7 @@ mod gpu_tests {
 
     #[test]
     fn presentation_preserves_distinct_low_float_values() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let caps = DisplayCapabilities::new(
             PotentialHeadroom::new(8.0).unwrap(),
             CurrentHeadroom::new(4.0).unwrap(),
@@ -712,7 +712,7 @@ mod gpu_tests {
 
     #[test]
     fn scene_linear_tonemap_preserves_hdr_values() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let out = run_tonemap_mode(
             &device,
             [2.0, 1.25, 0.5, 0.75],
@@ -726,7 +726,7 @@ mod gpu_tests {
 
     #[test]
     fn edr_tonemap_mode_keeps_the_existing_soft_shoulder() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let out = run_tonemap_mode(
             &device,
             [2.0, 1.25, 0.5, 1.0],
@@ -742,7 +742,7 @@ mod gpu_tests {
 
     #[test]
     fn presentation_rejects_nonfloat_targets_and_nonfloat_linear_sources() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let target = make_texture(
             &device,
             GpuTextureFormat::Bgra8Unorm,

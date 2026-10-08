@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "source_crate": "crates/manifold-renderer",
+  "destination_crate": "crates/manifold-node-engine",
+  "rewrite_roots": [
+    "crates/manifold-renderer",
+    "crates/manifold-node-engine",
+    "crates/manifold-app"
+  ],
+  "aliases": {}
+}

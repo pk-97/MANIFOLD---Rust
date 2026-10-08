@@ -1,14 +1,14 @@
 //! Area-weighted normals, matching manifold-fluids decode_surface.
-use super::count_surface_triangles::MARCHING_CUBES_COMMON;
-use super::liquid_bricks;
-use super::relax_surface_mesh::SurfaceMeshPass;
-use super::sort_particles_into_cells::float_param;
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::water::primitives::count_surface_triangles::MARCHING_CUBES_COMMON;
+use manifold_node_engine::water::primitives::liquid_bricks;
+use manifold_node_engine::water::primitives::relax_surface_mesh::SurfaceMeshPass;
+use manifold_node_engine::float_param;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use std::borrow::Cow;
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SurfaceMeshNormals,
     type_id: "node.surface_mesh_normals",
     purpose: "Rebuild area-weighted smooth vertex normals from the incident triangles of a marching-cubes mesh. Sum unnormalized face cross products, then normalize, matching manifold-fluids decode_surface after FLIP mesh smoothing. Positions and attributes pass through; degenerate fans yield zero normals.",
@@ -41,7 +41,7 @@ crate::primitive! {
     wgsl_body: include_str!("shaders/surface_mesh_normals_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     derived_uniforms: ["strength:f32", "max_capacity:u32", "brick_pass:u32", "indexed:u32"],
-    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl"), include_str!("shaders/surface_mesh_adjacency.wgsl")],
+    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/surface_edge_ownership.wgsl"), include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/surface_edge_index.wgsl"), manifold_node_engine::water::primitives::relax_surface_mesh::SURFACE_MESH_ADJACENCY_WGSL],
     owned_outputs: ["out"],
     buffer_index: "liquid_cell_brick_index",
     extra_fields: {
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn generated_normal_gather_validates() {
         let source =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<SurfaceMeshNormals>()
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<SurfaceMeshNormals>()
                 .unwrap();
         let module = naga::front::wgsl::parse_str(&source).unwrap();
         naga::valid::Validator::new(
@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn surface_stage_defaults_and_manifest_bindings() {
         use super::super::smooth_surface_mesh::SmoothSurfaceMesh;
-        use crate::node_graph::primitive::PrimitiveSpec;
+        use manifold_node_engine::primitive::PrimitiveSpec;
         let iterations = SmoothSurfaceMesh::PARAMS
             .iter()
             .find(|p| p.name == "iterations")
@@ -103,8 +103,8 @@ mod tests {
             "editable display span only"
         );
         assert_eq!(iterations.default, ParamValue::Float(2.0));
-        let def = super::super::gpu_flip_preset::render_def(
-            super::super::gpu_flip_preset::WaterScene::dam_break(64),
+        let def = manifold_node_engine::water::primitives::gpu_flip_preset::render_def(
+            manifold_node_engine::water::primitives::gpu_flip_preset::WaterScene::dam_break(64),
         );
         let metadata = def.preset_metadata.as_ref().unwrap();
         let scene = crate::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
@@ -162,9 +162,9 @@ mod tests {
                 .iter()
                 .any(|n| n.type_id == "node.relax_surface_mesh")
         );
-        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
         let view =
-            crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).unwrap();
+            manifold_node_engine::freeze::install::fuse_generator_view(&def, &registry).unwrap();
         for ty in ["node.smooth_surface_mesh", "node.surface_mesh_normals"] {
             assert_eq!(
                 view.def.nodes.iter().filter(|n| n.type_id == ty).count(),
@@ -178,10 +178,10 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::mesh::MeshVertex;
-    use crate::node_graph::primitives::liquid_surface_tests::{Harness, params, read};
+    use manifold_node_engine::mesh::MeshVertex;
+    use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
     use crate::node_graph::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
-    use crate::node_graph::primitives::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
+    use manifold_node_engine::water::primitives::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
     use glam::DVec3;
 
     #[test]
@@ -278,3 +278,6 @@ mod gpu_tests {
         }
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

@@ -29,7 +29,7 @@ use manifold_gpu::raytrace::{AccumulateParams, GiMaterial, MetalShadowRayTracer,
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 
 use crate::harness::shared;
 

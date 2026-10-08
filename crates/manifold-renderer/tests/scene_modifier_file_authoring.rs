@@ -16,15 +16,10 @@ use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneStageScope, SceneT
 use manifold_core::{Beats, NodeId, Seconds};
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
 use manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
-use manifold_renderer::node_graph::scene_modifier_expand::{
-    PreparedModifierEvents, PreparedSceneModifierGraph, SceneModifierNodeRoute,
-    prepare_scene_modifiers,
-};
-use manifold_renderer::node_graph::{FrameTime, NodeInstanceId, PrimitiveRegistry};
-use manifold_renderer::preset_loader::{
-    SCENE_MODIFIER_CATALOG, clear_project_presets, set_project_presets,
-};
-use manifold_renderer::preset_runtime::{FrameContextInputs, PresetRuntime};
+use manifold_node_engine::load::expand::{PreparedModifierEvents, PreparedSceneModifierGraph, SceneModifierNodeRoute, prepare_scene_modifiers};
+use manifold_node_engine::{exec::effect_node::FrameTime, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry};
+use manifold_node_engine::load::preset_loader::{SCENE_MODIFIER_CATALOG, clear_project_presets, set_project_presets};
+use manifold_node_engine::runtime::{FrameContextInputs, PresetRuntime};
 
 const MUSHROOM_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

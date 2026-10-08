@@ -22,10 +22,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -44,7 +44,7 @@ struct NoiseUniforms {
 /// `noise_type` uniform.
 pub const NOISE_TYPES: &[&str] = &["Perlin", "Simplex", "Random", "Value"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Noise,
     type_id: "node.noise",
     purpose: "Pure generator. Unified 2D procedural noise: `type` selects Perlin (gradient noise, square-grid lobes), Simplex (cleaner gradient noise, fewer directional artifacts), Random (per-pixel wang_hash white noise), or Value (smooth interpolated hash-grid noise — soft, slightly blobby; the classic `fract(sin)`-free value-noise with the 123.34/456.21/45.32 hash, matching the Latent Space website mosh field). `octaves` (Detail) stacks frequencies into fBM for Perlin/Simplex/Value (octaves=1 is single-octave; >1 sums lacunarity/persistence-scaled octaves). Output remapped to [0, 1]. Perlin/Simplex/Value broadcast to RGB (A=1); Random writes R only (G=B=0), matching the legacy hash field. Merges and replaces node.perlin_noise_2d / node.simplex_noise_2d / node.fbm_2d / node.hash_noise_field_2d (those type-IDs alias here).",
@@ -193,7 +193,7 @@ impl Primitive for Noise {
 // node from the palette.
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: "node.perlin_noise_2d",
         create: || Box::new(Noise::new()),
         picker: None,
@@ -201,7 +201,7 @@ inventory::submit! {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: "node.simplex_noise_2d",
         create: || {
             let mut n = Noise::new();
@@ -213,7 +213,7 @@ inventory::submit! {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: "node.fbm_2d",
         create: || {
             let mut n = Noise::new();
@@ -225,7 +225,7 @@ inventory::submit! {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: "node.hash_noise_field_2d",
         create: || {
             let mut n = Noise::new();

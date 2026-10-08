@@ -23,16 +23,13 @@ use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::runtime::PresetRuntime;
 use manifold_core::params::ParamManifest;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::primitives::Gain;
-use manifold_renderer::node_graph::{
-    EffectGraphDefExt, EffectNode, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph,
-    MetalBackend, NodeInstanceId, PrimitiveRegistry, ResourceId, Source, compile,
-};
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::primitives::gain::Gain;
+use manifold_node_engine::{persistence::EffectGraphDefExt, exec::effect_node::EffectNode, exec::execution_plan::ExecutionPlan, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, scene::boundary_nodes::Source, exec::execution_plan::compile};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 const WARMUP: u32 = 8;
@@ -163,7 +160,7 @@ fn main() {
         };
 
         for &(w, h) in RESOLUTIONS {
-            let mut graph = match def.clone().into_graph(&registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) {
+            let mut graph = match def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) {
                 Ok(g) => g,
                 Err(e) => {
                     eprintln!("skip {name}@{w}x{h}: build {e}");
@@ -265,7 +262,7 @@ fn main() {
 /// accumulation) and the build path (raw `into_graph` vs `PresetRuntime`) — to
 /// localize the 11ms.
 fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
-    use manifold_renderer::node_graph::StateStore;
+    use manifold_node_engine::state_store::StateStore;
     let (w, h) = (1920u32, 1080u32);
     let path = format!("{GENERATOR_PRESETS_DIR}/FluidSim2D.json");
     let def: EffectGraphDef = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -280,11 +277,11 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
     for &warm in &[5u32, 30, 120] {
       let mut row = [0.0f64; 2];
       for (col, prealloc) in [false, true].into_iter().enumerate() {
-        let mut graph = def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
+        let mut graph = def.clone().into_graph(registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
         let plan = compile(&graph).unwrap();
         let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
         if prealloc {
-            manifold_renderer::node_graph::pre_allocate_resources(&mut graph, &plan, device, &mut backend).unwrap();
+            manifold_node_engine::load::graph_loader::pre_allocate_resources(&mut graph, &plan, device, &mut backend).unwrap();
         }
         let mut exec = Executor::new(Box::new(backend));
         let mut state = StateStore::new();
@@ -339,7 +336,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
 /// dispatches (flagged); the cumulative curve and the per-type rollup are the
 /// robust signals.
 fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
-    use manifold_renderer::node_graph::StateStore;
+    use manifold_node_engine::state_store::StateStore;
     use std::collections::BTreeMap;
 
     const GENS: &[&str] = &["FluidSim2D", "OilyFluid", "MetallicGlass"];
@@ -351,7 +348,7 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
     // Time one truncated plan against a freshly built graph (fresh state), pre-
     // binding a black input to the generator-input boundary when it's live.
     let time_prefix = |def: &EffectGraphDef, k: usize| -> Option<f64> {
-        let mut graph = def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()).ok()?;
+        let mut graph = def.clone().into_graph(registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).ok()?;
         let full = compile(&graph).ok()?;
         let plan = full.truncated(k);
         let input_res = graph
@@ -367,7 +364,7 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
         // Allocate the full-size Array (particle) + Texture3D buffers, exactly
         // like the production generator path — without this the particle
         // dispatches run on empty buffers and read as ~free.
-        manifold_renderer::node_graph::pre_allocate_resources(&mut graph, &full, device, &mut backend)
+        manifold_node_engine::load::graph_loader::pre_allocate_resources(&mut graph, &full, device, &mut backend)
             .ok()?;
         let mut exec = Executor::new(Box::new(backend));
         exec.set_profile_force_all_live(true);
@@ -409,7 +406,7 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
             continue;
         };
         // Step → node-type label from one canonical build.
-        let Ok(graph0) = def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) else {
+        let Ok(graph0) = def.clone().into_graph(registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) else {
             eprintln!("skip {name}: build");
             continue;
         };
@@ -948,7 +945,7 @@ fn profile_pool_stats(device: &GpuDevice) {
 /// hand-kernel dispatch `profile_fused_colorgrade` measures. This is the speedup
 /// that lands on screen.
 fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
-    use manifold_renderer::node_graph::freeze::install::fused_view_by_id;
+    use manifold_node_engine::freeze::install::fused_view_by_id;
 
     println!(
         "\n--- ColorGrade: unfused graph vs AUTO-fused graph, both via executor (production path) ---"
@@ -980,7 +977,7 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
     // time over FRAMES. Returns None if the graph can't be built/compiled.
     // `mesh_rules` must be the def's own sidecar: the fused arm passes the
     // fused view's composed rules, not an empty map.
-    let time_def = |def: &EffectGraphDef, mesh_rules: &manifold_renderer::node_graph::mesh_change::PreparedMeshRules, w: u32, h: u32, label: &str| -> Option<f64> {
+    let time_def = |def: &EffectGraphDef, mesh_rules: &manifold_node_engine::scene::mesh_change::PreparedMeshRules, w: u32, h: u32, label: &str| -> Option<f64> {
         let mut graph = def.clone().into_graph(registry, mesh_rules).ok()?;
         let plan = compile(&graph).ok()?;
         let source_id = graph
@@ -1019,7 +1016,7 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
     };
 
     for &(w, h) in RESOLUTIONS {
-        let unfused_ms = match time_def(&unfused_def, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default(), w, h, "auto-cg-unfused-timed") {
+        let unfused_ms = match time_def(&unfused_def, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(), w, h, "auto-cg-unfused-timed") {
             Some(ms) => ms,
             None => {
                 eprintln!("skip auto-fused-colorgrade@{w}x{h}: unfused build");
@@ -1046,9 +1043,7 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
 /// fusion forfeits, so the real speedup may sit below the naive
 /// steps-×-ms/step projection. Measured, not projected.
 fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
-    use manifold_renderer::node_graph::freeze::reference::{
-        ColorGradeParams, colorgrade_pipeline, dispatch_fused_colorgrade,
-    };
+    use manifold_node_engine::freeze::reference::{ColorGradeParams, colorgrade_pipeline, dispatch_fused_colorgrade};
 
     println!(
         "\n--- ColorGrade: unfused graph (9 steps) vs hand-fused 1 kernel, real GPU time ---"
@@ -1101,7 +1096,7 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Ar
 
     for &(w, h) in RESOLUTIONS {
         // --- unfused: the shipped graph through the executor ---
-        let mut graph = match def.clone().into_graph(registry, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default()) {
+        let mut graph = match def.clone().into_graph(registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) {
             Ok(g) => g,
             Err(e) => {
                 eprintln!("skip fused-colorgrade@{w}x{h}: build {e}");
@@ -1182,7 +1177,7 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Ar
 /// production; the per-node SHARES are the signal. Work the spans can't see
 /// (MPS/MetalFX internal encoders) shows as "unattributed".
 fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>, names: &[&str]) {
-    use manifold_renderer::node_graph::freeze::install;
+    use manifold_node_engine::freeze::install;
 
     const DEFAULT_NAMES: &[&str] = &[
         "FluidSim2D",
@@ -1230,7 +1225,7 @@ fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gpu
             }
         };
 
-        attribute_def(registry, device, &sampler, &def, &manifold_renderer::node_graph::mesh_change::PreparedMeshRules::default(), &format!("{name} — unfused"));
+        attribute_def(registry, device, &sampler, &def, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default(), &format!("{name} — unfused"));
 
         if is_gen {
             match install::fused_generator_view_for(&def) {
@@ -1268,10 +1263,10 @@ fn attribute_def(
     device: &std::sync::Arc<GpuDevice>,
     sampler: &manifold_gpu::GpuTimestampSampler,
     def: &EffectGraphDef,
-    mesh_rules: &manifold_renderer::node_graph::mesh_change::PreparedMeshRules,
+    mesh_rules: &manifold_node_engine::scene::mesh_change::PreparedMeshRules,
     title: &str,
 ) {
-    use manifold_renderer::node_graph::StateStore;
+    use manifold_node_engine::state_store::StateStore;
     use std::collections::BTreeMap;
 
     const ATTR_WARMUP: u32 = 8;
@@ -1307,7 +1302,7 @@ fn attribute_def(
     }
     // Full-size Array/Texture3D allocation, like the production generator
     // path — without it particle dispatches run on empty buffers.
-    let _ = manifold_renderer::node_graph::pre_allocate_resources(
+    let _ = manifold_node_engine::load::graph_loader::pre_allocate_resources(
         &mut graph,
         &plan,
         device,
@@ -1470,9 +1465,9 @@ fn profile_synthetic_pointwise(device: &std::sync::Arc<GpuDevice>) {
 
     // Port names from a throwaway probe (avoid hardcoding "in"/"out").
     let probe = Gain::new();
-    let in_port: &'static str = manifold_renderer::node_graph::intern_name(&probe.inputs()[0].name);
+    let in_port: &'static str = manifold_node_engine::exec::effect_node::intern_name(&probe.inputs()[0].name);
     let out_port: &'static str =
-        manifold_renderer::node_graph::intern_name(&probe.outputs()[0].name);
+        manifold_node_engine::exec::effect_node::intern_name(&probe.outputs()[0].name);
     drop(probe);
 
     let mut prev = 0.0_f64;

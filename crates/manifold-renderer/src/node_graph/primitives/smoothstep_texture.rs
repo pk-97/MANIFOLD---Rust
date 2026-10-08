@@ -18,10 +18,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -32,7 +32,7 @@ struct SmoothstepUniforms {
     _pad1: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SmoothstepTexture,
     type_id: "node.smoothstep",
     purpose: "Per-pixel smoothstep contrast curve on RGB, alpha pass-through. Maps the input through `smoothstep(low, high, x)` per channel — anything below `low` clamps to 0, anything above `high` clamps to 1, and the Hermite polynomial smoothes the transition between them. Both edges are always live; for a symmetric-around-zero curve, wire `node.math(operation=Negate) → low` to mirror `high` into the low edge.",

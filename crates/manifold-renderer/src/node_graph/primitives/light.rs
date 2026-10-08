@@ -28,16 +28,16 @@
 //! CPU-only — no GPU dispatch.
 
 use std::borrow::Cow;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::light::{Light, LightFalloff, ShadowSoftness};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::scene::light::{Light, LightFalloff, ShadowSoftness};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const LIGHT_MODES: &[&str] = &["Sun", "Point", "Spot"];
 const LIGHT_FALLOFFS: &[&str] = &["Legacy", "Inverse Square"];
 const SHADOW_SOFTNESS_LABELS: &[&str] = &["Hard", "Soft", "VerySoft", "Contact"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: LightNode,
     type_id: "node.light",
     purpose: "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, blinn_specular, etc.) and shadow-aware mesh renderers (the PBR path lives inside node.render_mesh's material). All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage. shadow_softness's Contact tier (REALTIME_3D_DESIGN section 11 D12) trades the fixed PCF kernel for PCSS contact-hardening: shadows go sharp where the caster touches the receiver and soften with distance, driven by the port-shadowed light_size (world-units light diameter).",
@@ -358,16 +358,16 @@ impl Primitive for LightNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::light::LightMode;
+    use manifold_node_engine::scene::light::LightMode;
 
     #[test]
     fn run_emits_sun_light_by_default_with_premultiplied_color() {
-        use crate::node_graph::MockBackend;
-        use crate::node_graph::backend::Backend;
-        use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::execution_plan::ResourceId;
-        use crate::node_graph::ports::PortType;
+        use manifold_node_engine::exec::backend::MockBackend;
+        use manifold_node_engine::exec::backend::Backend;
+        use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+        use manifold_node_engine::exec::effect_node::ParamValues;
+        use manifold_node_engine::exec::execution_plan::ResourceId;
+        use manifold_node_engine::ports::PortType;
         use manifold_core::{Beats, Seconds};
 
         let mut backend = MockBackend::new();
@@ -416,7 +416,7 @@ mod tests {
             &mut render_mode_scratch,
             &mut object_scratch,
         );
-        let time = crate::node_graph::effect_node::FrameTime {
+        let time = manifold_node_engine::exec::effect_node::FrameTime {
             beats: Beats(0.0),
             seconds: Seconds(0.0),
             delta: Seconds(1.0 / 60.0),
@@ -446,12 +446,12 @@ mod tests {
 
     #[test]
     fn run_with_mode_point_emits_point_light() {
-        use crate::node_graph::MockBackend;
-        use crate::node_graph::backend::Backend;
-        use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::execution_plan::ResourceId;
-        use crate::node_graph::ports::PortType;
+        use manifold_node_engine::exec::backend::MockBackend;
+        use manifold_node_engine::exec::backend::Backend;
+        use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+        use manifold_node_engine::exec::effect_node::ParamValues;
+        use manifold_node_engine::exec::execution_plan::ResourceId;
+        use manifold_node_engine::ports::PortType;
         use manifold_core::{Beats, Seconds};
 
         let mut backend = MockBackend::new();
@@ -498,7 +498,7 @@ mod tests {
             &mut render_mode_scratch,
             &mut object_scratch,
         );
-        let time = crate::node_graph::effect_node::FrameTime {
+        let time = manifold_node_engine::exec::effect_node::FrameTime {
             beats: Beats(0.0),
             seconds: Seconds(0.0),
             delta: Seconds(1.0 / 60.0),
@@ -524,12 +524,12 @@ mod tests {
 
     #[test]
     fn run_with_contact_shadow_softness_emits_light_size() {
-        use crate::node_graph::MockBackend;
-        use crate::node_graph::backend::Backend;
-        use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::execution_plan::ResourceId;
-        use crate::node_graph::ports::PortType;
+        use manifold_node_engine::exec::backend::MockBackend;
+        use manifold_node_engine::exec::backend::Backend;
+        use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+        use manifold_node_engine::exec::effect_node::ParamValues;
+        use manifold_node_engine::exec::execution_plan::ResourceId;
+        use manifold_node_engine::ports::PortType;
         use manifold_core::{Beats, Seconds};
 
         let mut backend = MockBackend::new();
@@ -577,7 +577,7 @@ mod tests {
             &mut render_mode_scratch,
             &mut object_scratch,
         );
-        let time = crate::node_graph::effect_node::FrameTime {
+        let time = manifold_node_engine::exec::effect_node::FrameTime {
             beats: Beats(0.0),
             seconds: Seconds(0.0),
             delta: Seconds(1.0 / 60.0),

@@ -12,9 +12,9 @@ use super::terminal_analysis::TerminalAnalysis;
 use super::terminal_detail::{DetailFrame, TerminalDetail};
 use super::terminal_reaction::ReactiveTerminal;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const MAX_CELLS: usize = 640 * 135;
 const MAX_COLS: u32 = 640;
@@ -50,7 +50,7 @@ fn grid_dimensions(width: u32, height: u32, text_size: f32) -> GridDimensions {
     GridDimensions { columns, rows }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TerminalStream,
     type_id: "node.terminal_stream",
     purpose: "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image structure changes statement content; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Detail Reactivity selectively cycles data characters on fine image changes, then settles. Zero detail bypasses these edits; still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
@@ -124,7 +124,7 @@ impl Primitive for TerminalStream {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "cells").then_some(TERMINAL_STREAM_CAPACITY)

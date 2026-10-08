@@ -16,11 +16,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::{CurvePoint, MeshVertex};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::{CurvePoint, MeshVertex};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order
 /// (`segments` Int→i32, `sweep` f32), then the derived `profile_len` (u32),
@@ -35,7 +35,7 @@ struct RevolveCurveUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RevolveCurve,
     type_id: "node.revolve_curve",
     purpose: "Revolve a 2D profile curve (Array<CurvePoint>, x=radius, y=height) around the Y axis into a profile_len x (segments+1) positions+uv grid. pos(i,j) = (x_i*cos(phi_j), y_i, x_i*sin(phi_j)), phi_j = sweep * j/segments. Normals are left zero — wire node.make_triangles downstream (src_cols=segments+1, src_rows=profile_len) for topology and finite-difference normals. `sweep` is UNBOUNDED (range None) — a saw LFO sweeping past 2*pi and beyond is a valid performer gesture (BUG-039 class); sin/cos absorb the wrap with no seam.",
@@ -84,7 +84,7 @@ impl Primitive for RevolveCurve {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn revolve_curve_capacity_is_rows_times_cols() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = RevolveCurve::new();
         let mut params = ParamValues::default();
         params.insert(std::borrow::Cow::Borrowed("segments"), ParamValue::Float(8.0));
@@ -188,7 +188,7 @@ mod gpu_tests {
     }
 
     fn generated_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<RevolveCurve>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<RevolveCurve>()
             .expect("revolve_curve buffer codegen")
     }
 
@@ -202,7 +202,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "revolve-curve-test",
         );
         let profile_buf = device.create_buffer_shared(std::mem::size_of_val(profile) as u64);
@@ -241,7 +241,7 @@ mod gpu_tests {
     fn chain_into_triangulate_grid_produces_expected_topology() {
         use crate::node_graph::primitives::triangulate_grid::TriangulateGrid;
 
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let gen_wgsl = generated_wgsl();
 
         let profile = vec![mk_curve(0.0, -1.0), mk_curve(1.0, 0.0), mk_curve(0.0, 1.0)];
@@ -262,7 +262,7 @@ mod gpu_tests {
         assert!((v10.uv[0] - 0.0).abs() < 1e-5 && (v10.uv[1] - 0.5).abs() < 1e-5, "row1 col0 uv: {:?}", v10.uv);
 
         // Now triangulate the revolved grid and check the triangle count.
-        let tri_pipeline = crate::node_graph::freeze::codegen::standalone_for_spec::<TriangulateGrid>()
+        let tri_pipeline = manifold_node_engine::freeze::codegen::standalone_for_spec::<TriangulateGrid>()
             .expect("triangulate_grid codegen");
         let tri_expected_count = (COLS - 1) * (ROWS - 1) * 6; // (5-1)*(3-1)*6 = 48
 
@@ -291,7 +291,7 @@ mod gpu_tests {
         };
         let pipeline = device.create_compute_pipeline(
             &tri_pipeline,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "revolve-chain-tri",
         );
         let mut enc = device.create_encoder("revolve-chain-tri");

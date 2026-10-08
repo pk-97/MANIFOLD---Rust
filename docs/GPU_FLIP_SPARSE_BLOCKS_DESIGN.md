@@ -18,7 +18,7 @@ So the design does not use one halo. Each pass gets the smallest tile set its st
 
 | Piece | Where | What matters here |
 |---|---|---|
-| The step | `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs` `encode` :526 | passes in order: `particle_distance` → `particles_to_faces` → extend old → `face_gravity` → solids → `water_from_phi` → pockets → `divergence` → pressure → `subtract_pressure` → `constrain_solid_faces` ×2 → extend new → `density_source` → density solve → project → extend → `faces_to_particles` |
+| The step | `crates/manifold-node-engine/src/water/primitives/gpu_flip_step.rs` `encode` :526 | passes in order: `particle_distance` → `particles_to_faces` → extend old → `face_gravity` → solids → `water_from_phi` → pockets → `divergence` → pressure → `subtract_pressure` → `constrain_solid_faces` ×2 → extend new → `density_source` → density solve → project → extend → `faces_to_particles` |
 | Dispatch shape | `gpu_flip_step.rs` `groups` :311, `dispatch_pass` :142 | every lattice pass `@workgroup_size(256)`, one thread per cell (`cell_total()`) or face record (`face_total()`); `groups(threads) = [ceil(threads/256).max(1),1,1]` |
 | Extend | `gpu_flip_step.rs` `extend` :326, `band: band_layers(travel).max(FACE_VALID_LAYERS)` :1050 | `band_layers(travel) = ceil(√3·travel)+3`: 14 at 64, 23 at 128; three runs per step (old, new, spread) |
 | Indirect dispatch | `manifold-gpu/src/metal/encoder.rs` `dispatch_compute_indirect`; `gpu_flip_step.rs` `encode_pockets` (pocket gate, `POCKET_GATE_WORDS = 17`) | `pocket_round` writes indirect sizes and a replay range; each gated segment holds three sweeps and the next setup, with indirect dispatch as the direct fallback |

@@ -17,10 +17,10 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 pub const SIMPLEX_FIELD_OUTPUT_CHANNELS: &[&str] = &["R", "G", "B", "A"];
 
@@ -37,7 +37,7 @@ struct SimplexFieldUniforms {
     _pad1: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SimplexField2D,
     type_id: "node.simplex_field_2d",
     purpose: "Pure generator. 3D Perlin-style simplex noise sampled at `(uv * scale + offset, z)`. Outputs the SIGNED noise value in approximately [-1, +1] to the R channel (GBA = 0, 0, 1). The Z axis is what makes a static node produce an evolving field — animate `z` for turbulent shimmer in place; pan `offset_x` / `offset_y` for directional flow through a frozen field. Use this when noise drives downstream math (displacement, color injection, fluid-sim seeding); use `node.noise` when you want a [0, 1] visual texture.",

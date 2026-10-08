@@ -42,13 +42,10 @@ use std::sync::Arc;
 
 use manifold_core::{Beats, NodeId, Seconds, effect_graph_def::EffectGraphDef};
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::freeze::install::fused_generator_view_for;
-use manifold_renderer::node_graph::mesh_change::PreparedMeshRules;
-use manifold_renderer::node_graph::{
-    EffectGraphDefExt, Executor, FrameTime, MetalBackend, PrimitiveRegistry, ResourceId, compile,
-    pre_allocate_resources,
-};
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::freeze::install::fused_generator_view_for;
+use manifold_node_engine::scene::mesh_change::PreparedMeshRules;
+use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
 use crate::harness;
 

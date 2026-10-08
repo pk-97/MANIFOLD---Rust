@@ -15,10 +15,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -29,7 +29,7 @@ struct DitherPatternUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: DitherPattern,
     type_id: "node.dither_pattern",
     purpose: "Pure generator. Emits a per-pixel ordered-dither / halftone threshold in [0,1] (R=G=B=T, A=1) for one of six algorithms (Bayer 8x8, Halftone, Lines, CrossHatch, Blue Noise, Diamond), in screen space. The reusable pattern half of the dither effect — pair with node.dither (consumes a pattern) for the full effect, or feed any halftone / threshold consumer. The quantizer accepts ANY threshold texture, so you can also drive it from hash noise, a custom ramp, or a voronoi field.",

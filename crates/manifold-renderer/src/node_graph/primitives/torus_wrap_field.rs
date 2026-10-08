@@ -19,10 +19,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::InstanceTransform;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -37,7 +37,7 @@ struct Uniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TorusWrapField,
     type_id: "node.torus_wrap_field",
     purpose: "Lift an Array<vec2<f32>> of UVs onto a torus surface, emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, phi = uv.y * TAU, pos = ((R + r·cos φ)·cos θ, r·sin φ, (R + r·cos φ)·sin θ). Optional Array<f32> normal_disp pushes each instance along the outward surface normal — drive from node.fractal_noise_per_copy × petal-amplitude for flower-style petal displacement. `fold_angle` rotates the whole field around the X axis (port-shadow, drive from time for continuous animation). Generic across rings, halos, donuts, flower discs, gateways.",
@@ -101,7 +101,7 @@ impl Primitive for TorusWrapField {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "instances" {

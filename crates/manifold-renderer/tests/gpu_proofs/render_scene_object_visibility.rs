@@ -13,10 +13,10 @@
 
 use half::f16;
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_renderer::node_graph::PrimitiveRegistry;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
@@ -316,7 +316,7 @@ fn streaming_occluder_json() -> String {
 /// and warmup wait, and the object appears once its mesh lands.
 #[test]
 fn streaming_mesh_drops_only_its_object() {
-    use manifold_renderer::frame_status::FrameRenderStatus;
+    use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(

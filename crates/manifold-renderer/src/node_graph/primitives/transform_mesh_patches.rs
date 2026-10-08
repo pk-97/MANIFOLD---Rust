@@ -6,11 +6,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const PATCH_CELL_COMMON: &str = include_str!("shaders/patch_cell_common.wgsl");
 
@@ -35,7 +35,7 @@ struct TransformMeshPatchesUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TransformMeshPatches,
     type_id: "node.transform_mesh_patches",
     purpose: "Apply one shared fixed-cell pose blend to each reference triangle. Reference centroids plus source offset are normalized by scale and quantized into cell_size cubes; all three corners of a triangle use the same cell center. Rotation and orbit evaluate as full poses, then blend position and orthonormalized frames by the spatial weight, so driven angles are periodic; weighted separation/spread translation remains additive. Current vertices are coincident; reference vertices are BufferGather. UVs, padding, smooth normals, tangent xyz, and tangent.w are preserved.",
@@ -92,7 +92,7 @@ impl Primitive for TransformMeshPatches {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -195,12 +195,10 @@ impl Primitive for TransformMeshPatches {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::effect_node::NodeInstanceId;
-    use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
-    };
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     fn vertex(position: [f32; 3], normal: [f32; 3], tangent: [f32; 4]) -> MeshVertex {
         MeshVertex {
@@ -416,7 +414,7 @@ mod gpu_tests {
         u: TransformMeshPatchesUniforms,
         label: &str,
     ) -> Vec<MeshVertex> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
         let src = device.create_buffer_shared(std::mem::size_of_val(current) as u64);
         let rbuf = device.create_buffer_shared(std::mem::size_of_val(reference) as u64);
@@ -458,7 +456,7 @@ mod gpu_tests {
     }
 
     fn standalone_wgsl() -> String {
-        crate::node_graph::freeze::codegen::standalone_for_spec::<TransformMeshPatches>()
+        manifold_node_engine::freeze::codegen::standalone_for_spec::<TransformMeshPatches>()
             .expect("patch standalone codegen")
     }
 
@@ -799,7 +797,7 @@ mod gpu_tests {
             g.wgsl
         );
         let prim = TransformMeshPatches::new();
-        let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+        let node: &dyn manifold_node_engine::exec::effect_node::EffectNode = &prim;
         assert_eq!(
             node.array_output_capacity("out", &Default::default(), &[("in", 1009), ("reference", 2009)]),
             None,

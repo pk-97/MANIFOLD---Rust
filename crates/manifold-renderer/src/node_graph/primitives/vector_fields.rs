@@ -4,9 +4,9 @@ use std::borrow::Cow;
 
 use manifold_physics::{FieldValue, PhysicsError};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 fn required_field(ctx: &mut EffectNodeContext<'_, '_>, port: &str) -> Option<FieldValue> {
     let Some(slot) = ctx.inputs.slot(port) else {
@@ -36,7 +36,7 @@ fn write_result(
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: UniformVectorField,
     type_id: "node.uniform_vector_field",
     purpose: "Emit a constant dimensionless vector field in world coordinates from three scalar components.",
@@ -76,7 +76,7 @@ impl Primitive for UniformVectorField {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RadialVectorField,
     type_id: "node.radial_vector_field",
     purpose: "Emit a dimensionless radial vector field around a world-space center with validated radius and falloff.",
@@ -126,7 +126,7 @@ impl Primitive for RadialVectorField {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: VortexVectorField,
     type_id: "node.vortex_vector_field",
     purpose: "Emit a dimensionless tangential vector field around a world-space axis with validated radius and falloff.",
@@ -187,7 +187,7 @@ impl Primitive for VortexVectorField {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: AddVectorFields,
     type_id: "node.add_vector_fields",
     purpose: "Sum two dimensionless vector fields componentwise at the same world-space sample.",
@@ -220,7 +220,7 @@ impl Primitive for AddVectorFields {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MultiplyVectorFields,
     type_id: "node.multiply_vector_fields",
     purpose: "Multiply two dimensionless vector fields componentwise at the same world-space sample.",
@@ -253,7 +253,7 @@ impl Primitive for MultiplyVectorFields {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ScaleVectorField,
     type_id: "node.scale_vector_field",
     purpose: "Scale a dimensionless vector field by a scalar strength without changing its world-coordinate domain.",
@@ -293,12 +293,12 @@ impl Primitive for ScaleVectorField {
 mod tests {
     use super::*;
 
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
-    use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::ports::{PortType, ScalarType};
-    use crate::node_graph::{MockBackend, Slot};
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs};
+    use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::{PortType, ScalarType};
+    use manifold_node_engine::{exec::backend::MockBackend, bindings::Slot};
     use manifold_core::{Beats, Seconds};
     use manifold_physics::VectorField;
 

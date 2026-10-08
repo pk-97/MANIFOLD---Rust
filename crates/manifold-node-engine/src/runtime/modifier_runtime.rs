@@ -1,0 +1,435 @@
+//! Scene-modifier runtime admission, event state, and generator preparation.
+//!
+//! These methods are a facet of [`PresetRuntime`], kept here so the core frame
+//! loop remains within its source-size contract. Their signatures and behavior
+//! remain part of the same runtime type.
+
+use ahash::AHashMap;
+use manifold_core::effects::PresetInstance;
+use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
+use manifold_core::params::ParamManifest;
+
+use super::{FrameContextInputs, JsonGeneratorLoadError, PresetIo, PresetRuntime};
+use crate::{parameters::ParamValue, persistence::PrimitiveRegistry};
+
+/// Map resource-preparation failures into the public generator-load error.
+pub(super) fn generator_error_from_prealloc(
+    e: crate::load::graph_loader::PreAllocationError,
+) -> JsonGeneratorLoadError {
+    use crate::load::graph_loader::PreAllocationError as P;
+    match e {
+        P::AllocationFailed(error) => JsonGeneratorLoadError::Resize(error),
+        P::ModifierAdmission(error) => JsonGeneratorLoadError::SceneModifier(error),
+        P::ModifierMemoryUnavailable => JsonGeneratorLoadError::SceneModifier(
+            crate::load::expand::SceneModifierExpandError::CapacityExceeded {
+                path: "modifierBufferBudget".into(),
+                detail: "the GPU did not expose current allocated size and working-set capacity"
+                    .into(),
+            },
+        ),
+        P::UnsizedArrayOutput {
+            node_type, port, ..
+        } => JsonGeneratorLoadError::UnsizedArrayOutput { node_type, port },
+        P::UnsizedTexture3DOutput {
+            node_type, port, ..
+        } => JsonGeneratorLoadError::UnsizedTexture3DOutput { node_type, port },
+        P::UnboundArrayResource {
+            producer_handle,
+            producer_node_type,
+            producer_port,
+            cause,
+        } => JsonGeneratorLoadError::UnboundArrayResource {
+            producer_handle,
+            producer_node_type,
+            producer_port,
+            cause,
+        },
+    }
+}
+
+impl PresetRuntime {
+    /// Shared structural entry for watched, standalone and fused generators.
+    pub fn from_def_for_render(
+        doc: EffectGraphDef,
+        registry: &PrimitiveRegistry,
+        manifest: Option<&ParamManifest>,
+        render_fused: bool,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        let doc = if manifold_core::phong_migration::contains_phong_materials(&doc) {
+            let mut migrated = doc;
+            manifold_core::phong_migration::migrate_phong_to_pbr(&mut migrated);
+            migrated
+        } else {
+            doc
+        };
+        if !doc.scene_modifiers.iter().any(|modifier|
+            manifold_core::scene_modifier_math_view::is_math_view_recipe(&modifier.graph)) {
+            return Self::from_def_for_render_view(doc, registry, manifest, render_fused, None);
+        }
+        let mut runtime = Self::from_def_for_render_view(doc.clone(), registry, manifest, render_fused, None)?;
+        runtime.math_views = super::math_view::prepare_views(&doc, registry, manifest, render_fused, &runtime)?;
+        Ok(runtime)
+    }
+
+    pub(super) fn from_def_for_render_view(
+        doc: EffectGraphDef,
+        registry: &PrimitiveRegistry,
+        manifest: Option<&ParamManifest>,
+        render_fused: bool,
+        math_view: Option<(
+            &manifold_core::NodeId,
+            Option<crate::load::expand::LegacyMathViewScope>,
+        )>,
+    ) -> Result<Self, JsonGeneratorLoadError> {
+        let mut doc = doc;
+        // Retired params leave before anything reads the authored graph: the
+        // scene-modifier expansion, its value writes and the render def must
+        // all see the same nodes.
+        if crate::load::graph_loader::has_retired_params(&doc) {
+            crate::load::graph_loader::retire_params(&mut doc);
+        }
+        crate::water::runtime::gpu_flip_surface::prepare(&mut doc);
+        let (render_def, authoring) =
+            if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc)
+                || crate::load::expand::contains_fragments(&doc)
+            {
+                let prepared = match math_view {
+                    Some((modifier_id, None)) => crate::load::expand::prepare_scene_modifier_math_view(&doc, registry, modifier_id)?,
+                    Some((modifier_id, Some(scope))) => crate::load::expand::prepare_legacy_scene_modifier_math_view(&doc, registry, modifier_id, scope)?,
+                    None => crate::load::expand::prepare_scene_modifiers(&doc, registry)?,
+                };
+                // The generator resolver drops Composite bindings. Keep provenance
+                // in the same order before installing the resolved binding list.
+                let sources = prepared
+                    .def
+                    .preset_metadata
+                    .as_ref()
+                    .map(|metadata| {
+                        metadata
+                            .bindings
+                            .iter()
+                            .zip(prepared.binding_sources)
+                            .filter_map(|(binding, source)| {
+                                matches!(binding.target, BindingTarget::Node { .. })
+                                    .then_some(source)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let guards = crate::load::expand::PreparedModifierParameterGuards::prepare(&doc)?;
+                (
+                    prepared.def,
+                    Some((doc, prepared.routes, sources, guards, prepared.event_routes, prepared.impulse_routes)),
+                )
+            } else {
+                (doc, None)
+            };
+        // Editor fusion changes execution topology, not the authored simulation.
+        // Compare the effective unfused definition when carrying physics state.
+        let content_key = crate::freeze::install::def_content_key(&render_def);
+        #[cfg(feature = "gpu-proofs")]
+        let physics_sources = crate::water::runtime::physics_sources::prepare(
+            &render_def,
+            authoring.as_ref().map_or(&render_def, |(owner, ..)| owner),
+            authoring.as_ref().map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice()),
+            registry,
+        );
+        let fused = if render_fused {
+            crate::freeze::install::fused_generator_view_for(&render_def)
+        } else {
+            None
+        };
+        // Design §3.3: the fused view's mesh-rule sidecar describes the
+        // fused def's generated node ids, so it must ride into
+        // `from_render_def` alongside `view.def`. An empty map is correct
+        // only when fusion did not occur — an unfused render_def has no
+        // sidecar by construction.
+        let mesh_rules = fused
+            .as_ref()
+            .map_or_else(crate::scene::mesh_change::PreparedMeshRules::default, |view| {
+                view.mesh_rules.clone()
+            });
+        let render_def = match &fused {
+            Some(view) => (*view.def).clone(),
+            None => render_def,
+        };
+        let impulse_routes = authoring.as_ref().map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice());
+        let mut runtime = Self::from_render_def(render_def, registry, manifest, &mesh_rules, impulse_routes)?;
+        #[cfg(feature = "gpu-proofs")]
+        runtime.apply_physics_source_graphs(physics_sources);
+        runtime.effect_nodes[0].def_content_key = content_key;
+        if let Some(view) = &fused {
+            runtime.effect_nodes[0].bound.fused_retarget = view.retarget.clone();
+        }
+        if let Some((canonical, routes, sources, guards, event_routes, impulse_routes)) = authoring {
+            runtime.prepare_modifier_impulses(&canonical, &impulse_routes, registry)?;
+            crate::load::expand::validate_modifier_runtime(
+                &canonical,
+                &runtime.graph,
+            )?;
+            let empty_members = ahash::AHashMap::default();
+            let members = fused
+                .as_ref()
+                .map_or(&empty_members, |view| &view.node_retarget);
+            let budget =
+                crate::load::expand::PreparedModifierBufferBudget::prepare(
+                    &canonical,
+                    &routes,
+                    &runtime.graph,
+                    members,
+                )?;
+            runtime.graph.set_modifier_buffer_budget(budget);
+            guards.install(&mut runtime.graph)?;
+            runtime.modifier_events = Some(
+                crate::load::expand::PreparedModifierEvents::prepare(
+                    &canonical,
+                    &event_routes,
+                    &runtime.graph,
+                )?,
+            );
+            runtime.modifier_control_state = Some(crate::load::expand::PreparedModifierControlState::prepare_with_fusion(
+                &canonical, &routes, &runtime.graph, members,
+            )?);
+            let segment = &mut runtime.effect_nodes[0];
+            let writes =
+                crate::load::expand::PreparedGraphValueWrites::prepare(
+                    &canonical,
+                    &routes,
+                    &runtime.graph,
+                    &segment.bound.fused_retarget,
+                )?;
+            segment.bound.install_prepared_routes(writes, sources)?;
+            segment.group_preview_map =
+                manifold_core::flatten::group_output_producer_map(&canonical);
+            runtime.modifier_preview_routes = routes;
+        }
+        Ok(runtime)
+    }
+}
+
+impl PresetRuntime {
+    /// Check the same prepared-array plan used by native allocation, without
+    /// creating GPU resources. Structural admission calls this before publishing
+    /// an edited owner so an oversized stack cannot replace a working scene.
+    pub fn prepared_modifier_buffer_usage(
+        &self,
+        canvas: (u32, u32),
+    ) -> Result<
+        Option<crate::load::expand::ModifierBufferUsage>,
+        crate::load::graph_loader::PreAllocationError,
+    > {
+        let Some(budget) = self.graph.modifier_buffer_budget() else {
+            return Ok(None);
+        };
+        let allocation = crate::exec::resource_allocation::plan_array_allocations(
+            &self.graph,
+            &self.plan,
+            canvas,
+            &AHashMap::default(),
+        )?;
+        let mut usage = budget.account(&allocation)
+            .map_err(crate::load::graph_loader::PreAllocationError::ModifierAdmission)?;
+        let add = |left: u64, right: u64| left.checked_add(right).ok_or_else(||
+            crate::load::graph_loader::PreAllocationError::ModifierAdmission(
+                crate::load::expand::SceneModifierExpandError::CapacityExceeded {
+                    path: "mathViewBuffers".into(), detail: "prepared byte count overflow".into(),
+                }));
+        for view in &self.math_views {
+            for variant in &view.variants {
+                if let Some(extra) = variant.prepared_modifier_buffer_usage(canvas)? {
+                    usage.candidate_bytes = add(usage.candidate_bytes, extra.candidate_bytes)?;
+                    usage.baseline_bytes = add(usage.baseline_bytes, extra.baseline_bytes)?;
+                    for (scene, bytes) in extra.modifier_bytes {
+                        let entry = usage.modifier_bytes.entry(scene).or_default();
+                        *entry = add(*entry, bytes)?;
+                    }
+                }
+            }
+        }
+        Ok(Some(usage))
+    }
+
+    /// Account and admit a prepared-array candidate against a captured GPU
+    /// memory snapshot. The snapshot belongs to the caller's admission
+    /// boundary; this method does no device query and performs no allocation.
+    pub fn prepared_modifier_buffer_usage_with_snapshot(
+        &self,
+        canvas: (u32, u32),
+        snapshot: Option<manifold_gpu::GpuMemorySnapshot>,
+    ) -> Result<
+        Option<crate::load::expand::ModifierBufferUsage>,
+        crate::load::graph_loader::PreAllocationError,
+    > {
+        let Some(usage) = self.prepared_modifier_buffer_usage(canvas)? else {
+            return Ok(None);
+        };
+        crate::load::expand::admit_candidate_bytes(snapshot, usage.candidate_bytes)
+            .map_err(crate::load::graph_loader::PreAllocationError::ModifierAdmission)?;
+        Ok(Some(usage))
+    }
+
+    pub fn is_modifier_trigger_param(&self, param: &str) -> bool {
+        self.modifier_events
+            .as_ref()
+            .is_some_and(|events| events.is_modifier_param(param))
+    }
+
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn note_modifier_audio_event(&mut self, param: &str) -> bool {
+        for view in &mut self.math_views {
+            for variant in &mut view.variants {
+                variant.note_modifier_audio_event(param);
+            }
+        }
+        self.modifier_events
+            .as_mut()
+            .is_some_and(|events| events.note_audio(param))
+    }
+
+    pub fn note_modifier_audio_key(&mut self, param_key: u64) -> bool {
+        for view in &mut self.math_views {
+            for variant in &mut view.variants {
+                variant.note_modifier_audio_key(param_key);
+            }
+        }
+        self.modifier_events
+            .as_mut()
+            .is_some_and(|events| events.note_audio_key(param_key))
+    }
+
+    pub fn note_modifier_clip_event(&mut self, host: Option<&PresetInstance>) {
+        for view in &mut self.math_views {
+            for variant in &mut view.variants {
+                variant.note_modifier_clip_event(host);
+            }
+        }
+        if let Some(events) = &mut self.modifier_events {
+            events.note_clip(|param| {
+                host.is_none_or(|host| {
+                    host.clip_edge_enabled_matching(|candidate| candidate == param)
+                })
+            });
+        }
+    }
+
+    pub(super) fn consume_trigger_markers(&mut self) {
+        self.pending_trigger_baseline = None;
+        if let Some(events) = &mut self.modifier_events {
+            events.consume_pending();
+        }
+    }
+
+    /// Called by the event owner before incrementing its clip/audio counter.
+    /// Multiple events before an evaluation preserve the earliest baseline.
+    pub fn note_trigger_event(&mut self, previous_count: u32) {
+        self.pending_trigger_baseline.get_or_insert(previous_count);
+        for view in &mut self.math_views {
+            for variant in &mut view.variants {
+                variant.note_trigger_event(previous_count);
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn carry_pending_trigger_from(&mut self, prior: &Self) {
+        self.pending_trigger_baseline = prior.pending_trigger_baseline;
+    }
+
+    pub fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
+        for view in &mut self.math_views {
+            if let Some(previous) = prior.math_views.iter_mut().find(|previous| previous.modifier_id == view.modifier_id) {
+                view.events.carry_from(&previous.events);
+                for (variant, previous_variant) in view.variants.iter_mut().zip(&mut previous.variants) {
+                    variant.carry_generator_state_from(previous_variant);
+                }
+            }
+        }
+        self.carry_pending_trigger_from(prior);
+        if let (Some(current), Some(previous)) = (&mut self.modifier_events, &prior.modifier_events)
+        {
+            current.carry_from(previous);
+        }
+        if let (Some(current), Some(previous)) =
+            (&self.modifier_control_state, &prior.modifier_control_state)
+        {
+            current.harvest_from(
+                previous,
+                &mut self.graph,
+                &mut prior.graph,
+                &mut self.state_store,
+                &mut prior.state_store,
+            );
+        }
+    }
+
+    /// Update the `system.generator_input` node's per-frame context. No-op on
+    /// an effect-chain runtime.
+    pub fn set_frame_context(&mut self, fc: FrameContextInputs) {
+        if let Some(events) = &self.modifier_events {
+            events.write_context(&mut self.graph);
+        }
+        let FrameContextInputs {
+            time,
+            beat,
+            aspect,
+            trigger_count,
+            anim_progress,
+            output_width,
+            output_height,
+        } = fc;
+        let PresetIo::Generate {
+            generator_input_id, ..
+        } = self.io
+        else {
+            return;
+        };
+        let id = generator_input_id;
+        let _ = self.graph.set_param(id, "time", ParamValue::Float(time));
+        let _ = self.graph.set_param(id, "beat", ParamValue::Float(beat));
+        let _ = self
+            .graph
+            .set_param(id, "aspect", ParamValue::Float(aspect));
+        let _ = self
+            .graph
+            .set_param(id, "trigger_count", ParamValue::Float(trigger_count));
+        let baseline = self
+            .pending_trigger_baseline
+            .map_or(trigger_count, |count| count as f32);
+        let _ = self
+            .graph
+            .set_param(id, "trigger_baseline", ParamValue::Float(baseline));
+        let _ = self
+            .graph
+            .set_param(id, "anim_progress", ParamValue::Float(anim_progress));
+        let _ = self
+            .graph
+            .set_param(id, "output_width", ParamValue::Float(output_width));
+        let _ = self
+            .graph
+            .set_param(id, "output_height", ParamValue::Float(output_height));
+    }
+
+    /// Push the host's slider values through the preset's bindings to the
+    /// matching inner-node params (generator path). Each binding reads its value
+    /// from the id-keyed `params` manifest by `source_id`; an empty manifest
+    /// leaves every binding at its declared default. No per-frame allocation —
+    /// the manifest is borrowed directly, no float-bus wrapping.
+    pub fn apply_param_values(&mut self, params: &ParamManifest) {
+        if let Some(seg) = self.effect_nodes.first_mut() {
+            seg.bound.apply(&mut self.graph, params);
+        }
+    }
+
+    /// Explicit local preview targets. Per-object copies remain distinct so
+    /// the editor can request an object rather than silently selecting one.
+    pub fn modifier_node_copies(
+        &self,
+        modifier: &manifold_core::NodeId,
+        local: &manifold_core::scene_modifier_preset::SceneNodeRef,
+    ) -> Option<&[crate::load::expand::SceneModifierNodeCopy]> {
+        self.modifier_preview_routes
+            .iter()
+            .find(|route| &route.modifier_id == modifier && &route.local == local)
+            .map(|route| route.copies.as_slice())
+    }
+}

@@ -14,9 +14,9 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -59,7 +59,7 @@ pub struct EnvmapUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BakeEquirectEnvmap,
     type_id: "node.bake_environment",
     purpose: "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). `mode = gradient` (default) matches the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. `mode = softbox` bakes an exact-zero black base lit only by `emitter_count` bright horizontal emitter strips (soft falloff at strip edges only), plus one optional directional sun disc at `sun_x/sun_y/sun_z` sized by `sun_disc_size` and `sun_disc_intensity` (0 = no disc). Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
@@ -401,8 +401,8 @@ impl Primitive for BakeEquirectEnvmap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::exec::effect_node::EffectNode;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     fn params_at(width: f32, height: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
@@ -458,7 +458,7 @@ mod gpu_tests {
     use manifold_gpu::{GpuBinding, GpuDevice, GpuTexture, GpuTextureFormat};
 
     use super::*;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn readback_rgba16f(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
         let bytes_per_row = w * 8;
@@ -614,7 +614,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     #[test]
     fn gradient_mode_matches_legacy_formula() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 32u32);
         let horizon_strength = 1.0;
         let azimuth_variation = 0.12;
@@ -662,7 +662,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     #[test]
     fn softbox_base_is_exact_zero_outside_strip_bands() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 64u32);
         let emitter_elevation = 0.15;
         let emitter_width = 0.03; // half_width; falloff band = ±0.03 in "up"
@@ -703,7 +703,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// Strip Lights at 0 blacked out the world).
     #[test]
     fn softbox_fill_lights_every_texel_and_ignores_strip_intensity() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 64u32);
 
         // (b) fill only (strip intensity 0): every texel strictly positive.
@@ -743,7 +743,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     #[test]
     fn softbox_emitter_rows_exceed_hdr_one() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (32u32, 64u32);
         let px = bake(&device, w, h, 1, 1.0, 0.12, 1.0, 1u32, 6.0, 0.15, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
         let max_channel = px.iter().fold(0.0f32, |m, p| m.max(p[0]).max(p[1]).max(p[2]));
@@ -752,7 +752,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     #[test]
     fn softbox_emitter_count_changes_strip_count() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 128u32);
 
         fn count_bands(px: &[[f32; 4]], w: u32, h: u32) -> u32 {
@@ -780,7 +780,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     #[test]
     fn softbox_sun_disc_peaks_at_expected_direction() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (128u32, 64u32);
         // A direction off-axis so its equirect coordinates aren't a
         // trivial edge/pole case.
@@ -826,7 +826,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     #[test]
     fn softbox_sun_disc_intensity_zero_is_byte_identical_to_no_disc() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (32u32, 32u32);
         // Direction IS set, but intensity is 0 — must be byte-identical to
         // the direction being unset entirely (D7: "sun_disc_intensity = 0
@@ -847,12 +847,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gate_gpu_tests {
     use super::*;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::{FrameTime, MetalBackend};
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
@@ -931,7 +931,7 @@ mod gate_gpu_tests {
     /// (`mark_outputs_unchanged`) fires on frame 2.
     #[test]
     fn frame2_matches_frame1_on_static_params_and_declares_unchanged() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 32u32);
         let format = GpuTextureFormat::Rgba16Float;
         let mut backend = MetalBackend::new(device.arc(), w, h, format);
@@ -957,7 +957,7 @@ mod gate_gpu_tests {
     /// output a FRESH executor baked with that param from the start would.
     #[test]
     fn param_change_is_not_skipped_and_matches_fresh_bake() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 32u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -989,3 +989,6 @@ mod gate_gpu_tests {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

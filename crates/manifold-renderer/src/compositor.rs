@@ -1,6 +1,7 @@
-use crate::gpu_encoder::GpuEncoder;
+use manifold_node_engine::runtime::instrumentation::ArrayDump;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use crate::layer_compositor::CompositeClipDescriptor;
-use crate::preset_context::ProjectTempo;
+use manifold_node_engine::runtime::preset_context::ProjectTempo;
 use crate::tonemap::TonemapSettings;
 use manifold_core::BlendMode;
 use manifold_core::LayerId;
@@ -143,19 +144,6 @@ impl DumpRequest {
     }
 }
 
-/// One dumped `Array` (storage-buffer) output for inspection: identity, the
-/// live buffer, the per-item byte stride, and the channel layout as
-/// `(name, kind, byte_offset)` where `kind` ∈ {`f32`,`i32`,`u32`,`vec2f`,
-/// `vec3f`,`vec4f`}. The reader decodes the buffer against these fields.
-pub struct ArrayDump<'a> {
-    pub name: String,
-    pub port: String,
-    pub type_id: String,
-    pub buffer: &'a manifold_gpu::GpuBuffer,
-    pub item_size: u32,
-    pub fields: Vec<(String, &'static str, u32)>,
-}
-
 /// Trait for compositing layers into a final output.
 pub trait Compositor: Send {
     /// Render into the compositor's internal render targets.
@@ -204,7 +192,7 @@ pub trait Compositor: Send {
         _request: Option<(
             EffectId,
             NodeId,
-            crate::node_graph::scene_viewport::SceneViewportConfig,
+            manifold_node_engine::scene::scene_viewport::SceneViewportConfig,
         )>,
     ) {
     }
@@ -216,17 +204,17 @@ pub trait Compositor: Send {
     fn scene_viewport_status(
         &self,
     ) -> Result<
-        crate::frame_status::FrameRenderStatus,
-        crate::node_graph::scene_viewport::SceneViewportHostError,
+        manifold_node_engine::runtime::frame_status::FrameRenderStatus,
+        manifold_node_engine::scene::scene_viewport::SceneViewportHostError,
     > {
-        Err(crate::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime)
+        Err(manifold_node_engine::scene::scene_viewport::SceneViewportHostError::MissingRuntime)
     }
 
     fn write_scene_viewport_fluid_domains(
         &self,
         _output: &mut Vec<(
             NodeId,
-            crate::node_graph::fluid::FluidDomainSnapshot,
+            manifold_node_engine::water::fluid::FluidDomainSnapshot,
         )>,
     ) {
     }
@@ -240,14 +228,14 @@ pub trait Compositor: Send {
     /// How the previewed node's output should be rendered in the editor preview
     /// (flow wheel for a vector field, lift for a scalar, raw for colour).
     /// Default `Color`.
-    fn preview_encoding(&self) -> crate::node_graph::PreviewEncoding {
-        crate::node_graph::PreviewEncoding::Color
+    fn preview_encoding(&self) -> manifold_node_engine::preview_encoding::PreviewEncoding {
+        manifold_node_engine::preview_encoding::PreviewEncoding::Color
     }
 
     /// Live scalar input / output values of the previewed node this frame, when
     /// it has no texture output — the data behind the editor's value inspector.
     /// Default empty.
-    fn preview_scalar_io(&self) -> crate::node_graph::PreviewScalarIo {
+    fn preview_scalar_io(&self) -> manifold_node_engine::preview_encoding::PreviewScalarIo {
         (Vec::new(), Vec::new())
     }
 
@@ -257,7 +245,7 @@ pub trait Compositor: Send {
     /// not the frozen authoring def. Walks the watched chain set internally
     /// (the watched effect id comes from the active preview request). Default
     /// empty for compositors without effect chains.
-    fn live_node_params(&self) -> crate::node_graph::LiveNodeParams {
+    fn live_node_params(&self) -> manifold_node_engine::preview_encoding::LiveNodeParams {
         Vec::new()
     }
 
@@ -310,7 +298,7 @@ pub trait Compositor: Send {
     fn chain_debug_info(
         &self,
         _layer_id: &str,
-    ) -> Option<crate::preset_runtime::ChainDebugInfo<'_>> {
+    ) -> Option<manifold_node_engine::runtime::ChainDebugInfo<'_>> {
         None
     }
 
@@ -321,7 +309,7 @@ pub trait Compositor: Send {
     fn graph_snapshot_for(
         &self,
         _type_id: &manifold_core::PresetTypeId,
-    ) -> Option<crate::node_graph::GraphSnapshot> {
+    ) -> Option<manifold_node_engine::snapshot::GraphSnapshot> {
         None
     }
 
@@ -333,7 +321,7 @@ pub trait Compositor: Send {
     fn outer_routings_for(
         &self,
         _type_id: &manifold_core::PresetTypeId,
-    ) -> Vec<crate::node_graph::OuterParamRouting> {
+    ) -> Vec<manifold_node_engine::snapshot::OuterParamRouting> {
         Vec::new()
     }
 
@@ -347,14 +335,14 @@ pub trait Compositor: Send {
 
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — set per-frame RT quality values.
     /// Default no-op for compositors without RT chains.
-    fn set_rt_quality(&mut self, _q: crate::node_graph::RtQuality) {}
+    fn set_rt_quality(&mut self, _q: manifold_node_engine::exec::effect_node::RtQuality) {}
 
     /// SCENE_FX P4a — the compositor's layer-skin registry: previous-frame
     /// composited output per layer, published at end of frame. The host
     /// hands this to the generator renderer so `node.layer_source` can
     /// emit it during graph execution. Default `None` for compositors
     /// without one.
-    fn layer_skin_registry(&self) -> Option<&crate::layer_skin::LayerSkinRegistry> {
+    fn layer_skin_registry(&self) -> Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry> {
         None
     }
 
@@ -439,7 +427,7 @@ pub trait Compositor: Send {
 
     /// Drain every owned chain's per-step CPU profiles recorded on the last
     /// profiled frame (PERF_BUDGET_GATE_DESIGN P2). Default empty.
-    fn take_step_profiles(&mut self) -> Vec<crate::node_graph::StepProfile> {
+    fn take_step_profiles(&mut self) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
         Vec::new()
     }
 }

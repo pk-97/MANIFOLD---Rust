@@ -8,10 +8,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,7 +22,7 @@ struct TextureSum5Uniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TextureSum5,
     type_id: "node.texture_sum_5",
     purpose: "Per-pixel weighted-sum of five textures: out = (a+b+c+d+e) / divisor. divisor=1 keeps the result a plain sum (compose mode), divisor=5 turns it into an average. Collapses the four-deep Mix(Add) chain (+ optional scale_offset_texture for division) that a manual N-term composition would otherwise need.",

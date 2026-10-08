@@ -18,12 +18,12 @@
 
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use std::borrow::Cow;
-use super::standalone_pipeline::{standalone_pipeline, active_elements};
+use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`point_x`,
 /// `point_y`, `amplitude`, `envelope`, `radius`, `active_count` Int → i32), then
@@ -47,7 +47,7 @@ struct BurstUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ApplyRadialBurstToParticles,
     type_id: "node.add_burst",
     purpose: "Per-particle radial impulse around `(point_x, point_y)` — evaluates the radial + tangent + noise-perturbed-radial + falloff math at each particle's exact UV and applies the resulting push to `position.xy` directly. The per-particle counterpart to `node.explosion_force` (which paints the same math as a texture for downstream sampling). Use this atom when bilinear smoothing near the impulse centre would muddy the visible kick — fluid sims, sparks reacting to beat hits, particle-text inject events.",
@@ -130,12 +130,12 @@ crate::primitive! {
 // region's `time_val`/`dt_scaled` fields, IN DECLARATION ORDER (matches
 // `derived_uniforms` above) — `run()`'s own computation below.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.add_burst",
         array_ports: &[],
         recompute: |ctx| Some(vec![
             ctx.frame.seconds.0 as f32,
-            crate::node_graph::physics::particle_frame_duration(ctx.frame.delta),
+            manifold_node_engine::water::physics::particle_frame_duration(ctx.frame.delta),
         ]),
     }
 }
@@ -144,7 +144,7 @@ impl Primitive for ApplyRadialBurstToParticles {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {
@@ -197,7 +197,7 @@ impl Primitive for ApplyRadialBurstToParticles {
         }
 
         let time_val = ctx.time.seconds.0 as f32;
-        let dt_scaled = crate::node_graph::physics::particle_frame_duration(ctx.time.delta);
+        let dt_scaled = manifold_node_engine::water::physics::particle_frame_duration(ctx.time.delta);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);

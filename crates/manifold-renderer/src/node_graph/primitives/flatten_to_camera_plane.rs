@@ -18,12 +18,12 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::camera::Camera;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{standalone_pipeline, active_elements};
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::scene::camera::Camera;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`flatten`
 /// f32, `active_count` Int → i32), then the THREE derived camera-forward fields
@@ -42,7 +42,7 @@ struct FlattenUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: FlattenToCameraPlane,
     type_id: "node.flatten_to_camera_plane",
     purpose: "Compress particles toward the camera viewing plane. For each live particle: depth = dot(position - 0.5, cam.fwd); position -= cam.fwd * depth * flatten * 0.1. Collapses a 3D particle volume toward a flat sheet facing the camera (FluidSim3D's flatten control). Takes a Camera input and reads cam.fwd. Decomposed from the flatten step of the fused node.fluid_simulate_3d.",
@@ -97,7 +97,7 @@ crate::primitive! {
 // `camera_ext_N` with nothing wired, which it does not — install only
 // creates the port when a real producer wire exists.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.flatten_to_camera_plane",
         array_ports: &[],
         recompute: |ctx| ctx.camera.map(|c| vec![c.fwd[0], c.fwd[1], c.fwd[2]]),
@@ -108,7 +108,7 @@ impl Primitive for FlattenToCameraPlane {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

@@ -24,10 +24,10 @@ use sha2::{Digest, Sha256};
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::gltf_load::load_gltf_texture;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SourceTextureKey {
@@ -75,7 +75,7 @@ struct GltfTextureBlitUniforms {
     glossiness_factor: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GltfTextureSource,
     type_id: "node.gltf_texture_source",
     purpose: "Read one embedded image out of a glTF/.glb file and emit it as a Texture2D wire, so an imported mesh's baked-in albedo/alpha map can feed node.render_scene's base_color_map_N. texture_index selects among document.textures(); color_space picks sRGB (albedo/base-color — the default) vs Linear (normal/metallic/roughness maps) so the hardware linearizes correctly on sample. width/height set the output resolution: the glTF importer sets these to the source image's exact dimensions (a 1:1 stretch), while manual drops resample to the default 1024² until resized.",
@@ -718,7 +718,7 @@ impl GltfTextureSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
     fn params_at(width: f32, height: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
@@ -766,13 +766,13 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::{FrameTime, MetalBackend};
-    use crate::node_graph::ports::PortType;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::exec::{effect_node::FrameTime, metal_backend::MetalBackend};
+    use manifold_node_engine::ports::PortType;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
@@ -901,7 +901,7 @@ mod gpu_tests {
     }
 
     fn provided_backend(
-        device: &crate::TestDevice,
+        device: &manifold_gpu::testkit::TestDevice,
         w: u32,
         h: u32,
         mipmapped: bool,
@@ -1029,7 +1029,7 @@ mod gpu_tests {
     #[test]
     fn provided_output_matches_writable_conversion_and_has_mips() {
         CONVERTED_TEXTURE_CACHE.with(|cache| cache.borrow_mut().clear());
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let rgba: Vec<u8> = (0..(w * h * 4)).map(|n| (n * 17) as u8).collect();
         let params = synthetic_params(w, h, 0, 0);
@@ -1105,7 +1105,7 @@ mod gpu_tests {
     #[test]
     fn provided_cache_does_not_share_pending_work_then_converges() {
         CONVERTED_TEXTURE_CACHE.with(|cache| cache.borrow_mut().clear());
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (2u32, 2u32);
         let rgba = vec![
             9, 31, 77, 255, 42, 80, 13, 255, 120, 4, 200, 255, 220, 90, 17, 255,
@@ -1167,7 +1167,7 @@ mod gpu_tests {
     #[test]
     fn provided_cache_isolates_mode_dimensions_and_opaque_black() {
         CONVERTED_TEXTURE_CACHE.with(|cache| cache.borrow_mut().clear());
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let rgba = vec![
             13, 37, 91, 255, 61, 122, 9, 255, 190, 4, 70, 255, 240, 100, 3, 255,
         ];
@@ -1247,7 +1247,7 @@ mod gpu_tests {
     #[test]
     fn provided_cache_separates_glossiness_factor_but_reuses_source() {
         CONVERTED_TEXTURE_CACHE.with(|cache| cache.borrow_mut().clear());
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (2u32, 2u32);
         let rgba = vec![
             13, 37, 91, 255, 61, 122, 9, 64, 190, 4, 70, 128, 240, 100, 3, 192,
@@ -1320,10 +1320,10 @@ mod gpu_tests {
 
     #[test]
     fn provided_outputs_share_through_executors_and_layer_edits_preserve_peer_pixels() {
-        use crate::node_graph::{Graph, Executor, compile};
-        use crate::node_graph::boundary_nodes::FinalOutput;
+        use manifold_node_engine::{graph::Graph, exec::execution::Executor, exec::execution_plan::compile};
+        use manifold_node_engine::scene::boundary_nodes::FinalOutput;
         CONVERTED_TEXTURE_CACHE.with(|cache| cache.borrow_mut().clear());
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pixels = vec![40, 80, 160, 64, 90, 50, 20, 128, 200, 30, 10, 200, 7, 110, 220, 255];
         let build = || {
             let mut source = GltfTextureSource::new();
@@ -1341,7 +1341,7 @@ mod gpu_tests {
         };
         let (mut a, plan_a, mut exec_a, source_a, resource_a) = build();
         let (mut b, plan_b, mut exec_b, _, resource_b) = build();
-        let run = |graph: &mut Graph, plan: &crate::node_graph::ExecutionPlan, exec: &mut Executor| {
+        let run = |graph: &mut Graph, plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan, exec: &mut Executor| {
             let mut native = device.create_encoder("provided-output-executor");
             let mut gpu = RendererGpuEncoder::new(&mut native, &device);
             exec.execute_frame_with_gpu(graph, plan, frame_time(), &mut gpu);
@@ -1389,7 +1389,7 @@ mod gpu_tests {
 
     #[test]
     fn identical_synthetic_sources_share_immutable_input_and_independent_outputs() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (2u32, 2u32);
         let format = GpuTextureFormat::Rgba8UnormSrgb;
         let params = synthetic_params(w, h, 0, 0);
@@ -1468,7 +1468,7 @@ mod gpu_tests {
 
     #[test]
     fn source_cache_separates_shape_format_and_device_scope_and_expires_weak_entries() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (2u32, 2u32);
         let format = GpuTextureFormat::Rgba8UnormSrgb;
         let rgba = vec![
@@ -1665,7 +1665,7 @@ mod gpu_tests {
             println!("four_k_jpeg_source_blits_non_black: fixture not found, skipping");
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (1024u32, 1024u32);
         let format = GpuTextureFormat::Rgba8UnormSrgb;
         let mut backend = MetalBackend::new(device.arc(), w, h, format);
@@ -1699,7 +1699,7 @@ mod gpu_tests {
             println!("frame2_matches_frame1_on_static_asset_and_declares_unchanged: fixture not found at {}, skipping", path.display());
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 64u32);
         let format = GpuTextureFormat::Rgba8UnormSrgb;
         let mut backend = MetalBackend::new(device.arc(), w, h, format);
@@ -1729,7 +1729,7 @@ mod gpu_tests {
     fn recycled_output_is_rewritten_with_stable_content() {
         let path = helmet_fixture_path();
         assert!(path.exists(), "required glTF fixture missing: {}", path.display());
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 64u32);
         let format = GpuTextureFormat::Rgba8UnormSrgb;
         let mut backend = MetalBackend::new(device.arc(), w, h, format);
@@ -1797,7 +1797,7 @@ mod gpu_tests {
     fn overwritten_same_output_identity_forces_refresh() {
         let path = helmet_fixture_path();
         assert!(path.exists(), "required glTF fixture missing: {}", path.display());
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 64u32);
         let format = GpuTextureFormat::Rgba8UnormSrgb;
         let mut backend = MetalBackend::new(device.arc(), w, h, format);
@@ -1839,7 +1839,7 @@ mod gpu_tests {
             println!("mode_flip_matches_fresh_executor: fixture not found at {}, skipping", path.display());
             return;
         }
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (64u32, 64u32);
         let format = GpuTextureFormat::Rgba8UnormSrgb;
 
@@ -1882,7 +1882,7 @@ mod gpu_tests {
 
     #[test]
     fn prewarm_pipeline_populates_the_shared_compute_cache() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         // Order-independent (BUG-144): the cache is process-global and
         // shared with other gpu_tests, so another test may already have
         // populated this exact entry, reading a zero before/after delta even
@@ -1917,3 +1917,6 @@ mod gpu_tests {
         );
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

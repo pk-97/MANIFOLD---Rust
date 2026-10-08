@@ -326,7 +326,7 @@ class LandingTests(unittest.TestCase):
         for path in (
             "crates/manifold-renderer/src/node_graph/primitives/invert.rs",
             "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
-            "crates/manifold-renderer/src/node_graph/primitives/gpu_flip_scene_tests.rs",
+            "crates/manifold-node-engine/src/water/primitives/gpu_flip_scene_tests.rs",
             "crates/manifold-renderer/src/node_graph/bundled_presets.rs",
             "crates/manifold-renderer/tests/gpu_proofs/main.rs",
             "crates/manifold-renderer/tests/glb_conformance.rs",
@@ -753,14 +753,14 @@ class DiffScopeTests(unittest.TestCase):
 
     def test_sibling_alias_and_integration_mapping(self):
         with tempfile.TemporaryDirectory() as d:
-            crate = Path(d) / "crates/manifold-renderer"
-            src = crate / "src/node_graph"
+            crate = Path(d) / "crates/manifold-node-engine"
+            src = crate / "src/water"
             src.mkdir(parents=True)
-            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-renderer"\n')
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-node-engine"\n')
             (src / "fluid.rs").write_text('#[path = "fluid_tests.rs"]\nmod checks;\n')
             (src / "fluid_tests.rs").write_text("")
-            plan = cpu_scope.plan_for_paths(["crates/manifold-renderer/src/node_graph/fluid.rs"], d)
-            self.assertIn("test(/^node_graph::fluid::checks::/)", plan.filterset)
+            plan = cpu_scope.plan_for_paths(["crates/manifold-node-engine/src/water/fluid.rs"], d)
+            self.assertIn("test(/^water::fluid::checks::/)", plan.filterset)
             self.assertIn("binary(=gpu_proofs)", plan.filterset)
 
     def test_deleted_integration_test_selects_no_binary(self):

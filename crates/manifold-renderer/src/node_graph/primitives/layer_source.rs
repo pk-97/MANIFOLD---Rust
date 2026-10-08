@@ -23,9 +23,9 @@ use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use manifold_core::LayerId;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -34,7 +34,7 @@ struct LayerSourceBlitUniforms {
     out_height: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: LayerSource,
     type_id: "node.layer_source",
     purpose: "Emit another layer's composited output as a Texture2D wire, so a scene_object's emissive_map or base_color_map (or any texture input) can be skinned by whatever that layer is playing. Reads the previous frame's composite — the compositor publishes every layer's final texture after all renders complete, and graph execution reads it next frame, so layer-to-layer loops are one-frame feedback, never a render-order hazard. A missing or deleted layer id emits transparent black; the layer param is never cleared and nothing panics.",
@@ -183,8 +183,8 @@ mod tests {
     /// section-4 "never blocks render" invariant, registry side).
     #[test]
     fn unknown_layer_id_returns_fallback_no_panic() {
-        let device = crate::test_device();
-        let mut registry = crate::layer_skin::LayerSkinRegistry::new(
+        let device = manifold_gpu::testkit::test_device();
+        let mut registry = manifold_node_engine::runtime::layer_skin::LayerSkinRegistry::new(
             &device,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
         );
@@ -201,7 +201,7 @@ mod tests {
         });
         let mut encoder = device.create_encoder("fallback proof");
         {
-            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
+            let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut encoder, &device);
             registry.begin_snapshots();
             registry.publish_snapshot(&mut gpu, &LayerId::new("layer-a"), &published);
             registry.finish_snapshots();

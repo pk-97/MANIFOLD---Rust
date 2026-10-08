@@ -31,7 +31,7 @@ The system is intuitive by default — drop a preset, it works — and exposes p
 
 ### 3.1 Primitives
 
-Every node in the graph is an instance of a [`Primitive`](../crates/manifold-renderer/src/node_graph/primitive.rs). A primitive declares (via the `primitive!` macro):
+Every node in the graph is an instance of a [`Primitive`](../crates/manifold-node-engine/src/primitive.rs). A primitive declares (via the `primitive!` macro):
 
 - A stable **`type_id`** — e.g. `"node.gain"`, `"node.remap"`. Treated as public API once shipped.
 - **`inputs`** — named typed ports (Texture2D, Texture3D, Scalar(F32/V2/V3)). Each is required or optional.
@@ -92,7 +92,7 @@ These close the loop between image content and scalar modulation. ColorCompass u
 Live registries beat hand-maintained tables — the inventory channels populate the catalog at compile time, and the JSON preset directory is browsable directly.
 
 - **Primitives** — 30+ shipping in `crates/manifold-renderer/src/node_graph/primitives/`. See [NODE_CATALOG.md](NODE_CATALOG.md) for the curated naming + categorisation spec, [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) for the design rationale and decomposition recipes.
-- **Atomic complex primitives** — `crates/manifold-renderer/src/node_graph/atomic/` holds the three irreducible kernels (Plasma, FluidSim2D, Glitch); FluidSim3D lives alongside the primitives. These don't decompose to atoms without losing what they are.
+- **Atomic complex primitives** — `crates/manifold-node-engine/src/atomic/` holds the three irreducible kernels (Plasma, FluidSim2D, Glitch); FluidSim3D lives alongside the primitives. These don't decompose to atoms without losing what they are.
 - **Composite Rust builders** — `crates/manifold-renderer/src/node_graph/composites/` (Bloom, Halation, Infrared, Mirror, SoftFocus, StrobeOpacity). Dev fixtures for parity tests; new composites ship as JSON.
 - **Shipping presets** — `crates/manifold-renderer/assets/effect-presets/` (29 as of 2026-05-19). Each is one JSON file; the build script codegens the bundled table.
 

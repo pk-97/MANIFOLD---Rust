@@ -297,7 +297,7 @@ wants it.
 | `SceneVm` is a pure function of the def (no staleness possible) | It takes `&EffectGraphDef` only; unit tests on synthetic defs (`scene_vm_*` in the Vm module); negative gate: `rg -n "Project\b" <vm module>` → 0 hits outside the builder's snapshot walk in state_sync |
 | Merged graphs are flatten-clean and validator-clean | P4 gate runs `graph_tool validate` + `graph_tool fusion` on a merged def written to a temp file; flatten-equivalence test on a synthetic merge |
 | Show path never pays: content render byte-identical with panel open | P1 gate diffs the headless show render with `scene_setup_width` 0 vs 400 (the REALTIME_3D D9 proof pattern) |
-| No new port types, no model fields, no serialization change | Negative gates: `rg -n "PortType::" crates/manifold-renderer/src/node_graph/ports.rs` unchanged; `git diff --stat crates/manifold-core/src/layer.rs` empty across the wave (except none — layer.rs is not touched) |
+| No new port types, no model fields, no serialization change | Negative gates: `rg -n "PortType::" crates/manifold-node-engine/src/ports.rs` unchanged; `git diff --stat crates/manifold-core/src/layer.rs` empty across the wave (except none — layer.rs is not touched) |
 
 ## 5. Phasing (Sonnet, one session each; orchestrated overnight)
 

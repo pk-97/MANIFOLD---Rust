@@ -310,9 +310,9 @@ fn prepared_modifier_bytes(
             host.params.clone(),
         )
     };
-    let runtime = manifold_renderer::preset_runtime::PresetRuntime::from_def(
+    let runtime = manifold_node_engine::runtime::PresetRuntime::from_def(
         graph,
-        &manifold_renderer::node_graph::PrimitiveRegistry::with_builtin(),
+        &manifold_node_engine::persistence::PrimitiveRegistry::with_builtin(),
         Some(&params),
     )
     .map_err(|error| format!("prepared-byte query failed: {error}"))?;

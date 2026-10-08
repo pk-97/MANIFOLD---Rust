@@ -9,11 +9,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuEvent};
 
-use crate::mesh::{MeshVertex, Vec4Vertex};
-use crate::node_graph::content_revision::ContentVersion;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
+use manifold_node_engine::content_revision::ContentVersion;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 pub const CUT_MAP_EXTRA_RECORDS: u32 = 196_608;
 const MESH_VERTEX_SIZE: u64 = std::mem::size_of::<MeshVertex>() as u64;
@@ -108,6 +108,20 @@ pub(crate) fn scratch_bytes(map_records: u64) -> Option<u64> {
     words.checked_mul(4)?.checked_mul(2)?.checked_add(16 + 48)
 }
 
+inventory::submit! {
+    manifold_node_engine::exec::resource_allocation::ArrayScratch {
+        type_id: "node.cut_mesh_bands",
+        bytes: scratch_bytes,
+    }
+}
+inventory::submit! {
+    manifold_node_engine::exec::resource_allocation::ArrayScratch {
+        type_id: "node.cut_mesh_cells",
+        bytes: scratch_bytes,
+    }
+}
+
+
 fn scratch_words(candidate_count: u32) -> Option<u64> {
     let blocks = u64::from(candidate_count)
         .checked_add(255)?
@@ -136,7 +150,7 @@ fn ensure_pipeline<'a>(
 }
 
 fn clear_map(
-    gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
+    gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
     pipeline: &GpuComputePipeline,
     uniforms: &CutMapUniforms,
     map: &GpuBuffer,
@@ -244,7 +258,7 @@ fn ensure_readbacks(state: &mut CutMapState, device: &manifold_gpu::GpuDevice) {
 }
 
 fn snapshot_status(
-    gpu: &mut crate::gpu_encoder::GpuEncoder<'_>,
+    gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
     readbacks: &mut [CutMapReadback],
     next_readback: &mut usize,
     status_clear_pipeline: &mut Option<GpuComputePipeline>,
@@ -537,7 +551,7 @@ fn cut_map_capacity(port_name: &str, input_capacities: &[(&str, u32)]) -> Option
     map_capacity(reference)
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CutMeshBands,
     type_id: "node.cut_mesh_bands",
     purpose: "Clip each reference triangle into exact directional bands and emit barycentric provenance records for downstream live mesh fragmentation.",
@@ -577,7 +591,7 @@ impl Primitive for CutMeshBands {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         cut_map_capacity(port_name, input_capacities)
@@ -588,7 +602,7 @@ impl Primitive for CutMeshBands {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: CutMeshCells,
     type_id: "node.cut_mesh_cells",
     purpose: "Clip each reference triangle into exact grid cells and emit barycentric provenance records for downstream live mesh fragmentation.",
@@ -622,7 +636,7 @@ impl Primitive for CutMeshCells {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         cut_map_capacity(port_name, input_capacities)
@@ -663,7 +677,7 @@ mod tests {
         bands: u32,
         output_capacity: u32,
     ) -> (Vec<Vec4Vertex>, [u32; 4]) {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let reference = device.create_buffer_shared(std::mem::size_of_val(vertices) as u64);
         unsafe {
             reference.write(0, bytemuck::cast_slice(vertices));
@@ -988,5 +1002,18 @@ mod tests {
         let (output, status) = dispatch_shader(&vertices, 0, 1, 4);
         assert_eq!(status[1], 1);
         assert!(output.iter().all(|vertex| vertex.position[3] == -1.0));
+    }
+}
+
+#[cfg(test)]
+mod scratch_source_tests {
+    #[test]
+    fn array_scratch_registration_preserves_checked_sizing() {
+        for type_id in ["node.cut_mesh_bands", "node.cut_mesh_cells"] {
+            let bytes = manifold_node_engine::exec::resource_allocation::array_scratch(type_id).unwrap();
+            for records in [0, 196_608, 196_611, u64::MAX] {
+                assert_eq!(bytes(records), super::scratch_bytes(records));
+            }
+        }
     }
 }

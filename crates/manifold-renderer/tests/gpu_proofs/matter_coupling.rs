@@ -15,19 +15,17 @@ use std::sync::Arc;
 
 use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_renderer::frame_status::FrameRenderStatus;
-use manifold_renderer::gpu_encoder::GpuEncoder;
-use manifold_renderer::node_graph::fluid::TICK;
-use manifold_renderer::node_graph::fluid_particles::FluidParticle;
-use manifold_renderer::node_graph::liquid::bodies::LiquidBody;
-use manifold_renderer::node_graph::physics::PhysicsStepScope;
-use manifold_renderer::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use manifold_renderer::node_graph::{
-    ArrayType, EffectNode, EffectNodeContext, EffectNodeType, ParamDef, PrimitiveRegistry, Transform,
-};
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::water::fluid::TICK;
+use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::water::liquid::bodies::LiquidBody;
+use manifold_node_engine::water::physics::PhysicsStepScope;
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::{ports::ArrayType, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef, persistence::PrimitiveRegistry, scene::transform::Transform};
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::{Value, json};
 
 use crate::harness;
@@ -100,8 +98,8 @@ impl EffectNode for CouplingProbe {
         &self.type_id
     }
 
-    fn depth_rule(&self) -> manifold_renderer::node_graph::depth_rule::DepthRule {
-        manifold_renderer::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
 
     fn inputs(&self) -> &[NodeInput] {

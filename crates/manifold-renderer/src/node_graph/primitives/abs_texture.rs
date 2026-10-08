@@ -3,11 +3,11 @@
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: AbsTexture,
     type_id: "node.absolute_value",
     purpose: "Per-pixel abs(input.rgb). Alpha passes through. Useful after node.sin_texture (abs(sin(x)) is a humped positive-only pattern with twice the spatial frequency) or after scale_offset_texture to fold a signed field into a 'V' curve.",

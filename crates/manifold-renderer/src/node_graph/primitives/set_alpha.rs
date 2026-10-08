@@ -15,10 +15,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -29,7 +29,7 @@ struct SetAlphaUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SetAlpha,
     type_id: "node.set_alpha",
     purpose: "Force the output alpha to a constant (default 1 = opaque), RGB pass-through. The explicit display-stage opacity decision for generator chains whose alpha has been consumed by blend semantics — e.g. an additive feedback afterglow loop, where node.mix's alpha rule locks the loop's alpha at its (black, transparent) initial state while the RGB accumulates light. Place at the end of the display chain, after the tone map. NOT for effects: effects must carry their input's alpha (the alpha-contract sweep enforces this); this atom is the deliberate exception for generator display termini, matching the baked alpha=1 in resolve_scatter / resolve_accumulator.",

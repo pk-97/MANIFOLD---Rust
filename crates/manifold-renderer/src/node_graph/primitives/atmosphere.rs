@@ -15,17 +15,17 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::atmosphere::Atmosphere;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::scene::atmosphere::Atmosphere;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// `shaft_quality` enum labels, index = `Atmosphere::shaft_quality`
 /// (VOLUMETRIC_LIGHT_DESIGN.md D1: `0` Low/16 steps, `1` Med/24 (default),
 /// `2` High/32).
 const SHAFT_QUALITIES: &[&str] = &["Low", "Med", "High"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: AtmosphereNode,
     type_id: "node.atmosphere",
     purpose: "Scene-wide atmosphere producer: exponential depth fog (colour + density + height falloff) plus an ambient/sky tint, emitted as a single Atmosphere struct consumed by render_scene's optional `atmosphere` input. Fog fades distant geometry toward fog_color by 1 - exp(-density·distance); height_falloff concentrates it near the ground (y=0) for a haze look; ambient_tint multiplies each object's ambient term. Every param is port-shadowed by a same-named optional scalar input, so fog density on a fader or beat_ramp is a live depth-mood knob. Unwired into render_scene = fog off (density 0), byte-identical to no atmosphere.",
@@ -181,12 +181,12 @@ impl Primitive for AtmosphereNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::MockBackend;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-    use crate::node_graph::effect_node::{FrameTime, ParamValues};
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::ports::PortType;
+    use manifold_node_engine::exec::backend::MockBackend;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::effect_node::{FrameTime, ParamValues};
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::ports::PortType;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {

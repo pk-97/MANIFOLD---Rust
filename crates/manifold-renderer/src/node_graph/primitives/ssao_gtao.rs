@@ -74,11 +74,11 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::camera::{Camera, CameraMode};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::scene::camera::{Camera, CameraMode};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
 
@@ -108,7 +108,7 @@ struct SsaoGtaoUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SsaoGtao,
     type_id: "node.ssao_gtao",
     purpose: "Ground Truth Ambient Occlusion (GTAO) from scene depth + a Camera (docs/CINEMATIC_POST_DESIGN.md D9), replacing node.ssao_from_depth. Reconstructs view-space center position + normal exactly as the retired atom (linearize_depth + inverse-projection xy; normal via explicit +/-1-texel finite differences). 2 slices per pixel at hash-derived angles (phi_i = hash_angle(px)*0.5 + i*(pi/2)); per slice, per side (+/- the slice's screen direction), 4 steps at screen radii derived from `radius` projected at the center pixel's depth; each step's sample is range-checked against `radius` in view space and folded into a per-side horizon cosine (max, floored at -1.0 for 'no occluder'); the slice's normal-angle basis uses dir3=(dir2.x,-dir2.y,0) (Y negated to match the Y-flip in the view-space position reconstruction — BUG-y5w7 sign fix, see the module doc comment); horizon angles converted via acos, clamped against the normal's signed in-plane angle, and integrated with the closed-form arc a(h) = 0.25*(-cos(2h-n)+cos(n)+2h*sin(n)); slice contribution = ||N_p||*(a(h1)+a(h2)); pixel visibility = sum of slice contributions / sum of ||N_p||*full_ref(n) (full_ref(n) = cos(n)+n*sin(n), the analytically-known fully-open value of a(h1)+a(h2) for that slice's normal angle — normalizing by this instead of by slice count fixes BUG-y5w7's grazing-angle darkening on flat surfaces: the raw closed-form is exact only when the per-pixel view vector is fronto-parallel to the normal); out.r = clamp(1 - intensity*(1-visibility), 0, 1) (broadcast to RGB, alpha 1). Depth taps = slices*2*steps — the default (slices=2, steps=4, 16 taps) is the committed D9(a) budget, bit-identical for existing graphs; the `slices`/`steps` params buy fidelity at linear cost (e.g. 4x8 = 64 taps). No temporal accumulation, no thickness heuristic — deterministic single-frame budget (D9(a)). Output is an AO map — wire it into a node.mix (Multiply mode) against the scene color; this atom does NOT modify the color image itself. Reads fov_y/near/far entirely via derived uniforms — the Camera wire is never a GPU binding.",
@@ -219,7 +219,7 @@ fn derive_view_scalars(cam: &Camera) -> [f32; 3] {
 // routed Camera external, matching `run()`'s own `derive_view_scalars` call
 // below exactly.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.ssao_gtao",
         array_ports: &[],
         recompute: |ctx| ctx.camera.map(derive_view_scalars).map(|v| v.to_vec()),
@@ -325,7 +325,7 @@ mod tests {
 /// pixel agreement.
 #[cfg(test)]
 pub(crate) mod cpu_reference {
-    use crate::node_graph::camera::linearize_depth;
+    use manifold_node_engine::scene::camera::linearize_depth;
 
     const GTAO_HALF_PI: f32 = std::f32::consts::FRAC_PI_2;
 
@@ -753,7 +753,7 @@ mod gpu_tests {
 
     use super::cpu_reference::{gtao_texel, DepthBuffer};
     use super::SsaoGtao;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn upload_rgba16f(device: &GpuDevice, w: u32, h: u32, label: &str, px: &[f16]) -> GpuTexture {
         assert_eq!(px.len(), (w * h * 4) as usize);
@@ -908,7 +908,7 @@ mod gpu_tests {
     /// (the design doc's own named plausible-wrong move).
     #[test]
     fn gtao_matches_cpu_reference() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (24u32, 16u32);
         let raw = depth_ramp_2d(w, h);
         let depth_tex = upload_depth(&device, w, h, &raw);
@@ -918,11 +918,11 @@ mod gpu_tests {
         let uniforms = GtaoUniforms { radius, intensity, slices: 2.0, steps: 4.0, projection: 0, relief: 0.2, fov_y, near, far, _pad0: 0.0, _pad1: 0.0, _pad2: 0.0 };
         let bytes = bytemuck::bytes_of(&uniforms);
 
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SsaoGtao>()
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SsaoGtao>()
             .expect("node.ssao_gtao standalone codegen");
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "gtao-generated",
         );
         let gen_out = dispatch(&device, &pipeline, &depth_tex, w, h, bytes);
@@ -973,7 +973,7 @@ mod gpu_tests {
     /// satisfies the invariant.
     #[test]
     fn generated_gtao_flat_plane_gives_full_visibility() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 16u32);
         let raw = vec![0.5f32; (w * h) as usize];
         let depth_tex = upload_depth(&device, w, h, &raw);
@@ -998,11 +998,11 @@ mod gpu_tests {
         };
         let bytes = bytemuck::bytes_of(&uniforms);
 
-        let gen_wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<SsaoGtao>()
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SsaoGtao>()
             .expect("node.ssao_gtao standalone codegen");
         let pipeline = device.create_compute_pipeline(
             &gen_wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "gtao-flat",
         );
         let out = dispatch(&device, &pipeline, &depth_tex, w, h, bytes);

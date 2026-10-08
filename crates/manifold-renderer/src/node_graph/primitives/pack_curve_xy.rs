@@ -23,12 +23,12 @@
 
 use std::borrow::Cow;
 
-use crate::mesh::CurvePoint;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::CurvePoint;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: PackCurveXy,
     type_id: "node.combine_xy",
     purpose: "Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. The curve-pipeline counterpart to node.split_xy; the standard way to assemble a curve from independently-built axis chains (generate_range → array_math sweep → pack_curve_xy → render_lines). `scale` is port-shadows-param so an outer slider can rescale the whole curve at performance time. An internal PROJ_SCALE = 0.25 screen-fit constant is folded into the output: at scale = 1.0 the curve fills the inner 50% of the screen — matches the legacy generator_math::PROJ_SCALE convention so existing line-renderer presets stay visually identical. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
@@ -75,7 +75,7 @@ impl Primitive for PackCurveXy {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn output_capacity_follows_x_input() {
-        use crate::node_graph::effect_node::ParamValues;
+        use manifold_node_engine::exec::effect_node::ParamValues;
         let prim = PackCurveXy::new();
         let params = ParamValues::default();
         let inputs = [("x", 256_u32), ("y", 256_u32)];

@@ -9,10 +9,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -29,7 +29,7 @@ struct TrigUniforms {
 
 pub const TRIG_MODES: &[&str] = &["Sin", "Cos", "Tan"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TrigTexture,
     type_id: "node.sine_cosine",
     purpose: "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free. `freq` and `phase` can ALSO be driven per-pixel from optional texture inputs (`freq_tex` / `phase_tex` — R channel) — unlocks per-cell unique trig patterns (per-star twinkle, cellular flicker, etc.) when fed from a per-cell hash source like `node.voronoi_2d` (A channel) routed through `node.channel_mixer`.",
@@ -162,14 +162,12 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use super::TrigTexture;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId, compile};
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::parameters::ParamValue;
-    use crate::node_graph::{
-        Executor, FinalOutput, FrameTime, MetalBackend, NodeInstanceId, Source,
-    };
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::parameters::ParamValue;
+    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, scene::boundary_nodes::Source};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -199,7 +197,7 @@ mod gpu_tests {
     /// Source filled with `shadow_val` in R, while `in` gets cleared to
     /// `in_val` in R via a second source. When None, only `in` is wired.
     fn run_trig_with_freq_tex_shadow(in_val: f32, freq_tex_val: f32, scalar_freq: f32) -> f32 {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -222,13 +220,13 @@ mod gpu_tests {
         let in_target = RenderTarget::new(&device, w, h, format, "trig-in");
         let ftex_target = RenderTarget::new(&device, w, h, format, "trig-ftex");
         let out_target = RenderTarget::new(&device, w, h, format, "trig-out");
-        crate::clear_texture_committed(
+        manifold_node_engine::testkit::gpu::clear_texture_committed(
             &device,
             &in_target.texture,
             [in_val as f64, in_val as f64, in_val as f64, 1.0],
             "trig-in-clear",
         );
-        crate::clear_texture_committed(
+        manifold_node_engine::testkit::gpu::clear_texture_committed(
             &device,
             &ftex_target.texture,
             [freq_tex_val as f64, 0.0, 0.0, 1.0],
@@ -263,7 +261,7 @@ mod gpu_tests {
     }
 
     fn run_trig_with_phase_tex_shadow(in_val: f32, phase_tex_val: f32, scalar_phase: f32) -> f32 {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 
@@ -288,13 +286,13 @@ mod gpu_tests {
         let in_target = RenderTarget::new(&device, w, h, format, "trig-in");
         let ptex_target = RenderTarget::new(&device, w, h, format, "trig-ptex");
         let out_target = RenderTarget::new(&device, w, h, format, "trig-out");
-        crate::clear_texture_committed(
+        manifold_node_engine::testkit::gpu::clear_texture_committed(
             &device,
             &in_target.texture,
             [in_val as f64, in_val as f64, in_val as f64, 1.0],
             "trig-in-clear",
         );
-        crate::clear_texture_committed(
+        manifold_node_engine::testkit::gpu::clear_texture_committed(
             &device,
             &ptex_target.texture,
             [phase_tex_val as f64, 0.0, 0.0, 1.0],

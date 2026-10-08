@@ -5,10 +5,10 @@
 use std::borrow::Cow;
 
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -19,7 +19,7 @@ struct CheckerUniforms {
     _pad: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Checkerboard,
     type_id: "node.checkerboard",
     purpose: "Pure generator. Alternating black/white squares at configurable scale. Output is binary {0, 1} broadcast to RGB (A = 1). Useful as a debug/diagnostic pattern, a mask for node.compose, or a base for grid-aligned effects.",

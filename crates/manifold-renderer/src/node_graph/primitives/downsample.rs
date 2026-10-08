@@ -25,10 +25,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 pub const DOWNSAMPLE_FACTORS: &[&str] = &["2x", "4x", "8x"];
 
@@ -41,7 +41,7 @@ struct DownsampleUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: Downsample,
     type_id: "node.downsample",
     purpose: "Integer-factor (2x / 4x / 8x) box-filter downsample of a Texture2D. Output dims = input dims / factor; the executor allocates the downstream slot at the smaller size so subsequent passes (e.g. a gaussian blur) run at reduced bandwidth. Used as the front of multi-resolution pipelines — quarter-res velocity blur in oily fluid, bloom mip starts, CoC pyramids, etc.",
@@ -77,7 +77,7 @@ crate::primitive! {
 /// Decode the `factor` enum param into the integer downsample factor.
 /// Default to 4 (the enum's default value `1`) for unset / malformed
 /// params; matches the run-time fallback.
-fn read_factor(params: &crate::node_graph::effect_node::ParamValues) -> u32 {
+fn read_factor(params: &manifold_node_engine::exec::effect_node::ParamValues) -> u32 {
     match params.get("factor") {
         Some(ParamValue::Enum(n)) => match *n {
             0 => 2u32,
@@ -101,7 +101,7 @@ impl Primitive for Downsample {
         port: &str,
         _canvas_dims: (u32, u32),
         input_dims: &[(&str, (u32, u32))],
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         if port != "out" {
             return None;
@@ -130,7 +130,7 @@ impl Primitive for Downsample {
     fn output_canvas_scale(
         &self,
         port: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         if port != "out" {
             return None;
@@ -187,13 +187,13 @@ impl Primitive for Downsample {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
     /// Build a `ParamValues` map containing only the default `factor`
     /// (enum 1 = 4×) — enough to drive `output_dims` /
     /// `output_canvas_scale` in tests without exercising the full
     /// graph param-init path.
-    fn default_params() -> crate::node_graph::effect_node::ParamValues {
+    fn default_params() -> manifold_node_engine::exec::effect_node::ParamValues {
         let mut p = ahash::AHashMap::default();
         p.insert(std::borrow::Cow::Borrowed("factor"), ParamValue::Enum(1));
         p

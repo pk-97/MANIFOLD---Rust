@@ -13,10 +13,10 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Mirror/fold modes, indexed by the `mode` enum. Mirrors the legacy
 /// `TransformFX` table (the affine-only `Identity` plus eight
@@ -42,7 +42,7 @@ struct MirrorFoldUvUniforms {
     _pad2: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: MirrorFoldUv,
     type_id: "node.mirror",
     purpose: "Mirror/fold coordinate generator: rewrites the per-pixel UV via an axis flip or kaleidoscope-style fold (Identity / Mirror / MirrorX / MirrorY / FlipY / QuadMirror / FoldX / FoldY / FoldBoth) and emits it (R = folded_u, G = folded_v). Resampling at these coordinates produces the mirrored / folded image. Pair with node.remap (Clamp) + node.mix (Lerp) — the TD coordinate → remap → blend shape replacing the fused TransformFX mirror modes. The affine half (translate/scale/rotate) stays in node.transform.",

@@ -17,10 +17,10 @@
 
 use std::borrow::Cow;
 
-use crate::mesh::pipeline::{look_at_rh, mat4_mul, ortho_rh};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::pipeline::{look_at_rh, mat4_mul, ortho_rh};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 /// Five instances. Matches the legacy generator's hardcoded
 /// `INSTANCE_COUNT`. The shader's uniform packs five sizes / angles
@@ -47,7 +47,7 @@ struct NestedCubesUniforms {
     extra2: [f32; 4],
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: NestedCubesGeometry,
     type_id: "node.nested_cubes_geometry",
     purpose: "Render a 5-instance gap-face cube field with EMA-smoothed per-instance Y rotation, per-face scatter, and a per-face envelope-driven kick on each trigger. Isometric orthographic camera. Target angles arrive on a port (Array<f32> length 5) so an upstream cycler or accumulator chooses the rotation behaviour; the kick envelope is internal state.",
@@ -377,14 +377,12 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::parameters::TableData;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use manifold_node_engine::parameters::TableData;
     use crate::node_graph::primitives::CycleTableRow;
-    use crate::node_graph::{
-        Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue, compile,
-    };
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::execution_plan::compile};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     use super::NestedCubesGeometry;
 
@@ -398,7 +396,7 @@ mod gpu_tests {
     }
 
     fn output_resource(
-        plan: &crate::node_graph::ExecutionPlan,
+        plan: &manifold_node_engine::exec::execution_plan::ExecutionPlan,
         node: NodeInstanceId,
         port: &str,
     ) -> ResourceId {
@@ -417,7 +415,7 @@ mod gpu_tests {
     /// Build a minimal graph: cycle_table_row(1×5 table) → nested_cubes_geometry,
     /// run one frame, read back the rendered texture as `u16` pixels.
     fn run_geometry(w: u32, h: u32, angles: [f32; 5]) -> Vec<u16> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();

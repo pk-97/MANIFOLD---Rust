@@ -29,13 +29,13 @@ use manifold_core::preset_def::PresetKind;
 
 use crate::generators::bundled_generator_presets::loaded_generator_presets_from_bundled;
 use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
-use crate::node_graph::descriptor::{Category, NodeDescriptor, Role, descriptor_for};
-use crate::node_graph::freeze::derived_uniform_registry::has_recompute;
-use crate::node_graph::palette::PaletteCategory;
-use crate::node_graph::param_doc::tooltip_for;
-use crate::node_graph::parameters::{ParamType, ParamValue};
-use crate::node_graph::persistence::PrimitiveFactory;
-use crate::node_graph::ports::{PortType, ScalarType};
+use manifold_node_engine::descriptor::{Category, NodeDescriptor, Role, descriptor_for};
+use manifold_node_engine::freeze::derived_uniform_registry::has_recompute;
+use manifold_node_engine::palette::PaletteCategory;
+use manifold_node_engine::param_doc::tooltip_for;
+use manifold_node_engine::parameters::{ParamType, ParamValue};
+use manifold_node_engine::persistence::PrimitiveFactory;
+use manifold_node_engine::ports::{PortType, ScalarType};
 
 /// Opening marker of the generated block in `docs/NODE_CATALOG.md`.
 pub const BEGIN_MARKER: &str =
@@ -103,8 +103,8 @@ struct NodeRow {
 /// Thin alias — the actual rendering lives in
 /// `freeze::classify::fusion_kind_str` (shared with `graph_tool fusion`,
 /// design D2/D10, so the catalog and the CLI verb can never disagree).
-fn fusion_str(node: &dyn crate::node_graph::effect_node::EffectNode) -> String {
-    crate::node_graph::freeze::classify::fusion_kind_str(node)
+fn fusion_str(node: &dyn manifold_node_engine::exec::effect_node::EffectNode) -> String {
+    manifold_node_engine::freeze::classify::fusion_kind_str(node)
 }
 
 struct PortRow {
@@ -218,7 +218,7 @@ fn collect_rows() -> Vec<NodeRow> {
     rows
 }
 
-fn port_row(p: &crate::node_graph::ports::NodePort) -> PortRow {
+fn port_row(p: &manifold_node_engine::ports::NodePort) -> PortRow {
     PortRow {
         name: p.name.to_string(),
         ty: port_type_str(&p.ty),
@@ -238,8 +238,8 @@ fn port_row(p: &crate::node_graph::ports::NodePort) -> PortRow {
 /// - `inputs:<a>@1000,<b>@1024` — derived from the inputs some other way.
 /// - `none` — unresolvable; `every_array_output_declares_a_valid_capacity_source`
 ///   fails any such node.
-fn capacity_rule(node: &dyn crate::node_graph::effect_node::EffectNode, port: &str) -> String {
-    use crate::node_graph::effect_node::ParamValues;
+fn capacity_rule(node: &dyn manifold_node_engine::exec::effect_node::EffectNode, port: &str) -> String {
+    use manifold_node_engine::exec::effect_node::ParamValues;
 
     if node.canvas_sized_array_outputs().contains(&port) {
         return "canvas".into();
@@ -306,11 +306,11 @@ fn capacity_rule(node: &dyn crate::node_graph::effect_node::EffectNode, port: &s
 }
 
 fn param_row(
-    p: &crate::node_graph::parameters::ParamDef,
-    node: &dyn crate::node_graph::effect_node::EffectNode,
+    p: &manifold_node_engine::parameters::ParamDef,
+    node: &dyn manifold_node_engine::exec::effect_node::EffectNode,
 ) -> ParamRow {
     ParamRow {
-        name: crate::node_graph::effect_node::intern_name(&p.name),
+        name: manifold_node_engine::exec::effect_node::intern_name(&p.name),
         label: p.label,
         ty: p.ty,
         default: param_default_str(&p.default),

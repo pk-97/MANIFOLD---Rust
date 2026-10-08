@@ -9,10 +9,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 fn finite_unit(value: f32, fallback: f32) -> f32 {
     if value.is_finite() {
@@ -22,7 +22,7 @@ fn finite_unit(value: f32, fallback: f32) -> f32 {
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RgbDistance,
     type_id: "node.rgb_distance",
     purpose: "Output the per-pixel Euclidean RGB distance from a target colour. Red, green, and blue are independent scalar port-shadowed controls so a graph can drive the target without a Vec3 binding.",
@@ -125,14 +125,12 @@ impl Primitive for RgbDistance {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::effect_node::NodeInstanceId;
-    use crate::node_graph::freeze::TextureDiff;
-    use crate::node_graph::freeze::classify::FusionKind;
-    use crate::node_graph::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec,
-    };
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::TextureDiff;
+    use manifold_node_engine::freeze::classify::FusionKind;
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec};
+    use manifold_node_engine::primitive::PrimitiveSpec;
+    use manifold_node_engine::gpu::render_target::RenderTarget;
     use half::f16;
     use manifold_gpu::{
         GpuBinding, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
@@ -251,7 +249,7 @@ mod gpu_tests {
 
     #[test]
     fn blob_v2_rgb_distance_standalone_and_fused_match_fixture() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let input = upload_fixture(&device);
         let params = RgbDistanceUniforms {
             red: 0.2,

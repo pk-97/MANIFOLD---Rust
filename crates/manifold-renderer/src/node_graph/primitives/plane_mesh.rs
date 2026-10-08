@@ -18,11 +18,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Number of triangle vertices in the flat plane (2 triangles × 3 vertices).
 pub const PLANE_VERTEX_COUNT: u32 = 6;
@@ -41,7 +41,7 @@ struct PlaneUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GeneratePlaneMesh,
     type_id: "node.plane_mesh",
     purpose: "Emit a flat camera-facing quad as 6 triangle-list MeshVertex entries in the XY plane, facing +Z. The sheet that displays a live layer composite in 3D: pair node.layer_source (wired into the consuming node.scene_object's base_color_map) + node.unlit_material to skin the plane with whatever another layer is playing. width/height are port-shadowed so the plane aspect can be driven from the canvas aspect or an LFO.",
@@ -142,8 +142,8 @@ impl Primitive for GeneratePlaneMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::ports::{ArrayType, PortType, ScalarType};
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn generate_plane_mesh_declares_width_height_inputs_and_mesh_array_output() {
@@ -192,7 +192,7 @@ mod gpu_tests {
     use super::*;
 
     fn dispatch_plane(wgsl: &str, capacity: u32, uniform: &[u8]) -> Vec<MeshVertex> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "plane-mesh-oracle");
         let out_buf = device.create_buffer_shared(capacity as u64 * 64);
         let mut enc = device.create_encoder("plane-mesh-oracle");
@@ -253,7 +253,7 @@ mod gpu_tests {
         bytes.extend_from_slice(&CAPACITY.to_le_bytes());
 
         let wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<GeneratePlaneMesh>()
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<GeneratePlaneMesh>()
                 .expect("plane_mesh buffer codegen");
 
         let verts = dispatch_plane(&wgsl, CAPACITY, &bytes);

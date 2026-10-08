@@ -1,10 +1,10 @@
 //! Bounded sparse triangle samples for Math View overlays.
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::{Primitive, PrimitiveSpec};
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
 use manifold_gpu::GpuBinding;
 use std::borrow::Cow;
 
@@ -23,7 +23,7 @@ struct SampleUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: SampleTriangleGrid,
     type_id: "node.sample_triangle_grid",
     purpose: "Emit a bounded sparse lattice of tiny independent MeshVertex triangles for Math View presentation. Coordinates are deterministic cell centres scaled by radius and translated by source_offset; this source contains no modifier or evaluation math.",
@@ -49,7 +49,7 @@ impl Primitive for SampleTriangleGrid {
     fn array_output_capacity(
         &self,
         port: &str,
-        _p: &crate::node_graph::effect_node::ParamValues,
+        _p: &manifold_node_engine::exec::effect_node::ParamValues,
         _i: &[(&str, u32)],
     ) -> Option<u32> {
         (port == "vertices").then_some(SAMPLE_TRIANGLE_GRID_CAPACITY)

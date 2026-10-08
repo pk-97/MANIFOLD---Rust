@@ -25,13 +25,13 @@ use std::time::Instant;
 
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuDevice;
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::readback_raw_halves;
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 /// D7 extension dispatch: `.glb`/`.gltf` (case-insensitive) route to this
 /// module's loop; everything else stays on `perf_soak.rs`'s P1 project soak.
@@ -377,7 +377,7 @@ fn run_profiled(
         }
         let profile = enc.commit_and_wait_profiled(device);
         let cpu_profiles = runtime.take_step_profiles();
-        let cpu_by_tag: std::collections::HashMap<&str, &manifold_renderer::node_graph::StepProfile> =
+        let cpu_by_tag: std::collections::HashMap<&str, &manifold_node_engine::exec::execution::StepProfile> =
             cpu_profiles.iter().map(|p| (p.tag.as_str(), p)).collect();
 
         let mut frame = ProfiledFrame {

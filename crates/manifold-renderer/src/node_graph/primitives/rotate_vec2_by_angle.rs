@@ -18,10 +18,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::dispatch_standalone_2d;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::dispatch_standalone_2d;
 
 // Standalone-codegen uniform layout: the single `angle` param (the body computes
 // cos/sin itself, where the hand uniform carried CPU-precomputed cos_a/sin_a).
@@ -34,7 +34,7 @@ struct RotateUniforms {
     _pad2: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RotateVec2ByAngle,
     type_id: "node.rotate_vector",
     purpose: "Rotate the input's RG vec2 field by an arbitrary angle (radians) per pixel. `out.x = v.x*cos - v.y*sin`, `out.y = v.x*sin + v.y*cos`. The general curl-from-gradient atom — defaults to angle = PI/2 (+90° CCW, the divergence-free curl-flow case) but the angle is port-shadow-param so a control wire (LFO, driver, manual slider, clip-trigger envelope) can sweep it continuously. Sweeping the angle is how FluidSim2D's `rotation_angle` knob biases the flow off the pure-curl axis.",
@@ -111,9 +111,9 @@ impl Primitive for RotateVec2ByAngle {
             // the body computes cos/sin from `angle`. rotate_vec2_by_angle.wgsl is
             // the parity oracle.
             gpu.device.create_compute_pipeline(
-                &crate::node_graph::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
+                &manifold_node_engine::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
                     .expect("node.rotate_vector standalone codegen"),
-                crate::node_graph::freeze::codegen::ENTRY,
+                manifold_node_engine::freeze::codegen::ENTRY,
                 "node.rotate_vector",
             )
         });

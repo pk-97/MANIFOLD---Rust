@@ -31,10 +31,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
-use crate::mesh::{EdgePair, CurvePoint};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::{EdgePair, CurvePoint};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const MSAA_SAMPLE_COUNT: u32 = 4;
 
@@ -79,7 +79,7 @@ pub struct EdgeInstance {
     _pad: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RenderLines,
     type_id: "node.draw_lines",
     purpose: "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. Wire the optional `widths` Array<f32> (parallel to `points`) and each segment renders as a tapered capsule interpolating its endpoints' thickness multipliers — trunk-to-tip width decay for bolts, strokes, and plant stems. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.combine_xy (for parametric curve graphs built from generate_range + array_math chains) or other curve-source primitives upstream.",

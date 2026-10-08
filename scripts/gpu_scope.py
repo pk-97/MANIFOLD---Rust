@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 RENDERER_SRC = "crates/manifold-renderer/src/"
+ENGINE_SRC = "crates/manifold-node-engine/src/"
+CONTRACT_TESTS_DIR = RENDERER_SRC + "engine_contract_tests/"
 UI_PAINT_DIR = "crates/manifold-ui-paint/"
 UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::"]
 PROOFS_DIR = "crates/manifold-renderer/tests/gpu_proofs/"
@@ -43,11 +45,11 @@ CPU_FLIP_REFERENCE_FILTERS = [
     "fluid_surface_perf::",
     "node_graph::primitives::whitewater_scene_tests::",
     "node_graph::primitives::gpu_flip_render_smoke_tests::",
-    "node_graph::primitives::gpu_flip_preset::",
-    "node_graph::scene_modifier_expand::acceleration::",
-    "preset_runtime::physics_carry::",
-    "preset_runtime::physics_sampling::",
-    "preset_runtime::physics_impulses::tests::coupled_playback_tests::",
+    "water::primitives::gpu_flip_preset::",
+    "load::expand::acceleration::",
+    "water::runtime::physics_carry::",
+    "water::runtime::physics_sampling::",
+    "water::runtime::physics_impulses::tests::coupled_playback_tests::",
 ]
 
 # Landing warning budget for the scoped (non-glb) GPU step, seconds of test time.
@@ -66,13 +68,13 @@ SMOKE_FILTERS = [
 
 # Graph runtime + freeze compiler.
 RUNTIME_FILTERS = [
-    "node_graph::freeze::",
-    "node_graph::execution",
-    "node_graph::resource_allocation",
-    "node_graph::metal_backend",
-    "node_graph::bindings",
-    "node_graph::graph_loader",
-    "preset_runtime::",
+    "freeze::",
+    "exec::execution",
+    "exec::resource_allocation",
+    "exec::metal_backend",
+    "bindings",
+    "load::graph_loader",
+    "runtime::",
 ]
 
 # manifold-gpu core, shared WGSL, proof harness: runtime set + lighting proofs,
@@ -200,64 +202,61 @@ MATTER_DOMAIN_FILTERS = ["matter_scene::", "matter_coupling::", "matter_look::",
 # Narrow rows win over EXPLICIT_ROWS: a path matching any gets only the narrow
 # rows it matches.
 NARROW_ROWS = [
-    ((RENDERER_SRC + "node_graph/primitives/gpu_flip_extension_tests.rs",),
+    ((ENGINE_SRC + "water/primitives/gpu_flip_extension_tests.rs",),
      (["gpu_flip_step_order_", "gpu_flip_extend_faces_"], [])),
-    ((RENDERER_SRC + "node_graph/liquid/lattice.rs",
-      RENDERER_SRC + "node_graph/primitives/liquid_frame.rs",
-      RENDERER_SRC + "node_graph/primitives/liquid_solid_distance.rs",
-      RENDERER_SRC + "node_graph/primitives/particle_volume.rs",
-      RENDERER_SRC + "node_graph/primitives/shaders/particle_volume_body.wgsl",
-      RENDERER_SRC + "node_graph/primitives/shaders/liquid_solid_distance_body.wgsl"),
+    ((ENGINE_SRC + "water/liquid/lattice.rs",
+      ENGINE_SRC + "water/primitives/liquid_frame.rs",
+      ENGINE_SRC + "water/primitives/liquid_solid_distance.rs",
+      ENGINE_SRC + "water/primitives/particle_volume.rs",
+      ENGINE_SRC + "water/primitives/shaders/particle_volume_body.wgsl",
+      ENGINE_SRC + "water/primitives/shaders/liquid_solid_distance_body.wgsl"),
      (["fluid_mesh_grid_native_", "liquid_frame::gpu_tests::",
        "gpu_flip_narrow_band_mesher_values",
        "mesh_contact_oblique_wall_and_thin_plate_match_cpu_reference",
        "fluid_clamp_scheduled_boundary_renders_like_unfrozen"], [])),
-    ((RENDERER_SRC + "node_graph/primitives/particle_identity",
-      RENDERER_SRC + "node_graph/primitives/particle_publication",
+    ((ENGINE_SRC + "water/primitives/particle_identity",
+      ENGINE_SRC + "water/primitives/particle_publication",
       RENDERER_SRC + "node_graph/primitives/particle_frame_blend_tests",
       RENDERER_SRC + "node_graph/primitives/interpolate_particle_frames",
-      RENDERER_SRC + "node_graph/primitives/push_out_of_solid",
+      ENGINE_SRC + "water/primitives/push_out_of_solid",
       RENDERER_SRC + "node_graph/primitives/mix_arrays",
-      RENDERER_SRC + "node_graph/primitives/liquid_frame",
-      RENDERER_SRC + "node_graph/liquid/frame_ring",
-      RENDERER_SRC + "node_graph/liquid/frame_history",
-      RENDERER_SRC + "node_graph/primitives/shaders/particle_identity",
-      RENDERER_SRC + "node_graph/primitives/shaders/particle_publication",
+      ENGINE_SRC + "water/primitives/liquid_frame",
+      ENGINE_SRC + "water/liquid/frame_ring",
+      ENGINE_SRC + "water/liquid/frame_history",
+      ENGINE_SRC + "water/primitives/shaders/particle_identity",
+      ENGINE_SRC + "water/primitives/shaders/particle_publication",
       RENDERER_SRC + "node_graph/primitives/shaders/interpolate_particle_frames",
-      RENDERER_SRC + "node_graph/primitives/shaders/push_out_of_solid",
+      ENGINE_SRC + "water/primitives/shaders/push_out_of_solid",
       RENDERER_SRC + "node_graph/primitives/shaders/mix_arrays",
-      RENDERER_SRC + "node_graph/primitives/shaders/liquid_frame.wgsl"),
+      ENGINE_SRC + "water/primitives/shaders/liquid_frame_faces.wgsl"),
      (["particle_publication_gpu_tests::", "particle_frame_blend_tests::gpu_tests::",
        "interpolate_particle_frames::gpu_tests::", "push_out_of_solid::gpu_tests::",
        "mix_arrays::gpu_tests::", "gpu_flip_inflow_emits_at_empty_sites_into_free_slots",
        "gpu_flip_narrow_band_publication_repeats_failed_ticks",
-       "liquid_frame_live_held_frame_matches_offline",
-       "liquid_frame_whitewater_reads_the_selected_slot",
-       "liquid_frame_encode_failure_publishes_the_selected_outputs",
-       "liquid_frame_solid_shrink_keeps_mix_capacity"], [])),
+       "liquid_frame::gpu_tests::"], [])),
     # The sheeting stage; its step wiring is proven by gpu_flip_step's own filters.
-    ((RENDERER_SRC + "node_graph/primitives/gpu_flip_sheeting",
-      RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_sheeting.wgsl"),
+    ((ENGINE_SRC + "water/primitives/gpu_flip_sheeting",
+      ENGINE_SRC + "water/primitives/shaders/gpu_flip_sheeting.wgsl"),
      (["gpu_flip_sheeting_tests::"], [])),
-    ((RENDERER_SRC + "node_graph/primitives/gpu_flip_clock.rs",
-      RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_clock.wgsl"),
+    ((ENGINE_SRC + "water/primitives/gpu_flip_clock.rs",
+      ENGINE_SRC + "water/primitives/shaders/gpu_flip_clock.wgsl"),
      (["gpu_flip_clock::gpu_tests::"], [])),
-    ((RENDERER_SRC + "node_graph/primitives/emission_count.rs",
-      RENDERER_SRC + "node_graph/primitives/spawn_whitewater.rs",
-      RENDERER_SRC + "node_graph/primitives/shaders/emission_count_body.wgsl",
-      RENDERER_SRC + "node_graph/primitives/shaders/spawn_whitewater_body.wgsl"),
+    ((ENGINE_SRC + "water/primitives/emission_count.rs",
+      ENGINE_SRC + "water/primitives/spawn_whitewater.rs",
+      ENGINE_SRC + "water/primitives/shaders/emission_count_body.wgsl",
+      ENGINE_SRC + "water/primitives/shaders/spawn_whitewater_body.wgsl"),
      (["whitewater_particle_tests::"], [])),
-    ((RENDERER_SRC + "node_graph/primitives/gpu_flip_narrow_band_tests.rs",
-      RENDERER_SRC + "node_graph/primitives/gpu_flip_narrow_band.rs",
-      RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_narrow_band.wgsl"),
+    ((ENGINE_SRC + "water/primitives/gpu_flip_narrow_band_tests.rs",
+      ENGINE_SRC + "water/primitives/gpu_flip_narrow_band.rs",
+      ENGINE_SRC + "water/primitives/shaders/gpu_flip_narrow_band.wgsl"),
      (["narrow_band", "face_grid_demo_gpu_flip_and_matter_side_by_side"], [])),
-    ((RENDERER_SRC + "node_graph/liquid/clock.rs",
-      RENDERER_SRC + "node_graph/liquid/fields.rs",
-      RENDERER_SRC + "node_graph/liquid/fields/"),
+    ((ENGINE_SRC + "water/liquid/clock.rs",
+      ENGINE_SRC + "water/liquid/fields.rs",
+      ENGINE_SRC + "water/liquid/fields/"),
      (LIQUID_FORCE_FILTERS, REPORTER_SKIPS)),
-    ((RENDERER_SRC + "node_graph/primitives/gpu_flip_domain.rs",),
+    ((ENGINE_SRC + "water/primitives/gpu_flip_domain.rs",),
      (LIQUID_DOMAIN_FILTERS + ["fluid_mesh_grid_native_"], REPORTER_SKIPS)),
-    ((RENDERER_SRC + "node_graph/primitives/matter_domain.rs",),
+    ((ENGINE_SRC + "water/primitives/matter_domain.rs",),
      (MATTER_DOMAIN_FILTERS, REPORTER_SKIPS)),
 ]
 
@@ -269,28 +268,28 @@ EXPLICIT_ROWS = [
       RENDERER_SRC + "node_graph/primitives/shaders/blob_bounds.wgsl"),
      (["node_graph::primitives::blob_bounds::",
        "liquid_surface_tests::", "liquid_bricks::tests::gpu_tests::"], [])),
-    ((RENDERER_SRC + "node_graph/primitives/offset_lattice",
-      RENDERER_SRC + "node_graph/primitives/redistance_lattice",
-      RENDERER_SRC + "node_graph/primitives/lattice_closing",
-      RENDERER_SRC + "node_graph/primitives/shaders/offset_lattice",
-      RENDERER_SRC + "node_graph/primitives/shaders/redistance_lattice"),
+    ((ENGINE_SRC + "water/primitives/offset_lattice",
+      ENGINE_SRC + "water/primitives/redistance_lattice",
+      ENGINE_SRC + "water/primitives/lattice_closing",
+      ENGINE_SRC + "water/primitives/shaders/offset_lattice",
+      ENGINE_SRC + "water/primitives/shaders/redistance_lattice"),
      (["fluid_fill_pits"], [])),
     (("crates/manifold-gpu/src/metal/raytrace.rs",
       RENDERER_SRC + "node_graph/primitives/render_scene.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/render_scene.wgsl",
       PROOFS_DIR + "rt_"),
      (["rt_"], ["particletext"])),
-    ((RENDERER_SRC + "node_graph/freeze/",), (["freeze::"], [])),
+    ((ENGINE_SRC + "freeze/",), (["freeze::"], [])),
     # Live Matter (GPU_MPM_SOLVER_DESIGN.md) and the substep regions it runs in.
-    ((RENDERER_SRC + "node_graph/matter.rs",
-      RENDERER_SRC + "node_graph/matter/",
-      RENDERER_SRC + "node_graph/substeps.rs",
-      RENDERER_SRC + "node_graph/execution/substep_region.rs",
-      RENDERER_SRC + "node_graph/primitives/matter_",
+    ((ENGINE_SRC + "water/matter.rs",
+      ENGINE_SRC + "water/matter/",
+      ENGINE_SRC + "exec/substeps.rs",
+      ENGINE_SRC + "exec/execution/substep_region.rs",
+      ENGINE_SRC + "water/primitives/matter_",
       RENDERER_SRC + "node_graph/primitives/grid_to_matter",
       RENDERER_SRC + "node_graph/primitives/zero_array",
-      RENDERER_SRC + "node_graph/primitives/shaders/matter_",
-      RENDERER_SRC + "node_graph/primitives/shaders/grid_to_matter",
+      ENGINE_SRC + "water/primitives/shaders/matter_",
+      ENGINE_SRC + "water/primitives/shaders/grid_to_matter",
       RENDERER_SRC + "node_graph/primitives/shaders/zero_array",
       PROOFS_DIR + "matter_",
       PROOFS_DIR + "substeps"),
@@ -298,64 +297,68 @@ EXPLICIT_ROWS = [
     # GPU FLIP water (GPU_FLIP_PRESSURE_SOLVE.md): the step's proofs are scene
     # proofs in other files (still pool, free fall, whitewater, resize), so a
     # module filter alone would miss them.
-    ((RENDERER_SRC + "node_graph/liquid/",
-      RENDERER_SRC + "node_graph/primitives/gpu_flip_",
-      RENDERER_SRC + "node_graph/primitives/liquid_state",
-      RENDERER_SRC + "node_graph/primitives/liquid_fill",
-      RENDERER_SRC + "node_graph/primitives/face_sample_component",
-      RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_",
-      RENDERER_SRC + "node_graph/primitives/shaders/liquid_fill",
-      RENDERER_SRC + "node_graph/primitives/shaders/face_sample_component"),
+    ((ENGINE_SRC + "water/liquid/",
+      ENGINE_SRC + "water/primitives/gpu_flip_",
+      ENGINE_SRC + "water/primitives/liquid_state",
+      ENGINE_SRC + "water/primitives/liquid_fill",
+      ENGINE_SRC + "water/primitives/face_sample_component",
+      ENGINE_SRC + "water/primitives/shaders/gpu_flip_",
+      ENGINE_SRC + "water/primitives/shaders/liquid_fill",
+      ENGINE_SRC + "water/primitives/shaders/face_sample_component"),
      (["gpu_flip_", "face_grid_tests::"], REPORTER_SKIPS)),
     # The GPU FLIP step runs its sort, scans and coarse inverse gated on the
     # clock's slot plan; only the inactive-slot proof runs them gated.
-    ((RENDERER_SRC + "node_graph/primitives/sort_particles_into_cells",
-      RENDERER_SRC + "node_graph/primitives/prefix_scan",
-      RENDERER_SRC + "node_graph/primitives/shaders/sort_particles_into_cells",
-      RENDERER_SRC + "node_graph/primitives/shaders/prefix_scan",
-      RENDERER_SRC + "node_graph/primitives/shaders/coarse_inverse"),
+    ((ENGINE_SRC + "water/primitives/sort_particles_into_cells",
+      ENGINE_SRC + "water/primitives/prefix_scan",
+      ENGINE_SRC + "water/primitives/shaders/sort_particles_into_cells",
+      ENGINE_SRC + "water/primitives/shaders/prefix_scan",
+      ENGINE_SRC + "water/primitives/shaders/coarse_inverse"),
      (["gpu_flip_inactive_slots_match_the_ungated_step"], [])),
     # The counting sort word for word against its CPU oracle, and the proofs
     # that drive the sorter directly: the node, and the step's crowding cap.
-    ((RENDERER_SRC + "node_graph/primitives/sort_particles_into_cells",
-      RENDERER_SRC + "node_graph/primitives/prefix_scan",
-      RENDERER_SRC + "node_graph/primitives/shaders/sort_particles_into_cells",
-      RENDERER_SRC + "node_graph/primitives/shaders/prefix_scan"),
+    ((ENGINE_SRC + "water/primitives/sort_particles_into_cells",
+      ENGINE_SRC + "water/primitives/prefix_scan",
+      ENGINE_SRC + "water/primitives/shaders/sort_particles_into_cells",
+      ENGINE_SRC + "water/primitives/shaders/prefix_scan"),
      (["sort_particles_into_cells::gpu_tests::", "fluid_sort_particles_into_cells_",
        "gpu_flip_step_order_cell_cap_compacts_preserving_ids"], [])),
     # Shared marching-cubes topology: ownership, solid-contact CPU value parity
     # (volume_surface_mesh::gpu_tests::mesh_contact_*), and raster parity.
-    ((RENDERER_SRC + "node_graph/primitives/count_surface_edges",
-      RENDERER_SRC + "node_graph/primitives/volume_surface_mesh",
-      RENDERER_SRC + "node_graph/primitives/relax_surface_mesh",
+    ((ENGINE_SRC + "water/primitives/count_surface_edges",
+      ENGINE_SRC + "water/primitives/volume_surface_mesh",
+      ENGINE_SRC + "water/primitives/relax_surface_mesh",
       RENDERER_SRC + "node_graph/primitives/smooth_surface_mesh",
       RENDERER_SRC + "node_graph/primitives/surface_mesh_normals",
-      RENDERER_SRC + "node_graph/primitives/surface_mesh_parity",
+      ENGINE_SRC + "water/primitives/surface_mesh_parity",
       RENDERER_SRC + "node_graph/primitives/surface_mesh_freeze_tests",
-      RENDERER_SRC + "node_graph/primitives/shaders/count_surface_edges",
-      RENDERER_SRC + "node_graph/primitives/shaders/surface_edge_",
-      RENDERER_SRC + "node_graph/primitives/shaders/volume_surface_mesh",
-      RENDERER_SRC + "node_graph/primitives/shaders/relax_surface_mesh",
+      ENGINE_SRC + "water/primitives/shaders/count_surface_edges",
+      ENGINE_SRC + "water/primitives/shaders/surface_edge_",
+      ENGINE_SRC + "water/primitives/shaders/volume_surface_mesh",
+      ENGINE_SRC + "water/primitives/shaders/relax_surface_mesh",
+      ENGINE_SRC + "water/primitives/shaders/surface_mesh_",
       RENDERER_SRC + "node_graph/primitives/shaders/surface_mesh_",
       PROOFS_DIR + "liquid_indexed.rs"),
      (["count_surface_edges::gpu_tests::", "volume_surface_mesh::gpu_tests::", "surface_mesh_normals::gpu_tests::", "surface_mesh_freeze_tests::gpu_tests::", "fluid_indexed_", "liquid_indexed::"], [])),
     # Graph runtime.
-    ((RENDERER_SRC + "node_graph/execution",
-      RENDERER_SRC + "node_graph/resource_allocation",
-      RENDERER_SRC + "node_graph/metal_backend",
-      RENDERER_SRC + "node_graph/backend.rs",
-      RENDERER_SRC + "node_graph/bound_graph.rs",
-      RENDERER_SRC + "node_graph/graph.rs",
-      RENDERER_SRC + "node_graph/graph_loader.rs",
-      RENDERER_SRC + "node_graph/bindings",
-      RENDERER_SRC + "node_graph/effect_node.rs",
-      RENDERER_SRC + "node_graph/primitive.rs",
-      RENDERER_SRC + "gpu_encoder.rs"),
+    ((ENGINE_SRC + "exec/execution",
+      ENGINE_SRC + "exec/resource_allocation",
+      ENGINE_SRC + "exec/metal_backend",
+      ENGINE_SRC + "exec/backend.rs",
+      ENGINE_SRC + "exec/bound_graph.rs",
+      ENGINE_SRC + "graph.rs",
+      ENGINE_SRC + "load/graph_loader.rs",
+      ENGINE_SRC + "bindings",
+      ENGINE_SRC + "exec/effect_node.rs",
+      ENGINE_SRC + "primitive.rs",
+      ENGINE_SRC + "gpu/gpu_encoder.rs"),
      (RUNTIME_FILTERS, [])),
 ]
 
 # Paths whose change affects every proof: BROAD.
 BROAD_PATHS = (
+    ENGINE_SRC + "lib.rs",
+    ENGINE_SRC + "primitives/mod.rs",
+    ENGINE_SRC + "water/primitives/mod.rs",
     RENDERER_SRC + "node_graph/primitives/mod.rs",
     RENDERER_SRC + "node_graph/mod.rs",
     RENDERER_SRC + "lib.rs",
@@ -375,27 +378,27 @@ DOC_SUFFIXES = (".md", ".txt")
 # Renderer files outside node_graph/ whose lib tests include GPU proofs.
 # preset_runtime/ drives every graph; layer_skin.rs's end-to-end proofs live
 # in preset_runtime's tests, so its row names both modules.
-PRESET_RUNTIME_DIR = RENDERER_SRC + "preset_runtime/"
+PRESET_RUNTIME_DIR = ENGINE_SRC + "runtime/"
 LIB_PROOF_ROWS = {
-    RENDERER_SRC + "layer_skin.rs": ["layer_skin::", "preset_runtime::layer_skin_tests::"],
+    ENGINE_SRC + "runtime/layer_skin.rs": ["runtime::layer_skin::", "runtime::layer_skin_tests::"],
     # The whitewater step's proofs (across frames, the pool passes, the
     # handoff, the golden fingerprints that prove its output unchanged) live
     # in sibling `_tests` modules the path filter alone misses.
-    RENDERER_SRC + "node_graph/primitives/whitewater_step.rs": [
-        "node_graph::primitives::whitewater_step::",
-        "node_graph::primitives::whitewater_step_tests::",
-        "node_graph::primitives::whitewater_pool_tests::",
-        "node_graph::primitives::whitewater_handoff_tests::",
-        "node_graph::primitives::whitewater_engine_gpu_tests::",
-        "node_graph::primitives::whitewater_golden_tests::",
+    ENGINE_SRC + "water/primitives/whitewater_step.rs": [
+        "water::primitives::whitewater_step::",
+        "water::primitives::whitewater_step_tests::",
+        "water::primitives::whitewater_pool_tests::",
+        "water::primitives::whitewater_handoff_tests::",
+        "water::primitives::whitewater_engine_gpu_tests::",
+        "water::primitives::whitewater_golden_tests::",
     ],
 }
 
 # The solver adapter publishes the accepted schedule and MAC history.
 # The broad gpu_flip_ row above still supplies its existing solver proofs.
-LIB_PROOF_ROWS[RENDERER_SRC + "node_graph/primitives/gpu_flip_step.rs"] = [
-    "node_graph::primitives::gpu_flip_step::",
-    "node_graph::primitives::whitewater_engine_gpu_tests::",
+LIB_PROOF_ROWS[ENGINE_SRC + "water/primitives/gpu_flip_step.rs"] = [
+    "water::primitives::gpu_flip_step::",
+    "water::primitives::whitewater_engine_gpu_tests::",
 ]
 
 # BUG-imy3.1: per-element emitters share CPU-reference and fused value proofs.
@@ -405,9 +408,9 @@ for _whitewater_atom in (
     "dust_potential", "whitewater_emitter_dispatch", "whitewater_emitter_cpu",
     "whitewater_emitter_gpu_tests",
 ):
-    LIB_PROOF_ROWS[RENDERER_SRC + f"node_graph/primitives/{_whitewater_atom}.rs"] = [
-        "node_graph::primitives::whitewater_emitter_gpu_tests::",
-        "node_graph::primitives::whitewater_step_tests::",
+    LIB_PROOF_ROWS[ENGINE_SRC + f"water/primitives/{_whitewater_atom}.rs"] = [
+        "water::primitives::whitewater_emitter_gpu_tests::",
+        "water::primitives::whitewater_step_tests::",
     ]
 del _whitewater_atom
 
@@ -418,14 +421,19 @@ for _engine_path in (
     "primitives/advect_whitewater.rs", "primitives/keep_whitewater.rs",
     "liquid/substep_history.rs",
 ):
-    LIB_PROOF_ROWS[RENDERER_SRC + "node_graph/" + _engine_path] = [
-        "node_graph::primitives::whitewater_engine_gpu_tests::",
-        "node_graph::primitives::whitewater_pool_tests::",
-        "node_graph::primitives::whitewater_step_tests::",
+    LIB_PROOF_ROWS[ENGINE_SRC + "water/" + _engine_path] = [
+        "water::primitives::whitewater_engine_gpu_tests::",
+        "water::primitives::whitewater_pool_tests::",
+        "water::primitives::whitewater_step_tests::",
     ]
 del _engine_path
 
 LIB_PROOF_ROWS[RENDERER_SRC + "reference_fixtures.rs"] = CPU_FLIP_REFERENCE_FILTERS
+for _pressure_fixture in ("dambreak_pressure_problems.bin.zst", "deep_pool_pressure_problems.bin.zst",
+                          "deep_pool_density_problems.bin.zst", "gpu_flip_pressure_golden.txt"):
+    LIB_PROOF_ROWS["crates/manifold-node-engine/tests/fixtures/" + _pressure_fixture] = [
+        "water::primitives::gpu_flip_pressure_tests::",
+    ]
 
 PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
 
@@ -434,9 +442,9 @@ def is_gpu_path(path):
     """Paths that trigger the GPU-proofs leg (mirrors the context-nudge triggers)."""
     if path.endswith(".wgsl"):
         return True
-    if path.startswith(("crates/manifold-gpu/", UI_PAINT_DIR, RENDERER_SRC + "node_graph/")):
+    if path.startswith(("crates/manifold-gpu/", UI_PAINT_DIR, ENGINE_SRC, CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
         return True
-    if "shaders/" in path or "gpu_encoder" in path:
+    if "shaders/" in path or "gpu::gpu_encoder" in path:
         return True
     if path.startswith((PRESET_RUNTIME_DIR, CPU_FLIP_FIXTURES_DIR)) or path in LIB_PROOF_ROWS:
         return True
@@ -481,6 +489,9 @@ class Plan:
             return []
         runs = [{"targets": ["gpu_proofs"], "lib": True, "filters": self.final_filters(),
                  "skips": self.final_skips(), "budgeted": True}]
+        runs.append({"package": "manifold-node-engine", "targets": [], "lib": True,
+                     "filters": self.final_filters(), "skips": self.final_skips(),
+                     "budgeted": True})
         if self.ui_paint:
             runs.append({"package": "manifold-ui-paint", "targets": [], "lib": True,
                          "filters": UI_PAINT_FILTERS, "skips": self.final_skips(),
@@ -512,7 +523,8 @@ class Plan:
 
 def module_filters(path):
     """Lib/proof test-path filters for a renderer source file, or None for root."""
-    parts = path[len(RENDERER_SRC):].split("/")
+    root = ENGINE_SRC if path.startswith(ENGINE_SRC) else RENDERER_SRC
+    parts = path[len(root):].split("/")
     name = parts[-1]
     if not name.endswith(".rs"):
         return []
@@ -529,6 +541,41 @@ def module_filters(path):
     return ["::".join(m) + "::" for m in mods if m]
 
 
+def contract_module_filters(path, repo):
+    """Resolve relocated contracts through their real Rust module mounts."""
+    from crate_move_replay import module_items
+    repo = Path(repo)
+    target = (repo / path).resolve()
+    found = set()
+
+    def walk(source, prefix, ancestors):
+        source = source.resolve()
+        if source in ancestors or not source.is_file():
+            return
+        if source == target:
+            found.add("::".join(prefix) + "::")
+            return
+        text = source.read_text()
+        for start, end, head, scope in module_items(text):
+            declaration = re.match(r"(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", text[head:end])
+            if not declaration:
+                continue
+            name = declaration[1]
+            attrs = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', text[start:head])
+            if attrs:
+                child = source.parent.joinpath(*scope, attrs[-1])
+            else:
+                base = source.parent if source.stem in ("lib", "mod") else source.with_suffix("")
+                child = base.joinpath(*scope, name + ".rs")
+                if not child.is_file():
+                    child = base.joinpath(*scope, name, "mod.rs")
+            if "engine_contract_tests" in child.parts:
+                walk(child, prefix + scope + (name,), ancestors | {source})
+
+    walk(repo / RENDERER_SRC / "lib.rs", (), set())
+    return sorted(found)
+
+
 def path_attr_filters(path, repo):
     """Filters for a `<dir>/tests/<file>.rs` pulled in by `#[path] mod x;` in `<dir>/mod.rs`.
 
@@ -536,19 +583,22 @@ def path_attr_filters(path, repo):
     path-derived filter would select nothing. Unresolvable preset_runtime test
     files fall back to the whole preset_runtime module rather than to nothing.
     """
-    parts = path[len(RENDERER_SRC):].split("/")
+    if path.startswith(CONTRACT_TESTS_DIR):
+        return contract_module_filters(path, repo)
+    root = ENGINE_SRC if path.startswith(ENGINE_SRC) else RENDERER_SRC
+    parts = path[len(root):].split("/")
     if len(parts) < 3 or parts[-2] != "tests":
         return None
     dirs = parts[:-2]
     try:
-        text = (Path(repo) / RENDERER_SRC / "/".join(dirs) / "mod.rs").read_text()
+        text = (Path(repo) / root / "/".join(dirs) / "mod.rs").read_text()
     except OSError:
         text = ""
     for file_name, module in PATH_ATTR_MOD.findall(text):
         if file_name == parts[-1]:
             return ["::".join(dirs + [module]) + "::"]
     if path.startswith(PRESET_RUNTIME_DIR):
-        return ["preset_runtime::"]
+        return ["runtime::"]
     return None
 
 
@@ -575,7 +625,7 @@ def default_shader_users(repo, wgsl_path, depth=3):
 def changed_test_filters(path, repo, base):
     """Promote changed test bodies; shared-helper edits retain module scope."""
     # Only renderer lib and proof paths have a derivable test-name prefix.
-    if not path.startswith((RENDERER_SRC, PROOFS_DIR)):
+    if not path.startswith((RENDERER_SRC, ENGINE_SRC, PROOFS_DIR)):
         return set()
     source = Path(repo) / path
     if source.suffix != ".rs" or not source.exists():
@@ -626,6 +676,12 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
         if path.startswith(UI_PAINT_DIR):
             plan.ui_paint = True
             continue
+        if path.startswith(CONTRACT_TESTS_DIR):
+            mounted = contract_module_filters(path, repo)
+            if not mounted:
+                plan.unmapped.append((path, "contract test has no resolvable Rust module mount"))
+                continue
+            plan.filters.update(mounted)
         plan.filters.update(changed_test_filters(path, repo, base))
         if is_gltf_path(path):
             plan.glb = True
@@ -647,6 +703,9 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
             plan.filters.update(BROAD_FILTERS)
             plan.broad.append((path, "manifold-gpu core"))
             continue
+        if path in LIB_PROOF_ROWS:
+            plan.filters.update(LIB_PROOF_ROWS[path])
+            continue
         if path.endswith(DOC_SUFFIXES):
             continue
         if path.endswith(".wgsl"):
@@ -659,15 +718,12 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
         if path.startswith(CPU_FLIP_FIXTURES_DIR):
             plan.filters.update(CPU_FLIP_REFERENCE_FILTERS)
             continue
-        if path in LIB_PROOF_ROWS:
-            plan.filters.update(LIB_PROOF_ROWS[path])
-            continue
-        if path.startswith(RENDERER_SRC) and path.endswith(".rs"):
+        if path.startswith((RENDERER_SRC, ENGINE_SRC)) and path.endswith(".rs"):
             plan.filters.update(path_attr_filters(path, repo) or module_filters(path))
             continue
         if is_gltf_path(path):
             continue
-        if not path.startswith(("crates/manifold-renderer/", "crates/manifold-gpu/")):
+        if not path.startswith(("crates/manifold-renderer/", "crates/manifold-node-engine/", "crates/manifold-gpu/")):
             plan.notes.append(f"{path}: outside renderer/gpu crates, smoke only")
             continue
         plan.unmapped.append((path, "no GPU test mapping rule for this file type"))
@@ -682,7 +738,7 @@ def _map_wgsl(plan, path, repo, shader_users):
                         "crates/manifold-spectral/")):
         plan.notes.append(f"{path}: other crate's shader, smoke only")
         return
-    if "/node_graph/freeze/shaders/" in path:
+    if path.startswith(ENGINE_SRC + "freeze/shaders/"):
         plan.filters.add("freeze::")
         return
     users = shader_users(path)
@@ -694,7 +750,7 @@ def _map_wgsl(plan, path, repo, shader_users):
         plan.broad.append((path, f"shared WGSL, {len(users)} users"))
         return
     for user in users:
-        if user.startswith(RENDERER_SRC):
+        if user.startswith((RENDERER_SRC, ENGINE_SRC)):
             plan.filters.update(LIB_PROOF_ROWS.get(user, module_filters(user)))
         else:
             plan.notes.append(f"{path}: user {user} outside renderer")

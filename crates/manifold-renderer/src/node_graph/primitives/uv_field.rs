@@ -9,11 +9,11 @@
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: UvField,
     type_id: "node.uv_field",
     purpose: "Pure generator. Writes per-pixel UV coordinates as a texture: R = u (0..1 left-to-right), G = v (0..1 top-to-bottom), B = 0, A = 1. Foundation primitive of the procedural texture math family — compose with math/noise/distance/polar primitives to author novel procedural textures.",

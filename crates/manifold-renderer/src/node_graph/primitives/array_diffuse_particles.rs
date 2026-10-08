@@ -17,12 +17,12 @@
 
 use manifold_gpu::GpuBinding;
 
-use crate::particles::Particle;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::particles::Particle;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use std::borrow::Cow;
-use super::standalone_pipeline::{standalone_pipeline, active_elements};
+use manifold_node_engine::primitives::standalone_pipeline::{standalone_pipeline, active_elements};
 
 /// Generated-codegen uniform layout: scalar params in PARAMS order (`diffusion`
 /// f32, `active_count` Int → i32), then the derived `frame_count` (u32, an exact
@@ -37,7 +37,7 @@ struct DiffuseUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ArrayDiffuseParticles,
     type_id: "node.spread_out",
     purpose: "Apply a per-particle hash-based random kick to `Particle.velocity`. One GPU dispatch over Array<Particle> with aliased read+write. `diffusion` scales the kick magnitude (typical range 0..0.05); zero means no-op. `frame_count` reseeds the hash each frame so the kick is genuinely uncorrelated across frames. Generic Brownian-noise atom — pairs with any particle integrator (attractor ODE, fluid sim, advection) that wants additive jitter on its 3D state.",
@@ -83,7 +83,7 @@ crate::primitive! {
 // D7/P0 (`docs/CINEMATIC_POST_DESIGN.md`): per-frame recompute for a FUSED
 // region's `frame_count` field. Matches `run()`'s own computation below.
 inventory::submit! {
-    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+    manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.spread_out",
         array_ports: &[],
         recompute: |ctx| Some(vec![ctx.frame.frame_count as f32]),
@@ -94,7 +94,7 @@ impl Primitive for ArrayDiffuseParticles {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

@@ -8,10 +8,10 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::dispatch_standalone_2d;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::dispatch_standalone_2d;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,7 +22,7 @@ struct ScaleOffsetUniforms {
     _pad1: f32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ScaleOffsetTexture,
     type_id: "node.scale_offset_image",
     purpose: "Per-pixel affine remap `a * x + b` on RGB. Alpha pass-through. The general re-range primitive: use scale=2, offset=-1 to recover signed [-1, 1] noise from a [0, 1] generator; scale=0.5, offset=0.5 to compress signed sin/cos to [0, 1]; scale<0 to invert. Two-scalar version of node.exposure + node.brightness fused.",
@@ -116,11 +116,11 @@ impl Primitive for ScaleOffsetTexture {
             .output_format_override
             .unwrap_or(manifold_gpu::GpuTextureFormat::Rgba16Float);
         let pipeline = self.pipeline.get_or_insert_with(|| {
-            let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
+            let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
                 .expect("node.scale_offset_image standalone codegen");
             gpu.device.create_compute_pipeline(
                 &wgsl,
-                crate::node_graph::freeze::codegen::ENTRY,
+                manifold_node_engine::freeze::codegen::ENTRY,
                 "node.scale_offset_image",
             )
         });

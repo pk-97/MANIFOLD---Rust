@@ -34,7 +34,7 @@ pub(crate) struct ExportFrameObservation {
     pub frame_idx: u32,
     pub time_seconds: f64,
     pub dt_seconds: f64,
-    pub status: manifold_renderer::frame_status::FrameRenderStatus,
+    pub status: manifold_node_engine::runtime::frame_status::FrameRenderStatus,
     pub rt_updates: manifold_gpu::raytrace::RtAccelUpdate,
     pub rt_dispatches: u32,
     pub history_resets: u32,
@@ -1034,12 +1034,12 @@ impl ContentThread {
         let frame_status = self.content_pipeline.frame_render_status();
         #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
         let frame_status = match export_test_fault(frame_idx) {
-            Some(ExportTestFault::PendingGeometry) => manifold_renderer::frame_status::FrameRenderStatus::PendingGeometry,
-            Some(ExportTestFault::Preparation) => manifold_renderer::frame_status::FrameRenderStatus::Failed(manifold_renderer::frame_status::FrameRenderFailure::RtAllocation),
-            Some(ExportTestFault::Encode) => manifold_renderer::frame_status::FrameRenderStatus::Failed(manifold_renderer::frame_status::FrameRenderFailure::RtEncode),
+            Some(ExportTestFault::PendingGeometry) => manifold_node_engine::runtime::frame_status::FrameRenderStatus::PendingGeometry,
+            Some(ExportTestFault::Preparation) => manifold_node_engine::runtime::frame_status::FrameRenderStatus::Failed(manifold_node_engine::runtime::frame_status::FrameRenderFailure::RtAllocation),
+            Some(ExportTestFault::Encode) => manifold_node_engine::runtime::frame_status::FrameRenderStatus::Failed(manifold_node_engine::runtime::frame_status::FrameRenderFailure::RtEncode),
             _ => frame_status,
         };
-        if frame_status != manifold_renderer::frame_status::FrameRenderStatus::Complete {
+        if frame_status != manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete {
             let message = format!(
                 "Export frame {frame_idx} is not complete ({frame_status:?}); refusing to encode"
             );

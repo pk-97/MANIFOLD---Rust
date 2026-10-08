@@ -17,10 +17,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -31,7 +31,7 @@ struct Gradient3DUniforms {
     _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GradientCentralDiff3D,
     type_id: "node.edge_slope_3d",
     purpose: "6-tap central-difference gradient of a scalar density Texture3D, written as a vec3 Texture3D. Toroidal wrap (XY use vol_res, Z uses vol_depth); gradient = float3(dx, dy, dz) * 0.5 in integer voxel space. 3D sibling of node.edge_slope. Decomposed from the gradient half of the legacy fused node.fluid_gradient_curl_3d; pair with node.swirl_force_3d for the FluidSim3D force field.",
@@ -121,9 +121,9 @@ impl Primitive for GradientCentralDiff3D {
             // (codegen::VOLUME_WORKGROUP_3D), not the hand shader's 8x8x8 -
             // div_ceil(8) covered only an eighth of the volume.
             [
-                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
-                vol_res.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
-                vol_depth.div_ceil(crate::node_graph::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_res.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
+                vol_depth.div_ceil(manifold_node_engine::freeze::codegen::VOLUME_WORKGROUP_3D),
             ],
             "node.edge_slope_3d",
         );

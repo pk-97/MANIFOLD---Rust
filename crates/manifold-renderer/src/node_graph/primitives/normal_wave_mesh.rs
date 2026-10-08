@@ -12,11 +12,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::mesh::MeshVertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -35,7 +35,7 @@ struct NormalWaveUniforms {
     _pad0: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: NormalWaveMesh,
     type_id: "node.normal_wave_mesh",
     purpose: "Displace the current Array<MeshVertex> along its smooth input normals by a coherent directional sine wave. The phase uses scene-relative current positions and an explicit Phase; amplitude is relative to the wired scene radius. The current triangle's three displaced corners transport smooth normals with an inverse-transpose frame map and tangents with a forward map, preserving UVs and tangent handedness. Disabled or zero amplitude returns the current record exactly; degenerate triangles preserve their input frame.",
@@ -83,7 +83,7 @@ impl Primitive for NormalWaveMesh {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -101,10 +101,8 @@ impl Primitive for NormalWaveMesh {
     /// (`shaders/normal_wave_mesh_body.wgsl`), never re-indexes, and
     /// output capacity follows `in` — so topology tracks input `in`
     /// topology and positions are Written.
-    fn mesh_output_rule(&self, port: &str) -> crate::node_graph::mesh_change::MeshOutputRule<'_> {
-        use crate::node_graph::mesh_change::{
-            MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule,
-        };
+    fn mesh_output_rule(&self, port: &str) -> manifold_node_engine::scene::mesh_change::MeshOutputRule<'_> {
+        use manifold_node_engine::scene::mesh_change::{MeshAspect, MeshDependency, MeshOutputRule, MeshRevisionRule};
         if port == "out" {
             return MeshOutputRule {
                 topology: MeshRevisionRule::Dependencies(&[MeshDependency {
@@ -185,12 +183,10 @@ impl Primitive for NormalWaveMesh {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::effect_node::NodeInstanceId;
-    use crate::node_graph::freeze::classify::{FusionKind, InputAccess};
-    use crate::node_graph::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
-    };
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::classify::{FusionKind, InputAccess};
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     fn vertex(position: [f32; 3], normal: [f32; 3], tangent: [f32; 4]) -> MeshVertex {
         MeshVertex {
@@ -215,7 +211,7 @@ mod gpu_tests {
         u: NormalWaveUniforms,
         label: &str,
     ) -> Vec<MeshVertex> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
         let src = device.create_buffer_shared(std::mem::size_of_val(src_vertices) as u64);
         let dst = device.create_buffer_shared(std::mem::size_of_val(src_vertices) as u64);
@@ -273,7 +269,7 @@ mod gpu_tests {
             vertex([0.5, -0.1, 0.0], [0.0, 0.2, 0.98], [1.0, 0.0, 0.0, -1.0]),
             vertex([-0.1, 0.6, 0.0], [0.15, 0.0, 0.99], [1.0, 0.0, 0.0, -1.0]),
         ];
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<NormalWaveMesh>()
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<NormalWaveMesh>()
             .expect("normal wave standalone codegen");
         let identity = dispatch(&wgsl, &src, uniforms(0.0, 1.0), "normal-wave-zero");
         for (got, expected) in identity.iter().zip(&src) {
@@ -426,7 +422,7 @@ mod gpu_tests {
             "dispatch count anchors on the gathered array length"
         );
         let prim = NormalWaveMesh::new();
-        let node: &dyn crate::node_graph::effect_node::EffectNode = &prim;
+        let node: &dyn manifold_node_engine::exec::effect_node::EffectNode = &prim;
         assert_eq!(
             node.array_output_capacity("out", &Default::default(), &[("in", 1009)]),
             Some(1009),

@@ -21,11 +21,11 @@
 use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::InstanceTransform;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the `amplitude` param (f32) then the
 /// codegen-injected `dispatch_count` (= element count, the guard), padded to 16
@@ -41,7 +41,7 @@ struct Uniforms {
 
 const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.wgsl");
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: InstanceRotationJitter,
     type_id: "node.rotation_jitter",
     purpose: "Add hash-driven per-instance Euler-rotation jitter to each InstanceTransform's rot_pad.xyz; positions and scale pass through. For each idx: rx/ry/rz = (hash_u32(idx*3+{0,1,2}) - 0.5) · amplitude. ADD semantics — pre-existing rotation from upstream is preserved and perturbed. Generic across any instanced field that wants visual density via non-uniform per-cube orientation. Reproduces the legacy DigitalPlants per-instance rotation hash bit-exactly when amplitude = 0.2.",
@@ -79,7 +79,7 @@ impl Primitive for InstanceRotationJitter {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "instances" {
@@ -146,7 +146,7 @@ impl Primitive for InstanceRotationJitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::primitive::PrimitiveSpec;
 
     #[test]
     fn instance_rotation_jitter_default_amplitude_matches_legacy() {

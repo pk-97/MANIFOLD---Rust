@@ -21,9 +21,9 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const MAX_TRACKED: usize = 32;
 
@@ -78,7 +78,7 @@ fn assign_global(
     }
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: TrackPersist,
     type_id: "node.track_persist",
     purpose: "Global nearest-neighbour identity tracking with grace-period retention. Matches incoming Channels[X, Y, WIDTH, HEIGHT] detections against a persistent tracked set using Euclidean distance on (X, Y), assigning pairs best-first across the whole set so identity doesn't depend on detection arrival order. Output has stable identity across frames — prerequisite for temporal filters like one_euro_filter. Unmatched detections spawn new tracks (up to capacity); tracks missing for grace_frames cycles are removed.",
@@ -144,7 +144,7 @@ impl Primitive for TrackPersist {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name == "out" {

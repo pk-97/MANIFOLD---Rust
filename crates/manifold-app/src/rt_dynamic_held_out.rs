@@ -21,7 +21,7 @@ use manifold_core::effects::{ParamId, ParameterDriver};
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_core::{Beats, Bpm, GraphTarget, LayerId, PresetTypeId, cold_touch::ColdTouchKind};
-use manifold_renderer::frame_status::FrameRenderStatus;
+use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use serde_json::{Value, json};
 
 use crate::content_command::ContentCommand;

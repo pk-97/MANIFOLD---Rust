@@ -25,8 +25,8 @@ mod gpu_tests {
         GpuTextureFormat, GpuTextureUsage,
     };
 
-    use crate::mesh::MeshVertex;
-    use crate::node_graph::freeze::codegen::standalone_for_spec;
+    use manifold_node_engine::mesh::MeshVertex;
+    use manifold_node_engine::freeze::codegen::standalone_for_spec;
     use crate::node_graph::primitives::{
         bend_mesh::BendMesh,
         fold_mesh::FoldMesh,
@@ -99,7 +99,7 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let pipeline = device.create_compute_pipeline(
             wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "scene-fx-passthrough",
         );
         let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
@@ -149,7 +149,7 @@ mod gpu_tests {
 
     #[test]
     fn default_passthrough_all_amount_mesh_deformers_are_identity() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let src = make_vertices();
         let filler = make_filler_weights(&device, &src);
         let dummy_field = make_dummy_field(&device);

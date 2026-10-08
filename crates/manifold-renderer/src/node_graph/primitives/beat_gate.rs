@@ -17,9 +17,9 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 use crate::node_graph::primitives::note_rates::NOTE_RATE_VALUES;
 
 /// Display labels for the `rate` enum. Indices match
@@ -29,7 +29,7 @@ pub const BEAT_GATE_RATE_LABELS: &[&str] = &[
     "1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/64",
 ];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BeatGate,
     type_id: "node.beat_gate",
     purpose: "Beat-synced square gate. Outputs `0` when off and `amount` when on, flipping at the `duty` point within each cycle of the selected note rate. Stateless and seek-safe — the same musical pattern as `node.strobe`'s internal gate, surfaced as a wireable scalar source.",
@@ -119,11 +119,11 @@ mod tests {
     use super::*;
     use manifold_core::{Beats, Seconds};
 
-    use crate::node_graph::effect_node::{EffectNode, EffectNodeType, FrameTime};
-    use crate::node_graph::execution_plan::compile;
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-    use crate::node_graph::Executor;
+    use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeType, FrameTime};
+    use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+    use manifold_node_engine::exec::execution::Executor;
 
     fn frame_at_beats(b: f32) -> FrameTime {
         FrameTime {
@@ -139,8 +139,8 @@ mod tests {
         seen: std::sync::Arc<std::sync::Mutex<Option<ParamValue>>>,
     }
     impl EffectNode for Capture {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id

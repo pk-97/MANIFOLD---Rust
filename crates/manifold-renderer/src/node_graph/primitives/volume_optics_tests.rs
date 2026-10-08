@@ -4,7 +4,7 @@ use manifold_gpu::{
     GpuTextureUsage,
 };
 
-use crate::mesh::{InstanceTransform, MeshVertex};
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 
 use super::{SHADER, Uniforms};
 
@@ -146,8 +146,8 @@ fn blend() -> GpuBlendState {
     }
 }
 
-fn camera() -> crate::node_graph::camera::Camera {
-    use crate::node_graph::camera::{Camera, CameraMode};
+fn camera() -> manifold_node_engine::scene::camera::Camera {
+    use manifold_node_engine::scene::camera::{Camera, CameraMode};
     let mut camera = Camera::look_at(
         [0.0, 0.0, -1.0],
         [0.0, 0.0, 0.0],
@@ -164,7 +164,7 @@ fn uniforms(model: [[f32; 4]; 4], multiplier: f32) -> Uniforms {
     uniforms_for_camera(camera(), model, multiplier)
 }
 fn uniforms_for_camera(
-    camera: crate::node_graph::camera::Camera,
+    camera: manifold_node_engine::scene::camera::Camera,
     model: [[f32; 4]; 4],
     multiplier: f32,
 ) -> Uniforms {
@@ -207,7 +207,7 @@ fn render_path_with_camera(
     model: [[f32; 4]; 4],
     multiplier: f32,
     occluder: Option<&[MeshVertex]>,
-    camera: crate::node_graph::camera::Camera,
+    camera: manifold_node_engine::scene::camera::Camera,
 ) -> f32 {
     let path = texture(
         device,
@@ -389,7 +389,7 @@ fn render_nearest(device: &manifold_gpu::GpuDevice, vertices: &[MeshVertex]) -> 
 
 #[test]
 fn production_volume_optics_pipelines_compile() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let _path = device.create_render_pipeline(
         SHADER,
         "vs_main",
@@ -410,7 +410,7 @@ fn production_volume_optics_pipelines_compile() {
 #[test]
 fn volume_path_matches_one_slab_thickness() {
     let value = render_path(
-        &crate::test_device(),
+        &manifold_gpu::testkit::test_device(),
         &cube(0.2, 0.6),
         identity(),
         1.0,
@@ -423,14 +423,14 @@ fn volume_path_matches_one_slab_thickness() {
 fn volume_path_excludes_air_between_separated_slabs() {
     let mut vertices = cube(0.2, 0.4);
     vertices.extend(cube(0.7, 0.9));
-    let value = render_path(&crate::test_device(), &vertices, identity(), 1.0, None);
+    let value = render_path(&manifold_gpu::testkit::test_device(), &vertices, identity(), 1.0, None);
     assert!((value - 0.4).abs() < 0.00001, "path={value}");
 }
 
 #[test]
 fn opaque_depth_truncates_second_slab() {
     let value = render_path(
-        &crate::test_device(),
+        &manifold_gpu::testkit::test_device(),
         &cube(0.2, 0.8),
         identity(),
         1.0,
@@ -441,7 +441,7 @@ fn opaque_depth_truncates_second_slab() {
 
 #[test]
 fn mirrored_model_preserves_signed_path() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let vertices = cube(0.2, 0.6);
     let ordinary = render_path(&device, &vertices, identity(), 1.0, None);
     let mirrored = render_path(&device, &vertices, mirrored(), 1.0, None);
@@ -454,7 +454,7 @@ fn mirrored_model_preserves_signed_path() {
 
 #[test]
 fn density_multiplier_scales_path() {
-    let device = crate::test_device();
+    let device = manifold_gpu::testkit::test_device();
     let vertices = cube(0.2, 0.6);
     let base = render_path(&device, &vertices, identity(), 1.0, None);
     let doubled = render_path(&device, &vertices, identity(), 2.0, None);
@@ -466,7 +466,7 @@ fn density_multiplier_scales_path() {
 
 #[test]
 fn nearest_depth_matches_front_surface() {
-    let nearest = render_nearest(&crate::test_device(), &cube(0.2, 0.6));
+    let nearest = render_nearest(&manifold_gpu::testkit::test_device(), &cube(0.2, 0.6));
     let expected = camera()
         .project_to_pixel([0.0, 0.0, 0.2], SIZE, SIZE)
         .unwrap()
@@ -480,9 +480,9 @@ fn nearest_depth_matches_front_surface() {
 #[test]
 fn perspective_camera_measures_positive_world_space_path() {
     let mut camera = camera();
-    camera.mode = crate::node_graph::camera::CameraMode::Perspective { fov_y: 1.0 };
+    camera.mode = manifold_node_engine::scene::camera::CameraMode::Perspective { fov_y: 1.0 };
     let value = render_path_with_camera(
-        &crate::test_device(),
+        &manifold_gpu::testkit::test_device(),
         &cube(0.2, 0.6),
         identity(),
         1.0,

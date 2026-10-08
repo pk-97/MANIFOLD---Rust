@@ -8,9 +8,7 @@ use manifold_editing::commands::graph::{
     MoveSceneModifierCommand, RemoveSceneModifiersCommand, ReorderSceneModifiersCommand,
     SetSceneModifierPreparationParamCommand,
 };
-use manifold_renderer::node_graph::{
-    PrimitiveRegistry, scene_modifier_authoring::prepare_new_scene_modifier,
-};
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier};
 
 #[derive(Debug)]
 pub(crate) enum SceneModifierAction {
@@ -268,7 +266,7 @@ pub(crate) fn build_action(
                 .clone();
             instance.targets = targets.clone();
             let frames =
-                manifold_renderer::node_graph::scene_modifier_expand::resolve_modifier_mesh_frames(
+                manifold_node_engine::load::expand::resolve_modifier_mesh_frames(
                     graph, &instance,
                 )
                 .map_err(|error| error.to_string())?;
@@ -711,7 +709,7 @@ impl Command for AdmittedGraphCommand {
             if let Some(device) = &self.budget_device {
                 let snapshot = device.modifier_memory_snapshot();
                 if let Err(error) =
-                    manifold_renderer::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                    manifold_node_engine::load::expand::admit_candidate_bytes(
                         snapshot,
                         candidate_bytes,
                     )
@@ -723,7 +721,7 @@ impl Command for AdmittedGraphCommand {
                 }
             } else if let Some(snapshot) = self.budget_snapshot {
                 if let Err(error) =
-                    manifold_renderer::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                    manifold_node_engine::load::expand::admit_candidate_bytes(
                         Some(snapshot),
                         candidate_bytes,
                     )
@@ -780,7 +778,7 @@ fn capture_frame_changes(
         for instance in &owner_graph.scene_modifiers {
             let before = instance.mesh_frames.clone();
             let after =
-                manifold_renderer::node_graph::scene_modifier_expand::resolve_modifier_mesh_frames(
+                manifold_node_engine::load::expand::resolve_modifier_mesh_frames(
                     owner_graph,
                     instance,
                 )
@@ -866,7 +864,7 @@ fn validate_owner(
     let host = project
         .graph_target_owner(target)
         .ok_or("Generator owner is no longer present")?;
-    let mut runtime = manifold_renderer::preset_runtime::PresetRuntime::from_def(
+    let mut runtime = manifold_node_engine::runtime::PresetRuntime::from_def(
         graph.clone(),
         registry,
         Some(&host.params),

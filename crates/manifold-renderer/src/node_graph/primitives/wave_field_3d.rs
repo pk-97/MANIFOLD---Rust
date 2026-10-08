@@ -3,11 +3,11 @@
 use manifold_gpu::GpuBinding;
 use std::borrow::Cow;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::mesh::Vec4Vertex;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::Vec4Vertex;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,7 +22,7 @@ pub(super) struct Uniforms {
     pub(super) _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: WaveField3d,
     type_id: "node.wave_field_3d",
     purpose: "Evaluate a travelling mathematical sine field at each 3D position. out = sin(TAU * (dot(position.xyz, direction) * frequency - fract(phase))). Direction coefficients are intentionally not normalized: a zero vector is a uniform temporal pulse, and frequency zero is valid.",
@@ -60,7 +60,7 @@ impl Primitive for WaveField3d {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "out" {
@@ -130,12 +130,12 @@ mod gpu_tests {
     use super::*;
 
     fn dispatch(src: &[Vec4Vertex], frequency: f32, phase: f32, direction: [f32; 3]) -> Vec<f32> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let wgsl =
-            crate::node_graph::freeze::codegen::standalone_for_spec::<WaveField3d>().unwrap();
+            manifold_node_engine::freeze::codegen::standalone_for_spec::<WaveField3d>().unwrap();
         let pipeline = device.create_compute_pipeline(
             &wgsl,
-            crate::node_graph::freeze::codegen::ENTRY,
+            manifold_node_engine::freeze::codegen::ENTRY,
             "wave-pilot-field",
         );
         let input = device.create_buffer_shared(std::mem::size_of_val(src) as u64);

@@ -11,11 +11,11 @@
 
 use std::borrow::Cow;
 
-use crate::mesh::{InstanceTransform, MeshVertex};
-use crate::node_graph::effect_node::{ConditionalRequirement, EffectNodeContext};
-use crate::node_graph::material::MaterialKind;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
+use manifold_node_engine::exec::effect_node::{ConditionalRequirement, EffectNodeContext};
+use manifold_node_engine::scene::material::MaterialKind;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
     ConditionalRequirement {
@@ -28,7 +28,7 @@ const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
     },
 ];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: RenderInstanced3DMesh,
     type_id: "node.render_copies",
     purpose: "Instanced mesh adapter over the shared scene material evaluator. Draws an Array<MeshVertex> through wired Array<InstanceTransform> entries with complete material maps while retaining legacy normal and red-channel map semantics.",
@@ -102,7 +102,7 @@ impl Primitive for RenderInstanced3DMesh {
     fn output_canvas_scale(
         &self,
         _port: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
         Some((1, 1))
     }
@@ -196,7 +196,7 @@ impl Primitive for RenderInstanced3DMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
+    use manifold_node_engine::exec::effect_node::EffectNode;
 
     #[test]
     fn render_instanced_3d_mesh_declares_conditional_requirements() {

@@ -17,8 +17,8 @@ use std::path::Path;
 
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
-use manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers;
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::load::expand::prepare_scene_modifiers;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 
 #[path = "common/scene_modifier.rs"]
 mod common;

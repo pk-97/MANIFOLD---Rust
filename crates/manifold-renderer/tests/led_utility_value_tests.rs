@@ -20,13 +20,13 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_core::{BlendMode, LayerId, LayerType};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, CompositorFrame};
-use manifold_renderer::gpu_encoder::GpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_renderer::headless_readback::readback_raw_halves;
 use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
-use manifold_renderer::node_graph::PrimitiveRegistry;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_renderer::tonemap::TonemapSettings;
 
 const LED_W: u32 = 8;

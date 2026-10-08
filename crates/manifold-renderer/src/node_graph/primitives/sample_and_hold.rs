@@ -19,12 +19,10 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::{
-    EffectNode, EffectNodeContext, EffectNodeType, NodeRequires,
-};
-use crate::node_graph::parameters::{ParamDef, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use crate::node_graph::state_store::NodeState;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
+use manifold_node_engine::parameters::{ParamDef, ParamValue};
+use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use manifold_node_engine::state_store::NodeState;
 
 pub const SAMPLE_AND_HOLD_TYPE_ID: &str = "node.sample_and_hold";
 
@@ -79,14 +77,14 @@ impl Default for SampleAndHold {
 }
 
 impl EffectNode for SampleAndHold {
-    fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
-        crate::node_graph::depth_rule::DepthRule::Terminal
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
     }
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
-    fn boundary_reason(&self) -> Option<crate::node_graph::freeze::classify::BoundaryReason> {
-        Some(crate::node_graph::freeze::classify::BoundaryReason::NonGpu)
+    fn boundary_reason(&self) -> Option<manifold_node_engine::freeze::classify::BoundaryReason> {
+        Some(manifold_node_engine::freeze::classify::BoundaryReason::NonGpu)
     }
 
     fn inputs(&self) -> &[NodeInput] {
@@ -159,12 +157,12 @@ impl EffectNode for SampleAndHold {
 }
 
 inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
+    manifold_node_engine::persistence::PrimitiveFactory {
         type_id: SAMPLE_AND_HOLD_TYPE_ID,
         create: || Box::new(SampleAndHold::new()),
-        picker: Some(crate::node_graph::palette::PickerInfo {
+        picker: Some(manifold_node_engine::palette::PickerInfo {
             label: "Sample & Hold",
-            category: crate::node_graph::palette::PaletteCategory::Driver,
+            category: manifold_node_engine::palette::PaletteCategory::Driver,
         }),
     }
 }
@@ -229,13 +227,13 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod trigger_latch_release_tests {
     use super::*;
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::effect_node::FrameTime;
-    use crate::node_graph::execution_plan::compile;
-    use crate::node_graph::graph::Graph;
-    use crate::node_graph::primitives::Value;
-    use crate::node_graph::state_store::StateStore;
-    use crate::node_graph::Executor;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::effect_node::FrameTime;
+    use manifold_node_engine::exec::execution_plan::compile;
+    use manifold_node_engine::graph::Graph;
+    use manifold_node_engine::primitives::value::Value;
+    use manifold_node_engine::state_store::StateStore;
+    use manifold_node_engine::exec::execution::Executor;
     use manifold_core::{Beats, Seconds};
     use std::sync::{Arc, Mutex};
 
@@ -253,7 +251,7 @@ mod trigger_latch_release_tests {
         seen: Arc<Mutex<Option<f32>>>,
     }
     impl EffectNode for Capture {
-        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule { crate::node_graph::depth_rule::DepthRule::Terminal } // test fixture
+        fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule { manifold_node_engine::scene::depth_rule::DepthRule::Terminal } // test fixture
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
         }
@@ -281,7 +279,7 @@ mod trigger_latch_release_tests {
 
     #[test]
     fn cleanup_nodes_releases_the_held_latch_so_the_next_frame_recaptures() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let seen = Arc::new(Mutex::new(None));
         let mut g = Graph::new();
         let value = g.add_node(Box::new(Value::new()));

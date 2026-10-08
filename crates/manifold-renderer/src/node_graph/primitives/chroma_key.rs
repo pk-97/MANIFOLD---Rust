@@ -18,10 +18,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuSamplerDesc;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 
 /// Display labels for [`ChromaKey`]'s `mode` enum.
 ///   - `Select` (0, default): output 1 where the pixel matches the
@@ -30,7 +30,7 @@ use super::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
 ///     greenscreen shape.
 pub const CHROMA_KEY_MODES: &[&str] = &["Select", "Reject"];
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ChromaKey,
     type_id: "node.chroma_key",
     purpose: "Produce a per-pixel mask describing how close each pixel is to a target colour (RGB Euclidean distance, soft falloff at the tolerance edge). Pairs with `masked_mix` to make any effect operate selectively on a chosen colour range.",
@@ -170,15 +170,12 @@ mod gpu_tests {
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
-    use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-    use crate::node_graph::backend::Backend;
-    use crate::node_graph::bindings::Slot;
-    use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::{
-        ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend, NodeInstanceId,
-        ParamValue, Source, compile, primitives::chroma_key::ChromaKey,
-    };
-    use crate::render_target::RenderTarget;
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_node_engine::exec::backend::Backend;
+    use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::exec::execution_plan::ResourceId;
+    use {manifold_node_engine::exec::execution_plan::ExecutionPlan, manifold_node_engine::exec::execution::Executor, manifold_node_engine::scene::boundary_nodes::FinalOutput, manifold_node_engine::exec::effect_node::FrameTime, manifold_node_engine::graph::Graph, manifold_node_engine::exec::metal_backend::MetalBackend, manifold_node_engine::exec::effect_node::NodeInstanceId, manifold_node_engine::parameters::ParamValue, manifold_node_engine::scene::boundary_nodes::Source, manifold_node_engine::exec::execution_plan::compile, crate::node_graph::primitives::chroma_key::ChromaKey};
+    use manifold_node_engine::gpu::render_target::RenderTarget;
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -211,7 +208,7 @@ mod gpu_tests {
         softness: f32,
         mode: u32,
     ) -> [f32; 4] {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let (w, h) = (4u32, 4u32);
         let format = GpuTextureFormat::Rgba16Float;
 

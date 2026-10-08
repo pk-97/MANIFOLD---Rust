@@ -26,10 +26,10 @@
 
 use std::borrow::Cow;
 
-use crate::mesh::{CurvePoint, EdgePair};
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::mesh::{CurvePoint, EdgePair};
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 pub const SEED_MODES: &[&str] = &["Reroll", "Fixed"];
 
@@ -59,7 +59,7 @@ fn rand_pm(state: &mut u32) -> f32 {
     rand01(state) * 2.0 - 1.0
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: LightningBolt,
     type_id: "node.lightning_bolt",
     purpose: "Generate a lightning bolt as polyline geometry on each strike: midpoint-displacement core from (x0,y0) to (x1,y1) plus two generations of recursively displaced branches, with per-point width taper (thick trunk, hairline tips). `strike` is a trigger-count stream (rising value = new bolt); `auto_strike_beats` > 0 additionally fires a bolt every N beats. The emitted core/branch edge topologies are live for exactly one frame (sentinel-padded otherwise) — wire the draws into a feedback chain for afterglow. Outputs feed node.draw_lines: shared `points`, parallel `widths` (wire to draw_lines.widths for the taper), and separate `core_edges` / `branch_edges` so core and branches draw at different intensities. `strike_pulse` is 1.0 on the strike frame (feed node.envelope_follower_ar for a flash envelope); `age` counts frames since the last strike (-1 before the first).",
@@ -398,7 +398,7 @@ impl Primitive for LightningBolt {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &crate::node_graph::effect_node::ParamValues,
+        params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         let capacity = match params.get("max_capacity") {

@@ -11,11 +11,11 @@
 
 use std::borrow::Cow;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: BeatRamp,
     type_id: "node.beat_ramp",
     purpose: "Per-beat attack envelope: out = clamp(fract(beats·rate) / attack, 0, 1). Snaps to 0 each beat, ramps to 1 over the first `attack` fraction of the cycle, then holds. The musician-facing pop-in envelope (Voronoi Prism fades cells in over the first 15% of each beat). Stateless / seek-safe — reads FrameTime.beats (or a wired `beat`). Wire into any scalar (gain, mask multiplier, opacity) for a beat-synced attack.",

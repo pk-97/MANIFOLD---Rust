@@ -278,9 +278,9 @@ pub(crate) fn serialized_value_as_f32(
 /// Recursively find a snapshot node by stable [`NodeId`], descending into
 /// groups. Resolves a previewed node's title + type_id for the value inspector.
 fn find_snapshot_node<'a>(
-    nodes: &'a [manifold_renderer::node_graph::NodeSnapshot],
+    nodes: &'a [manifold_node_engine::snapshot::NodeSnapshot],
     id: &manifold_core::NodeId,
-) -> Option<&'a manifold_renderer::node_graph::NodeSnapshot> {
+) -> Option<&'a manifold_node_engine::snapshot::NodeSnapshot> {
     for n in nodes {
         if &n.node_id == id {
             return Some(n);
@@ -499,7 +499,7 @@ fn modifier_preview_selection(
 /// than borrowing all of `self`.
 #[allow(clippy::type_complexity)]
 pub(crate) fn resolve_canvas_binding(
-    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
+    snapshot: Option<&manifold_node_engine::snapshot::GraphSnapshot>,
     target: Option<&manifold_core::GraphTarget>,
     project: &manifold_core::project::Project,
     node_id: u32,
@@ -534,7 +534,7 @@ pub(crate) fn resolve_canvas_binding(
         .parameters
         .iter()
         .find(|p| p.name == inner_param)
-        .is_some_and(|p| p.kind == manifold_renderer::node_graph::ParamSnapshotKind::Angle);
+        .is_some_and(|p| p.kind == manifold_node_engine::snapshot::ParamSnapshotKind::Angle);
     if matches!(target?, manifold_core::GraphTarget::SceneModifier { .. }) {
         let target = target.expect("scene modifier target was checked above");
         let owner = project.graph_target_owner(target)?;
@@ -567,7 +567,7 @@ pub(crate) fn resolve_canvas_binding(
     let def = if let Some(def) = instance.graph.as_ref() {
         def
     } else {
-        view = manifold_renderer::node_graph::loaded_preset_view_by_id(instance.effect_type())?;
+        view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(instance.effect_type())?;
         &view.canonical_def
     };
     let binding = def.preset_metadata.as_ref()?.bindings.iter().find(|b| {
@@ -892,7 +892,7 @@ impl Application {
         if let Some(def) = instance.graph.as_ref() {
             return full_reshape_from_instance(instance, def, param_id);
         }
-        let view = manifold_renderer::node_graph::loaded_preset_view_by_id(instance.effect_type())?;
+        let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(instance.effect_type())?;
         full_reshape_from_instance(instance, &view.canonical_def, param_id)
     }
 
@@ -927,7 +927,7 @@ impl Application {
         if let Some(def) = instance.graph.as_ref() {
             return binding_for_node_param(&instance.params, def, scope_path, node_id, param_name);
         }
-        let view = manifold_renderer::node_graph::loaded_preset_view_by_id(instance.effect_type())?;
+        let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(instance.effect_type())?;
         binding_for_node_param(&instance.params, &view.canonical_def, scope_path, node_id, param_name)
     }
 
@@ -1717,7 +1717,7 @@ impl Application {
                     .map(str::to_owned)
                     .or_else(|| {
                         snap_node
-                            .and_then(|n| manifold_renderer::node_graph::descriptor_for(&n.type_id))
+                            .and_then(|n| manifold_node_engine::descriptor::descriptor_for(&n.type_id))
                             .map(|d| {
                                 if !d.summary.is_empty() {
                                     d.summary.to_string()
@@ -2697,7 +2697,7 @@ mod binding_reroute_tests {
     #[test]
     fn mapping_canvas_supports_generator_and_stock_bindings() {
         use manifold_core::{effects::PresetInstance, params::Param, GraphTarget};
-        use manifold_renderer::node_graph::{GraphSnapshot, NodeSnapshot};
+        use manifold_node_engine::snapshot::{GraphSnapshot, NodeSnapshot};
         let mut def = def_with_binding();
         def.preset_metadata.as_mut().unwrap().bindings[0].user_added = true;
         let mut fx = PresetInstance::new(manifold_core::PresetTypeId::new("Audit"));

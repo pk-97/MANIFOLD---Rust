@@ -5,12 +5,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::standalone_pipeline::standalone_pipeline;
-use crate::mesh::InstanceTransform;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::fluid_particles::FluidParticle;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -21,7 +21,7 @@ pub(crate) struct Uniforms {
     pub(crate) _pad1: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: ParticlesToCopies,
     type_id: "node.particles_to_copies",
     purpose: "Turn each liquid particle into a copy transform: positioned at the particle, uniformly scaled by its radius, unrotated. Unused particle slots (radius 0) and slots at or past the live count become zero-scale holes.",
@@ -51,7 +51,7 @@ impl Primitive for ParticlesToCopies {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         if port_name != "copies" {
@@ -92,12 +92,10 @@ impl Primitive for ParticlesToCopies {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::node_graph::effect_node::NodeInstanceId;
-    use crate::node_graph::freeze::classify::FusionKind;
-    use crate::node_graph::freeze::codegen::{
-        ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec,
-    };
-    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_node_engine::exec::effect_node::NodeInstanceId;
+    use manifold_node_engine::freeze::classify::FusionKind;
+    use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused, standalone_for_spec};
+    use manifold_node_engine::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::DisplaceCopies;
     use manifold_gpu::{GpuBuffer, GpuDevice};
 
@@ -163,7 +161,7 @@ mod gpu_tests {
 
     #[test]
     fn particles_to_copies_matches_cpu() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let src = particles();
         for live_count in [-1.0, 3.0, 0.0] {
             assert_eq!(raw(&standalone(&device, &src, live_count)), raw(&expected(&src, live_count)), "live_count {live_count}");
@@ -174,7 +172,7 @@ mod gpu_tests {
     /// standalone kernels and the CPU.
     #[test]
     fn particles_to_copies_fused_with_displace_matches_unfused() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let src = particles();
         let weights = [1.0_f32, 0.5, -2.0, 4.0];
         let (live_count, amount, direction) = (3.0_f32, 0.25_f32, [0.0_f32, 1.0, 0.5]);
@@ -318,3 +316,6 @@ mod gpu_tests {
         assert_eq!(raw(&fused_result), raw(&unfused), "fused against standalone");
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+mod extent;

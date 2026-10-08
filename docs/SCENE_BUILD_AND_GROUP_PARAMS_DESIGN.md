@@ -49,7 +49,7 @@ a moved anchor is an escalation, not a guess.
 | `render_scene` per-object params | `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:223-296` (`rebuild`) | 9 TRS `ParamDef`s per object, labels identical across objects ("Position X" ×N). `Cow<'static, str>` names, generated from counts — the node cannot know object names |
 | `render_scene` param consumption | `render_scene.rs:640-655` (`evaluate`) | Nine `ctx.params.get(format!("pos_x_{n}"))` reads → `model_matrix(pos, rot, scale)` at `:419` |
 | CPU-struct input accessors | `render_scene.rs:552-566` — `ctx.inputs.camera(..)`, `.light(..)`, `.material(..)` at `:614` | The Camera/Light/Material port pattern is proven end-to-end; a Transform port is a fourth instance of it, not new plumbing |
-| No Transform port | `crates/manifold-renderer/src/node_graph/ports.rs:17-53` (`PortType`) | Negative claim, search run: variants are Texture2D(+Typed), Texture3D, Scalar, Array, Camera, Light, Material. No Transform/Mat4 |
+| No Transform port | `crates/manifold-node-engine/src/ports.rs:17-53` (`PortType`) | Negative claim, search run: variants are Texture2D(+Typed), Texture3D, Scalar, Array, Camera, Light, Material. No Transform/Mat4 |
 | No mesh-TRS atom | `rg -i "transform" primitives/` | `affine_transform` = 2D UV effect; `generate_instance_transforms` + `InstanceTransform` (`generators/mesh_common.rs:93`, GPU Pod `pos_scale`/`rot_pad`) = the *instancing* array path — different semantics (many anonymous copies, GPU data), stays separate |
 | Expose flow label | `crates/manifold-editing/src/commands/graph.rs:1497-1568` (`mirror_effect_side`) | Card slider label = the bare inner `ParamDef` label — exposing `pos_x_2` yields an anonymous "Position X" |
 | Expose command scope | `graph.rs:1080-1096` (`ToggleNodeParamExposeCommand`) | Carries `scope_path: Vec<u32>` — the enclosing-group chain is ALREADY known at expose time; the section seed reads the innermost group's name from it |
@@ -58,7 +58,7 @@ a moved anchor is an escalation, not a guess.
 | Node-face rows | `GRAPH_EDITOR_REDESIGN.md` on-node phases 1–6 (all ✅ 2026-07-01); `graph_canvas/model.rs` (`NodeRow`, `compute_node_rows`) | Regular nodes render param rows with sliders/checkboxes/editors; the row substrate P4 reuses. Canvas already computes wire-driven/outer-driven state (`apply_driven_state`, `outer_routings`) |
 | Group box rendering | `graph_canvas/model.rs:114-123` (`is_group`, `group_tint`) | Groups draw as tinted boxes with interface ports only — no param rows |
 | Group exposure policy | `NODE_GROUPS_UI_DESIGN.md` status | Phase D (interface editing) **dropped** — Peter 2026-06-13: organisation-only, exposure direct-to-card. This design keeps that; **no live group-param runtime**. *(F14 clarification 2026-07-10: `COMPONENT_LIBRARY_DESIGN.md` section 4 (The interaction set (the actual UX))/section 4a is the sanctioned `GroupParamDef` consumer — but declaration-only: component macros are `GroupParamDef` entries that **lower onto ordinary card `BindingDef`s at expose** (COMPONENT section 4b), so the thing this design kills — a live group-param interface runtime — stays dead. "`GroupParamDef` stays unused" was too strong; "no live group-param runtime" is the real invariant.)* |
-| glTF importer | `crates/manifold-renderer/src/node_graph/gltf_import.rs:274-669` (`build_import_graph`) | Already builds one named+tinted group per material with stable inner `node_id`s; curates a 13-slider card (camera/sun/reflections + per-object metallic/roughness with " 2"-style suffixes); sets recenter via `pos_x_{k}` params ON the render node (`:510-518`); **no transform sliders on the card at all** |
+| glTF importer | `crates/manifold-renderer/src/node_graph/gltf_import/mod.rs:274-669` (`build_import_graph`) | Already builds one named+tinted group per material with stable inner `node_id`s; curates a 13-slider card (camera/sun/reflections + per-object metallic/roughness with " 2"-style suffixes); sets recenter via `pos_x_{k}` params ON the render node (`:510-518`); **no transform sliders on the card at all** |
 | Stale importer cap | `gltf_import.rs:45` (`MAX_RENDER_SCENE_OBJECTS = 8`) | Comment says "mirrored from node.render_scene's own MAX_OBJECTS" — that constant was deleted 2026-07-05 (`render_scene.rs:64`, `OBJECT_SLIDER_MAX = 64`). Imports silently drop materials past 8 while the renderer is uncapped. Fixed in P2 |
 | Migration chain | `crates/manifold-io/src/migrate.rs:5-84` | Version-gated `Value → Value` steps, top currently `1.11.0`; `migrations/param_storage_v14.rs` is the quarantined-module precedent |
 | Fan-out bindings | `effect_graph_def.rs:404-413` (`BindingDef`, one id → many targets, per-target `scale`/`offset`) | Ableton-style macros are already representable — a load-bearing input to the Phase-D kill |
@@ -233,7 +233,7 @@ largest-first ordering and the loud warning above it.
 ## 3. Data model (committed — the executor transcribes)
 
 ```rust
-// crates/manifold-renderer/src/node_graph/transform.rs — sibling of camera.rs/light.rs
+// crates/manifold-node-engine/src/scene/transform.rs — sibling of camera.rs/light.rs
 /// Local TRS of one scene object. CPU-only wire value (PortType::Transform),
 /// composed to a model matrix by the consuming renderer per frame.
 /// Euler radians, XYZ application order — matching render_scene's existing
@@ -272,7 +272,7 @@ impl Default for Transform {
 Freeze/fusion: CPU-struct wires don't participate in pointwise fusion, and
 `render_scene` is a raster node (never fused). `⚠ VERIFY-AT-IMPL`: confirm no
 `PortType` match in the freeze compiler needs the new arm —
-`rg -n "PortType::" crates/manifold-renderer/src/node_graph/freeze/ | rg -v test`.
+`rg -n "PortType::" crates/manifold-node-engine/src/freeze/ | rg -v test`.
 
 ## 4. What it buys on stage
 
@@ -295,7 +295,7 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
 
 ### P1 — Transform port + `node.transform_3d` (one session)
 
-- **Entry state:** clean tree off current `origin/main`; `rg -n "Transform" crates/manifold-renderer/src/node_graph/ports.rs` → no variant; section 1 anchors re-run.
+- **Entry state:** clean tree off current `origin/main`; `rg -n "Transform" crates/manifold-node-engine/src/ports.rs` → no variant; section 1 anchors re-run.
 - **Read-back:** this doc section 2 D1/D2, section 3; `ports.rs` whole; one Material-port plumbing
   commit (`git log --oneline -S "PortType::Material" -- crates/manifold-renderer` →
   read the M1 diff); `node.light`'s producer atom end-to-end;
@@ -307,7 +307,7 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
   section 2.5-audited), unit tests: identity default; param→output; each scalar port
   overrides its same-named param (the port-shadows contract, one test per family).
 - **Gate.** Positive: `cargo test -p manifold-renderer --lib transform` green;
-  `check-presets` clean. Negative: `rg -n "Arc<Mutex|Arc<RwLock" crates/manifold-renderer/src/node_graph/transform.rs primitives/transform_3d.rs` → 0.
+  `check-presets` clean. Negative: `rg -n "Arc<Mutex|Arc<RwLock" crates/manifold-node-engine/src/scene/transform.rs primitives/transform_3d.rs` → 0.
   **Demo:** none — L1 (nothing consumes the port yet; P2 is the vertical slice).
 - **Forbidden:** consuming the port in any renderer this phase; inventing a matrix
   type on the wire (the wire carries TRS; matrices are composed by consumers).

@@ -12,11 +12,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::mesh::InstanceTransform;
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::InstanceTransform;
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 pub const INSTANCE_LAYOUTS: &[&str] = &["Grid", "Ring", "Spiral", "Random"];
 
@@ -43,7 +43,7 @@ struct InstanceUniforms {
     dispatch_count: u32,
 }
 
-crate::primitive! {
+manifold_node_engine::primitive! {
     name: GenerateInstanceTransforms,
     type_id: "node.arrange_copies",
     purpose: "Emit an Array<InstanceTransform> filled with one of four procedural layouts (slots beyond active_count zero out): Grid — side = ceil(active_count^(1/3)), 3D index (cx,cy,cz) = (i mod side, (i/side) mod side, i/side^2), position = ((cx/(side-1) - 0.5)*extent_x, (cy/(side-1) - 0.5)*extent_y, (cz/(side-1) - 0.5)*extent_z). Ring — t = i/active_count, theta = t*2π, position = (cos(theta)*extent_x/2, 0, sin(theta)*extent_z/2). Spiral — t = i/active_count, theta = t*2π*4 (4 turns), r = t, position = (cos(theta)*r*extent_x/2, (t-0.5)*extent_y, sin(theta)*r*extent_z/2). Random — wang-hash of (index, seed) per axis, position = (hash-0.5)*extent per axis, uniform within the extent box. Scale is uniform `base_scale`; rotation is uniform (rot_x, rot_y, rot_z) applied identically to every instance. Pair with node.render_copies to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
@@ -242,7 +242,7 @@ mod gpu_tests {
     use super::*;
 
     fn dispatch_git(wgsl: &str, capacity: u32, uniform: &[u8]) -> Vec<InstanceTransform> {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "git-oracle");
         let out_buf = device.create_buffer_shared(capacity as u64 * 32);
         let mut enc = device.create_encoder("git-oracle");
@@ -298,7 +298,7 @@ mod gpu_tests {
 
             let hand_wgsl = include_str!("shaders/generate_instance_transforms.wgsl");
             let gen_wgsl =
-                crate::node_graph::freeze::codegen::standalone_for_spec::<GenerateInstanceTransforms>()
+                manifold_node_engine::freeze::codegen::standalone_for_spec::<GenerateInstanceTransforms>()
                     .expect("generate_instance_transforms buffer codegen");
 
             let from_hand = dispatch_git(hand_wgsl, CAPACITY, &hand);

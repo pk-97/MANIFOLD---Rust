@@ -6,7 +6,7 @@
 
 use manifold_foundation::cold_touch::{cold_touch_count, ColdTouchKind};
 
-use crate::node_graph::{PrimitiveRegistry, effect_node::EffectNodeContext, Executor, FrameTime, MetalBackend, StateStore, FINAL_OUTPUT_TYPE_ID, SOURCE_TYPE_ID};
+use manifold_node_engine::{persistence::PrimitiveRegistry, exec::effect_node::EffectNodeContext, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, state_store::StateStore, scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID, scene::boundary_nodes::SOURCE_TYPE_ID};
 
 /// Snapshot the cold-touch counter before an operation.
 fn snapshot_cold_touches() -> u64 {

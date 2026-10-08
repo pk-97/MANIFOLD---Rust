@@ -29,15 +29,15 @@ use std::sync::Arc;
 
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
-use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::{
     encode_rgba8_png, non_black_fraction, readback_raw_halves, readback_tonemapped_rgba8,
 };
-use manifold_renderer::node_graph::PrimitiveRegistry;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_renderer::node_graph::gltf_import::assemble_import_graph;
-use manifold_renderer::preset_context::PresetContext;
-use manifold_renderer::preset_runtime::PresetRuntime;
-use manifold_renderer::render_target::RenderTarget;
+use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 720;

@@ -16,6 +16,9 @@ log = { workspace = true }
 ringbuf = "0.4"
 sha2 = "0.10"
 
+[build-dependencies]
+sha2 = "0.10"
+
 [features]
 # Wall-clock ceiling micro-benchmarks (BUG-113/BUG-142): sensitive to CPU
 # contention from nextest's parallel thread pool and whatever else is running
