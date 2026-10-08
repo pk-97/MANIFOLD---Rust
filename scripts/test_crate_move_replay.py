@@ -171,6 +171,66 @@ class ReplayTests(unittest.TestCase):
         expected.update({'plans/p1/'+p:v for p,v in replay.files(self.plan).items()})
         self.assertEqual(actual, expected)
 
+    def bin_plan(self, directory=False, collision=False):
+        source = 'crates/manifold-renderer'
+        dest = 'crates/manifold-node-engine'
+        relative = 'src/bin/tool/main.rs' if directory else 'src/bin/tool.rs'
+        declaration = '[[bin]]\nname = "graph-tool"\npath = "' + relative + '"\n'
+        old = '[package]\nname = "manifold-renderer"\n' + declaration
+        self.original[source + '/Cargo.toml'] = ('100644', old.encode())
+        self.original[source + '/' + relative] = ('100644', b'fn main() { crate::run(); }\nfn run() {}\n')
+        with (self.plan / 'moves.tsv').open('a') as f:
+            f.write(source + '/' + relative + '\t' + dest + '/' + relative + '\n')
+            if directory:
+                self.original[source + '/src/bin/tool/helper.rs'] = ('100644', b'pub fn help() {}\n')
+                f.write(source + '/src/bin/tool/helper.rs\t' + dest + '/src/bin/tool/helper.rs\n')
+        after = '[package]\nname = "manifold-node-engine"\n' + declaration
+        if collision:
+            after += '[[bin]]\nname = "graph-tool"\npath = "src/bin/other.rs"\n'
+            self.original[dest + '/src/bin/other.rs'] = ('100644', b'fn main() {}\n')
+        self.template(dest + '/Cargo.toml', after)
+        (self.plan / 'manifests.json').write_text(json.dumps([
+            {'path': source + '/Cargo.toml', 'before': old,
+             'after': '[package]\nname = "manifold-renderer"\n'}]))
+        self.pin()
+        return source, dest, relative
+
+    def test_single_file_bin_moves_with_manifest(self):
+        source, dest, relative = self.bin_plan()
+        actual = self.moved()
+        self.assertEqual(actual[dest + '/' + relative], self.original[source + '/' + relative])
+        self.assertEqual(self.run_tool('verify', self.commit(actual, self.base)), 0, self.output)
+
+    def test_directory_bin_moves_whole_with_manifest(self):
+        source, dest, relative = self.bin_plan(directory=True)
+        actual = self.moved()
+        self.assertEqual(actual[dest + '/' + relative], self.original[source + '/' + relative])
+        self.assertEqual(actual[dest + '/src/bin/tool/helper.rs'],
+                         self.original[source + '/src/bin/tool/helper.rs'])
+        self.assertEqual(self.run_tool('verify', self.commit(actual, self.base)), 0, self.output)
+
+    def test_bin_destination_name_collision_rejected(self):
+        self.bin_plan(collision=True)
+        self.rejects_replay()
+        self.assertIn('colliding bin target', self.output)
+
+    def test_directory_bin_partial_move_rejected(self):
+        self.bin_plan(directory=True)
+        p = self.plan / 'moves.tsv'
+        p.write_text(''.join(line for line in p.read_text().splitlines(keepends=True)
+                             if 'helper.rs' not in line))
+        self.pin()
+        self.rejects_replay()
+        self.assertIn('directory bin must move whole', self.output)
+
+    def test_bin_target_configuration_change_rejected(self):
+        self.bin_plan()
+        p = self.plan / 'templates/crates/manifold-node-engine/Cargo.toml'
+        p.write_text(p.read_text() + 'required-features = ["unexpected"]\n')
+        self.pin()
+        self.rejects_replay()
+        self.assertIn('bin target configuration changed', self.output)
+
     def test_directory_source_preserves_applied_residual(self):
         source = self.repo / 'draft'
         entries = dict(self.original)

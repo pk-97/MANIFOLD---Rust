@@ -13,6 +13,7 @@ import stat
 import subprocess
 import tempfile
 import sys
+import tomllib
 
 CONFIG = {}
 R = 'crates/manifold-renderer/'
@@ -40,6 +41,8 @@ def safe_path(p):
 def module(path, modules=None):
     modules = MODULES if modules is None else modules
     if path in modules: return modules[path]
+    # Cargo binaries have their own crate roots, not library module paths.
+    if '/src/bin/' in path: return None
     if not path.startswith('crates/') or '/src/' not in path or not path.endswith('.rs'): return None
     package, rest = path.split('/src/', 1)
     root = package.rsplit('/', 1)[1].replace('-', '_')
@@ -640,6 +643,96 @@ def derive_mounts(source, templates, moves):
     return removals, additions
 
 
+def bin_targets(entries, crate):
+    """Discover only Cargo's two conventional bin shapes, without invoking Cargo."""
+    manifest = crate + '/Cargo.toml'
+    if manifest not in entries: return {}
+    data = tomllib.loads(entries[manifest][1].decode('utf-8'))
+    explicit = data.get('bin', [])
+    targets = {}
+    paths = set()
+    def add(name, path, declaration):
+        safe_path(path)
+        if name in targets or path in paths:
+            raise ValueError(manifest + ': colliding bin target: ' + name)
+        targets[name] = (path, declaration)
+        paths.add(path)
+    for row in explicit:
+        name = row['name']
+        path = row.get('path')
+        if path is None:
+            candidates = [p for p in (f'src/bin/{name}.rs', f'src/bin/{name}/main.rs')
+                          if crate + '/' + p in entries]
+            if len(candidates) != 1:
+                raise ValueError(manifest + ': bin path must be explicit: ' + name)
+            path = candidates[0]
+        add(name, crate + '/' + safe_path(path), row)
+    if data.get('package', {}).get('autobins', True):
+        prefix = crate + '/src/bin/'
+        for path in sorted(entries):
+            if not path.startswith(prefix): continue
+            rel = path[len(prefix):].split('/')
+            if len(rel) == 1 and rel[0].endswith('.rs'): name = rel[0][:-3]
+            elif len(rel) == 2 and rel[1] == 'main.rs': name = rel[0]
+            else: continue
+            if path in paths: continue
+            add(name, path, {'name': name})
+    return targets
+
+
+def validate_bin_moves(source, templates, moves, plan):
+    """A bin moves whole, retaining its target name and manifest configuration."""
+    bin_moves = {a: b for a, b in moves.items() if '/src/bin/' in a or '/src/bin/' in b}
+    if not bin_moves: return
+    manifest_source = dict(source)
+    for row in manifest_rows(plan):
+        mode, raw = manifest_source[row['path']]
+        text = raw.decode('utf-8')
+        if not row['before'] or text.count(row['before']) != 1:
+            raise ValueError(row['path'] + ': wiring context changed in manifests.json')
+        manifest_source[row['path']] = (mode, text.replace(row['before'], row['after'], 1).encode())
+    final = {moves.get(p, p): entry for p, entry in manifest_source.items()}
+    final.update(templates)
+    covered = set()
+    crates = {a.split('/src/bin/', 1)[0] for a in bin_moves if '/src/bin/' in a}
+    for crate in sorted(crates):
+        for name, (root, declaration) in bin_targets(source, crate).items():
+            if root not in bin_moves: continue
+            new = bin_moves[root]
+            if '/src/bin/' not in new:
+                raise ValueError(root + ': bin destination must be under src/bin')
+            destination = new.split('/src/bin/', 1)[0]
+            target = bin_targets(final, destination).get(name)
+            if target is None or target[0] != new:
+                raise ValueError(new + ': bin target name changed or collided: ' + name)
+            # A moved bin must be explicitly carried by the reviewed manifest.
+            if target[1].get('path') != new[len(destination)+1:]:
+                raise ValueError(new + ': moved bin requires an explicit manifest path')
+            old_options = {k: v for k, v in declaration.items() if k != 'path'}
+            new_options = {k: v for k, v in target[1].items() if k != 'path'}
+            if old_options != new_options:
+                raise ValueError(new + ': bin target configuration changed')
+            if root.endswith('/main.rs'):
+                prefix = root[:-len('main.rs')]
+                new_prefix = new[:-len('main.rs')] if new.endswith('/main.rs') else ''
+                if not new_prefix:
+                    raise ValueError(root + ': directory bin must remain a directory bin')
+                members = [p for p in source if p.startswith(prefix)]
+                for member in members:
+                    if moves.get(member) != new_prefix + member[len(prefix):]:
+                        raise ValueError(root + ': directory bin must move whole: ' + member)
+                covered.update(members)
+            else:
+                if new.endswith('/main.rs'):
+                    raise ValueError(root + ': single-file bin must remain single-file')
+                covered.add(root)
+            if crate != destination and crate + '/Cargo.toml' in final:
+                if name in bin_targets(final, crate):
+                    raise ValueError(root + ': source manifest retains moved bin: ' + name)
+    if set(bin_moves) - covered:
+        raise ValueError('unowned or partial bin move: ' + ', '.join(sorted(set(bin_moves) - covered)))
+
+
 def remove_mounts(dest, removals):
     for parent, spans in sorted(removals.items()):
         p = checked_file(dest, parent); text = read_utf8(p)
@@ -724,6 +817,7 @@ def _replay_tree(source, plan, dest):
     source_entries = files(source)
     template_entries = files(plan / 'templates')
     validate_paths(set(source_entries) | set(moves.values()) | set(template_entries))
+    validate_bin_moves(source_entries, template_entries, moves, plan)
     collect_path_modules(source, moves)
     mapping = mappings(moves, tsv(plan / 'rewrites.tsv'))
     removals, additions = derive_mounts(source_entries, template_entries, moves)
