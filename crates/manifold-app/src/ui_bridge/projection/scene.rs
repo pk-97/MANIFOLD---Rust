@@ -581,10 +581,10 @@ mod ownership_tests {
     #[test]
     fn every_bundled_scene_control_has_one_owner() {
         let mut scenes = Vec::new();
-        for preset in manifold_renderer::node_graph::bundled_preset_type_ids(
+        for preset in manifold_nodes::bundled_presets::bundled_preset_type_ids(
             manifold_core::preset_def::PresetKind::Generator,
         ) {
-            let def = manifold_renderer::node_graph::bundled_preset_def(&preset).unwrap();
+            let def = manifold_nodes::bundled_presets::bundled_preset_def(&preset).unwrap();
             if manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).is_some() {
                 assert_one_owner(preset.as_str(), def);
                 scenes.push(preset.as_str().to_string());
@@ -686,7 +686,7 @@ mod ownership_tests {
     #[test]
     fn the_matter_water_shows_no_camera_control() {
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakMatter")).unwrap();
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("WaterDamBreakMatter")).unwrap();
         let camera = assert_one_owner("WaterDamBreakMatter", def);
         assert!(camera.iter().any(|id| id.ends_with("_distance")), "the orbit camera owns its dials: {camera:?}");
         let vm = SceneVm::from_def(def).unwrap();
@@ -706,7 +706,7 @@ mod ownership_tests {
     #[test]
     fn gpu_flip_water_is_a_liquid_object_without_physics() {
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
         let vm = SceneVm::from_def(def).expect("the GPU dam break is a scene");
         let water = vm.objects.iter().find_map(|object| match object {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
@@ -728,7 +728,7 @@ mod ownership_tests {
         use manifold_core::scene_modifier_preset::SceneTargetSelection;
         use manifold_nodes_scene::node_graph::{scene_modifier_authoring, scene_vm::SceneObjectVm, scene_vm::SceneVm};
         let mut def: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
-            include_str!("../../../../manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json"),
+            include_str!("../../../../manifold-nodes/assets/generator-presets/WaterDamBreakGpuFlip.json"),
         ).unwrap();
         let scene = SceneNodeRef::locate(&def, &NodeId::new("scene")).unwrap();
         let water = SceneNodeRef::locate(&def, &NodeId::new("water_object")).unwrap();
@@ -762,7 +762,7 @@ mod ownership_tests {
     #[test]
     fn gpu_flip_water_owns_its_whitewater_controls() {
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
         assert_one_owner("WaterDamBreakGpuFlip", def);
         let vm = SceneVm::from_def(def).unwrap();
         let water = vm.objects.iter().find_map(|object| match object {
@@ -790,7 +790,7 @@ mod ownership_tests {
         use manifold_nodes_scene::node_graph::scene_vm::{MaterialVm, SceneObjectVm, SceneVm};
 
         for preset in ["WaterDamBreakGpuFlip", "WaterDamBreakParticles"] {
-            let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new(preset))
+            let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(preset))
                 .expect("water family preset");
             let vm = SceneVm::from_def(def).expect("water family scene");
             let water = vm.objects.iter().find_map(|object| match object {
@@ -854,7 +854,7 @@ mod ownership_tests {
     fn gpu_flip_water_surface_shape_sliders_route_from_water_detail() {
         use manifold_core::effect_graph_def::BindingTarget;
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
         let vm = SceneVm::from_def(def).unwrap();
         let water = vm.objects.iter().find_map(|object| match object {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),

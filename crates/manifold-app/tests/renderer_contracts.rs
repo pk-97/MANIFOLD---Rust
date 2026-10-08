@@ -1,4 +1,4 @@
-use manifold_renderer as _;
+use manifold_nodes as _;
 mod contracts;
 #[path = "renderer_contracts/led_preset_value_tests.rs"]
 mod led_preset_value_tests;

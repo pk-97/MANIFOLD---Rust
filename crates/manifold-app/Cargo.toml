@@ -31,7 +31,7 @@ manifold-editing = { path = "../manifold-editing" }
 manifold-ui = { path = "../manifold-ui" }
 manifold-ui-paint = { path = "../manifold-ui-paint" }
 manifold-playback = { path = "../manifold-playback" }
-manifold-renderer = { path = "../manifold-renderer" }
+manifold-nodes = { path = "../manifold-nodes" }
 manifold-io = { path = "../manifold-io" }
 manifold-media = { path = "../manifold-media" }
 manifold-gpu = { path = "../manifold-gpu" }
@@ -87,12 +87,12 @@ objc2-app-kit = { version = "0.3", features = [
 ] }
 
 [features]
-whitewater-oracle = ["manifold-renderer/whitewater-oracle", "gpu-proofs"]
-water-race-probes = ["manifold-renderer/water-race-probes", "gpu-proofs"]
-matter-perf-proofs = ["manifold-renderer/matter-perf-proofs", "gpu-proofs"]
-fluid-perf-proofs = ["manifold-renderer/fluid-perf-proofs", "gpu-proofs"]
-rt-perf-proofs = ["manifold-renderer/rt-perf-proofs", "gpu-proofs"]
-gpu-proofs = ["manifold-editing/gpu-proofs", "manifold-compositor/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-renderer/gpu-proofs", "manifold-node-engine/gpu-proofs"]
+whitewater-oracle = ["manifold-nodes/whitewater-oracle", "gpu-proofs"]
+water-race-probes = ["manifold-nodes/water-race-probes", "gpu-proofs"]
+matter-perf-proofs = ["manifold-nodes/matter-perf-proofs", "gpu-proofs"]
+fluid-perf-proofs = ["manifold-nodes/fluid-perf-proofs", "gpu-proofs"]
+rt-perf-proofs = ["manifold-nodes/rt-perf-proofs", "gpu-proofs"]
+gpu-proofs = ["manifold-editing/gpu-proofs", "manifold-compositor/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-nodes/gpu-proofs", "manifold-node-engine/gpu-proofs"]
 ui-automation = []
 profiling = ["dep:manifold-profiler"]
 ui-snapshot = []
@@ -114,7 +114,7 @@ manifold-foundation = { path = "../manifold-foundation" }
 manifold-physics = { path = "../manifold-physics" }
 manifold-fluids = { path = "../manifold-fluids" }
 glam = "0.29.3"
-manifold-renderer = { path = "../manifold-renderer", features = ["testkit"] }
+manifold-nodes = { path = "../manifold-nodes", features = ["testkit"] }
 manifold-compositor = { path = "../manifold-compositor", features = ["testkit"] }
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
 manifold-nodes-image = { path = "../manifold-nodes-image", features = ["testkit"] }

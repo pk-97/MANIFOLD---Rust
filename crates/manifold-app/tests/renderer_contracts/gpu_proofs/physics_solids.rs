@@ -16,7 +16,7 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
 
-const PHYSICS_SOLIDS_JSON: &str = manifold_renderer::testkit::assets::ASSETS_GENERATOR_PRESETS_PHYSICSSOLIDS_JSON;
+const PHYSICS_SOLIDS_JSON: &str = manifold_nodes::testkit::assets::ASSETS_GENERATOR_PRESETS_PHYSICSSOLIDS_JSON;
 const FRAME_COUNT: u32 = 120;
 
 /// Compound scan proof for the scene-modifier path.  The importer keeps the
@@ -112,7 +112,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
         authored_vm.header.vertex_count_exact,
         "imported source totals remain exact"
     );
-    let recipe: EffectGraphDef = serde_json::from_str(manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SHATTER_JSON)
+    let recipe: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SHATTER_JSON)
     .expect("Shatter recipe parses");
     let instance = prepare_new_scene_modifier(
         &enabled,
@@ -337,7 +337,7 @@ fn imported_flower_empty_scene_clears_and_restores() {
         .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
     let (imported, _) = assemble_import_graph(&fixture).expect("original flower imports");
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let mut visible = manifold_renderer::generators::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
+    let mut visible = manifold_nodes::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
         .create_with_override(h.device.clone(), &imported.preset_metadata.as_ref().unwrap().id,
             Some(&imported), h.width, h.height, false, None, None)
     .expect("visible flower graph builds");
@@ -449,7 +449,7 @@ fn imported_flower_submesh_controls_preserve_siblings_and_parent_visibility() {
         let param = params.get_mut(id).unwrap(); param.base = value; param.value = value;
     };
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let mut runtime = manifold_renderer::generators::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
+    let mut runtime = manifold_nodes::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
         .create_with_override(h.device.clone(), &metadata.id, Some(&imported), h.width, h.height, false, None, None).unwrap();
     let target = h.make_target("flower-submesh-controls");
     warm_imported_runtime(&mut runtime, &target, &shown);
@@ -577,7 +577,7 @@ fn imported_flower_physics_off_renders_authored_transform() {
     );
 
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let runtime = manifold_renderer::generators::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
+    let runtime = manifold_nodes::registry::GeneratorRegistry::new(GpuTextureFormat::Rgba16Float)
         .create_with_override(h.device.clone(), &enabled_graph.preset_metadata.as_ref().unwrap().id,
             Some(&enabled_graph), h.width, h.height, false, None, None)
     .expect("physics-off flower graph builds");

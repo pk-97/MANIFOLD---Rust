@@ -189,7 +189,7 @@ fn authored_vortex(viscosity: f32) -> (EffectGraphDef, NodeId, String) {
     );
 
     let owner = project.graph_for_target(&target, None).unwrap();
-    let mut recipe: EffectGraphDef = serde_json::from_str(manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFORCE_JSON)
+    let mut recipe: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFORCE_JSON)
     .unwrap();
     let metadata = recipe.preset_metadata.as_mut().unwrap();
     for (id, value) in [

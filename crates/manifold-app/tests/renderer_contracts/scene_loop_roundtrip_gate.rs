@@ -4,7 +4,7 @@
 //! tests. These checks exercise the real bundled recipe, host insertion,
 //! compiler preparation, and serialized value preservation.
 
-use manifold_renderer as _;
+use manifold_nodes as _;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
@@ -15,9 +15,9 @@ use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scen
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
-use manifold_renderer::testkit::scene_modifier as common;
+use manifold_nodes::testkit::scene_modifier as common;
 
-const HOST: &str = manifold_renderer::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON;
+const HOST: &str = manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON;
 
 fn host() -> EffectGraphDef {
     let mut host = serde_json::from_str(HOST).expect("nested v2 host parses");

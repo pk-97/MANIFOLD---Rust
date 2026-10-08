@@ -28,7 +28,7 @@ use manifold_node_engine::water::liquid::grid::{FACE_GRID_PORTS, face_len};
 use manifold_node_engine::water::liquid::conformance::{BoxScene, Check, FIXTURE_DENSITY, Fixture, LiquidSolverRow, LiquidTotals, STACK_HEIGHT, set_type_param};
 use manifold_node_engine::water::physics::{PhysicsStepScope, native_ticks_on_this_thread};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use {manifold_node_engine::ports::ArrayType, manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::exec::effect_node::EffectNodeContext, manifold_node_engine::exec::effect_node::EffectNodeType, manifold_node_engine::exec::effect_node::NodeErrorTap, manifold_node_engine::parameters::ParamDef, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_renderer::node_graph::bundled_preset_def, manifold_renderer::node_graph::bundled_preset_type_ids};
+use {manifold_node_engine::ports::ArrayType, manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::exec::effect_node::EffectNodeContext, manifold_node_engine::exec::effect_node::EffectNodeType, manifold_node_engine::exec::effect_node::NodeErrorTap, manifold_node_engine::parameters::ParamDef, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes::bundled_presets::bundled_preset_type_ids};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_compositor::preset_thumbnail::{THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, render_preset_thumbnail};
@@ -993,7 +993,7 @@ fn liquid_hydrostatic_lift() {
     for row in running(Check::HydrostaticLift) {
         for &fixture in Check::HydrostaticLift.fixtures(row.coupled) {
             let (def, scene) = if row.type_id == GPU_FLIP_DOMAIN_TYPE_ID {
-                manifold_renderer::testkit::liquid_conformance_fixtures::gpu_flip_engine_tank()
+                manifold_nodes::testkit::liquid_conformance_fixtures::gpu_flip_engine_tank()
             } else {
                 (self::scene(row, fixture), box_scene(fixture))
             };
@@ -1508,7 +1508,7 @@ fn gpu_flip_body_reaction_matches_engine_substeps() {
     let mut failures = Vec::new();
     for shift in [0.0, 0.025] {
         eprintln!("cube moved {shift} m");
-        let (def, scene) = manifold_renderer::testkit::liquid_conformance_fixtures::gpu_flip_engine_tank_moved(shift);
+        let (def, scene) = manifold_nodes::testkit::liquid_conformance_fixtures::gpu_flip_engine_tank_moved(shift);
         let expected = engine_tank(&scene);
         let mass = f64::from(scene.mass);
         let actual = gpu_flip_tank(def, mass);
@@ -1813,7 +1813,7 @@ fn with_force_and_impulse(def: &EffectGraphDef, strength: f32) -> (EffectGraphDe
     use manifold_core::NodeId;
     use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
     let mut recipe: EffectGraphDef =
-        serde_json::from_str(manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON).unwrap();
+        serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON).unwrap();
     let metadata = recipe.preset_metadata.as_mut().unwrap();
     for (id, value) in [("strength", strength), ("impulse_strength", 3.0), ("direction_x", 1.0), ("direction_y", 0.0)] {
         metadata.params.iter_mut().find(|param| param.id == id).unwrap().default_value = value;
@@ -2605,7 +2605,7 @@ fn gpu_flip_light_body_stays_bounded_in_the_dam_break() {
     const FRAMES: u32 = 60;
     const BOUND: f64 = 40.0;
     let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).expect("the GPU FLIP row");
-    let (def, scene) = manifold_renderer::testkit::liquid_conformance_fixtures::gpu_flip_dam_break_with_box(0.01);
+    let (def, scene) = manifold_nodes::testkit::liquid_conformance_fixtures::gpu_flip_dam_break_with_box(0.01);
     let mut run = LiquidRun::offline(row, def, 1);
     let mut peak = 0.0f64;
     for frame in 0..FRAMES {
@@ -2621,4 +2621,4 @@ fn gpu_flip_light_body_stays_bounded_in_the_dam_break() {
     eprintln!("gpu_flip_light_body_stays_bounded_in_the_dam_break: {} kg box, peak {peak:.2} m/s", scene.mass);
 }
 
-use manifold_renderer::testkit::liquid_conformance_fixtures::LIQUID_SOLVERS;
+use manifold_nodes::testkit::liquid_conformance_fixtures::LIQUID_SOLVERS;

@@ -8,7 +8,7 @@ use manifold_node_engine::{
     runtime::{generator_provider::generator_provider, preset_context::PresetContext},
 };
 
-use {manifold_compositor::generator_renderer::GeneratorRenderer, manifold_renderer::generators::registry::GeneratorRegistry};
+use {manifold_compositor::generator_renderer::GeneratorRenderer, manifold_nodes::registry::GeneratorRegistry};
 
 const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 const WORKER: &str = "MANIFOLD_GENERATOR_PROVIDER_PROOF_WORKER";

@@ -116,7 +116,7 @@ pub(crate) fn dispatch_preset(
             } else {
                 ctx.project
                     .instance_preset_id(&target)
-                    .and_then(|id| manifold_renderer::node_graph::bundled_preset_def(&id).cloned())
+                    .and_then(|id| manifold_nodes::bundled_presets::bundled_preset_def(&id).cloned())
             };
             let mut command = RevertToLibraryCommand::new(target.clone(), resolved.is_some());
             if let Some(def) = resolved {

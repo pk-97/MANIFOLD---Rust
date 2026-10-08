@@ -27,7 +27,7 @@ mod authored_coupling;
 mod dam_break_authoring;
 mod deleted_obstacle;
 
-const WATER_BASIN_JSON: &str = manifold_renderer::testkit::assets::TESTS_FIXTURES_CPU_FLIP_WATERBASIN_JSON;
+const WATER_BASIN_JSON: &str = manifold_nodes::testkit::assets::TESTS_FIXTURES_CPU_FLIP_WATERBASIN_JSON;
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
 const LAST_FRAME: u32 = 90;
@@ -462,7 +462,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     use manifold_core::{GraphTarget, PresetTypeId, layer::Layer, project::Project};
     use manifold_editing::command::Command;
     use manifold_editing::commands::graph::AddSceneFluidCommand;
-    use {manifold_renderer::node_graph::bundled_preset_def, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type};
+    use {manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type};
 
     let mut project = Project::default();
     let preset = PresetTypeId::new("Scene");
@@ -472,7 +472,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     let target_graph = GraphTarget::Generator(layer.layer_id.clone());
     project.timeline.layers.push(layer);
     let mut add = AddSceneFluidCommand::new(target_graph.clone(), render_id,
-        manifold_renderer::testkit::reference_fixtures::cpu_flip_metadata(), metadata_for_node_type("node.transform_3d"),
+        manifold_nodes::testkit::reference_fixtures::cpu_flip_metadata(), metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"),
         manifold_editing::commands::graph::flip_scene_fluid_template(), baseline.clone())
         .with_world_metadata(metadata_for_node_type("node.physics_world"));
@@ -666,7 +666,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     use manifold_core::scene_modifier_preset::SceneNodeRef;
     use manifold_editing::command::Command;
     use manifold_editing::commands::graph::{AddSceneFluidCommand, AddSceneObjectCommand, AssignSceneFluidRoleCommand};
-    use {manifold_renderer::node_graph::bundled_preset_def, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type};
+    use {manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type};
     use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
     let mut project = Project::default();
@@ -677,7 +677,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let target_graph = GraphTarget::Generator(layer.layer_id.clone());
     project.timeline.layers.push(layer);
     let mut add_fluid = AddSceneFluidCommand::new(target_graph.clone(), render_id,
-        manifold_renderer::testkit::reference_fixtures::cpu_flip_metadata(), metadata_for_node_type("node.transform_3d"),
+        manifold_nodes::testkit::reference_fixtures::cpu_flip_metadata(), metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"),
         manifold_editing::commands::graph::flip_scene_fluid_template(), baseline.clone())
         .with_world_metadata(metadata_for_node_type("node.physics_world"));
@@ -828,7 +828,7 @@ fn scene_physics_modifier_impulse_changes_rendered_liquid() {
     wires.retain(|wire| wire["toNode"] != 4);
     wires.push(serde_json::json!({"fromNode":500,"fromPort":"transform","toNode":4,"toPort":"initial_volume"}));
     let owner: EffectGraphDef = serde_json::from_value(raw).unwrap();
-    let mut recipe: EffectGraphDef = serde_json::from_str(manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON).unwrap();
+    let mut recipe: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON).unwrap();
     let metadata = recipe.preset_metadata.as_mut().unwrap();
     for (id, value) in [("strength", 0.0), ("impulse_strength", 3.0), ("direction_x", 1.0), ("direction_y", 0.0)] {
         metadata.params.iter_mut().find(|param| param.id == id).unwrap().default_value = value;

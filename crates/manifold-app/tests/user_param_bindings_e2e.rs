@@ -26,7 +26,7 @@
 //! See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7.6 and section 9 Phase 3.
 
 // Force the linker to keep manifold-renderer's inventory::submit! blocks.
-use manifold_renderer as _;
+use manifold_nodes as _;
 
 use manifold_core::PresetTypeId;
 use manifold_core::ableton_mapping::{

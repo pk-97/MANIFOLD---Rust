@@ -9,7 +9,7 @@
 
 #![cfg(target_os = "macos")]
 
-use manifold_renderer as _;
+use manifold_nodes as _;
 use std::ffi::c_void;
 use std::path::Path;
 use std::slice;
@@ -50,7 +50,7 @@ fn browser_popup_thumbnails_paint() {
     // A real committed factory thumbnail (verified elsewhere to render as a
     // clean Lissajous curve on black). Decode + register it exactly as the
     // app's per-frame thumbnail pass does.
-    let thumb = std::path::Path::new(manifold_renderer::testkit::assets::CATALOG_ASSETS_ROOT)
+    let thumb = std::path::Path::new(manifold_nodes::testkit::assets::CATALOG_ASSETS_ROOT)
         .join("preset-thumbnails/generators/Lissajous.png");
     let (tw, th, rgba) = manifold_compositor::preset_thumbnail::decode_png_rgba8(&thumb)
         .expect("decode committed Lissajous thumbnail");

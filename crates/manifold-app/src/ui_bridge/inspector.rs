@@ -60,7 +60,7 @@ mod scene_card_convergence_tests {
     }
 
     fn add_fixture_fog(project: &mut Project, layer_id: &LayerId) {
-        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
             .unwrap().clone();
         let scene = def.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
         let mut fog = manifold_editing::commands::graph::AddSceneFogCommand::new(
@@ -79,7 +79,7 @@ mod scene_card_convergence_tests {
     ) -> manifold_core::effect_graph_def::EffectGraphDef {
         let (_, layer) = project.timeline.find_layer_by_id(layer_id).unwrap();
         layer.generator_graph().cloned().unwrap_or_else(|| {
-            manifold_renderer::node_graph::bundled_preset_def(&layer.generator_type().clone())
+            manifold_nodes::bundled_presets::bundled_preset_def(&layer.generator_type().clone())
                 .cloned()
                 .expect("Scene is a bundled preset")
         })

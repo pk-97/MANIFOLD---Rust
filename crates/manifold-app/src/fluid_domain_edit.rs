@@ -620,7 +620,7 @@ mod tests {
     use manifold_editing::commands::graph::{ExposureSet, TemplateExposure};
 
     const GPU_FLIP_WATER: &str =
-        include_str!("../../manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json");
+        include_str!("../../manifold-nodes/assets/generator-presets/WaterDamBreakGpuFlip.json");
 
     #[test]
     fn runtime_domain_bounds_hide_unaccepted_layouts_and_lock_driven_edits() {

@@ -12,7 +12,7 @@
 
 #![cfg(feature = "gpu-proofs")]
 
-use manifold_renderer as _;
+use manifold_nodes as _;
 use std::sync::Arc;
 
 use half::f16;
@@ -62,7 +62,7 @@ struct LedUtilityFixture {
 fn preset_def(id: &str) -> EffectGraphDef {
     // Filename stem = preset id (the bundle contract). Read from disk rather
     // than the catalog so the test pins exactly what ships in this tree.
-    let path = (manifold_renderer::testkit::assets::CATALOG_ASSETS_ROOT.to_owned() + "/generator-presets/")
+    let path = (manifold_nodes::testkit::assets::CATALOG_ASSETS_ROOT.to_owned() + "/generator-presets/")
     .to_string()
         + id
         + ".json";

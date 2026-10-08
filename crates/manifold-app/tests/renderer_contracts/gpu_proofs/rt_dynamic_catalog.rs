@@ -20,7 +20,7 @@ use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_renderer::node_graph::loaded_scene_modifier_presets_from_bundled;
+use manifold_nodes::bundled_presets::loaded_scene_modifier_presets_from_bundled;
 use manifold_nodes_scene::node_graph::primitives::render_scene::rt_proof::{RtProbeObject, RtProbeScene};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
@@ -51,35 +51,35 @@ const EXPECTED_STOCK_IDS: &[&str] = &[
 fn recipe_json(id: &str) -> &'static str {
     match id {
         "ElasticSculpture" => {
-            manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_ELASTICSCULPTURE_JSON
+            manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_ELASTICSCULPTURE_JSON
         }
-        "MaskedPeel" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_MASKEDPEEL_JSON,
-        "MathView" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_MATHVIEW_JSON,
-        "OrderedRecon" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_ORDEREDRECON_JSON,
+        "MaskedPeel" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_MASKEDPEEL_JSON,
+        "MathView" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_MATHVIEW_JSON,
+        "OrderedRecon" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_ORDEREDRECON_JSON,
         "OrderedReconHit" => {
-            manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_ORDEREDRECONHIT_JSON
+            manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_ORDEREDRECONHIT_JSON
         }
-        "RadialForce" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_RADIALFORCE_JSON,
-        "RenderMode" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_RENDERMODE_JSON,
-        "SceneFog" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SCENEFOG_JSON,
-        "SceneLoop" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SCENELOOP_JSON,
-        "Shatter" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SHATTER_JSON,
-        "SpatialEchoes" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SPATIALECHOES_JSON,
-        "SurfacePeel" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SURFACEPEEL_JSON,
-        "SurfacePeelHit" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SURFACEPEELHIT_JSON,
-        "SurfaceWaves" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SURFACEWAVES_JSON,
-        "UniformForce" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON,
-        "VortexForce" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFORCE_JSON,
+        "RadialForce" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_RADIALFORCE_JSON,
+        "RenderMode" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_RENDERMODE_JSON,
+        "SceneFog" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SCENEFOG_JSON,
+        "SceneLoop" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SCENELOOP_JSON,
+        "Shatter" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SHATTER_JSON,
+        "SpatialEchoes" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SPATIALECHOES_JSON,
+        "SurfacePeel" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SURFACEPEEL_JSON,
+        "SurfacePeelHit" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SURFACEPEELHIT_JSON,
+        "SurfaceWaves" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SURFACEWAVES_JSON,
+        "UniformForce" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON,
+        "VortexForce" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFORCE_JSON,
         "VortexFragments" => {
-            manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFRAGMENTS_JSON
+            manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFRAGMENTS_JSON
         }
-        "WavesEchoes" => manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_WAVESECHOES_JSON,
+        "WavesEchoes" => manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_WAVESECHOES_JSON,
         other => panic!("unknown scene-modifier acceptance fixture {other}"),
     }
 }
 
 fn discovered_stock_ids() -> Vec<String> {
-    let root = Path::new(manifold_renderer::testkit::assets::CATALOG_ASSETS_ROOT).join("scene-modifier-presets");
+    let root = Path::new(manifold_nodes::testkit::assets::CATALOG_ASSETS_ROOT).join("scene-modifier-presets");
     let mut ids: Vec<String> = fs::read_dir(&root)
         .unwrap_or_else(|error| panic!("read {}: {error}", root.display()))
         .map(|entry| {
@@ -99,7 +99,7 @@ fn discovered_stock_ids() -> Vec<String> {
 }
 
 fn catalog_host() -> EffectGraphDef {
-    with_catalog_environment(serde_json::from_str(manifold_renderer::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON)
+    with_catalog_environment(serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON)
     .expect("catalog host fixture must parse"))
 }
 
@@ -204,7 +204,7 @@ fn attach(mut owner: EffectGraphDef, ids: &[&str]) -> EffectGraphDef {
                         ),
                         "{id}: {error}"
                     );
-                    manifold_renderer::testkit::rt_dynamic::modifier_combo_scene().scene_modifiers[0]
+                    manifold_nodes::testkit::rt_dynamic::modifier_combo_scene().scene_modifiers[0]
                         .mesh_frames
                         .clone()
                 }
@@ -869,7 +869,7 @@ fn rt_dynamic_catalog_all_stock_and_compositions() {
     );
 
     let mut catalog_ids: Vec<String> =
-        manifold_renderer::node_graph::bundled_preset_type_ids(PresetKind::SceneModifier)
+        manifold_nodes::bundled_presets::bundled_preset_type_ids(PresetKind::SceneModifier)
             .map(|id| id.as_str().to_owned())
             .collect();
     catalog_ids.sort();
@@ -925,7 +925,7 @@ fn rt_dynamic_catalog_authored_unknown_mesh_writer() {
 
 fn authored_unknown_writer_graph() -> EffectGraphDef {
     let mut graph: serde_json::Value =
-        serde_json::from_str(manifold_renderer::testkit::rt_dynamic::scene_json()).unwrap();
+        serde_json::from_str(manifold_nodes::testkit::rt_dynamic::scene_json()).unwrap();
     let shader = r#"
 struct MeshVertex {
     position:vec3<f32>,

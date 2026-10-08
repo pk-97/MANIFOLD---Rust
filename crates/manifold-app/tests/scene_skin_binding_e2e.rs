@@ -12,7 +12,7 @@
 //! layer deletion.
 
 // Force the linker to keep manifold-renderer's inventory::submit! blocks.
-use manifold_renderer as _;
+use manifold_nodes as _;
 
 use manifold_editing::command::Command;
 use manifold_core::effect_graph_def::EffectGraphDef;

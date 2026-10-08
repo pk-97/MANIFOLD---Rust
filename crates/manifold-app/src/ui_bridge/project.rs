@@ -1428,7 +1428,7 @@ pub(crate) fn generator_catalog_default(
     }
     // Use the same migrated definition as the visible parameter manifest.
     // Re-parsing raw catalog JSON drops scene exposures on the first edit.
-    manifold_renderer::node_graph::bundled_preset_def(&gt).cloned()
+    manifold_nodes::bundled_presets::bundled_preset_def(&gt).cloned()
 }
 
 /// P4b: translate the UI's SkinTargetMap into the editing command's enum.
@@ -1621,7 +1621,7 @@ mod tests {
             PresetTypeId::from_string("Scene".to_string()),
         );
         let layer_id = project.timeline.layers[idx].layer_id.clone();
-        let def = manifold_renderer::node_graph::bundled_preset_def(
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(
             &project.timeline.layers[idx].generator_type().clone(),
         )
         .expect("Scene is a bundled preset");
@@ -1642,7 +1642,7 @@ mod tests {
             PresetTypeId::from_string("PhysicsSolids".to_string()),
         );
         let layer_id = project.timeline.layers[idx].layer_id.clone();
-        let def = manifold_renderer::node_graph::bundled_preset_def(
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(
             &project.timeline.layers[idx].generator_type().clone(),
         )
         .expect("PhysicsSolids is a bundled preset");
@@ -1666,7 +1666,7 @@ mod tests {
     ) -> manifold_core::effect_graph_def::EffectGraphDef {
         let (_, layer) = project.timeline.find_layer_by_id(layer_id).unwrap();
         layer.generator_graph().cloned().unwrap_or_else(|| {
-            manifold_renderer::node_graph::bundled_preset_def(&layer.generator_type().clone())
+            manifold_nodes::bundled_presets::bundled_preset_def(&layer.generator_type().clone())
                 .cloned()
                 .expect("Scene is a bundled preset")
         })

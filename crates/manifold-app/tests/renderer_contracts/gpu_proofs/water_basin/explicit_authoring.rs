@@ -11,7 +11,7 @@ use manifold_editing::commands::graph::{
     SetGraphNodeParamCommand,
 };
 use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-use {manifold_renderer::node_graph::bundled_preset_def, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type};
+use {manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Sample {
@@ -144,7 +144,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
     let mut fluid = AddSceneFluidCommand::new(
         target.clone(),
         scene,
-        manifold_renderer::testkit::reference_fixtures::cpu_flip_metadata(),
+        manifold_nodes::testkit::reference_fixtures::cpu_flip_metadata(),
         metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"),
         metadata_for_node_type("node.scene_object"),

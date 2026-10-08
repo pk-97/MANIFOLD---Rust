@@ -24,7 +24,7 @@ sha2 = "0.10"
 # contention from nextest's parallel thread pool and whatever else is running
 # on the machine, so they don't belong in the "safe to run freely, always
 # green" default sweep. Off by default; opt in with `--features bench-timing`
-# (same convention as manifold-renderer's `gpu-proofs`).
+# (same convention as manifold-nodes's `gpu-proofs`).
 bench-timing = []
 
 [lints]

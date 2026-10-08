@@ -70,7 +70,7 @@ pub(crate) fn build_action(
     match action {
         SceneModifierAction::Paste(layer, clipboard) => crate::scene_modifier_transfer::build_paste(project, layer, clipboard),
         SceneModifierAction::Add(_, preset) => {
-            let recipe = manifold_renderer::node_graph::bundled_preset_def(
+            let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
                 &PresetTypeId::from_string(preset),
             )
             .ok_or("Scene modifier preset is no longer available")?;
@@ -927,7 +927,7 @@ mod routing_tests {
         use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
         use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
         let mut graph: EffectGraphDef = serde_json::from_str(include_str!(
-            "../../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+            "../../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
         )).unwrap();
         let scene = SceneNodeRef { scope: vec![], node: NodeId::new("scene") };
         assert!(super::shatter_targets(&graph, &scene).is_err());

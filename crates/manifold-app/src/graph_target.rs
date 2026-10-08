@@ -36,7 +36,7 @@ pub(crate) fn resolve<'a>(
     target: &GraphTarget,
 ) -> Option<&'a EffectGraphDef> {
     let owner = project.graph_target_owner(target)?;
-    let default = manifold_renderer::node_graph::bundled_preset_def(owner.effect_type());
+    let default = manifold_nodes::bundled_presets::bundled_preset_def(owner.effect_type());
     project.graph_for_target(target, default)
 }
 
@@ -109,6 +109,6 @@ pub(crate) fn catalog_default(project: &Project, target: &GraphTarget) -> Option
         Some(owner)
     } else {
         let owner = project.graph_target_owner(target)?;
-        manifold_renderer::node_graph::bundled_preset_def(owner.effect_type()).cloned()
+        manifold_nodes::bundled_presets::bundled_preset_def(owner.effect_type()).cloned()
     }
 }

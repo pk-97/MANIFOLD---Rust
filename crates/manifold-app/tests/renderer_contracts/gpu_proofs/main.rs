@@ -1,4 +1,4 @@
-use manifold_renderer as _;
+use manifold_nodes as _;
 mod generator_provider;
 mod liquid_conformance;
 mod physics_solids;

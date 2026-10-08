@@ -237,7 +237,7 @@ fn graph_string_param_value(
     inst: &PresetInstance,
     sp_def: &manifold_core::preset_definition_registry::StringParamDef,
 ) -> (String, Option<String>) {
-    let Some(catalog_def) = manifold_renderer::node_graph::bundled_preset_def(inst.effect_type()) else {
+    let Some(catalog_def) = manifold_nodes::bundled_presets::bundled_preset_def(inst.effect_type()) else {
         return (sp_def.default_value.to_string(), None);
     };
     let graph = inst.graph.as_ref().unwrap_or(catalog_def);
@@ -1154,7 +1154,7 @@ mod audio_send_projection_tests {
             manifold_core::PresetTypeId::from_string("Oscilloscope".to_string()),
         );
         generator.init_defaults();
-        let mut graph = manifold_renderer::node_graph::bundled_preset_def(generator.effect_type())
+        let mut graph = manifold_nodes::bundled_presets::bundled_preset_def(generator.effect_type())
             .expect("Oscilloscope generator preset is bundled")
             .clone();
         let first = AudioSend::new("Music");
@@ -1208,7 +1208,7 @@ mod modifier_audio_projection_tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
         ))).unwrap();
-        let recipe = manifold_renderer::node_graph::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
         let modifier = prepare_new_scene_modifier(&graph, recipe, "force".into(),
             SceneNodeRef { scope: vec![], node: "scan_render".into() }, SceneTargetSelection::AllObjects).unwrap();
         graph = manifold_core::scene_modifier_edit::insert_scene_modifier(&graph, 0, modifier).unwrap().graph;
@@ -1259,7 +1259,7 @@ mod modifier_audio_projection_tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
         ))).unwrap();
-        let recipe = manifold_renderer::node_graph::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
         let modifier = prepare_new_scene_modifier(&graph, recipe, "force".into(),
             SceneNodeRef { scope: vec![], node: "scan_render".into() }, SceneTargetSelection::AllObjects).unwrap();
         graph = manifold_core::scene_modifier_edit::insert_scene_modifier(&graph, 0, modifier).unwrap().graph;
@@ -1328,7 +1328,7 @@ mod modifier_audio_projection_tests {
             "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
         ))).unwrap();
         for preset in ["RenderMode", "SceneFog"] {
-            let recipe = manifold_renderer::node_graph::bundled_preset_def(
+            let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
                 &manifold_core::PresetTypeId::new(preset),
             ).unwrap();
             let modifier = prepare_new_scene_modifier(
@@ -1563,7 +1563,7 @@ mod modifier_audio_projection_tests {
 
     #[test]
     fn prepared_enabled_parameter_projects_from_local_default_without_host_binding() {
-        let recipe = manifold_renderer::node_graph::bundled_preset_def(
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
             &manifold_core::PresetTypeId::new("Shatter"),
         )
         .unwrap()
@@ -1773,7 +1773,7 @@ mod consolidation_tests {
     #[test]
     fn picker_rejects_pre_modified_scene_and_conflicting_source_graph() {
         let mut modified = fixture();
-        let recipe = manifold_renderer::node_graph::bundled_preset_def(
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
             &manifold_core::PresetTypeId::new("SceneFog"),
         )
         .unwrap();
@@ -1835,7 +1835,7 @@ mod consolidation_tests {
     fn modifier_target_chrome_follows_recipe_output_scope() {
         let mut graph = fixture();
         for preset_id in ["RenderMode", "SceneFog", "SceneLoop"] {
-            let recipe = manifold_renderer::node_graph::bundled_preset_def(
+            let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
                 &manifold_core::PresetTypeId::new(preset_id),
             )
             .unwrap();

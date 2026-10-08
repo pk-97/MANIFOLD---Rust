@@ -109,7 +109,7 @@ pub(crate) fn snapshot_and_prune_embedded_presets(project: &mut Project) {
             // import entry — never shadowed by an auto-captured snapshot.
             continue;
         }
-        let Some(def) = manifold_renderer::node_graph::bundled_preset_def(id) else {
+        let Some(def) = manifold_nodes::bundled_presets::bundled_preset_def(id) else {
             // Resolves nowhere (not even the current overlay) — nothing to
             // snapshot. This is the orphan case D9 exists to prevent for new
             // instances; an existing project that somehow reached this state
@@ -259,7 +259,7 @@ fn migrate_legacy_math_views(
         }
         (scenes, carriers, survey)
     };
-    let recipe = manifold_renderer::node_graph::bundled_preset_def(
+    let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
         &manifold_core::PresetTypeId::new("MathView"),
     );
     // Host base values to seed after the caller refreshes the manifest:
@@ -1724,7 +1724,7 @@ mod tests {
             .embedded_preset(&PresetTypeId::BLOOM)
             .expect("a tracking instance's library id must get a self-containment snapshot");
         assert_eq!(snapshot.origin, EmbeddedOrigin::Snapshot);
-        let expected = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::BLOOM)
+        let expected = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::BLOOM)
             .expect("Bloom must resolve in the live catalog");
         assert_eq!(
             snapshot.def.preset_metadata.as_ref().map(|m| &m.id),
@@ -1757,7 +1757,7 @@ mod tests {
         // A Saved entry under the same id as the tracking instance — Saved
         // is deliberate (Save to Project / fork / import) and must never be
         // downgraded or overwritten by the auto-captured snapshot pass.
-        let saved_def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::BLOOM)
+        let saved_def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::BLOOM)
             .expect("Bloom resolves")
             .clone();
         project.upsert_embedded_preset(EmbeddedPreset {

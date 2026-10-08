@@ -17,7 +17,7 @@
 // blocks. Without a reference into the crate, dead-code elimination
 // can drop the entire compilation unit and silently empty the
 // effect / generator registries.
-use manifold_renderer as _;
+use manifold_nodes as _;
 
 use manifold_io::loader;
 

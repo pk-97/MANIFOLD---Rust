@@ -414,11 +414,11 @@ fn scene_physics_refuses_enable_physics_on_water() {
     for (name, json) in [
         (
             "WaterDamBreakGpuFlip",
-            include_str!("../../../../../manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json"),
+            include_str!("../../../../../manifold-nodes/assets/generator-presets/WaterDamBreakGpuFlip.json"),
         ),
         (
             "WaterDamBreakMatter",
-            include_str!("../../../../../manifold-renderer/assets/generator-presets/WaterDamBreakMatter.json"),
+            include_str!("../../../../../manifold-nodes/assets/generator-presets/WaterDamBreakMatter.json"),
         ),
     ] {
         let graph: EffectGraphDef = serde_json::from_str(json).expect("preset parses");

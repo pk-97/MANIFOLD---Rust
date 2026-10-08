@@ -733,7 +733,7 @@ mod tests {
     fn fixture() -> (Project, LayerId, Vec<u32>) {
         let mut project = Project::default();
         let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
             .expect("Scene resolves")
             .clone();
         let layer_id = layer.layer_id.clone();
@@ -920,7 +920,7 @@ mod tests {
         let mut destination =
             Layer::new_generator("Other layer".into(), PresetTypeId::new("Scene"), 1);
         destination.gen_params_or_init().graph = Some(
-            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+            manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
                 .unwrap()
                 .clone(),
         );

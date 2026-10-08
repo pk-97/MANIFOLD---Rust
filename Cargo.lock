@@ -2291,7 +2291,7 @@ dependencies = [
  "manifold-playback",
  "manifold-profiler",
  "manifold-recording",
- "manifold-renderer",
+ "manifold-nodes",
  "manifold-spectral",
  "manifold-ui",
  "manifold-ui-paint",
@@ -2598,7 +2598,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "manifold-renderer"
+name = "manifold-nodes"
 version = "0.1.0"
 dependencies = [
  "ahash",
@@ -2627,7 +2627,7 @@ dependencies = [
  "manifold-nodes-scene",
  "manifold-physics",
  "manifold-playback",
- "manifold-renderer",
+ "manifold-nodes",
  "manifold-ui",
  "manifold-ui-paint",
  "naga",
