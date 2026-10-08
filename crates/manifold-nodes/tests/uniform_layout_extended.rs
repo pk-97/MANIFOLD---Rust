@@ -1,8 +1,9 @@
 //! BUG-m3af: extended ABI proof for every primitive-owned uniform mirror.
 //! Complements the existing scalar buffer proof; no GPU is needed.
 use manifold_nodes as _;
+#[path = "support"]
 mod support {
-    pub mod rust_items;
+    use crate::rust_items;
     pub mod custom_abi_cases;
     pub mod texture_abi_cases;
     pub mod uniform_abi;
@@ -171,7 +172,7 @@ mod texture {
     }
 }
 mod custom {
-    use crate::testkit::source_roots::verify_wgsl_roots;
+    use manifold_nodes::testkit::source_roots::verify_wgsl_roots;
     use super::support;
     use std::{collections::BTreeSet, path::Path};
     use support::{

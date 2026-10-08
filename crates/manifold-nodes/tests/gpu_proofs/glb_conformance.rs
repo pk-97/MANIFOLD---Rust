@@ -15,11 +15,11 @@
 //! `gltf_import.rs`).
 //!
 //! Run: `bash scripts/fetch-gltf-conformance.sh && cargo test -p
-//! manifold-renderer --features gpu-proofs --test glb_conformance --
+//! manifold-nodes --features gpu-proofs --test gpu_proofs glb_conformance:: --
 //! --test-threads=1`
 //!
 //! Regenerate goldens: `UPDATE_CONFORMANCE_GOLDENS=1 cargo test -p
-//! manifold-renderer --features gpu-proofs --test glb_conformance --
+//! manifold-nodes --features gpu-proofs --test gpu_proofs glb_conformance:: --
 //! --test-threads=1` — review the diff before committing (D3).
 
 #![cfg(feature = "gpu-proofs")]

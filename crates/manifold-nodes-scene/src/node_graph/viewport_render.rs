@@ -24,7 +24,7 @@
 //! separate runtimes on the same `GpuDevice` cannot share execution state —
 //! this is what makes the D9 guarantee mechanical rather than a hoped-for
 //! ordering. `docs/REALTIME_3D_DESIGN_P5_GATE.md` proof lives in
-//! `crates/manifold-renderer/tests/gpu_proofs/scene_viewport_navigate.rs`.
+//! `crates/manifold-nodes/tests/gpu_proofs/scene_viewport_navigate.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

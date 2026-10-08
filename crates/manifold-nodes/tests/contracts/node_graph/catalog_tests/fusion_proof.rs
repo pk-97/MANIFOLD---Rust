@@ -340,7 +340,7 @@ fn colorgrade_fuzz_fused_agrees_with_unfused() {
 
 /// **The step-4 production gate (design section 12.3 step 5).** Drives the *install*
 /// path end-to-end through the real executor: the region-grower
-/// ([`crate::node_graph::freeze::install::fuse_canonical_def`]) auto-discovers the ColorGrade region
+/// ([`crate::contracts::node_graph::freeze::install::fuse_canonical_def`]) auto-discovers the ColorGrade region
 /// and rewrites the def into one `node.wgsl_compute` fused node carrying the
 /// auto-generated kernel; `into_graph` builds it; the executor runs it through
 /// the same WgslCompute introspection + dispatch the live chain uses. Diffed
@@ -469,7 +469,7 @@ fn every_fused_preset_executes_one_frame() {
     let mut failures: Vec<String> = Vec::new();
     let mut fused_count = 0usize;
 
-    for type_id in crate::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
+    for type_id in manifold_nodes::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
         let preset_id = type_id.as_str().to_string();
         let Some(base) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&type_id) else {
             continue;
@@ -599,8 +599,8 @@ fn every_fused_generator_kernel_compiles() {
     let mut fused_generators = 0usize;
     let mut fused_kernels = 0usize;
 
-    for type_id in crate::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
-        let Some(json) = crate::bundled_presets::bundled_preset_json(&type_id) else {
+    for type_id in manifold_nodes::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
+        let Some(json) = manifold_nodes::bundled_presets::bundled_preset_json(&type_id) else {
             continue;
         };
         let Ok(def) = serde_json::from_str::<EffectGraphDef>(&json) else {
@@ -695,7 +695,7 @@ fn infrared_preset_black_stays_black() {
     let input = black_input(&device, w, h);
 
     let id = PresetTypeId::new("Infrared");
-    let def = crate::bundled_presets::bundled_preset_def(&id)
+    let def = manifold_nodes::bundled_presets::bundled_preset_def(&id)
         .expect("Infrared preset def");
 
     let mut graph = Graph::new();
@@ -747,7 +747,7 @@ fn infrared_preset_black_stays_black() {
 /// here (before any effect), which is what Infrared then colours.
 #[test]
 fn wireframe_generator_background_is_black() {
-    use crate::bundled_presets::bundled_preset_json;
+    use manifold_nodes::bundled_presets::bundled_preset_json;
     use manifold_node_engine::runtime::preset_context::PresetContext;
     use manifold_node_engine::runtime::PresetRuntime;
     use manifold_core::PresetTypeId;
@@ -1063,7 +1063,7 @@ fn fusion_coverage_baseline() {
 
     for kind in [manifold_core::preset_def::PresetKind::Effect, manifold_core::preset_def::PresetKind::Generator]
     {
-        for type_id in crate::bundled_presets::bundled_preset_type_ids(kind) {
+        for type_id in manifold_nodes::bundled_presets::bundled_preset_type_ids(kind) {
             let Some(base) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&type_id) else {
                 continue;
             };
@@ -1181,7 +1181,7 @@ fn every_fused_generator_executes_one_frame() {
     let mut failures: Vec<String> = Vec::new();
     let mut fused_count = 0usize;
 
-    for type_id in crate::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
+    for type_id in manifold_nodes::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
         let Some(fused_view) = fused_generator_view_by_id(&type_id) else {
             continue;
         };
@@ -1327,7 +1327,7 @@ fn glitch_fused_kernel_animates_over_time() {
     let (w, h) = (256u32, 256u32);
     let input = gradient_input(&device, w, h);
 
-    let json = crate::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("Glitch"))
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("Glitch"))
         .expect("Glitch is a bundled preset");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse Glitch.json");
 
@@ -1426,7 +1426,7 @@ fn glitch_fused_kernel_speed_binding_scales_time() {
     let (w, h) = (256u32, 256u32);
     let input = gradient_input(&device, w, h);
 
-    let json = crate::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("Glitch"))
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("Glitch"))
         .expect("Glitch is a bundled preset");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse Glitch.json");
 
@@ -1546,7 +1546,7 @@ fn watercolor_fused_kernel_animates_over_time() {
     let (w, h) = (256u32, 256u32);
     let input = gradient_input(&device, w, h);
 
-    let json = crate::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("Watercolor"))
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("Watercolor"))
         .expect("Watercolor is a bundled preset");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse Watercolor.json");
 
@@ -1771,7 +1771,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
 
-    let json = crate::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("DigitalPlants"))
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new("DigitalPlants"))
         .expect("DigitalPlants preset bundled");
     let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
     // The whole point: DigitalPlants' GPU per-instance chain must fuse into a
@@ -1874,7 +1874,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
 
-    let json = crate::bundled_presets::bundled_preset_json(
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(
         &manifold_core::PresetTypeId::new("FluidSim2D"),
     )
     .expect("FluidSim2D preset bundled");
@@ -2042,7 +2042,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
 
-    let json = crate::bundled_presets::bundled_preset_json(
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(
         &manifold_core::PresetTypeId::new("FluidSim3D"),
     )
     .expect("FluidSim3D preset bundled");
@@ -2137,7 +2137,7 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
 
-    let json = crate::bundled_presets::bundled_preset_json(
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(
         &manifold_core::PresetTypeId::new("FluidSim2D"),
     )
     .expect("FluidSim2D preset bundled");
@@ -2207,7 +2207,7 @@ fn particletext_seed_gate_matches_ungated() {
     let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
-    let json = crate::bundled_presets::bundled_preset_json(
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(
         &manifold_core::PresetTypeId::new("ParticleText"),
     )
     .expect("ParticleText bundled");
@@ -2282,7 +2282,7 @@ fn feedback_pingpong_matches_copy_path() {
     let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
-    let json = crate::bundled_presets::bundled_preset_json(
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(
         &manifold_core::PresetTypeId::new("MetallicGlass"),
     )
     .expect("MetallicGlass bundled");
@@ -2336,7 +2336,7 @@ fn oilyfluid_inloop_f16_fusion_matches_unfused() {
     let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
-    let json = crate::bundled_presets::bundled_preset_json(
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(
         &manifold_core::PresetTypeId::new("OilyFluid"),
     )
     .expect("OilyFluid bundled");
@@ -2414,7 +2414,7 @@ fn metallicglass_optional_input_fusion_matches_unfused() {
     let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
-    let json = crate::bundled_presets::bundled_preset_json(
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(
         &manifold_core::PresetTypeId::new("MetallicGlass"),
     )
     .expect("MetallicGlass bundled");
@@ -2494,7 +2494,7 @@ fn particletext_fp32_flow_field_fused_matches_unfused() {
     let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
-    let json = crate::bundled_presets::bundled_preset_json(
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(
         &manifold_core::PresetTypeId::new("ParticleText"),
     )
     .expect("ParticleText bundled");
@@ -2581,7 +2581,7 @@ fn fluidsim3d_seed_gate_matches_ungated() {
     let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
-    let json = crate::bundled_presets::bundled_preset_json(
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(
         &manifold_core::PresetTypeId::new("FluidSim3D"),
     )
     .expect("FluidSim3D bundled");

@@ -252,7 +252,7 @@ fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
     use serde_json::{Value, json};
 
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let json = crate::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
         "WaterDamBreakGpuFlip",
     ))
     .expect("Dam Break bundled");

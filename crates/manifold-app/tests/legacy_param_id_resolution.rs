@@ -3,8 +3,8 @@
 //!
 //! Lives in `manifold-app/tests/` rather than `manifold-io/tests/`
 //! because the post-load resolver depends on `inventory::submit!`
-//! entries from `manifold-renderer/src/effects/*.rs` and
-//! `manifold-renderer/src/generators/*.rs`. `manifold-app` is the
+//! entries from `manifold-nodes/src/effects/*.rs` and
+//! `manifold-nodes/src/generators/*.rs`. `manifold-app` is the
 //! one crate that links all of them, so this is the only place the
 //! registry is fully populated outside a running binary.
 //!
@@ -13,7 +13,7 @@
 //! covers the missing piece: that legacy `paramIndex: i32` actually
 //! resolves to the correct stable `param_id` via the live registry.
 
-// Force the linker to keep manifold-renderer's `inventory::submit!`
+// Force the linker to keep manifold-nodes's `inventory::submit!`
 // blocks. Without a reference into the crate, dead-code elimination
 // can drop the entire compilation unit and silently empty the
 // effect / generator registries.
@@ -514,7 +514,7 @@ fn liveschool_gen_param_values_save_as_id_keyed_map() {
 #[test]
 fn liveschool_param_values_save_as_id_keyed_map() {
     // Step 12 (superseded by PARAM_STORAGE_DESIGN.md P1): with
-    // `manifold-renderer` linked, the registry IS populated; saving an
+    // `manifold-nodes` linked, the registry IS populated; saving an
     // effect must emit `params` as an id-keyed Map. Loading Liveschool
     // (a real V1.1-era fixture, positional Array on disk) exercises the
     // full one-time migration path (`migrations::param_storage_v14`)

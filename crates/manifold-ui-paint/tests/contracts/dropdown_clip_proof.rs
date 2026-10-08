@@ -9,7 +9,7 @@
 //!   off-viewport swatches, and scrolls internally — nothing paints or
 //!   takes clicks outside the container.
 //!
-//! Run: `SWATCH_OUT=/some/dir cargo test -p manifold-renderer --test dropdown_clip_proof`
+//! Run: `SWATCH_OUT=/some/dir cargo test -p manifold-nodes --test dropdown_clip_proof`
 //! then open `$SWATCH_OUT/dropdown_fit.png` / `dropdown_overflow.png`.
 
 #![cfg(target_os = "macos")]

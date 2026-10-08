@@ -52,7 +52,7 @@ pub struct RangeContract {
 
 /// Why a `RangeContract` exists (design doc D2). A closed enum: every
 /// contract names exactly one of these — the meta-test
-/// `every_range_contract_names_a_real_boundary` (manifold-renderer,
+/// `every_range_contract_names_a_real_boundary` (manifold-nodes,
 /// `node_graph::freeze::classify`) pins each contracted param to its
 /// reason in a curated table, so a contract can't creep back onto a
 /// param whose range is merely a creative-amount hint.

@@ -11,8 +11,8 @@ Three patterns: **compute** (GPU-driven, fills texture), **line-based** (CPU ver
 Touch exactly **2 files** to add a new generator:
 
 ```
-1. manifold-renderer/src/generators/my_gen.rs    (NEW FILE — impl + registration)
-2. manifold-renderer/src/generators/mod.rs        pub mod my_gen;
+1. manifold-nodes/src/generators/my_gen.rs    (NEW FILE — impl + registration)
+2. manifold-nodes/src/generators/mod.rs        pub mod my_gen;
 ```
 
 All metadata and factory registration lives in the implementation file via `inventory::submit!`:
@@ -60,7 +60,7 @@ If other code needs to reference this generator's type ID, add a const to
 - `ParamSpec::whole_labels(name, min, max, default, &labels, osc)` — integer with labels
 
 The `inventory` crate collects submissions at link time. Registries in `manifold-core`
-(definition, type) and factories in `manifold-renderer` (registry.rs) all iterate
+(definition, type) and factories in `manifold-nodes` (registry.rs) all iterate
 `inventory::iter` at startup — no manual wiring needed.
 
 ## Generator Trait

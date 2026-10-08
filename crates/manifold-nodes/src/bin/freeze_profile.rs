@@ -17,7 +17,7 @@
 //! Each generator (preset, resolution) is wrapped in `catch_unwind` so one
 //! failing preset can't abort an unattended run.
 //!
-//! Run: `cargo run --release -p manifold-renderer --bin freeze-profile`
+//! Run: `cargo run --release -p manifold-nodes --bin freeze-profile`
 
 use manifold_nodes as _;
 use manifold_core::PresetTypeId;

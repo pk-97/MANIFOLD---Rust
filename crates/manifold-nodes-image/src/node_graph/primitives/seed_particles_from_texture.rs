@@ -354,7 +354,7 @@ impl SeedParticlesFromTexture {
     }
 }
 
-/// BUG-191/BUG-037 gate. Run deliberately: `cargo test -p manifold-renderer
+/// BUG-191/BUG-037 gate. Run deliberately: `cargo test -p manifold-nodes
 /// --features gpu-proofs node_graph::primitives::seed_particles_from_texture::gpu_tests`.
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {

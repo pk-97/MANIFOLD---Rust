@@ -307,7 +307,7 @@ Remaining reference differences (not evidence of improved behaviour):
 
 | # | Invariant | Machine check |
 |---|---|---|
-| I1 | No node-grid velocity in the liquid path | `rg -n "node_vel\|NodeVelocity\|matter_" crates/manifold-renderer/src/node_graph/primitives -g "{gpu_flip_,coarse_inverse,dot_products,divide_by_value}*"` returns zero |
+| I1 | No node-grid velocity in the liquid path | `rg -n "node_vel\|NodeVelocity\|matter_" crates/manifold-nodes/src/node_graph/primitives -g "{gpu_flip_,coarse_inverse,dot_products,divide_by_value}*"` returns zero |
 | I2 | No CPU readback inside a frame; the stop is on the GPU | the same files hold no `read_back`, `readback` or `wait_until_completed` |
 | I3 | Every pass of the step and the solver has a value proof against a CPU reference | `gpu_flip_step_tests.rs` (one test per pass), `gpu_flip_pressure_tests.rs`; `step_shader_validates_with_every_entry` |
 | I4 | The GPU solve matches the f64 reference | `pressure_module_matches_reference_64`, `_128`, `_odd_sides` and `_deep_pool`: the solver against `scripts/mgpcg_reference.py` at the shipped counts, within the f32 floor |

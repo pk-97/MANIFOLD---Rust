@@ -34,7 +34,7 @@ fn scene_modifier_grouped_water_add_and_retarget_expand() {
     use manifold_core::scene_modifier_edit::retarget_scene_modifier;
     use manifold_core::scene_index::FlatSceneIndex;
 
-    let owner = crate::bundled_presets::bundled_preset_def(
+    let owner = manifold_nodes::bundled_presets::bundled_preset_def(
         &manifold_core::PresetTypeId::new("WaterDamBreakGpuFlip"),
     ).expect("shipped Dam Break after load migrations").clone();
     let scene = scene(&owner);

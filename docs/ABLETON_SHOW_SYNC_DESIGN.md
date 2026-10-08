@@ -289,7 +289,7 @@ thread).
   `(baseline, new, project)` → `Vec<MergeOp>` as pure functions (unit-testable
   without a project), then one command applies them.
 - **Threading:** parse + sample-path resolution on a background worker
-  (pattern: `manifold-renderer/src/background_worker.rs`); result crosses to
+  (pattern: `manifold-nodes/src/background_worker.rs`); result crosses to
   the content thread as one `ContentCommand`. Never parse on the content thread.
 - **Dependencies:** `flate2` + `quick-xml` in `manifold-io` only. Both are
   boring, widely-used crates; no new shared state anywhere.

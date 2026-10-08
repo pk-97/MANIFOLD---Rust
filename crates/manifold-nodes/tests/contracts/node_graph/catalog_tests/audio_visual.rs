@@ -244,7 +244,7 @@ fn audio_visual_generators_render_live_sources_and_fuse_on_portrait_canvas() {
     let target = RenderTarget::new(&device, width, height, FMT, "audio-generator-target");
     let (source, audio) = audio_fixture();
     for name in ["Oscilloscope", "Spectrogram"] {
-        let def = crate::bundled_presets::bundled_preset_def(&PresetTypeId::new(name))
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(name))
             .unwrap()
             .clone();
         assert!(
@@ -368,7 +368,7 @@ fn audio_visual_spectrum_chain_keeps_fixed_source_size_on_portrait_canvas() {
             {"fromNode":2,"fromPort":"out","toNode":3,"toPort":"in"}
         ]
     })).unwrap());
-    let mut metadata = crate::bundled_presets::bundled_preset_def(&PresetTypeId::INVERT_COLORS)
+    let mut metadata = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::INVERT_COLORS)
         .unwrap()
         .preset_metadata
         .clone()

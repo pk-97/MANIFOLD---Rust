@@ -19,11 +19,9 @@ use manifold_node_engine::{
     ports::PortType,
 };
 
-mod support {
-    pub mod rust_items;
-}
+use crate::rust_items;
 
-use crate::testkit::source_roots::{primitive_source_roots, verify_wgsl_roots};
+use manifold_nodes::testkit::source_roots::{primitive_source_roots, verify_wgsl_roots};
 
 /// One expected struct field: name as the hand struct spells it (raw param
 /// name — the WGSL-side reserved-word prefixing is a text concern, not a byte
@@ -153,12 +151,12 @@ fn parse_source(text: &str) -> (Vec<String>, Vec<HandStruct>) {
         match item {
             syn::Item::Macro(item) => {
                 if let Some(item) =
-                    support::rust_items::testkit_item(&item).expect("valid testkit_visible item")
+                    rust_items::testkit_item(&item).expect("valid testkit_visible item")
                 {
                     collect(item, structs);
                 }
             }
-            syn::Item::Struct(item) if !support::rust_items::test_only(&item.attrs) => {
+            syn::Item::Struct(item) if !rust_items::test_only(&item.attrs) => {
                 if !item.fields.iter().any(|f| {
                     f.ident.as_ref().is_some_and(|n| n == "dispatch_count")
                         && scalar(&f.ty) == "u32"

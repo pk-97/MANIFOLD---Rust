@@ -7,7 +7,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 
 #[cfg(test)]
 mod tests {
-    use crate::freeze::segment::*;
+    use crate::contracts::freeze::segment::*;
 
     fn registry() -> PrimitiveRegistry {
         PrimitiveRegistry::with_builtin()

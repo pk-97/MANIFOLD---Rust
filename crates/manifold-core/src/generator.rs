@@ -14,7 +14,7 @@ mod tests {
     use crate::generator_registration::{GeneratorMetadata, ParamSpec};
     use crate::preset_type_id::PresetTypeId;
 
-    // Test-only inventory submission — BLACK_HOLE isn't linked from manifold-renderer in unit tests.
+    // Test-only inventory submission — BLACK_HOLE isn't linked from manifold-nodes in unit tests.
     inventory::submit! {
         GeneratorMetadata {
             id: PresetTypeId::BLACK_HOLE,

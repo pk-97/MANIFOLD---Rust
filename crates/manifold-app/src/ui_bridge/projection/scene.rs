@@ -728,16 +728,14 @@ mod ownership_tests {
         use manifold_core::scene_modifier_preset::SceneTargetSelection;
         use manifold_nodes_scene::node_graph::{scene_modifier_authoring, scene_vm::SceneObjectVm, scene_vm::SceneVm};
         let mut def: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
-            include_str!("../../../../manifold-nodes/assets/generator-presets/WaterDamBreakGpuFlip.json"),
+            manifold_nodes::testkit::assets::ASSETS_GENERATOR_PRESETS_WATERDAMBREAKGPUFLIP_JSON,
         ).unwrap();
         let scene = SceneNodeRef::locate(&def, &NodeId::new("scene")).unwrap();
         let water = SceneNodeRef::locate(&def, &NodeId::new("water_object")).unwrap();
         assert_eq!(water.scope.len(), 1);
         // The performer's modifier picker uses this same scoped object list.
         assert!(scene_modifier_authoring::scene_modifier_objects(&def, &scene).unwrap().contains(&water));
-        let recipe = serde_json::from_str(include_str!(
-            "../../../../manifold-renderer/assets/scene-modifier-presets/UniformForce.json",
-        )).unwrap();
+        let recipe = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON).unwrap();
         let instance = scene_modifier_authoring::prepare_new_scene_modifier(
             &def, &recipe, NodeId::new("force"), scene,
             SceneTargetSelection::Explicit { objects: vec![water] },

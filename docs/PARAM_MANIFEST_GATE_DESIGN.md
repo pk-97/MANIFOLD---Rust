@@ -1,6 +1,6 @@
 # PARAM_MANIFEST_GATE — make a half-built param manifest unobservable at runtime (BUG-080 (Design pass: param-manifest two-phase…))
 
-**Status:** P1 SHIPPED 2026-07-14 (bug-wave lane B) · Sonnet 5 (Peter approved the direction same day: "I want to also ensure these bugs are fixed at the root and fundamental level … remove bug classes where possible and sensible") · `manifest_provisional()` (`crates/manifold-core/src/effects.rs`), the two seam asserts + throttled warns (`crates/manifold-node-engine/src/runtime/mod.rs`'s `assert_manifest_gate`, `crates/manifold-app/src/ui_bridge/state_sync.rs`'s `rows_from_manifest`), the D3 meta-test (`crates/manifold-core/tests/bug080_project_deserialize_single_door.rs`), and the two INV-1 tests all landed; gate green (1721/1721, `-p manifold-core -p manifold-renderer -p manifold-io`).
+**Status:** P1 SHIPPED 2026-07-14 (bug-wave lane B) · Sonnet 5 (Peter approved the direction same day: "I want to also ensure these bugs are fixed at the root and fundamental level … remove bug classes where possible and sensible") · `manifest_provisional()` (`crates/manifold-core/src/effects.rs`), the two seam asserts + throttled warns (`crates/manifold-node-engine/src/runtime/mod.rs`'s `assert_manifest_gate`, `crates/manifold-app/src/ui_bridge/state_sync.rs`'s `rows_from_manifest`), the D3 meta-test (`crates/manifold-core/tests/bug080_project_deserialize_single_door.rs`), and the two INV-1 tests all landed; gate green (1721/1721, `-p manifold-core -p manifold-nodes -p manifold-io`).
 **Prerequisites:** PARAM_STORAGE_BOUNDARIES_DESIGN.md P1 (SHIPPED — the reconcile stage this design hardens)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting the phase. Executes inside the 2026-07-14 bug-wave **lane B** session.
 
@@ -87,7 +87,7 @@ fix.
 
 **Deliverables:** `manifest_provisional()` (D1) · the two seam asserts + throttled release warns (D2) · meta-test `bug080_project_deserialize_single_door` (D3) · tests `bug080_provisional_manifest_asserts_at_chain_build` + `bug080_loader_path_never_provisional` (INV-1) · this doc's Status flipped at landing.
 
-**Gate:** `cargo nextest run -p manifold-core -p manifold-renderer -p manifold-io --lib` green including the three named tests; negative: the meta-test itself is the rg gate. Full workspace sweep at landing time per the standard section 5 test-scope rule.
+**Gate:** `cargo nextest run -p manifold-core -p manifold-nodes -p manifold-io --lib` green including the three named tests; negative: the meta-test itself is the rg gate. Full workspace sweep at landing time per the standard section 5 test-scope rule.
 
 **Demo:** none — L1. No user-visible surface; the artifact is the assert-fires/loader-clean test pair.
 

@@ -40,8 +40,8 @@ fn every_registered_generator_runs_without_panicking_or_nans() {
     let registry = PrimitiveRegistry::with_builtin();
 
     let mut count = 0_usize;
-    for id in crate::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
-        let Some(json) = crate::bundled_presets::bundled_preset_json(&id) else {
+    for id in manifold_nodes::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Generator) {
+        let Some(json) = manifold_nodes::bundled_presets::bundled_preset_json(&id) else {
             continue;
         };
         let mut generator = PresetRuntime::from_json_str_with_device(

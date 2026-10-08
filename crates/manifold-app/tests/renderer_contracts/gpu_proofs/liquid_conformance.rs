@@ -675,7 +675,7 @@ fn first_difference(a: &[u32], b: &[u32]) -> Option<(usize, u32, u32)> {
 /// I4: a coupled Box3D world steps once per settled liquid tick and only
 /// through its owner, at 60 and 30 fps. The counter sees every Box3D world
 /// on this thread, the scene's own included. Negative half: `rg -n
-/// '\.advance_worker\(' crates/manifold-renderer/src -g '!**/tests/**'`
+/// '\.advance_worker\(' crates/manifold-nodes/src -g '!**/tests/**'`
 /// hits only the two owners and the worker's inline tests.
 #[test]
 fn liquid_coupled_world_steps_once_per_tick() {

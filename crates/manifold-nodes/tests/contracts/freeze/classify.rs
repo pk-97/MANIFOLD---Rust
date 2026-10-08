@@ -325,8 +325,8 @@ use manifold_node_engine::freeze::classify::FusionKind;
         #[cfg(not(feature = "gpu-proofs"))]
         let registry = PrimitiveRegistry::with_builtin();
         let mut violations: Vec<String> = Vec::new();
-        crate::source_roots::verify_wgsl_roots().expect("WGSL crate inventory");
-        let roots = crate::source_roots::primitive_source_roots().expect("primitive source roots");
+        manifold_nodes::testkit::source_roots::verify_wgsl_roots().expect("WGSL crate inventory");
+        let roots = manifold_nodes::testkit::source_roots::primitive_source_roots().expect("primitive source roots");
         for entry in roots.iter().flat_map(|dir| read_dir(dir).expect("read primitives dir")) {
             let path = entry.expect("dir entry").path();
             if path.extension().and_then(|s| s.to_str()) != Some("rs") {

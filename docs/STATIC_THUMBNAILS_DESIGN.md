@@ -21,10 +21,10 @@ Companion docs: [archive/PRESET_BROWSER_AUDITION_DESIGN.md](archive/PRESET_BROWS
 | Test input | `preset_thumbnail.rs:258` `build_gradient_input` | Pure math gradient R=x,G=y,B=(x+y)/2 — no edges, no detail, no hue spread. This is why old thumbnails looked bad |
 | Generator capture state | `preset_thumbnail.rs:159-219` | Already deterministic: 60 warm-up frames at dt=1/60, 120bpm, anim sweep 0→1, IO/warmup settle wait. Generators-at-sensible-state is solved |
 | Factory thumbnail cache | `assets/preset-thumbnails/{effects,generators}/<id>.png` via `factory_thumbnail_path` (`preset_thumbnail.rs:129`) | Committed PNGs; resolution packaged-bundle else dev workspace |
-| Regeneration bin | `crates/manifold-renderer/src/bin/generate_preset_thumbnails.rs` | One-shot dev bin; renders every factory preset, writes PNGs to commit |
+| Regeneration bin | `crates/manifold-nodes/src/bin/generate_preset_thumbnails.rs` | One-shot dev bin; renders every factory preset, writes PNGs to commit |
 | Coverage | `ls` counts 2026-09-11 | 26 effect + 49 generator presets; only 15 + 14 thumbnails committed. ~60% of the grid has no static image |
 | Browser cell precedence | `crates/manifold-ui/src/panels/browser_popup.rs:783-802` | Live audition atlas wins, then static thumbnail, then flat. The black live cells hide whatever statics exist |
-| Live audition pool | `crates/manifold-renderer/src/audition/mod.rs` (696 lines), wired through `content_pipeline.rs:812-843`, snapshot fields `content_thread.rs:1464-1467`, panel hooks `browser_popup.rs:283-457` | Effect cells tap the layer's real source or master composite (`audition/mod.rs:62-66`); empty layer → black fallback → "half the effects don't render". Frame-budget throttle → the pop-in "load time" |
+| Live audition pool | `crates/manifold-nodes/src/audition/mod.rs` (696 lines), wired through `content_pipeline.rs:812-843`, snapshot fields `content_thread.rs:1464-1467`, panel hooks `browser_popup.rs:283-457` | Effect cells tap the layer's real source or master composite (`audition/mod.rs:62-66`); empty layer → black fallback → "half the effects don't render". Frame-budget throttle → the pop-in "load time" |
 | Missing-from-library entries | `crates/manifold-app/src/ui_root/dropdowns.rs:297-308` | Snapshot-origin embedded presets surface in the picker when their library file is gone, badged "missing from library" in the same 14px strip as the name (`browser_popup.rs:830-845`) — the overlap |
 | Amount defaults | audit script output below | 8 presets have wet/dry-style defaults below 1.0 |
 
@@ -102,20 +102,20 @@ Consequences, stated honestly: the picker loses "what does this effect do to my 
 - **Entry state:** the audit's amount list re-derives clean — re-run the preset-JSON walk; if new offenders exist, list them and include them.
 - **Read-back:** D5, D6; the preset JSON schema in `docs/GRAPH_TOOLING_DESIGN.md`.
 - **Deliverables:** the eight listed presets' `amount`/`mix` defaults → 1.0; StylizedFeedback `mode` default → 0.0 (first working mode); `factory_amount_defaults_full` test; `graph-tool validate` clean on every touched file.
-- **Gate:** `cargo nextest run -p manifold-renderer factory_amount_defaults` green; validate clean.
+- **Gate:** `cargo nextest run -p manifold-nodes factory_amount_defaults` green; validate clean.
 - **Demo:** none — L1.
 - **Forbidden moves:** touching `intensity` params; "fixing" the Stencil mode itself in this phase (separate bead); changing any other default because it looks nicer.
-- **Test scope:** `-p manifold-renderer` only.
+- **Test scope:** `-p manifold-nodes` only.
 
 ### P2 — Test card, capture unification, regenerate everything
 
 - **Entry state:** P1 landed (thumbnails must render the new defaults).
 - **Read-back:** D2-D4; section 3.1 (test card)–3.3 (freshness sidecar); the warm-up loop at `preset_thumbnail.rs:159-219`.
 - **Deliverables:** `build_test_card_input`; effect path on the shared warm-up capture; over-black flatten; `.hash` sidecars in the bin; `factory_thumbnails_fresh` test; `thumbnail_render_deterministic` (gpu-proofs); all 75 factory thumbnails regenerated and committed.
-- **Gate:** `cargo nextest run -p manifold-renderer` green incl. freshness; `scripts/gpu_proofs_gate.py` green; 75 PNGs + 75 hashes on disk.
+- **Gate:** `cargo nextest run -p manifold-nodes` green incl. freshness; `scripts/gpu_proofs_gate.py` green; 75 PNGs + 75 hashes on disk.
 - **Acceptance demo (L2):** a contact-sheet montage of all 75 PNGs (the bin writes one) — Peter looks at it. This is the moment the card design is judged.
 - **Forbidden moves:** tuning the card per-preset; shipping a card Peter hasn't seen; rendering at non-default params.
-- **Test scope:** `-p manifold-renderer` + gpu-proofs (GPU path touched).
+- **Test scope:** `-p manifold-nodes` + gpu-proofs (GPU path touched).
 
 ### P3 — Browser goes static-only; audition deleted
 
@@ -126,7 +126,7 @@ Consequences, stated honestly: the picker loses "what does this effect do to my 
 - **Acceptance demo (L3):** a `scripts/ui-flows/` flow that opens the effect browser and asserts cell count + that every visible cell is an image node; PNG artifact for Peter.
 - **Content-thread gate:** the deletion removes per-frame work; run `MANIFOLD_RENDER_TRACE=1` once to confirm no regression from the browser open path.
 - **Forbidden moves:** keeping the pool behind a flag; leaving `audition` as an empty module; "temporary" retention of the atlas surface.
-- **Test scope:** `-p manifold-ui -p manifold-app -p manifold-renderer`.
+- **Test scope:** `-p manifold-ui -p manifold-app -p manifold-nodes`.
 
 ## 6. Decided — do not reopen
 

@@ -20,7 +20,7 @@ Instrument frame: these are the "why won't this load" and "why is it black" mome
 | Texture-less material factors | `gltf_import.rs:692-698` | `color_r/g/b` **are** wired from `baseColorFactor` — BUG-169 (metalroughspheresnotextures-renders-fully-black)'s black render is NOT a missing-factor wire; cause unknown |
 | Material map sampler | `render_scene.rs:817-824` | Historical single-sampler snapshot; superseded by the per-family UV/address/filter contract in [GLTF_MATERIAL_EXTENSIONS_DESIGN.md section 7](GLTF_MATERIAL_EXTENSIONS_DESIGN.md#7-material-fidelity-corrections-2026-09-26) |
 | Convergence loop | `bin/render_import.rs:220-291` | byte-stability + `io_pending` + non-black floor; **`last_fraction` is only computed after a stable streak** (`render_import.rs:270-272`), so a reported `0.0000` is ambiguous: "renders black" vs "never went stable" |
-| gltf crate | `crates/manifold-renderer/Cargo.toml:47-55` | `gltf 1.4.1`, feature flags per extension; raw-JSON sniff precedent for extensions the crate lacks typed support for (clearcoat, G-P5) |
+| gltf crate | `crates/manifold-nodes/Cargo.toml:47-55` | `gltf 1.4.1`, feature flags per extension; raw-JSON sniff precedent for extensions the crate lacks typed support for (clearcoat, G-P5) |
 | Acceptance harness | `tests/glb_conformance.rs` + `tests/fixtures/gltf/khronos/manifest.json` | 148 assets classified; xfails carry named reasons; `scripts/gen_glb_conformance_status.py` regenerates the status doc |
 
 Extend, don't redesign: every fix in this doc lands inside these existing pieces. No new crates, no new threads, no new shared state.
@@ -63,7 +63,7 @@ Worktree note: the conformance fixtures are gitignored; `scripts/agent-worktree.
 - **Forbidden moves:** raising `frames_max` or lowering the non-black floor to make the gate pass (that's tuning the oracle, not fixing the bug); marking either asset xfail-with-new-reason.
 
 ### P2 — Parse-layer trio: D1 slice import + D5 scene fallback + D8 crate pre-flight (one session)
-- **Entry:** `rg -c 'gltf::import\(' crates/manifold-renderer/src` returns 3; repros for 166/170/172 still fail.
+- **Entry:** `rg -c 'gltf::import\(' crates/manifold-nodes/src` returns 3; repros for 166/170/172 still fail.
 - **Deliverables:** `import_glb` helper + 3 call-site migrations (compiler-driven: delete the old calls first); scene-fallback helper; crate-bump verdict for BUG-170 written into its backlog entry (bump taken, or defer-to-animation-doc executed).
 - **Gate:** positive — `UnlitTest.glb`, `RecursiveSkeletons.glb` import (unlit renders via existing unlit-ish path or escalate; recursive-skeletons renders non-black); `ClearCoatCarPaint.glb` passes the parse layer (render correctness belongs to the already-shipped clearcoat mapping). Negative — `rg 'gltf::import\(' crates/` zero hits outside the helper. Full conformance suite green.
 - **Forbidden moves:** keeping any old call site "just for tests"; a validation bypass that skips OUR extension gate (the gate is the fix — bypassing all validation reintroduces BUG-166 as its mirror image: assets we truly can't render importing silently broken).
@@ -77,7 +77,7 @@ Worktree note: the conformance fixtures are gitignored; `scripts/agent-worktree.
 ### P4 — D3 per-map samplers + D6 instancing (one session)
 - **Entry:** P1–P3 landed (goldens re-baselined if P1 changed any).
 - **Deliverables:** per-map-family sampler plumbing (GltfMaterialInfo fields → render_scene bind); descriptor-keyed sampler cache; instancing expansion at summary time; `TextureSettingsTest` + `SimpleInstancing` manifest entries flipped.
-- **Gate:** `TextureSettingsTest.glb` golden (this asset shows wrong-vs-right per quadrant — the golden IS the per-texture-wrap proof); `SimpleInstancing.glb` renders N visibly distinct instances (golden + object_count assertion); **all 56+ prior expect_pass goldens byte-stable** (the sampler change touches every textured draw — this is the phase's real risk, stated honestly); GPU parity suite for render_scene (`cargo test -p manifold-renderer --features gpu-proofs`, render_scene-scoped).
+- **Gate:** `TextureSettingsTest.glb` golden (this asset shows wrong-vs-right per quadrant — the golden IS the per-texture-wrap proof); `SimpleInstancing.glb` renders N visibly distinct instances (golden + object_count assertion); **all 56+ prior expect_pass goldens byte-stable** (the sampler change touches every textured draw — this is the phase's real risk, stated honestly); GPU parity suite for render_scene (`cargo test -p manifold-nodes --features gpu-proofs`, render_scene-scoped).
 - **Forbidden moves:** one global sampler swap (re-breaks the helmet the REPEAT fix fixed); per-texture sampler arrays in the shader (over-engineering — family granularity is what the fixture tests).
 
 ### Landing (per GIT_TREE_DISCIPLINE section 2)

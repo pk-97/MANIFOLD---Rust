@@ -1,7 +1,7 @@
 //! Bounded CPU and preview backlog measurements for the bundled PhysicsBoxes scene.
 //!
 //! Run explicitly in release mode with
-//! `cargo run --release -p manifold-renderer --example physics_benchmark`.
+//! `cargo run --release -p manifold-nodes --example physics_benchmark`.
 //! This measures solver cost rather than asserting a hardware-dependent bound.
 
 use std::collections::BTreeMap;

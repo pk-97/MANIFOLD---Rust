@@ -17,7 +17,7 @@
 //! two.
 
 use manifold_core::preset_def::PresetKind;
-use {manifold_node_engine::graph::Graph, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::param_binding::ResolvedBinding, manifold_node_engine::exec::bound_graph::ShadowedDefParam, crate::bundled_presets::bundled_preset_def, crate::bundled_presets::bundled_preset_type_ids, manifold_node_engine::exec::bound_graph::find_shadowed_def_params, manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id, manifold_node_engine::exec::bound_graph::shadow_baseline_entries, manifold_node_engine::load::chain_spec::splice_def_into_chain, manifold_node_engine::exec::bound_graph::unretarget_shadow};
+use {manifold_node_engine::graph::Graph, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::param_binding::ResolvedBinding, manifold_node_engine::exec::bound_graph::ShadowedDefParam, manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes::bundled_presets::bundled_preset_type_ids, manifold_node_engine::exec::bound_graph::find_shadowed_def_params, manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id, manifold_node_engine::exec::bound_graph::shadow_baseline_entries, manifold_node_engine::load::chain_spec::splice_def_into_chain, manifold_node_engine::exec::bound_graph::unretarget_shadow};
 
 /// Effects splice into a chain, so build the graph the way the chain builder
 /// does — a bare `Source` upstream, then the canonical def — and resolve the

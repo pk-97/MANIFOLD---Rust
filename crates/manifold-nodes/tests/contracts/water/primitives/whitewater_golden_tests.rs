@@ -192,7 +192,7 @@ fn record_candidate(lines: &[String]) {
     // allowed cfg can neither land on another module nor take over an
     // existing attribute.
     let file_at = |rev: &str| {
-        let shown = git(&["show", &format!("{rev}:crates/manifold-renderer/{MODULES}")]);
+        let shown = git(&["show", &format!("{rev}:crates/manifold-nodes/{MODULES}")]);
         assert!(shown.status.success(), "git show {rev}:{MODULES} failed; refusing to record");
         shown.stdout
     };

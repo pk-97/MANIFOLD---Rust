@@ -6,14 +6,14 @@
 //! not embedded into the binary, and exposed here as a lookup by
 //! `PresetTypeId`.
 //!
-//! The [`GeneratorRegistry`](crate::generators::registry::GeneratorRegistry)
+//! The [`GeneratorRegistry`](crate::registry::GeneratorRegistry)
 //! consults this table when creating a generator: if an entry matches
 //! the requested type id, the registry constructs a
 //! [`PresetRuntime`](crate::preset_runtime::PresetRuntime) from the JSON;
 //! otherwise it falls back to the `inventory::submit!` Rust factories.
 //!
 //! The raw-JSON / def / type-id lookups live in the kind-agnostic
-//! [`crate::node_graph::bundled_presets`] (fork #3 — one loader for both
+//! [`crate::bundled_presets`] (fork #3 — one loader for both
 //! kinds). This module keeps only the generator disk-bucket metadata loader
 //! plus its `PresetSource` submission (the legit disk-source split) and the
 //! generator-sweep tests.

@@ -100,7 +100,7 @@ Renderer side, resolved per frame (Copy, no alloc):
 
 ```rust
 /// Resolved per-frame values the trace dispatch consumes. Lives in
-/// manifold-renderer (node_graph/effect_node.rs next to FrameTime).
+/// manifold-nodes (node_graph/effect_node.rs next to FrameTime).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RtQuality {
     pub shadow_spp: u32, pub ao_spp: u32, pub gi_spp: u32, pub refl_spp: u32,
@@ -140,11 +140,11 @@ Seams:
 - **Read-back:** D5, D6, I1-I5; `EffectNodeContext` fields (effect_node.rs:166-210); the `set_preview_target` precedent; render_scene.rs:2539-2578 (realloc), :4111-4125 (bools), :5660-5740 (dispatch config), :1183-1191 (native-terms probe). Restate the forbidden moves below before code.
 - **Deliverables:** `RtQuality` struct; `Executor.rt_quality` + `set_rt_quality`; `EffectNodeContext.rt_quality` threaded at both construction sites; compositor call site resolves column by `is_export_mode()`; render_scene consumes `ctx.rt_quality` for all four spp values and both dispatch dims; constants and both env probes deleted; I3 gpu-proofs test (resolution flip → reset flag); existing gpu-proofs suite green.
 - **⚠ VERIFY-AT-IMPL:** (a) atrous filter and MetalFX denoiser texture dims on a ray-resolution change — confirm they realloc through the same dims-change path, read `rt_irr_width/height` consumers; (b) whether the WGSL freeze path bakes any spp value — `rg "spp" crates/manifold-node-engine/src/freeze/` must return zero, verify don't recall; (c) the export audio-mod path (`content_export.rs:110-131`) renders frames identically regardless — no work, confirm only.
-- **Gate:** `scripts/gpu_proofs_gate.py` green (mandatory — render_scene is the RT accumulation path); `cargo clippy -p manifold-renderer -p manifold-app -- -D warnings` clean; I4 negative rg gate zero hits; `MANIFOLD_RENDER_TRACE=1` run with a tier flip — no frame >20ms attributable to the settings path.
+- **Gate:** `scripts/gpu_proofs_gate.py` green (mandatory — render_scene is the RT accumulation path); `cargo clippy -p manifold-nodes -p manifold-app -- -D warnings` clean; I4 negative rg gate zero hits; `MANIFOLD_RENDER_TRACE=1` run with a tier flip — no frame >20ms attributable to the settings path.
 - **Acceptance demo:** headless render of `tests/fixtures/rt/RtEmissiveStrength.manifold` at default tiers → PNG byte-compared against main's output (threshold: identical or sub-1%-pixel diff, scripted pixel-diff with stated threshold — no agent eyeballs). Then the same render at Ultra/Native export column via a test harness override → PNG artifact for Peter (L2).
 - **Performer gesture:** mid-show panic — flip every live tier to Ultra Low between frames while a heavy GLB scene plays; gate asserts no panic, no realloc storm (reset fires once per change), next frame reflects new spp.
 - **Forbidden moves:** keeping the env probes as overrides; touching the graph bools; fusing this with any other render_scene cleanup; adapting a misfit call site instead of escalating; per-frame HashMap/String anywhere in the path.
-- **Test scope:** manifold-renderer + manifold-app + gpu-proofs. Verify once at phase end.
+- **Test scope:** manifold-nodes + manifold-app + gpu-proofs. Verify once at phase end.
 
 ### P3 — Settings panel UI (lane: Flash Weak)
 

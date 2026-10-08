@@ -1,7 +1,7 @@
 mod geometry;
 
 mod tests {
-    use crate::water::primitives::fluid_role_source::geometry;
+    use crate::contracts::water::primitives::fluid_role_source::geometry;
     use std::borrow::Cow;
     use std::sync::Arc;
     use manifold_node_engine::water::primitives::fluid_role_source::FluidRoleSource;

@@ -16,7 +16,7 @@
         let mut out = String::new();
 
         let mut effect_ids: Vec<_> =
-            crate::bundled_presets::bundled_preset_type_ids(PresetKind::Effect)
+            manifold_nodes::bundled_presets::bundled_preset_type_ids(PresetKind::Effect)
                 .collect();
         effect_ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         for type_id in effect_ids {
@@ -39,11 +39,11 @@
         }
 
         let mut gen_ids: Vec<_> =
-            crate::bundled_presets::bundled_preset_type_ids(PresetKind::Generator)
+            manifold_nodes::bundled_presets::bundled_preset_type_ids(PresetKind::Generator)
                 .collect();
         gen_ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         for type_id in gen_ids {
-            let Some(json) = crate::bundled_presets::bundled_preset_json(&type_id)
+            let Some(json) = manifold_nodes::bundled_presets::bundled_preset_json(&type_id)
             else {
                 continue;
             };

@@ -24,7 +24,7 @@ use manifold_core::marker::TimelineMarker;
 use manifold_core::session::{ClipSequence, Scene, SessionSlot};
 use manifold_core::SceneId;
 
-// Test-only inventory submissions — manifold-renderer isn't linked in editing tests.
+// Test-only inventory submissions — manifold-nodes isn't linked in editing tests.
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
 

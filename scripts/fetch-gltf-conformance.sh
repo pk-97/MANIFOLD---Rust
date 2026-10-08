@@ -9,7 +9,7 @@
 # asset already present at the right size is left alone.
 #
 # tests/fixtures/gltf/khronos/ is gitignored (except manifest.json itself);
-# `cargo test -p manifold-renderer --features gpu-proofs --test
+# `cargo test -p manifold-nodes --features gpu-proofs --test
 # glb_conformance` skip-if-absents any asset this script hasn't fetched, so
 # CI and a fresh worktree both stay offline-green (D1).
 #

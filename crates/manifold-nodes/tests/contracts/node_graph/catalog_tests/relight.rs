@@ -157,7 +157,7 @@
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn every_bundled_preset_validates_after_relight_augmentation() {
-        use crate::bundled_presets::bundled_preset_def;
+        use manifold_nodes::bundled_presets::bundled_preset_def;
         use manifold_node_engine::validate::{ValidateKind, validate_def};
         use manifold_core::preset_def::PresetKind;
 
@@ -169,7 +169,7 @@
             (PresetKind::Effect, ValidateKind::Effect),
             (PresetKind::Generator, ValidateKind::Generator),
         ] {
-            for type_id in crate::bundled_presets::bundled_preset_type_ids(kind) {
+            for type_id in manifold_nodes::bundled_presets::bundled_preset_type_ids(kind) {
                 let def = bundled_preset_def(&type_id)
                     .unwrap_or_else(|| panic!("bundled preset {type_id:?} has no parsed def"));
                 let augmented = relight_augment(def, &reg, &RelightParams::default());
@@ -203,7 +203,7 @@
     #[test]
     fn relight_off_matches_pre_relight_effect_graph_for_every_bundled_preset() {
         use manifold_node_engine::scene::boundary_nodes::{FinalOutput, Source};
-        use crate::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
+        use manifold_nodes::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
         use manifold_node_engine::load::chain_spec::splice_def_into_chain;
         use manifold_node_engine::graph::Graph;
         use manifold_node_engine::load::graph_loader::{BoundaryHandling, HandleScope, instantiate_def};

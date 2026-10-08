@@ -10,7 +10,7 @@ use manifold_core::scene_modifier_preset::{
     SceneTargetSelection,
 };
 
-use crate::node_graph::catalog_tests::expand_compiler_tests::fixture;
+use crate::contracts::node_graph::catalog_tests::expand_compiler_tests::fixture;
 use manifold_node_engine::load::expand::{SceneModifierExpandError, expand_scene_modifiers};
 use manifold_node_engine::persistence::PrimitiveRegistry;
 

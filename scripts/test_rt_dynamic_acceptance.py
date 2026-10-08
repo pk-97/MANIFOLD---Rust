@@ -222,7 +222,7 @@ class AcceptanceRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             with patch.object(runner, "list_tests", return_value=({"proof"}, 0, 0.0)) as listing:
-                for package in ("manifold-renderer", "manifold-nodes-scene"):
+                for package in ("manifold-nodes", "manifold-nodes-scene"):
                     runner._list_gpu_tests(root, root, package=package)
                     self.assertIn(package, listing.call_args.args[0])
                 runner._list_gpu_tests(root, root, release=True, feature="rt-perf-proofs")

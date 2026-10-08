@@ -151,7 +151,7 @@ use manifold_node_engine::testkit::mesh_revision::*;
         /// GPU in `tests/gpu_proofs/rt_dynamic_fusion.rs`.
         #[test]
         fn mesh_change_surface_waves_fused_sidecar_is_refit_eligible() {
-            use crate::bundled_presets::bundled_preset_json;
+            use manifold_nodes::bundled_presets::bundled_preset_json;
             use manifold_node_engine::freeze::install::fuse_canonical_def;
             use manifold_node_engine::scene::mesh_change::{PreparedMeshOutputRule, PreparedMeshRevisionRule};
             use manifold_node_engine::persistence::EffectGraphDefExt;

@@ -311,7 +311,7 @@ Currently a fused `node.digital_plants_render` primitive. With Material system +
 
 ### Other 3D presets
 
-Audit (run before implementation): `rg "node\.render_3d_mesh\b|node\.render_instanced_3d_mesh\b" crates/manifold-renderer/assets/generator-presets/ -l`. Every preset listed must be migrated (add a material wire). Expected to be: MetallicGlass, NestedCubes, and possibly nothing else. `check-presets` will refuse to build the renderer otherwise (missing required material wire).
+Audit (run before implementation): `rg "node\.render_3d_mesh\b|node\.render_instanced_3d_mesh\b" crates/manifold-nodes/assets/generator-presets/ -l`. Every preset listed must be migrated (add a material wire). Expected to be: MetallicGlass, NestedCubes, and possibly nothing else. `check-presets` will refuse to build the renderer otherwise (missing required material wire).
 
 ### Out of scope
 
@@ -435,10 +435,10 @@ Subsequent tranches (shadow infrastructure, DigitalPlants migration) build on th
 Per [`feedback_prefer_focused_tests`](../.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/memory/feedback_prefer_focused_tests.md) and [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md) section 4.1:
 
 **Per tranche:**
-- `cargo check -p manifold-renderer --lib --tests`
-- `cargo test -p manifold-renderer --lib node_graph::material::` (Tranche M1) / `node_graph::primitives::{unlit,phong,pbr,cel}_material::` (Tranche M2) / etc.
-- `cargo run -p manifold-renderer --bin check-presets` after any JSON edit (Tranche M5).
-- `cargo clippy -p manifold-renderer --lib -- -D warnings`.
+- `cargo check -p manifold-nodes --lib --tests`
+- `cargo test -p manifold-nodes --lib node_graph::material::` (Tranche M1) / `node_graph::primitives::{unlit,phong,pbr,cel}_material::` (Tranche M2) / etc.
+- `cargo run -p manifold-nodes --bin check-presets` after any JSON edit (Tranche M5).
+- `cargo clippy -p manifold-nodes --lib -- -D warnings`.
 
 **Per atom (Tranche M2):**
 - Unit test that `Primitive::run` constructs a Material with the right `kind` and propagates outer-card params correctly.
@@ -558,7 +558,7 @@ Post-vocab ids in play: `node.render_mesh`, `node.render_copies`,
   params defaulted to Opaque).
 - **Gate (negative):** `rg -i cull crates/manifold-gpu/src` still zero hits;
   `rg 'premultipl' primitives/shaders/render_3d_mesh.wgsl` zero hits;
-  `cargo run -p manifold-renderer --bin check-presets` clean.
+  `cargo run -p manifold-nodes --bin check-presets` clean.
 - **Forbidden moves:** adding a blend pipeline "while at it" (M6-D3) · premultiplying
   alpha in the mesh shader · a `double_sided`/cull param (M6-D4) · synthesizing the
   uniform layout from memory instead of reading the existing block · touching

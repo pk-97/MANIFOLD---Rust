@@ -1298,7 +1298,7 @@ fn gpu_flip_frame_by_node_type() {
 #[cfg(test)]
 mod native_reference {
     #[cfg(test)]
-    use crate::water::primitives::gpu_flip_scene_tests::*;
+    use crate::contracts::water::primitives::gpu_flip_scene_tests::*;
     #[cfg(test)]
     use manifold_fluids::{Bounds, CaptureError, Config, FluidWorld, ParticleRecord};
 

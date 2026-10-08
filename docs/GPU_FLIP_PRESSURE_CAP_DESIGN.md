@@ -236,7 +236,7 @@ Rounds inside a chunk past the stop run with their recorded groups. Each kernel 
 
 ## 9. Phasing
 
-Each phase is one commit on a lane branch; the lead reviews between. Test scope per phase: `cargo nextest run -p manifold-gpu` / `-p manifold-renderer` filtered to the touched modules, clippy on touched crates, GPU proofs through `scripts/gpu_queue.py`.
+Each phase is one commit on a lane branch; the lead reviews between. Test scope per phase: `cargo nextest run -p manifold-gpu` / `-p manifold-nodes` filtered to the touched modules, clippy on touched crates, GPU proofs through `scripts/gpu_queue.py`.
 
 - **C0 — deterministic baseline.** Deliverable: `tests/fixtures/gpu_flip_pressure_golden.txt` recorded on main by `pressure_module_matches_main_golden` with `MANIFOLD_RECORD_GOLDEN=1`: SHA, inputs, mode (direct and replayed), and per case FNV fingerprints of the pressure, the scalars and the progress record. Unused storage is seeded with a fixed sentinel before every solve. Cases: Dam Break problems 0 and 4 and deep-pool density problem 0 at 64³, level 0, plus Dam Break problem 0 at level 1; `Fixed(n)` for n in {1, 2, 16, 24, 25, 63, 64} and `Converged(64)`. Only the legacy-sized region (128 scalars, 68 progress floats) is fingerprinted; C6 tests the new tail separately. Gate: the test passes on the recording SHA.
 - **C1 — the counter at cap 64.** Section 4. Gate: the golden, `pressure_module_replay_matches_direct`, `pressure_module_converges_on_the_engine_tolerance`, the body proofs' bitwise checks.

@@ -1,7 +1,7 @@
     use manifold_node_engine::water::liquid::extent::*;
 use manifold_node_engine::water::liquid::lattice::LiquidLattice;
 use manifold_core::effect_graph_def::EffectGraphDef;
-    use crate::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
+    use manifold_nodes::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
     use manifold_node_engine::water::fluid::domain_layout;
 
 

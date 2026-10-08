@@ -6,7 +6,7 @@ use manifold_node_engine::palette::catalog_graph_def_for;
         // the bundled-preset registry now covers every ChainSpec, so
         // per-card divergence works on every effect.
         for type_id in
-            crate::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect)
+            manifold_nodes::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect)
         {
             assert!(
                 catalog_graph_def_for(&type_id).is_some(),

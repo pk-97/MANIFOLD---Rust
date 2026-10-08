@@ -29,14 +29,14 @@ Classification: exists / one wire away / genuinely new.
 
 | Piece | Where | State |
 |---|---|---|
-| Modifier framework: descriptor = plan builder + trace + row whitelist + enable wiring; apply/remove are generic commands; modifier list never stored | `crates/manifold-renderer/src/node_graph/scene_modifier.rs:32`, module doc `:1` | exists — `merge` is kind #2, one descriptor file shaped like the loop |
+| Modifier framework: descriptor = plan builder + trace + row whitelist + enable wiring; apply/remove are generic commands; modifier list never stored | `crates/manifold-nodes/src/node_graph/scene_modifier.rs:32`, module doc `:1` | exists — `merge` is kind #2, one descriptor file shaped like the loop |
 | `render_scene` draws object groups into ONE shared depth; per-group depth-only passes already run for every shadow caster (main pass AND shadow pass, instanced) | `render_scene.rs:22`, `:58` | exists — the two-layer merge depth extends this machinery |
 | `render_scene` `depth` output port, R32Float; single-sample depth snapshot (E2a) the RT shadow pass reconstructs origins from | `render_scene.rs:389`, `:991`, `:3993` | exists — the merge writes blended depth into this snapshot, making goo a correct shadow receiver |
 | RT pass chain rides the raster G-buffer: `rt_enabled` forces `depth`+`velocity` into it | `render_scene.rs:3965` | exists — Merge orders itself before every RT consumer |
 | RT shadow trace (half-res dispatch, TLAS, per-instance caster masks) | `manifold-gpu/src/metal/raytrace.rs:11`, `:275` | exists — its miss path is where goo casting hooks (D10); its per-instance masks are what transmissive goo excludes (D13) |
 | Per-object BLAS (RT) — closest-point query target for the bake | `raytrace.rs:67` | exists — the bake walks it |
 | Screen-space depth-raymarch pattern precedent (consume depth + camera, emit a per-pixel term) | `heightfield_shadow.rs:38`, `ssao_gtao.rs:116` | exists — Merge's march is the same family, writing G-buffer instead of a shadow term |
-| `Texture3D` channel type + slice/gradient/blur atoms; 3D simplex noise atoms | purposes surveyed in `crates/manifold-renderer/src/node_graph/primitives/` | exists — SDF field texture + growth-noise vocabulary |
+| `Texture3D` channel type + slice/gradient/blur atoms; 3D simplex noise atoms | purposes surveyed in `crates/manifold-nodes/src/node_graph/primitives/` | exists — SDF field texture + growth-noise vocabulary |
 | Material atoms (flat / phong / cook_torrance / cel) + `mix`/`mux` | NODE_CATALOG.md material family | exists — re-shade composes from shipped material vocabulary |
 | glTF morph support | `gltf_morph_deltas_source.rs` | exists — the morph guard has real weights to read |
 | smooth-min (smin) | — | 3 lines of math; lives **inline in the march pass**, not a primitive (DECOMPOSING_GENERATORS.md section 1.1 (no fused monoliths)) |

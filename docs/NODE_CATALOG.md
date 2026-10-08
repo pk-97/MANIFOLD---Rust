@@ -1,6 +1,6 @@
 # Node Catalog
 
-**Source of truth for what nodes exist.** Regenerate this file by walking the [image](../crates/manifold-nodes-image/src/node_graph/primitives/), [scene](../crates/manifold-nodes-scene/src/node_graph/primitives/), [engine](../crates/manifold-node-engine/src/primitives/) and [water](../crates/manifold-node-engine/src/water/primitives/) roots (one `type_id` per primitive — `pub const *_TYPE_ID` for the composite-effect primitives, `type_id: "node.…"` for the macro-defined atoms) and the two preset directories ([`effect-presets/`](../crates/manifold-renderer/assets/effect-presets/), [`generator-presets/`](../crates/manifold-renderer/assets/generator-presets/)). If you add a primitive or a preset and don't update this catalog, the catalog is stale — fix it.
+**Source of truth for what nodes exist.** Regenerate this file by walking the [image](../crates/manifold-nodes-image/src/node_graph/primitives/), [scene](../crates/manifold-nodes-scene/src/node_graph/primitives/), [engine](../crates/manifold-node-engine/src/primitives/) and [water](../crates/manifold-node-engine/src/water/primitives/) roots (one `type_id` per primitive — `pub const *_TYPE_ID` for the composite-effect primitives, `type_id: "node.…"` for the macro-defined atoms) and the two preset directories ([`effect-presets/`](../crates/manifold-nodes/assets/effect-presets/), [`generator-presets/`](../crates/manifold-nodes/assets/generator-presets/)). If you add a primitive or a preset and don't update this catalog, the catalog is stale — fix it.
 
 For *how* to compose these into a generator decomposition, see [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md). For the design rationale behind the primitive shape, see [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md).
 
@@ -34,9 +34,9 @@ Channels signatures reference `crate::node_graph::channel_names::well_known::*` 
 
 ## Registered node index (generated — authoritative)
 
-This block is **generated from the node registry** by `gen_node_catalog` (`cargo run -p manifold-renderer --bin gen_node_catalog`) and is the drift-guarded source of truth for *what exists* — a registry change that isn't reflected here fails `cargo test`. The hand-curated "Atoms by intent" grouping below (section 3) adds human structure and prose; once `category` / `role` are filled across the library, that grouping regenerates from those fields too. The full machine artifact — ports, params, complete descriptions, for the AI composition surface — is [`node_catalog.json`](node_catalog.json).
+This block is **generated from the node registry** by `gen_node_catalog` (`cargo run -p manifold-nodes --bin gen_node_catalog`) and is the drift-guarded source of truth for *what exists* — a registry change that isn't reflected here fails `cargo test`. The hand-curated "Atoms by intent" grouping below (section 3) adds human structure and prose; once `category` / `role` are filled across the library, that grouping regenerates from those fields too. The full machine artifact — ports, params, complete descriptions, for the AI composition surface — is [`node_catalog.json`](node_catalog.json).
 
-<!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
+<!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
 _Generated from the node registry. Do not hand-edit. 388 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
@@ -965,7 +965,7 @@ The effect presets are listed in section 5.
 
 ## 5. Effect presets
 
-26 JSON files at [`assets/effect-presets/`](../crates/manifold-renderer/assets/effect-presets/). Each is a decomposed atom graph (drillable in the editor); the atom composition is noted. The only thin-wrap-of-a-legacy-node is `WireframeDepth` (wraps `node.wireframe_depth`); `WireframeDepthGraph` is its in-flight atom-graph replacement.
+26 JSON files at [`assets/effect-presets/`](../crates/manifold-nodes/assets/effect-presets/). Each is a decomposed atom graph (drillable in the editor); the atom composition is noted. The only thin-wrap-of-a-legacy-node is `WireframeDepth` (wraps `node.wireframe_depth`); `WireframeDepthGraph` is its in-flight atom-graph replacement.
 
 | Preset | Atom shape |
 |---|---|
@@ -1001,7 +1001,7 @@ The effect presets are listed in section 5.
 
 ## 6. Generators
 
-All shipping generators are JSON-defined sub-graphs at [`assets/generator-presets/`](../crates/manifold-renderer/assets/generator-presets/), running from `system.generator_input` to `system.final_output`. Zero `inventory::submit!` generators remain; [`crates/manifold-renderer/src/generators/`](../crates/manifold-renderer/src/generators/) is now runtime infrastructure only (loader, registry, mesh/line pipelines, math, stateful base).
+All shipping generators are JSON-defined sub-graphs at [`assets/generator-presets/`](../crates/manifold-nodes/assets/generator-presets/), running from `system.generator_input` to `system.final_output`. Zero `inventory::submit!` generators remain; [`crates/manifold-nodes/src/generators/`](../crates/manifold-nodes/src/generators/) is now runtime infrastructure only (loader, registry, mesh/line pipelines, math, stateful base).
 
 ### 6.1 JSON-defined
 
@@ -1039,4 +1039,4 @@ Empty. The migration completed in May 2026 — see [GENERATOR_DECOMPOSITION_PLAN
 - After adding a new primitive: add a row to section 3 under the right family and bump nothing else; the AI agent reads section 3 to know what's available.
 - After adding a new preset: add a row to section 5 or section 6.1 with the topology shape; downstream readers learn the analogue from this entry.
 - After deleting a primitive: remove the row; don't leave it as "deprecated."
-- Validate by running `cargo run -p manifold-renderer --bin check-presets` (loads + compiles every preset, sub-second, no GPU); a green run means every primitive referenced by every preset is registered.
+- Validate by running `cargo run -p manifold-nodes --bin check-presets` (loads + compiles every preset, sub-second, no GPU); a green run means every primitive referenced by every preset is registered.

@@ -34,7 +34,7 @@ use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-use crate::testkit::reference_fixtures::cpu_flip_preset_json;
+use manifold_nodes::testkit::reference_fixtures::cpu_flip_preset_json;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const WIDTH: u32 = 1920;

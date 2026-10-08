@@ -128,7 +128,7 @@ This is a load-time schema upgrade, like any version bump. It is **not** a runti
 ## Touch points (coordinate — this lives with the binding model, not around it)
 
 `manifold-core`: `id.rs`, `effect_graph_def.rs` (EffectGraphNode), `effects.rs` (UserParamBinding),
-the loader/migration. `manifold-renderer`: `flatten.rs` is core, but the node_id→runtime map +
+the loader/migration. `manifold-nodes`: `flatten.rs` is core, but the node_id→runtime map +
 `param_binding.rs` (ParamTarget / ResolvedBinding / resolution) are the binding-model surface the
 other agent just reworked. `manifold-editing`: the expose command writes id targets; group/ungroup/
 move preserve ids. `manifold-app`: editor expose UI. The `assets/*-presets/*.json` stamping pass.

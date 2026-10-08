@@ -158,7 +158,7 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
         ];
         for (preset_name, type_ids) in cases {
             let type_id = manifold_core::PresetTypeId::new(preset_name);
-            let json = crate::bundled_presets::bundled_preset_json(&type_id)
+            let json = manifold_nodes::bundled_presets::bundled_preset_json(&type_id)
                 .unwrap_or_else(|| panic!("{preset_name}: no bundled JSON"));
             let def: EffectGraphDef = serde_json::from_str(&json).expect("preset parses");
             let def = manifold_core::flatten::flatten_groups(&def).expect("flattens");

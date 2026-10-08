@@ -62,7 +62,7 @@ elements to "squish" (compress height, re-center content) at clip boundaries.
 ### Key files
 
 - `manifold-gpu/src/metal/encoder.rs` — `set_scissor_rect()`, `draw_in_render_pass()` with `index_buffer_offset`
-- `manifold-renderer/src/ui_renderer.rs` — `ScissorBatch`, `PreparedBatch`, batched rendering
+- `manifold-nodes/src/ui_renderer.rs` — `ScissorBatch`, `PreparedBatch`, batched rendering
 - `manifold-ui/src/tree.rs` — `traverse_flat_range()` pre-pushes ancestor CLIPS_CHILDREN nodes
 
 ### Sub-region rendering

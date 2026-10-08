@@ -158,7 +158,7 @@ fn render_mode_stock_recipe_roundtrips_with_gate_and_labels() {
     // SurfacePeel); this pins the new recipe's persistence format.
     let source = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/scene-modifier-presets/RenderMode.json"
+        "/../manifold-nodes/assets/scene-modifier-presets/RenderMode.json"
     ));
     let parsed = deserialize_preset(source).expect("RenderMode stock recipe parses");
     let metadata = parsed.preset_metadata.as_ref().expect("recipe metadata");

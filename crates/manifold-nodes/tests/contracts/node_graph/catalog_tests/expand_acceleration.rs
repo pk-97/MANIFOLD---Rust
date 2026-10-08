@@ -24,7 +24,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn gpu_surface_water_resolves_to_its_flip_domain() {
-        let def = preset(crate::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreakGpu.json"));
+        let def = preset(manifold_nodes::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreakGpu.json"));
         let registry = PrimitiveRegistry::with_cpu_flip_reference();
         let index = FlatSceneIndex::build(&def).unwrap();
         let water = top("water_object");

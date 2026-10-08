@@ -68,7 +68,7 @@ use manifold_node_engine::runtime::testkit::prepare_surface as prepare;
     #[test]
     fn legacy_gpu_flip_surface_saved_fixture_preserves_authored_graph() {
         let mut def: EffectGraphDef = serde_json::from_str(include_str!(
-            "../../../../manifold-io/tests/fixtures/water_layer_graph_v1160.json"
+            "../../../../../manifold-io/tests/fixtures/water_layer_graph_v1160.json"
         )).unwrap();
         let before = def.clone();
         prepare(&mut def);

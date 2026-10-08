@@ -316,7 +316,7 @@ fn run_preset(
     change: impl Fn(u32, &mut ParamManifest),
 ) -> PresetOutcome {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
-    let json = crate::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(id))
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(id))
         .expect("bundled preset");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("preset parses");
     let mut manifest = ParamManifest::from_params(

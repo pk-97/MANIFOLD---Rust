@@ -38,7 +38,7 @@ from gate_policy import (
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
-    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, is_inert_plan_path,
+    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, CATALOG_PACKAGE, is_inert_plan_path,
 )
 from gate_workspace import Workspace
 
@@ -201,10 +201,14 @@ class Plan:
         for package in self.workspace.feature_packages('gpu-proofs'):
             filters = (UI_PAINT_FILTERS if self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
                        else self.final_filters())
+            if package == CATALOG_PACKAGE:
+                filters = [re.sub(r'^(exec|freeze|load|runtime|water|palette|preview_encoding|primitive_registry|node_graph)::',
+                                  r'contracts::\1::', value) for value in filters]
             targets = [t['name'] for t in self.workspace.targets(package, 'test')
                        if ('gpu-proofs' in t.get('required-features', [])
                            or (self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
-                               and t['name'] == 'main'))
+                               and t['name'] == 'main')
+                           or (package == CATALOG_PACKAGE and t['name'] == 'main'))
                        and t['name'] not in GLB_TESTS
                        and not (route and route[:2] == (package, t['name']) and not route[2])]
             has_lib = bool(self.workspace.targets(package, 'lib'))
@@ -291,13 +295,14 @@ def contract_module_filters(path, repo):
             if attrs:
                 child = source.parent.joinpath(*scope, attrs[-1])
             else:
-                base = source.parent if source.stem in ("lib", "mod") else source.with_suffix("")
+                base = source.parent if source.stem in ("lib", "mod", "main") else source.with_suffix("")
                 child = base.joinpath(*scope, name + ".rs")
                 if not child.is_file():
                     child = base.joinpath(*scope, name, "mod.rs")
             walk(child, prefix + scope + (name,), ancestors | {source})
 
     walk(repo / RENDERER_SRC / "lib.rs", (), set())
+    walk(repo / "crates/manifold-nodes/tests/main.rs", (), set())
     return sorted(found)
 
 
@@ -445,6 +450,19 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
     if shader_users is None:
         shader_users = shader_index(repo, workspace) if any(p.endswith('.wgsl') for p in paths) else lambda p: []
     plan = Plan(workspace=workspace)
+    # Retired crates have no runnable target. Only skip paths Git confirms
+    # were deleted; moved destinations are independently scoped from the diff.
+    unowned_missing = [p for p in paths if workspace.owner(p) is None
+                       and not (Path(repo) / p).exists()]
+    retired = set()
+    if unowned_missing and (Path(repo) / '.git').exists():
+        deleted = subprocess.run(
+            ['git', '-C', str(repo), 'diff', '--no-renames', '--diff-filter=D',
+             '--name-only', '--merge-base', base, '--', *unowned_missing],
+            capture_output=True, text=True)
+        if deleted.returncode:
+            raise RuntimeError(f'cannot scope deleted crate paths: {deleted.stderr.strip()}')
+        retired.update(deleted.stdout.splitlines())
     test_paths = [p for p in paths if p.endswith('.rs') and (Path(repo) / p).is_file()
                   and '#[test]' in (Path(repo) / p).read_text()
                   and p.startswith((RENDERER_SRC, ENGINE_SRC, PROOFS_DIR))]
@@ -460,6 +478,8 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
             if path:
                 patches[path[1]] = section
     for path in sorted(set(paths)):
+        if path in retired:
+            continue
         if not is_gpu_path(path, workspace):
             continue
         plan.filters.update("node_graph::catalog_tests::" + module + "::"
@@ -536,6 +556,8 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
         if path.startswith((RENDERER_SRC, ENGINE_SRC)) and path.endswith(".rs"):
             plan.filters.update(path_attr_filters(path, repo) or module_filters(path))
             continue
+        if path.startswith(CONTRACT_TESTS_DIR):
+            continue  # Its real consolidated-harness mount was resolved above.
         if is_gltf_path(path):
             continue
         owner = workspace.owner(path)

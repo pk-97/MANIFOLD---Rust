@@ -1,5 +1,5 @@
 use manifold_node_engine::load::binding_migration::*;
-use crate::bundled_presets::bundled_preset_def;
+use manifold_nodes::bundled_presets::bundled_preset_def;
 use manifold_core::project::Project;
     use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::{

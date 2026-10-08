@@ -99,8 +99,8 @@ const CEILINGS: &[(&str, usize)] = &[
     ("crates/manifold-node-engine/src/runtime/persistent_slot_tests.rs", 150),
     ("crates/manifold-node-engine/src/runtime/generator_input_tests.rs", 500),
     ("crates/manifold-node-engine/src/runtime/chain_error_tests.rs", 150),
-    ("crates/manifold-renderer/src/node_graph/catalog_tests/runtime_generator_runtime.rs", 1550),
-    ("crates/manifold-renderer/src/node_graph/catalog_tests/runtime_chain_fusion.rs", 1450),
+    ("crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_generator_runtime.rs", 1550),
+    ("crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_chain_fusion.rs", 1450),
     ("crates/manifold-node-engine/src/runtime/segment_prewarm_tests.rs", 50),
     // Wave 1 register files still open (interim ceilings = current + slack;
     // tighten at Wave 1 close — P-I kills scrub fields, P-S splits panels)

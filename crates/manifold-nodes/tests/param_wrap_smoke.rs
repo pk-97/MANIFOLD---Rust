@@ -8,7 +8,7 @@
 //! BUG-039 tag sweep (see `docs/BUG_BACKLOG.md`).
 //!
 //! Run:
-//!   cargo test -p manifold-renderer --test param_wrap_smoke --features gpu-proofs
+//!   cargo test -p manifold-nodes --test main param_wrap_smoke:: --features gpu-proofs
 #![cfg(feature = "gpu-proofs")]
 
 use manifold_core::PresetTypeId;
@@ -37,7 +37,7 @@ fn slot(spec: &ParamSpecDef, value: f32) -> Param {
 fn render_generator_at(preset_id: &'static str, param_id: &str, value: f32) -> Vec<u8> {
     let device = std::sync::Arc::new(GpuDevice::new_queued("param_wrap_smoke"));
     let registry = PrimitiveRegistry::with_builtin();
-    let json = crate::bundled_presets::bundled_preset_json(&PresetTypeId::new(preset_id))
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(&PresetTypeId::new(preset_id))
         .unwrap_or_else(|| panic!("{preset_id} bundled preset json"));
     let def: manifold_core::effect_graph_def::EffectGraphDef =
         serde_json::from_str(&json).expect("parse preset JSON");

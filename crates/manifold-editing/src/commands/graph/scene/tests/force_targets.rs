@@ -284,7 +284,7 @@ fn scene_force_targets_split_remaps_a_field_exported_by_the_split_group() {
 fn scene_force_targets_copies_remove_only_their_field_and_undoes() {
     let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
+        "/../manifold-nodes/assets/generator-presets/PhysicsBoxes.json"
     )))
     .unwrap();
     let world = graph

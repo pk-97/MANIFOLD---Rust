@@ -16,7 +16,7 @@ use manifold_node_engine::runtime::PresetRuntime;
 
 use manifold_nodes_scene::testkit::gpu_harness as harness;
 
-use crate::testkit::rt_dynamic::{modifier_combo_scene, scene_json};
+use manifold_nodes::testkit::rt_dynamic::{modifier_combo_scene, scene_json};
 
 /// Read a non-degenerate triangle from the executor's pinned Array dump and
 /// construct an analytical ray through its centroid. This is derived from

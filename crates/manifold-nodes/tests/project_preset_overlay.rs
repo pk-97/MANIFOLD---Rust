@@ -229,7 +229,7 @@ fn overlay_only_generator_produces_nonempty_editor_snapshot() {
 
     // Render path: resolves the tracking layer's def by id.
     assert!(
-        crate::bundled_presets::bundled_preset_json(&preset_id).is_some(),
+        manifold_nodes::bundled_presets::bundled_preset_json(&preset_id).is_some(),
         "RENDER path: overlay generator must resolve via bundled_preset_json"
     );
 

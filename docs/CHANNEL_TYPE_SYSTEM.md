@@ -23,7 +23,7 @@
 
 **section 17 (Texture2D channel signatures) — Phase 17.A shipped 2026-05-28.** Extends the Channel type system to decorate Texture2D ports with a four-slot RGBA channel signature. Same well_known registry, same FNV-1a-64 const-hash interning, same compile-time decidable match. Untyped Texture2D stays the back-compat default. Validator surfaces a structured `TextureChannelMismatch` carrying the first diverging slot index. Macro: `Texture2D[R: Name, G: Name, B: Name, A: Name]`. Migrated `node.optical_flow_estimate` to declare the Watercolor `(R: FLOW_X, G: CONFIDENCE, B: FLOW_Y, A: VALID)` convention; downstream consumer migrations (the bug-fix that motivated this) live in a follow-up commit. See section 17 for the full surface.
 
-**Acceptance criteria after Phase 6:** 862/862 manifold-renderer lib tests passing; clippy clean; `check-presets` reports 49/49 OK; three affected presets (BlackHole, ComputeStrangeAttractor, ParticleText) visually verified; manifold-app binary builds; companion docs reference CHANNEL_TYPE_SYSTEM.md as the type-system source of truth.
+**Acceptance criteria after Phase 6:** 862/862 manifold-nodes lib tests passing; clippy clean; `check-presets` reports 49/49 OK; three affected presets (BlackHole, ComputeStrangeAttractor, ParticleText) visually verified; manifold-app binary builds; companion docs reference CHANNEL_TYPE_SYSTEM.md as the type-system source of truth.
 
 **Companion docs:**
 
@@ -873,7 +873,7 @@ In `crates/manifold-node-engine/src/validation.rs`. Build synthetic graphs and a
 - **Order matters for Exact.** `Channels[x, y]` → `Channels[y, x]` errors (same names, different order).
 - **Error messages resolve names.** A mismatch produces a human-readable message with the original channel name strings.
 
-Run via `cargo test -p manifold-renderer --lib node_graph::validation::tests::`.
+Run via `cargo test -p manifold-nodes --lib node_graph::validation::tests::`.
 
 ### 9.2 Layout calculator tests
 
@@ -931,13 +931,13 @@ The most important integration test. After Phase 3 (typed family migration) and 
 2. Compile to an `ExecutionPlan` without validator errors.
 3. Render its first frame on the canonical fixture (`Liveschool Live Show V6 LEDS.manifold`) without visual regression.
 
-The first two are gated by `cargo run -p manifold-renderer --bin check-presets`. The third is the manual canonical-fixture sanity check pattern established in [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md section 3 (Parity-test strategy)](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md).
+The first two are gated by `cargo run -p manifold-nodes --bin check-presets`. The third is the manual canonical-fixture sanity check pattern established in [PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md section 3 (Parity-test strategy)](PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md).
 
 This is the test that catches naming-inconsistency landmines. If `pack_curve_xy` declares its output as `Channels[x, y]` but `render_lines` declares its input as `Channels[posx, posy]`, every Lissajous-shape preset breaks. The round-trip surfaces it immediately.
 
 ### 9.7 Parity tests for migrated primitives
 
-The existing parity test pattern (`cargo test -p manifold-renderer --test parity <name>::`) covers visual equivalence for every shipping effect/generator. Run after Phase 3 + Phase 4 for the migrated primitives. Expected outcome: zero visual diff, because byte layouts are preserved.
+The existing parity test pattern (`cargo test -p manifold-nodes --test parity <name>::`) covers visual equivalence for every shipping effect/generator. Run after Phase 3 + Phase 4 for the migrated primitives. Expected outcome: zero visual diff, because byte layouts are preserved.
 
 ### 9.8 Workspace test gate at Phase 5
 
@@ -982,7 +982,7 @@ Estimated chat counts per phase. Each phase's "Done when" is the explicit accept
 
 **Out of scope for Phase 1:** macro changes, primitive migrations, wgsl_compute changes. The type system exists but no primitive uses it yet.
 
-**Done when:** `cargo test -p manifold-renderer --lib node_graph::ports::` and `cargo test -p manifold-renderer --lib node_graph::validation::` are green. Workspace not affected — `ItemKind` still exists alongside the new types, no production code uses Channels yet.
+**Done when:** `cargo test -p manifold-nodes --lib node_graph::ports::` and `cargo test -p manifold-nodes --lib node_graph::validation::` are green. Workspace not affected — `ItemKind` still exists alongside the new types, no production code uses Channels yet.
 
 ### Phase 2 — Macro syntax + smoke-test primitive (~1 chat)
 
@@ -995,7 +995,7 @@ Estimated chat counts per phase. Each phase's "Done when" is the explicit accept
 
 **Out of scope:** the broader catalog migration.
 
-**Done when:** the smoke-test primitive's Channels port wires into another smoke-test primitive's Channels port in a unit test. End-to-end through the validator + executor. `cargo test -p manifold-renderer --lib` green.
+**Done when:** the smoke-test primitive's Channels port wires into another smoke-test primitive's Channels port in a unit test. End-to-end through the validator + executor. `cargo test -p manifold-nodes --lib` green.
 
 ### Phase 3 — Typed-family migration (~1 chat)
 
@@ -1010,8 +1010,8 @@ Estimated chat counts per phase. Each phase's "Done when" is the explicit accept
 **Out of scope:** wgsl_compute. The `Array(Anonymous)` path still works for cast atoms and wgsl_compute, both of which get migrated in Phase 4.
 
 **Done when:**
-- `cargo run -p manifold-renderer --bin check-presets` runs every preset without errors.
-- `cargo clippy -p manifold-renderer -- -D warnings` is clean.
+- `cargo run -p manifold-nodes --bin check-presets` runs every preset without errors.
+- `cargo clippy -p manifold-nodes -- -D warnings` is clean.
 - Focused parity tests for ~5 representative shipping presets (Lissajous, BasicShapes, MetallicGlass, FluidSim2D, NestedCubes) pass.
 
 ### Phase 4 — `wgsl_compute` migration + Anonymous deletion (~1 chat)
@@ -1033,7 +1033,7 @@ Estimated chat counts per phase. Each phase's "Done when" is the explicit accept
 
 **Done when:**
 - No reference to `ItemKind`, `Anonymous`, or `cast_as_*` anywhere in production code (grep confirms zero).
-- `cargo run -p manifold-renderer --bin check-presets` runs every preset without errors.
+- `cargo run -p manifold-nodes --bin check-presets` runs every preset without errors.
 - All wgsl_compute presets parse cleanly with new typed signatures.
 
 ### Phase 5 — Workspace test gate + naming consistency sweep (~1 chat)
@@ -1646,7 +1646,7 @@ Files added:
 Files modified:
 - `crates/manifold-node-engine/src/ports.rs` — types reshape, `ItemKind` retained alongside (deletion in Phase 4), new types added.
 - `crates/manifold-node-engine/src/validation.rs` — `channels_compatible` predicate, `ChannelMismatch` error variant, updated error display. Also adds `PERMISSIVE_PRIMITIVE_ALLOWLIST: &[PrimitiveTypeId]` const (see section 11.4).
-- `crates/manifold-renderer/src/node_graph/mod.rs` — re-export new types and `well_known`.
+- `crates/manifold-nodes/src/node_graph/mod.rs` — re-export new types and `well_known`.
 
 Tests added:
 - `crates/manifold-node-engine/src/ports.rs` — std430 layout calculator unit tests.

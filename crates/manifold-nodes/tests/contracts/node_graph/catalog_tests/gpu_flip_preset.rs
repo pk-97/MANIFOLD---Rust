@@ -333,7 +333,7 @@ use serde_json::{Value, json};
         let registry = PrimitiveRegistry::with_cpu_flip_reference();
         for name in [SHIPPED_PRESET, "WaterDamBreakGpu", "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
             let mut preset: Value = if name == "WaterDamBreakGpu" {
-                let source = crate::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreakGpu.json");
+                let source = manifold_nodes::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreakGpu.json");
                 serde_json::from_str(source).unwrap()
             } else {
                 let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
@@ -402,7 +402,7 @@ use serde_json::{Value, json};
     #[test]
     fn gpu_flip_surface_defaults_match_the_engine_on_both_dam_breaks() {
         let registry = PrimitiveRegistry::with_cpu_flip_reference();
-        let native = crate::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreak.json");
+        let native = manifold_nodes::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreak.json");
         let native = manifold_node_engine::runtime::PresetRuntime::from_json_str(native, &registry).unwrap();
         let gpu = manifold_node_engine::runtime::PresetRuntime::from_def(
             render_def(WaterScene::dam_break(64)), &registry, None,
@@ -588,7 +588,7 @@ use serde_json::{Value, json};
     #[test]
     fn gpu_flip_shipped_scene_rows_keep_authored_names() {
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-        let def = crate::bundled_presets::bundled_preset_def(&PresetTypeId::new(SHIPPED_PRESET)).unwrap();
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(SHIPPED_PRESET)).unwrap();
         let vm = SceneVm::from_def(def).expect("shipped scene resolves");
         let names: Vec<_> = vm.objects.iter().filter_map(|object| match object {
             SceneObjectVm::Known(row) => Some(row.name.as_str()),
@@ -821,10 +821,10 @@ use serde_json::{Value, json};
     }
 
 use manifold_node_engine::water::primitives::{gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS};
-use crate::bundled_presets::bundled_preset_json;
+use manifold_nodes::bundled_presets::bundled_preset_json;
 use manifold_node_engine::water::liquid::clock::INTERVAL_DURATION_INPUTS;
 
 fn shipped_preset() -> Value {
-    let json = crate::bundled_presets::bundled_preset_json(&PresetTypeId::new("WaterDamBreakGpuFlip")).expect("the GPU FLIP preset is bundled");
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(&PresetTypeId::new("WaterDamBreakGpuFlip")).expect("the GPU FLIP preset is bundled");
     serde_json::from_str(&json).expect("the GPU FLIP preset parses")
 }

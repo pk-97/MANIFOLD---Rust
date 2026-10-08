@@ -653,10 +653,10 @@ sandbox") and the wave still closed BUG-082 on a headless PNG. The PNG proved th
 - **Forbidden moves:** touching send *creation* ("+ Add Source" stays); the UI_SOTA
   visual pass; new widget kinds; conditional visibility anywhere (section 7.2 item 1's rule).
 - **Test scope:** `-p manifold-ui --lib` + `-p manifold-app --lib` (state_sync) +
-  `-p manifold-renderer --lib` if `ScopeOnsets` lives there; full workspace sweep +
+  `-p manifold-nodes --lib` if `ScopeOnsets` lives there; full workspace sweep +
   `cargo clippy --workspace -- -D warnings` at wave close.
 - **As-built correction:** `ScopeOnsets` lives in `manifold-spectral`, not
-  `manifold-renderer` — the brief's own entry-state anchor was imprecise; verified
+  `manifold-nodes` — the brief's own entry-state anchor was imprecise; verified
   at execution time (section 5's re-verification rule) and the test-scope line above
   followed the real crate. Removing the `kick: f32` field (not a flag) shrinks
   `ScopeOnsets::COUNT` 4→3 and `ScopeColumn::STRIDE` 8→7 at compile time — every

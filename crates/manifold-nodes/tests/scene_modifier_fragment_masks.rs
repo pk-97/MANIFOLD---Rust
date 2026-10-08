@@ -11,7 +11,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 use manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
 
-use crate::testkit::scene_modifier as common;
+use manifold_nodes::testkit::scene_modifier as common;
 
 const STOCK_WITH_MASKS: &[&str] = &[
     "MaskedPeel",

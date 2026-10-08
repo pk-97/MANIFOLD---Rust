@@ -143,7 +143,7 @@ const fn light_key(index: usize, offset: u64) -> u64 {
 }
 
 /// D6's curated "Add modifier" vocabulary: `(display name, type_id)`, in the
-/// design's own order. Plain string literals — no `manifold-renderer`
+/// design's own order. Plain string literals — no `manifold-nodes`
 /// dependency needed here; the command that receives the chosen `type_id`
 /// (`InsertMeshModifierCommand`, `manifold-editing`) is what actually knows
 /// it names a real primitive.
@@ -211,7 +211,7 @@ pub struct RowValue {
     pub driven: bool,
     /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8/sizing amendment): whether this
     /// param is currently an exposed card param on the layer's generator
-    /// graph — `manifold_renderer::node_graph::scene_vm::is_param_exposed`'s
+    /// graph — `manifold_nodes::node_graph::scene_vm::is_param_exposed`'s
     /// read off the SAME `EffectGraphDef` `SceneVm::from_def` already
     /// walked, transcribed by `state_sync` like every other field on this
     /// struct. Drives the row's mod-button lit state; NOT written by this
@@ -516,7 +516,7 @@ pub enum ObjectRowVm {
 /// documentation for `ModulatedEnumRow`'s own doc comment to point at
 /// (`labels` is transcribed by `state_sync`, the same DTO-boundary
 /// convention as `EnvironmentRowVm::mode_is_hdri`, since this crate can't
-/// depend on `manifold-renderer`'s `LIGHT_MODES`/`SHADOW_SOFTNESS_LABELS`).
+/// depend on `manifold-nodes`'s `LIGHT_MODES`/`SHADOW_SOFTNESS_LABELS`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct EnumRowValue {
     pub row: RowValue,
@@ -643,9 +643,9 @@ pub struct FluidRoleRow {
 }
 
 /// Full live-panel view model for one selected generator layer's scene —
-/// translated 1:1 from `manifold_renderer::node_graph::scene_vm::SceneVm`'s
+/// translated 1:1 from `manifold_nodes::node_graph::scene_vm::SceneVm`'s
 /// Header/Environment/Atmosphere sections by `state_sync` (this crate can't
-/// depend on `manifold-renderer`/`manifold-core`, so the translation is the
+/// depend on `manifold-nodes`/`manifold-core`, so the translation is the
 /// UI-facing DTO boundary, same convention as `AudioSendRow`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneForceRowVm {

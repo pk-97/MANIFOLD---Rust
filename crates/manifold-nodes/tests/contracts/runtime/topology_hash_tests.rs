@@ -53,7 +53,7 @@ use manifold_core::{PresetTypeId, effects::PresetInstance};
     /// commands drive — `manifold-editing`'s
     /// `toggle_relight_undo_roundtrip` (command_roundtrips.rs) proves the
     /// command correctly flips this same field through undo/redo;
-    /// `manifold-renderer` can't depend on `manifold-editing` (crate-graph
+    /// `manifold-nodes` can't depend on `manifold-editing` (crate-graph
     /// direction), so this half of the loop proves the OTHER end: the
     /// renderer reads that field, mints deterministic `rl_`-prefixed nodes
     /// when it's on, and the topology hash changes so a toggle actually

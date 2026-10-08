@@ -730,7 +730,7 @@ struct BoxRun {
 const BOX_SIZE: u32 = 64;
 
 fn box_def(fixture: manifold_node_engine::water::liquid::conformance::Fixture) -> manifold_core::effect_graph_def::EffectGraphDef {
-    use crate::testkit::liquid_conformance_fixtures::LIQUID_SOLVERS;
+    use manifold_nodes::testkit::liquid_conformance_fixtures::LIQUID_SOLVERS;
     let row = LIQUID_SOLVERS
         .iter()
         .find(|row| row.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)

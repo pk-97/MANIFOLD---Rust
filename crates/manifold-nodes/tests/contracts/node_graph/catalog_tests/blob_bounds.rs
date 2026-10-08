@@ -97,7 +97,7 @@ mod migration_tests {
         // loader's migrations before the renderer builds it, so its surface is
         // checked as the loader's flattened document.
         let mut layer: EffectGraphDef = serde_json::from_str(include_str!(
-            "../../../../manifold-io/tests/fixtures/water_layer_graph_v1160.json"
+            "../../../../../manifold-io/tests/fixtures/water_layer_graph_v1160.json"
         ))
         .expect("saved layer");
         layer.scene_modifiers.clear();

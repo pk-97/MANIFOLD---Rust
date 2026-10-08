@@ -5,7 +5,7 @@
 //! - `migrate_scene_exposures` is the load-time idempotent migration that stamps
 //!   exposures onto every scene-vocabulary node in an existing graph.
 //! - `PrimitiveRegistrySceneExposureProvider` implements the core trait for
-//!   creation-site commands that cannot depend on `manifold_renderer` directly.
+//!   creation-site commands that cannot depend on `manifold_nodes` directly.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 mod compound;

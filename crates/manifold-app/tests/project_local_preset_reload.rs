@@ -66,7 +66,7 @@ fn install(presets: &[EmbeddedPreset]) {
 fn fake_imported_generator(id: &PresetTypeId) -> EmbeddedPreset {
     let tess_json = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../manifold-renderer/assets/generator-presets/Tesseract.json"),
+            .join("../manifold-nodes/assets/generator-presets/Tesseract.json"),
     )
     .expect("read Tesseract.json");
     let mut def: manifold_core::effect_graph_def::EffectGraphDef =

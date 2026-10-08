@@ -113,7 +113,7 @@ def case_contamination():
     """An accel rebuild resets every accumulator. Inside the window (or within
     the lookback) the run is discarded; comfortably before it, it is fine."""
     print("4. contamination detection")
-    rebuild = ("[INFO manifold_renderer] node.render_scene: RT accel structure "
+    rebuild = ("[INFO manifold_nodes] node.render_scene: RT accel structure "
                "(re)build enqueued (async, topo key 0x1, content key 0x2)")
 
     def cap(frame):

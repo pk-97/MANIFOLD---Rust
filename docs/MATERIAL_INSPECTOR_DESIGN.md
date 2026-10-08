@@ -143,7 +143,7 @@ pub enum MaterialParamRole {
 // New field on SceneParamMetadata and ParamSpecDef:
 pub material_role: Option<MaterialParamRole>,
 
-// manifold-renderer::node_graph::material_inspector
+// manifold-nodes::node_graph::material_inspector
 pub fn material_param_role(type_id: &str, param_name: &str)
     -> Option<manifold_core::material_inspector::MaterialParamRole>;
 ```
@@ -169,7 +169,7 @@ The mode-parameter count becomes 96. Colours, texture slots, port names and the 
 Extend renderer `scene_vm::MaterialColorRow` with `pub texture_slots: Vec<MaterialTextureSlot>` and `pub shared_object_count: Option<usize>`. The existing selected object identifies the target map owner; each record's port is its existing graph input name, not a new asset ID.
 
 ```rust
-// manifold-renderer::node_graph::scene_vm
+// manifold-nodes::node_graph::scene_vm
 pub struct MaterialTextureSlot {
     pub port: String,
     pub source: MaterialTextureSource,

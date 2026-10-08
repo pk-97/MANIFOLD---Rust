@@ -6,7 +6,7 @@
 //! shader work inside a preset: edit JSON → render → Read the PNG.
 //!
 //! Run:
-//!   cargo run -p manifold-renderer --bin render-generator-preset -- \
+//!   cargo run -p manifold-nodes --bin render-generator-preset -- \
 //!       BlackHole --size 1280x720 --frames 90 --out /tmp/bh.png \
 //!       --param cam_dist=31.75 --param tilt=15
 //!
@@ -16,6 +16,7 @@
 //! save-time thumbnail path uses (linear HDR graph output → viewable PNG).
 
 use std::path::PathBuf;
+use manifold_nodes as _;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};

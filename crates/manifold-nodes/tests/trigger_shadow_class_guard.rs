@@ -12,7 +12,7 @@
 //! false negative on Lissajous, whose `mux_x.selector` / `mux_y.selector`
 //! are driven by a `presetMetadata.bindings` entry (an outer-card param
 //! written straight into the node's param every frame), not a graph wire.
-//! The shared checker (`manifold_renderer::node_graph::trigger_shadow_lint`)
+//! The shared checker (`manifold_nodes::node_graph::trigger_shadow_lint`)
 //! checks both paths, and — via `manifold_core::flatten::flatten_groups` —
 //! resolves wires transparently across group boundaries (Lissajous's
 //! `mux_x`/`mux_y` live inside the "Frequency Selection" group; flattening
@@ -32,7 +32,7 @@
 //! `trigger_shadow_lint::DISCRETE_REPLACE_ALLOWLIST`, each entry citing the
 //! preset's own description as the record of the decision.
 //!
-//! Run: `cargo nextest run -p manifold-renderer --test trigger_shadow_class_guard`
+//! Run: `cargo nextest run -p manifold-nodes --test main trigger_shadow_class_guard::`
 //! (GPU-free — pure static analysis over `EffectGraphDef`, safe for the
 //! default sweep).
 

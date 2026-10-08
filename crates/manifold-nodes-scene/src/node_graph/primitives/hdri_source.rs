@@ -632,7 +632,7 @@ mod tests {
 /// GPU-backed proof: the decoded EXR bytes actually upload and blit
 /// correctly, and `prewarm_pipeline` populates the shared compute cache
 /// (mirroring `gltf_texture_source`'s BUG-037 proof). Run deliberately:
-/// `cargo test -p manifold-renderer --features gpu-proofs
+/// `cargo test -p manifold-nodes --features gpu-proofs
 /// node_graph::primitives::hdri_source::gpu_tests`.
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {

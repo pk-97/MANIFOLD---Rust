@@ -8,7 +8,7 @@ parses that run's own output, and records it. It never re-derives a verdict
 the underlying harness did not produce.
 
 MODES
-  cpu      A1 mesh-change contract: `cargo test -p manifold-renderer mesh_change_`
+  cpu      A1 mesh-change contract: `cargo test -p manifold-nodes mesh_change_`
   gpu      A2-A5 correctness groups via one scripts/gpu_proofs_gate.py run
            with repeated --filter arguments (baseline, fusion, ordering,
            shading, current_frame, refit — catalog and perf are excluded here
@@ -18,7 +18,7 @@ MODES
            journey-proofs rt_dynamic_export_ -- --test-threads=1
            (requires ffmpeg and ffprobe on PATH)
   perf     A9 bounded performance: explicitly invoked release-build proof,
-           `cargo test --release -p manifold-renderer --features rt-perf-proofs
+           `cargo test --release -p manifold-nodes --features rt-perf-proofs
            --test gpu_proofs -- rt_dynamic_perf --test-threads=1`, followed by
            the held-out and reference-content app measurements.
            Requires --reference-project and --held-out-project; both files'
@@ -470,7 +470,7 @@ def validate_static_baseline(baseline_path: Path | None,
 def mode_cpu(repo: Path, manifest: Path, artifact_dir: Path):
     tests, commands = [], []
     fixtures = []
-    list_cmd = ["cargo", "test", "-p", "manifold-renderer", "mesh_change_", "--", "--list"]
+    list_cmd = ["cargo", "test", "-p", "manifold-nodes", "mesh_change_", "--", "--list"]
     list_log = artifact_dir / "list-cpu.log"
     listed, rc, dur = list_tests(list_cmd, repo, list_log)
     commands.append({"cmd": " ".join(list_cmd), "exitCode": rc,
@@ -486,7 +486,7 @@ def mode_cpu(repo: Path, manifest: Path, artifact_dir: Path):
         return 1, tests, {"passed": 0, "failed": 0, "blocked": 1}, commands, fixtures
 
     run_log = artifact_dir / "run-cpu.log"
-    run_cmd = ["cargo", "test", "-p", "manifold-renderer", "mesh_change_"]
+    run_cmd = ["cargo", "test", "-p", "manifold-nodes", "mesh_change_"]
     rc, dur = run_streamed(run_cmd, repo, run_log)
     commands.append({"cmd": " ".join(run_cmd), "exitCode": rc,
                      "durationSec": round(dur, 1), "log": str(run_log)})
@@ -537,7 +537,7 @@ def _mode_gpu_groups(repo: Path, manifest: Path, artifact_dir: Path,
     (A9: one bounded run, never a debug-profile measurement)."""
     tests, commands = [], []
     listed = set()
-    for package in ("manifold-renderer", "manifold-nodes-scene"):
+    for package in ("manifold-nodes", "manifold-nodes-scene"):
         names, rc, record = _list_gpu_tests(repo, artifact_dir, package=package)
         commands.append(record)
         if names is None:

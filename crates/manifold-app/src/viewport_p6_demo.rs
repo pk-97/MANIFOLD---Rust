@@ -1,5 +1,5 @@
 //! P6 demo/evidence (`docs/REALTIME_3D_DESIGN.md` P6 — Viewport Tier 2
-//! gizmos): drives the ACTUAL `manifold_renderer::node_graph` gizmo
+//! gizmos): drives the ACTUAL `manifold_nodes::node_graph` gizmo
 //! functions (`pick_object`, `gizmo_target_for`, `gizmo_lines`, `drag_write`)
 //! against a real `node.scene_object`-shaped scene through a real
 //! `ViewportSession`, then dumps headless PNGs and asserts pixels actually

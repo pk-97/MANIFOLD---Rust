@@ -30,9 +30,9 @@
     "tests": ["scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"]
   },
   "generator-fusion": {
-    "triggers": ["crates/manifold-nodes-image/src/node_graph/", "crates/manifold-nodes-scene/src/node_graph/", "crates/manifold-renderer/src/node_graph/", "crates/manifold-node-engine/src/", "crates/manifold-gpu/"],
+    "triggers": ["crates/manifold-nodes-image/src/node_graph/", "crates/manifold-nodes-scene/src/node_graph/", "crates/manifold-nodes/src/node_graph/", "crates/manifold-node-engine/src/", "crates/manifold-gpu/"],
     "kind": "gpu",
-    "source": "crates/manifold-renderer/src/freeze/proof.rs",
+    "source": "crates/manifold-nodes/tests/contracts/freeze/proof.rs",
     "tests": ["fused_gain_chain_matches_unfused_within_tolerance", "oracle_catches_wrong_fusion"]
   }
 }

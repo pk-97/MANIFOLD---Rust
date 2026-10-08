@@ -11,7 +11,7 @@
 //! phases the JSON harness cannot express: project save/reload, and source
 //! layer deletion.
 
-// Force the linker to keep manifold-renderer's inventory::submit! blocks.
+// Force the linker to keep manifold-nodes's inventory::submit! blocks.
 use manifold_nodes as _;
 
 use manifold_editing::command::Command;

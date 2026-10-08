@@ -789,7 +789,7 @@ fn glitch_block_displace_field_multi_output_matches_unfused() {
     let input = gradient_input(&device, w, h);
 
     let json =
-        crate::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
+        manifold_nodes::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
             "Glitch",
         ))
         .expect("Glitch is a bundled preset");

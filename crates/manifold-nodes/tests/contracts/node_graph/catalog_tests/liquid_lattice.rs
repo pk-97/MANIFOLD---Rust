@@ -3,7 +3,7 @@
     /// flattened. Scene-modifier recipes prepare only on a host scene, so the
     /// hosts are what the wiring guards walk.
     fn flat_bundled_hosts() -> Vec<(String, manifold_core::effect_graph_def::EffectGraphDef)> {
-        use crate::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
+        use manifold_nodes::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
         use manifold_core::preset_def::PresetKind;
 
         let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();

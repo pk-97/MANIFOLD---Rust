@@ -25,19 +25,19 @@
 
 A draw command's clip (and depth) is **bound at enqueue, never inferred at flush**. All four command types carry it per command: rect `RectCommand::clip`, line `LineCommand::clip`, image `ImageCommand::clip`, text `clip_bounds`. Batches are DERIVED in `prepare()` by run-scanning consecutive equal `(clip, depth)` commands — there is no "pending run" whose scissor gets decided later. History: BUG-060 (hardest bug in repo history) existed because rect scissors were stamped per batch at flush time, and a transform/depth boundary mid-traversal flushed pending tree rects under the immediate clip (`None`); depth had the same class of bug earlier. If you add a new command type, give it `clip` + `depth` fields captured at the push site.
 
-Corollary (2026-07-10, sibling of BUG-060): a tree node's **text/icon clip is the tree clip intersected with the node's own rect**, bound in `draw_node` at enqueue — a label longer than its widget cuts at the edge instead of overrunning the neighbour. Containment is structural, not a per-call-site elide. Proof: `manifold-renderer/tests/text_clip_to_node_bounds.rs` (pixel-asserted both ways).
+Corollary (2026-07-10, sibling of BUG-060): a tree node's **text/icon clip is the tree clip intersected with the node's own rect**, bound in `draw_node` at enqueue — a label longer than its widget cuts at the edge instead of overrunning the neighbour. Containment is structural, not a per-call-site elide. Proof: `manifold-nodes/tests/text_clip_to_node_bounds.rs` (pixel-asserted both ways).
 
 ## Key Module Splits
 
 - `manifold-app/src/ui_bridge/` — 8 modules: mod, transport, editing, inspector, layer, project, state_sync, marker
 - `manifold-app/src/` — `app.rs` + `app_render.rs` + `app_lifecycle.rs`
-- `manifold-renderer/src/node_graph/` — the graph runtime: `primitive.rs`, `graph.rs`, `execution_plan.rs`, `state_store.rs`, `metal_backend.rs`, `bundled_presets.rs`, plus the `primitives/`, `atomic/`, and `composites/` subdirectories
-- `manifold-renderer/src/node_graph/primitives/` — ~30 primitives (one file per primitive, auto-registered via `inventory::submit!`)
-- `manifold-renderer/src/node_graph/atomic/` — irreducible complex kernels (FluidSim2D, FluidSim3D, Plasma, Glitch)
-- `manifold-renderer/src/node_graph/composites/` — 6 Rust composite builders (Bloom, Halation, Infrared, Mirror, SoftFocus, StrobeOpacity) retained as dev fixtures for parity tests; new composites ship as JSON
-- `crates/manifold-renderer/assets/effect-presets/` — 29 JSON-authoritative presets, codegened into `BUNDLED_PRESETS` by `build.rs`
-- `manifold-renderer/src/effects/` — 6 legacy monolithic effect impls retained because their primitives wrap them (auto_gain, blob_tracking, depth_of_field, infrared, quad_mirror, wireframe_depth) + `compute_blit_helper` + `compute_dual_blit_helper`
-- `manifold-renderer/src/generators/` — 23 generator impls + shared infrastructure (registry, line_pipeline, compute_common, stateful_base, generator_math). Still on the legacy `inventory::submit! { GeneratorMetadata, GeneratorFactory }` workflow; JSON migration pending.
+- `manifold-nodes/src/node_graph/` — the graph runtime: `primitive.rs`, `graph.rs`, `execution_plan.rs`, `state_store.rs`, `metal_backend.rs`, `bundled_presets.rs`, plus the `primitives/`, `atomic/`, and `composites/` subdirectories
+- `manifold-nodes/src/node_graph/primitives/` — ~30 primitives (one file per primitive, auto-registered via `inventory::submit!`)
+- `manifold-nodes/src/node_graph/atomic/` — irreducible complex kernels (FluidSim2D, FluidSim3D, Plasma, Glitch)
+- `manifold-nodes/src/node_graph/composites/` — 6 Rust composite builders (Bloom, Halation, Infrared, Mirror, SoftFocus, StrobeOpacity) retained as dev fixtures for parity tests; new composites ship as JSON
+- `crates/manifold-nodes/assets/effect-presets/` — 29 JSON-authoritative presets, codegened into `BUNDLED_PRESETS` by `build.rs`
+- `manifold-nodes/src/effects/` — 6 legacy monolithic effect impls retained because their primitives wrap them (auto_gain, blob_tracking, depth_of_field, infrared, quad_mirror, wireframe_depth) + `compute_blit_helper` + `compute_dual_blit_helper`
+- `manifold-nodes/src/generators/` — 23 generator impls + shared infrastructure (registry, line_pipeline, compute_common, stateful_base, generator_math). Still on the legacy `inventory::submit! { GeneratorMetadata, GeneratorFactory }` workflow; JSON migration pending.
 
 ## Effect Pipeline
 

@@ -15,7 +15,7 @@ use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::testkit::scene_modifier as common;
+use manifold_nodes::testkit::scene_modifier as common;
 
 const HOST: &str = include_str!("fixtures/scene-modifiers/nested_multimaterial_v2.json");
 

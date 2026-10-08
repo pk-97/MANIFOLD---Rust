@@ -707,7 +707,7 @@ pub fn sync_inspector_data(
                             // constants (`light.rs`) — this crate can't
                             // depend on them directly through the UI DTO
                             // boundary (`manifold-ui` doesn't depend on
-                            // `manifold-renderer`), same convention as
+                            // `manifold-nodes`), same convention as
                             // `EnvironmentRowVm::mode_is_hdri`.
                             const LIGHT_MODE_LABELS: &[&str] = &["Sun", "Point"];
                             const SHADOW_SOFTNESS_LABELS: &[&str] = &["Hard", "Soft", "VerySoft", "Contact"];

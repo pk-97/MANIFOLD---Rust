@@ -33,7 +33,7 @@ This is expected to evolve into the **main interface pattern** for MANIFOLD user
 
 New crate. Dependencies: `manifold-core` (types only), `serde`/`serde_json`, `crossbeam-channel`, the official Rust MCP SDK (`rmcp`) with its streamable-HTTP transport, and `tokio` **isolated to this crate** (current-thread runtime on the MCP thread; tokio must not leak into any other crate). `manifold-app` depends on `manifold-mcp` and wires the channels.
 
-`manifold-mcp` must NOT depend on `manifold-renderer` or `manifold-gpu`. It talks to the running app exclusively through channels.
+`manifold-mcp` must NOT depend on `manifold-nodes` or `manifold-gpu`. It talks to the running app exclusively through channels.
 
 ### Threading
 

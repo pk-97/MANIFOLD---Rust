@@ -810,7 +810,7 @@ fn scene_modifier_expand_compiler_accepts_authored_rt_and_rejects_invalid_endpoi
 }
 
 fn math_view_fixture() -> EffectGraphDef {
-    crate::node_graph::catalog_tests::math_view_fixtures::test_owner()
+    crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner()
 }
 
 #[test]
@@ -1312,7 +1312,7 @@ fn scene_modifier_math_view_captures_preceding_instance_echoes() {
     // BUG-uvts: SpatialEchoes writes only SceneEndpoint::Instances. The view
     // must capture that producer and wire it into both diagram passes, while
     // the vertices-only fixture stays unwired.
-    let owner = crate::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
+    let owner = crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
     let registry = PrimitiveRegistry::with_builtin();
     let prepared = prepare_scene_modifier_math_view(
         &owner,
@@ -1368,7 +1368,7 @@ fn scene_modifier_math_view_captures_preceding_instance_echoes() {
 fn scene_modifier_math_view_captures_vertices_and_instances_from_the_right_producers() {
     // Vortex deforms vertices, SpatialEchoes echoes instances: each endpoint
     // must reach the diagram from its own stage output.
-    let owner = crate::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
+    let owner = crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
     let registry = PrimitiveRegistry::with_builtin();
     let prepared = prepare_scene_modifier_math_view(
         &owner,
@@ -1534,7 +1534,7 @@ fn scene_modifier_math_view_instance_only_chain_never_partially_connects() {
     // chain (SpatialEchoes alone, no patch carrier) must keep the view's
     // mask presentation-only — no weights wire reaches the scene object from
     // the generated mask (BUG-uvts acceptance).
-    let fixture = crate::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
+    let fixture = crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
     let mut owner = fixture.clone();
     owner.scene_modifiers.retain(|instance| instance.id != NodeId::new("vortex_a"));
     let metadata = owner.preset_metadata.as_mut().unwrap();

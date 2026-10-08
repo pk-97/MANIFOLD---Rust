@@ -411,7 +411,7 @@ flag them so we don't architect them out.
 ## P5 (polish) — status
 
 - **Box-filter downsample — SHIPPED.** `create_box_downsample_pipeline`
-  (manifold-renderer): a 4×4 box blit (tap spacing = one cell footprint / 4 in UV)
+  (manifold-nodes): a 4×4 box blit (tap spacing = one cell footprint / 4 in UV)
   used for the capture so a full-res→cell downscale doesn't alias. Unit-tested
   headless (`box_downsample_averages_high_frequency`).
 - **Deferred (need running-app verification or are interaction features), with

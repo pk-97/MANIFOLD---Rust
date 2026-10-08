@@ -5,7 +5,7 @@
 **Prerequisites:** P0 (this doc, D7) before P1–P4; CAMERA_AND_LENS P1+P2 and GBUFFER P1 before this P1/P2; GBUFFER P2 before this P3.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
-**Machine-check gates (added 2026-07-13 — GRAPH_TOOLING + PARAM_RANGE_CONTRACT are live on main; this lane is their first live test):** every edited or authored preset JSON pre-flights `cargo run -p manifold-app --bin graph-tool -- validate <file> --kind effect|generator` (zero errors required; warnings reported verbatim in the phase report, never fixed or suppressed) and `graph-tool fusion` before/after, with the dispatch-count delta reported. Any new atom or any param-shape change regenerates the catalog (`cargo run -p manifold-renderer --bin gen_node_catalog`) in the same commit — the drift test fails otherwise. A new atom must pass `every_boundary_atom_declares_its_reason`: fusable per ADDING_PRIMITIVES section"The codegen path is mandatory", or a declared `boundary_reason:` from the taxonomy — an undeclared boundary fails the default sweep. New params: `min`/`max` are display hints and must never restrict (PARAM_RANGE_CONTRACT D3); add a `RangeContract` ONLY for a real physical bound (Index/Count/degenerate — kernel evidence cited in the curated meta-test table). Card params follow `docs/CARD_AUTHORING.md`. The landing report carries a `Tool feedback:` section — friction, false positives, unclear messages — first-live-test telemetry Peter asked for.
+**Machine-check gates (added 2026-07-13 — GRAPH_TOOLING + PARAM_RANGE_CONTRACT are live on main; this lane is their first live test):** every edited or authored preset JSON pre-flights `cargo run -p manifold-app --bin graph-tool -- validate <file> --kind effect|generator` (zero errors required; warnings reported verbatim in the phase report, never fixed or suppressed) and `graph-tool fusion` before/after, with the dispatch-count delta reported. Any new atom or any param-shape change regenerates the catalog (`cargo run -p manifold-nodes --bin gen_node_catalog`) in the same commit — the drift test fails otherwise. A new atom must pass `every_boundary_atom_declares_its_reason`: fusable per ADDING_PRIMITIVES section"The codegen path is mandatory", or a declared `boundary_reason:` from the taxonomy — an undeclared boundary fails the default sweep. New params: `min`/`max` are display hints and must never restrict (PARAM_RANGE_CONTRACT D3); add a `RangeContract` ONLY for a real physical bound (Index/Count/degenerate — kernel evidence cited in the curated meta-test table). Card params follow `docs/CARD_AUTHORING.md`. The landing report carries a `Tool feedback:` section — friction, false positives, unclear messages — first-live-test telemetry Peter asked for.
 
 **Companions:** [CAMERA_AND_LENS_DESIGN.md](CAMERA_AND_LENS_DESIGN.md) (`LensParams` on the Camera wire; the CPU oracle) · [GBUFFER_DESIGN.md](GBUFFER_DESIGN.md) (the depth/velocity inputs; the shared linearize helper) · [RENDERING_INFRA_V2_DESIGN.md](RENDERING_INFRA_V2_DESIGN.md) (direction: pillar 2, "our 2D graph system already excels here; the missing inputs are per-pixel depth and motion vectors") · [docs/ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (authoring contract; the codegen-path rule every atom here satisfies)
 
@@ -45,7 +45,7 @@ suites, e.g. `project_3d.rs::gpu_tests`; this extends the same idea from
 |---|---|---|
 | `node.variable_blur` — separable gaussian, per-pixel width from `width` Texture2D R channel, H/V param; codegen-path (`MultiInputCoincident`, `input_access: [Gather, Gather]`) | `primitives/gaussian_blur_variable_width.rs:45-97` | THE DoF gather. ⚠ VERIFY-AT-IMPL (P1): read its body shader for the R-channel unit (sigma-in-px vs half-width-px) — `coc_from_depth` emits exactly that unit; transcribe, don't guess |
 | `node.gaussian_blur` (fixed-width separable, `input_access: [Gather]`) | `primitives/separable_gaussian.rs:126-128` | Precedent: Gather atoms are fusable; copy its shader-body shape |
-| Depth input, raw [0,1] R32Float; `shared/depth.wgsl::linearize_depth`; near/far via Camera wire | GBUFFER D2/D4 (⚠ VERIFY-AT-IMPL: exists once GBUFFER P1 lands — check `rg linearize_depth crates/manifold-renderer/src/node_graph/shaders/shared/`) | The depth contract |
+| Depth input, raw [0,1] R32Float; `shared/depth.wgsl::linearize_depth`; near/far via Camera wire | GBUFFER D2/D4 (⚠ VERIFY-AT-IMPL: exists once GBUFFER P1 lands — check `rg linearize_depth crates/manifold-nodes/src/node_graph/shaders/shared/`) | The depth contract |
 | Velocity input, NDC-delta Rg16Float, rigid+camera motion | GBUFFER D5 (P2) | The motion-blur input |
 | `LensParams` (focus_distance, f_stop, shutter_angle, exposure_ev) on the Camera wire | CAMERA_AND_LENS D4 | The lens facts every atom reads |
 | `Camera::project_to_pixel` CPU oracle (`view_z`, `depth`) | CAMERA_AND_LENS D2 | Reference for every depth↔world computation in the gates |
@@ -429,7 +429,7 @@ the precedent atom named in the phase. **Forbidden moves, all phases:**
 algorithm substitution (D2/D-math are the contract) · fused monolith
 kernels · any gate that requires looking at an image · touching tone-map
 atoms · frame-index/time inputs into any of these atoms (determinism is
-load-bearing). **Test scope:** focused `-p manifold-renderer` + the new
+load-bearing). **Test scope:** focused `-p manifold-nodes` + the new
 gpu_tests; workspace sweep at landing.
 
 **Demo rule for the open phases (P4/P5/P6), amended 2026-07-13:** the
@@ -453,7 +453,7 @@ this governs everything still open.
   completing the one conceptual fix consistently); time-family migrated
   onto the same path. Gate: I6 (`camera_derived_pointwise_atom_fuses_
   and_matches_unfused`) + the full existing freeze proof suite (125
-  passed) + the full `manifold-renderer --features gpu-proofs` sweep
+  passed) + the full `manifold-nodes --features gpu-proofs` sweep
   (1412 passed, 0 failed) + focused suite (1114 passed) + clippy — all
   independently re-run by the orchestrating session, not self-reported.
   `docs/FREEZE_COMPILER_MAP.md` section 4 (The cut rules — when fusion says no)/section 5 (The marker ABI)/section 9 (+ a section 7 (Precision contract (editor == stage)) cross-reference) updated
@@ -503,7 +503,7 @@ this governs everything still open.
 - **P6 — `node.bilateral_blur` AO denoise (one session; amendment
   2026-07-13; INDEPENDENT of P4/P5 — land it FIRST: it improves the
   already-shipped SSAO immediately, and P5's GTAO plugs into the same
-  denoise unchanged).** Entry: `rg 'bilateral' crates/manifold-renderer/src/
+  denoise unchanged).** Entry: `rg 'bilateral' crates/manifold-nodes/src/
   node_graph/primitives/` → 0 hits; D8 anchors re-verified. Read-back adds:
   D8 whole, `separable_gaussian.rs` (axis-pair + K9 precedent),
   `gaussian_blur_variable_width.rs` (two-input Gather ABI precedent).

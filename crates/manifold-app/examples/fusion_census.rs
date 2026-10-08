@@ -3,7 +3,7 @@
 //! fixture's embedded presets.
 //!
 //! ```text
-//! cargo run -p manifold-renderer --example fusion_census [-- --out <path>]
+//! cargo run -p manifold-app --example fusion_census [-- --out <path>]
 //! ```
 //!
 //! An example rather than a `graph-tool` verb because loading the `.manifold`
@@ -11,6 +11,7 @@
 //! dev-dependency.
 
 use std::path::PathBuf;
+use manifold_nodes as _;
 
 use manifold_node_engine::freeze::region::census::{FixtureCorpus, build_census_report};
 

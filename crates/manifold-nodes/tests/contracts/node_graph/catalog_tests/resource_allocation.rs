@@ -432,7 +432,7 @@ use ahash::AHashMap;
     /// two arrays at once.
     #[test]
     fn bundled_presets_share_only_dead_roots() {
-        use crate::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
+        use manifold_nodes::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
         use manifold_node_engine::persistence::{EffectGraphDefExt, PrimitiveRegistry};
         use manifold_core::preset_def::PresetKind;
         let registry = PrimitiveRegistry::with_builtin();

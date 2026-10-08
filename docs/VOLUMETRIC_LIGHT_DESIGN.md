@@ -4,7 +4,7 @@
 **Prerequisites:** none (the substrate is shipped)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 
-**Machine-check gates (added 2026-07-13 — GRAPH_TOOLING + PARAM_RANGE_CONTRACT are live on main; this lane is their first live test):** every edited or authored preset JSON pre-flights `cargo run -p manifold-app --bin graph-tool -- validate <file> --kind effect|generator` (zero errors required; warnings reported verbatim in the phase report, never fixed or suppressed) and `graph-tool fusion` before/after, with the dispatch-count delta reported. Any new atom or any param-shape change regenerates the catalog (`cargo run -p manifold-renderer --bin gen_node_catalog`) in the same commit — the drift test fails otherwise. A new atom must pass `every_boundary_atom_declares_its_reason`: fusable per ADDING_PRIMITIVES section"The codegen path is mandatory", or a declared `boundary_reason:` from the taxonomy — an undeclared boundary fails the default sweep. New params: `min`/`max` are display hints and must never restrict (PARAM_RANGE_CONTRACT D3); add a `RangeContract` ONLY for a real physical bound (Index/Count/degenerate — kernel evidence cited in the curated meta-test table). Card params follow `docs/CARD_AUTHORING.md`. The landing report carries a `Tool feedback:` section — friction, false positives, unclear messages — first-live-test telemetry Peter asked for.
+**Machine-check gates (added 2026-07-13 — GRAPH_TOOLING + PARAM_RANGE_CONTRACT are live on main; this lane is their first live test):** every edited or authored preset JSON pre-flights `cargo run -p manifold-app --bin graph-tool -- validate <file> --kind effect|generator` (zero errors required; warnings reported verbatim in the phase report, never fixed or suppressed) and `graph-tool fusion` before/after, with the dispatch-count delta reported. Any new atom or any param-shape change regenerates the catalog (`cargo run -p manifold-nodes --bin gen_node_catalog`) in the same commit — the drift test fails otherwise. A new atom must pass `every_boundary_atom_declares_its_reason`: fusable per ADDING_PRIMITIVES section"The codegen path is mandatory", or a declared `boundary_reason:` from the taxonomy — an undeclared boundary fails the default sweep. New params: `min`/`max` are display hints and must never restrict (PARAM_RANGE_CONTRACT D3); add a `RangeContract` ONLY for a real physical bound (Index/Count/degenerate — kernel evidence cited in the curated meta-test table). Card params follow `docs/CARD_AUTHORING.md`. The landing report carries a `Tool feedback:` section — friction, false positives, unclear messages — first-live-test telemetry Peter asked for.
 
 
 Peter's directives, 2026-07-13, all quoted because each one decides something:
@@ -227,7 +227,7 @@ accumulation / frame-index inputs (D5) · algorithm substitution (the committed
 math is the contract; upgrades are new decisions) · full-res march "because
 it looked banded" (fix is jitter/quality, D3/D5) · touching `apply_fog`'s
 math beyond what P1's characterization demands (D4). **Test scope:** focused
-`-p manifold-renderer --lib` + the named gpu_tests (`--features gpu-proofs`,
+`-p manifold-nodes --lib` + the named gpu_tests (`--features gpu-proofs`,
 plain `cargo test`, never nextest); workspace sweep at landing.
 
 - **P1 — Atmosphere fields + plumbing + fog characterization** (one session).

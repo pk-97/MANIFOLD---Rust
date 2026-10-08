@@ -11,7 +11,7 @@ use manifold_node_engine::load::preset_loader::{
 };
 
 mod tests {
-    use crate::load::preset_loader::*;
+    use crate::contracts::load::preset_loader::*;
 
 
     #[test]

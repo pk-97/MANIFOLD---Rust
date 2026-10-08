@@ -112,19 +112,19 @@ fn fixture(resolution: u32) {
     let mut volume = [ParticleVolume::new(), ParticleVolume::new()];
     volume[1].pipeline = Some(oracle::<ParticleVolume>(
         &h,
-        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/particle_volume_dense_reference.wgsl"),
+        include_str!("../../../../../manifold-node-engine/src/water/primitives/shaders/particle_volume_dense_reference.wgsl"),
     ));
     let mut smoothing: [[_; 3]; 2] = std::array::from_fn(|lane| std::array::from_fn(|_| {
         water_nodes::smooth_lattice((lane == 1).then(|| water_nodes::dense_pipeline("smooth_lattice", &h.device,
-            include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/smooth_lattice_dense_reference.wgsl"))))
+            include_str!("../../../../../manifold-node-engine/src/water/primitives/shaders/smooth_lattice_dense_reference.wgsl"))))
     }));
     let smooth_slots: [[(Slot, GpuBuffer); 3]; 2] =
         std::array::from_fn(|_| std::array::from_fn(|_| h.array::<f32>(&[], total)));
     let mut clamp = [water_nodes::clamp_liquid_to_solids(None), water_nodes::clamp_liquid_to_solids(Some(water_nodes::dense_pipeline("clamp_liquid_to_solids", &h.device,
-        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/clamp_liquid_to_solids_dense_reference.wgsl"))))];
+        include_str!("../../../../../manifold-node-engine/src/water/primitives/shaders/clamp_liquid_to_solids_dense_reference.wgsl"))))];
     let clamp_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<f32>(&[], total));
     let mut counters = [water_nodes::count_surface_triangles(None), water_nodes::count_surface_triangles(Some(water_nodes::dense_pipeline("count_surface_triangles", &h.device,
-        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/count_surface_triangles_dense_reference.wgsl"))))];
+        include_str!("../../../../../manifold-node-engine/src/water/primitives/shaders/count_surface_triangles_dense_reference.wgsl"))))];
     let count_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], total));
     let mut builder = LatticeBricks::new();
     let (bounds_slot, _) = h.array::<f32>(&[], 2);
@@ -142,11 +142,11 @@ fn fixture(resolution: u32) {
     let mut mesh = VolumeSurfaceMesh::new();
     let mesh_oracle = oracle::<VolumeSurfaceMesh>(
         &h,
-        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/volume_surface_mesh_dense_reference.wgsl"),
+        include_str!("../../../../../manifold-node-engine/src/water/primitives/shaders/volume_surface_mesh_dense_reference.wgsl"),
     );
     let relax_oracle = water_nodes::dense_pipeline("relax_surface_mesh",
         &h.device,
-        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/relax_surface_mesh_dense_reference.wgsl"),
+        include_str!("../../../../../manifold-node-engine/src/water/primitives/shaders/relax_surface_mesh_dense_reference.wgsl"),
     );
     let mut relaxers: [_; 2] = std::array::from_fn(|_| water_nodes::relax_surface_mesh());
     let relaxed: [[(Slot, GpuBuffer); 2]; 2] = std::array::from_fn(|_| {
@@ -803,12 +803,12 @@ fn scatter_fixture(
 #[test]
 fn fluid_bricks_scatter_mask_is_the_gather_mask() {
     use manifold_node_engine::testkit::liquid_surface::{Lattice, sort_and_shape};
-use crate::node_graph::catalog_tests::liquid_surface::blob_bounds;
+use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
 
     let mut h = Harness::new();
     let resolution = 64u32;
     let gather = h.device.create_compute_pipeline(
-        include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/lattice_bricks_gather_reference.wgsl"),
+        include_str!("../../../../../manifold-node-engine/src/water/primitives/shaders/lattice_bricks_gather_reference.wgsl"),
         "mark_bricks",
         "liquid.bricks.gather_reference",
     );

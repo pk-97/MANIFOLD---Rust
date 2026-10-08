@@ -1,7 +1,7 @@
 use manifold_node_engine::load::migration::{GraphMigration, MigrationStage};
 
 mod tests {
-use crate::load::migration::*;
+use crate::contracts::load::migration::*;
 
 #[test]
 fn migration_order_matches_table() {

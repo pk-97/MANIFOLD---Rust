@@ -37,7 +37,7 @@ want bug-118 worked on").
 | Piece | Where | State |
 |---|---|---|
 | glTF material parse | `gltf_load.rs:405-418` (`GltfMaterialInfo`) | base_color factor+texture, metallic/roughness **scalars**, emissive **factor**, alphaMode/cutoff. NO normal / metallic-roughness / occlusion / emissive texture indices, no KHR extensions |
-| gltf crate | `manifold-renderer/Cargo.toml:31` (`gltf = "1"`, v1.4.1, default features) | Extension features exist but are OFF: `KHR_lights_punctual`, `KHR_materials_emissive_strength`, `KHR_materials_specular`, `KHR_materials_transmission`, `KHR_materials_ior`. **No typed clearcoat support in 1.4.1** (needs the raw `extensions` feature + manual JSON, or a crate bump — checked in the registry source) |
+| gltf crate | `manifold-nodes/Cargo.toml:31` (`gltf = "1"`, v1.4.1, default features) | Extension features exist but are OFF: `KHR_lights_punctual`, `KHR_materials_emissive_strength`, `KHR_materials_specular`, `KHR_materials_transmission`, `KHR_materials_ior`. **No typed clearcoat support in 1.4.1** (needs the raw `extensions` feature + manual JSON, or a crate bump — checked in the registry source) |
 | Per-object texture ports | `render_scene.rs:194,493` | `base_color_map_n` ONLY — "no normal_map/roughness_map/metallic_map inputs per object yet" (the file says it itself) |
 | Texture decode + colour space | `gltf_texture_source.rs:197-202` | `color_space` param already selects `Rgba8UnormSrgb` vs linear — reusable as-is for the new map types |
 | IBL in `fs_pbr` | `render_scene.wgsl:648-651` | ONE lod-0 equirect sample along `reflect(-V, N)`, dimmed by heuristic `ibl_strength = 1.0 - roughness*0.7`. No prefiltered mips, no diffuse irradiance, no split-sum BRDF LUT — rough metal gets a sharp reflection faded to grey |

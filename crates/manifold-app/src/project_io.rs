@@ -1699,7 +1699,7 @@ mod tests {
     //
     // These exercise the actual production seam (`snapshot_and_prune_
     // embedded_presets`) rather than just the catalog-merge rule (covered
-    // separately by `manifold-renderer/tests/project_preset_overlay.rs`,
+    // separately by `manifold-nodes/tests/project_preset_overlay.rs`,
     // which proves disk-wins-over-Snapshot / Snapshot-as-fallback at the
     // catalog level). A full save→delete-user-file→reload file-system test
     // isn't reachable from here: `manifold-app` is a bin-only crate (no

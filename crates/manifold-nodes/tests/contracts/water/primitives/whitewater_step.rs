@@ -112,7 +112,7 @@ fn scene(dust: bool, particle_ports: &[&str]) {
         }
     }
 fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
-        let def = if dust { crate::water::primitives::whitewater_golden_tests::all_emitters(None) }
+        let def = if dust { crate::contracts::water::primitives::whitewater_golden_tests::all_emitters(None) }
             else { with_tick_probe(whitewater_render_def(WaterScene::dam_break(64))) };
         let axes = with_whitewater_axes(def.clone());
         let mut fused = Show::new_with_emitter_oracle(if packed { def } else { axes.clone() }, (96, 54), false, &[], Some(false));
@@ -231,7 +231,7 @@ fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
     }
 #[test]
     fn whitewater_packed_faces_match_axis_arrays() {
-        crate::water::primitives::whitewater_golden_tests::packed_scene_fingerprints();
+        crate::contracts::water::primitives::whitewater_golden_tests::packed_scene_fingerprints();
         let device = manifold_gpu::testkit::test_device();
         let fixture = Fixture::new(&device);
         let records: Vec<_> = fixture.records.iter().enumerate().map(|(i, p)| FluidParticle {

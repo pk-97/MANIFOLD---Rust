@@ -7,7 +7,7 @@
 //! picker clamped its height but laid out every row, so a long track/macro
 //! list was clipped away with no way to reach it.
 //!
-//! Run: `SWATCH_OUT=/some/dir cargo test -p manifold-renderer --test ableton_picker_scroll_proof`
+//! Run: `SWATCH_OUT=/some/dir cargo test -p manifold-nodes --test ableton_picker_scroll_proof`
 //! then open `$SWATCH_OUT/ableton_picker_top.png` / `ableton_picker_bottom.png`.
 
 #![cfg(target_os = "macos")]

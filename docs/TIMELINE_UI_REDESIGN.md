@@ -186,7 +186,7 @@ shared-render change. Verify visually by rendering the native UI headless → PN
 built; the work is targeted restyle + a real selection treatment + a token tune, not a rewrite.
 
 **Render paths.** Two. (1) **UITree** — declarative `tree.add_button/add_panel/add_label` with a
-`UIStyle`; the renderer (`manifold-renderer::ui_renderer::UIRenderer`) rasterizes it. Layer headers
+`UIStyle`; the renderer (`manifold-nodes::ui_renderer::UIRenderer`) rasterizes it. Layer headers
 + chrome use this. (2) **Immediate `Painter`** (`draw.rs`) — graph canvas only. Headers = UITree.
 
 **`UIStyle` capabilities** (`node.rs`): `bg_color`, `hover/pressed_bg_color`, `text_color`,
@@ -199,7 +199,7 @@ dark-stage philosophy**: "high contrast = distinct LEVELS, not a bright UI; a br
 on stage and glows in a dark room." Grey ramp `BG_0..BG_3` = 13/22/31/42 (already a section 15 spread).
 → Phase A is a **TUNE** (wider spread, brighter text `txt-dim/faint`, distinct selection, neutral
 `chip`), NOT a wholesale swap to the mockup's bright hexes. Keep it dark; validate by eye. Guarded by
-`tests/design_tokens.rs` + the ramp PNG in `manifold-renderer/tests/ui_color_swatches.rs`.
+`tests/design_tokens.rs` + the ramp PNG in `manifold-nodes/tests/ui_color_swatches.rs`.
 
 **Layer header** (`panels/layer_header.rs`): a `LayerControl` enum (29 variants:
 Background/AccentBar/Connector/BottomBorder/Chevron/TypeBadge/Name/DragHandle/GenType/Mute/Solo/Led/
@@ -230,7 +230,7 @@ section E "clips match layer colour" = feed `layer.color` into the clip body (re
 side); title-position + selection border live there too.
 
 **Headless render → PNG → compare loop** (the verification the redesign rides on):
-`manifold-renderer/tests/headless_ui_spike.rs::render_to_png(&device, &mut ui, &tree, path)` —
+`manifold-nodes/tests/headless_ui_spike.rs::render_to_png(&device, &mut ui, &tree, path)` —
 `GpuDevice::new()` windowless + `UIRenderer` rasterizes a `UITree` → PNG. Build a `LayerHeaderPanel`
 with mockup-like `LayerInfo` rows → render → `Read` the PNG → diff against `timeline-mockup.html`.
 Re-render after every change.
@@ -251,13 +251,13 @@ focused tests each step; full workspace on the token change + shared-render chan
 - **section C shipped** (commit bb6be36): dropped `Info` (clip count) + `NewClip` + `AddGenClip` from
   `compute_layer_row` **and** its `oracle_row` equivalence gate (kept rect-equal), widened the folder
   path label, removed the dead width consts. The `oracle_row` gate was retired 2026-09-29.
-- **Render harness**: `cargo test -p manifold-renderer --test timeline_header_preview` →
+- **Render harness**: `cargo test -p manifold-nodes --test timeline_header_preview` →
   `scratchpad/native_header_baseline.png`. Uses `ScreenLayout` with `timeline_split_ratio = 0.96`
   and a 256×1100 texture to crop to the bottom-anchored layer-controls panel. `Read` the PNG to
   compare against `timeline-mockup.html`.
 
 ### E status (clips — mostly already done)
-Clips render GPU-side via `manifold-renderer/src/clip_draw.rs` (`ClipBody` → SDF rounded rect: body
+Clips render GPU-side via `manifold-nodes/src/clip_draw.rs` (`ClipBody` → SDF rounded rect: body
 gradient + border + lift, section 24 5b), built by the viewport panel. **Audit correction:** clips are
 ALREADY layer-coloured — `get_clip_color` (`bitmap_painter.rs`) returns the layer colour for a normal
 clip; selected = `lighten(30)` **plus** a blue `CLIP_BORDER_SELECTED` outline (a distinct signal, so
@@ -274,7 +274,7 @@ check on the running app before shipping the title move. Optionally re-style cli
 the new layer focus-ring. Tuning knobs: `CLIP_*` / `CLIP_LABEL_*` in color.rs.
 
 ### F implementation findings (aspect-locked thumbnail — the one remaining net-new)
-The thumbnail tiler `manifold-renderer/src/clip_thumb_gpu.rs` already supports
+The thumbnail tiler `manifold-nodes/src/clip_thumb_gpu.rs` already supports
 per-cell quads: `ThumbQuad { rect, body_rect, radius, uv_min, uv_max }` where `rect`
 is "one bar of the clip" and a single still passes `rect == body_rect`. So filmstrip
 tiling exists — the cells are just **bar-width** today. section F = make cell width =

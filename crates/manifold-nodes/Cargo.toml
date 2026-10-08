@@ -104,16 +104,6 @@ syn = { version = "2", features = ["full", "visit"] }
 # Serializes GPU tests on the shared Metal device (see `test_device`). Reentrant
 # so a single test may acquire it more than once without deadlocking.
 parking_lot = { workspace = true }
-# FUSION_SOTA P3 census: loads the canonical-fixture-liveschool `.manifold`
-# project to walk its `embedded_presets` (per-instance forked/edited graph
-# defs) alongside the bundled preset library. Not a new crate-graph edge —
-# `renderer` already depends on `playback`, which depends on `io` — so this
-# only makes an already-transitive edge direct, test-only, dev-dependency
-# scoped. Precedent for the fixture-path resolution: `manifold-io/tests/load_project.rs`.
-# SCENE_LOOP_DESIGN P2 end-to-end gate: applies the REAL plan builder +
-# REAL command to a REAL imported GLB, then renders count=1 vs count=3 and
-# diffs. `manifold-nodes` (lib) never imports editing; this edge is
-# test-only, exactly like the `manifold-io` dev-dependency above.
 
 # The GPU FLIP render smoke drains Metal's autoreleased objects per frame, as the
 # content thread does (`content_thread.rs`), so host memory reads as the app's.
@@ -145,10 +135,7 @@ name = "gpu_proofs"
 path = "tests/gpu_proofs/main.rs"
 required-features = ["gpu-proofs"]
 
-# glTF conformance harness (GLB_CONFORMANCE_DESIGN.md G-P1): renders each
-# Khronos sample asset through the production import path and gates it with
-# numeric asserts + self-goldens. Needs a real GPU device, same reasons as
-# `gpu_proofs` above — off by default, run with `--features gpu-proofs`.
+# glTF conformance is a module of gpu_proofs; select glb_conformance::.
 
 [features]
 testkit = ["manifold-node-engine/testkit", "manifold-nodes-image/testkit", "manifold-nodes-scene/testkit"]

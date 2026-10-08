@@ -90,7 +90,7 @@ def main() -> int:
             cmd = [str(args.bin), "--dump-def", str(fixture), str(dump_path)]
         else:
             cmd = [
-                "cargo", "run", "-q", "-p", "manifold-renderer",
+                "cargo", "run", "-q", "-p", "manifold-nodes",
                 "--bin", "render-import", "--", "--dump-def", str(fixture), str(dump_path),
             ]
         result = subprocess.run(cmd)

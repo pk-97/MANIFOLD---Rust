@@ -14,7 +14,7 @@
 //! import through this exact migration). Rather than fabricate a project
 //! fixture, this test uses `pre_migration_scene_starter.json` — the actual
 //! `SceneStarter.json` bundled preset content as it existed at commit
-//! `73f9d7f4` (P1 HEAD, `git show 73f9d7f4:crates/manifold-renderer/assets/
+//! `73f9d7f4` (P1 HEAD, `git show 73f9d7f4:crates/manifold-nodes/assets/
 //! generator-presets/SceneStarter.json`, byte-for-byte, before `graph_tool
 //! migrate --in-place` ran on it), checked in verbatim as a held-out def
 //! this phase's worker did not author. It is a real production def with

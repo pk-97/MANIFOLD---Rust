@@ -13,7 +13,7 @@ use manifold_core::scene_modifier_preset::{SceneContextValue, SceneStageInput, S
 use manifold_core::{Beats, NodeId, Seconds};
 
 fn calibrated_fixture() -> EffectGraphDef {
-    let mut owner = crate::node_graph::catalog_tests::expand_compiler_tests::fixture();
+    let mut owner = crate::contracts::node_graph::catalog_tests::expand_compiler_tests::fixture();
 
     // Replace the deterministic cube leaves with source primitives while
     // retaining the authored object placements used by the calibration.

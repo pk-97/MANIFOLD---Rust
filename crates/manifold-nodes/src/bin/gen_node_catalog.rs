@@ -10,15 +10,15 @@
 //!   `docs/NODE_CATALOG.md`.
 //!
 //! Usage:
-//! - `cargo run -p manifold-renderer --bin gen_node_catalog`           → write both
-//! - `cargo run -p manifold-renderer --bin gen_node_catalog -- --check` → verify in sync (CI / pre-commit)
+//! - `cargo run -p manifold-nodes --bin gen_node_catalog`           → write both
+//! - `cargo run -p manifold-nodes --bin gen_node_catalog -- --check` → verify in sync (CI / pre-commit)
 //!
 //! The same drift check runs as the `catalog_gen::tests::regenerates_in_sync`
 //! lib test, so a stale doc fails `cargo test` too.
 
 use std::path::{Path, PathBuf};
 
-use crate::catalog_gen;
+use manifold_nodes::catalog_gen;
 
 fn docs_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs")
@@ -71,7 +71,7 @@ fn main() {
         }
         if drift {
             println!(
-                "\nout of sync — run `cargo run -p manifold-renderer --bin gen_node_catalog`"
+                "\nout of sync — run `cargo run -p manifold-nodes --bin gen_node_catalog`"
             );
             std::process::exit(1);
         }

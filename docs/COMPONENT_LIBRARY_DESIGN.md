@@ -112,7 +112,7 @@ The load-time behavior of `GroupParamDef` (defaults + instance overrides baked a
 
 ## 5. Storage & registry
 
-- **Bundled:** `crates/manifold-renderer/assets/components/*.json`, compiled in alongside preset JSON, riding the same hot-reload watcher pattern. Curated; shipping a bundled component is a deliberate act.
+- **Bundled:** `crates/manifold-nodes/assets/components/*.json`, compiled in alongside preset JSON, riding the same hot-reload watcher pattern. Curated; shipping a bundled component is a deliberate act.
 - **User + agent:** the user library directory, mirroring wherever user-saved presets live today (one file per component). Same mechanism, different directory.
 - **Registry:** `component_registry` in `manifold-core`, mirroring `preset_definition_registry`'s shape (`ArcSwap<HashMap<String, Arc<ComponentDef>>>`, rebuild on hot-reload). Fully separate from `PRESET_DEFINITIONS` — components are not presets and never enter the preset picker or `PresetTypeId` space.
 

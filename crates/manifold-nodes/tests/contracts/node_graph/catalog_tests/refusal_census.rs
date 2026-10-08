@@ -11,17 +11,17 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
         let registry = PrimitiveRegistry::with_builtin();
         let mut checked = 0usize;
         let mut defs: Vec<manifold_core::effect_graph_def::EffectGraphDef> = Vec::new();
-        for type_id in crate::bundled_presets::bundled_preset_type_ids(
+        for type_id in manifold_nodes::bundled_presets::bundled_preset_type_ids(
             manifold_core::preset_def::PresetKind::Effect,
         ) {
             if let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&type_id) {
                 defs.push((*view.canonical_def).clone());
             }
         }
-        for type_id in crate::bundled_presets::bundled_preset_type_ids(
+        for type_id in manifold_nodes::bundled_presets::bundled_preset_type_ids(
             manifold_core::preset_def::PresetKind::Generator,
         ) {
-            if let Some(json) = crate::bundled_presets::bundled_preset_json(&type_id)
+            if let Some(json) = manifold_nodes::bundled_presets::bundled_preset_json(&type_id)
                 && let Ok(def) = serde_json::from_str(&json)
             {
                 defs.push(def);

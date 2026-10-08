@@ -133,11 +133,11 @@ voro = minimal_generator('SweepVoronoi', [
 variants['SweepVoronoi'] = (append_tail(voro, z_scale=4.0), 'generator')
 
 # D: shipped Caustics generator, untouched, tail appended.
-caustics = json.load(open(REPO + '/crates/manifold-renderer/assets/generator-presets/Caustics.json'))
+caustics = json.load(open(REPO + '/crates/manifold-nodes/assets/generator-presets/Caustics.json'))
 variants['SweepCaustics'] = (append_tail(caustics), 'generator')
 
 # E: shipped Watercolor effect (UV-gradient source in the harness), tail appended.
-water = json.load(open(REPO + '/crates/manifold-renderer/assets/effect-presets/Watercolor.json'))
+water = json.load(open(REPO + '/crates/manifold-nodes/assets/effect-presets/Watercolor.json'))
 variants['SweepWatercolor'] = (append_tail(water), 'effect')
 
 for name, (doc, kind) in variants.items():

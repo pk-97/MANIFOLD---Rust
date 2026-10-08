@@ -218,7 +218,7 @@ fn driver_beat_divisions_survive_load() {
     // the registry has no effect ParamSpecs and `param_id` will be
     // empty — but the driver still loaded, beat division survived,
     // and the legacy index is gone (cleared by the resolver). In a
-    // production build linking manifold-renderer (manifold-app), the
+    // production build linking manifold-nodes (manifold-app), the
     // same load fills `param_id` from the registry.
     assert!(
         !loaded.is_empty(),
@@ -502,7 +502,7 @@ fn liveschool_roundtrip_preserves_addressing_sites() {
     // assertions below will fail.
     //
     // **Test scope:** this test runs in `manifold-io`'s test target,
-    // which intentionally does NOT link `manifold-renderer`. The
+    // which intentionally does NOT link `manifold-nodes`. The
     // effect/generator registries are therefore EMPTY here. Concretely:
     //
     // - Driver/envelope/Ableton mappings load with `param_id = ""`,

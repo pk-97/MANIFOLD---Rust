@@ -285,7 +285,7 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
 #[cfg(feature = "gpu-proofs")]
 mod gpu_tests {
     use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
-    use crate::node_graph::catalog_tests::particle_frame_blend_tests::*;
+    use crate::contracts::node_graph::catalog_tests::particle_frame_blend_tests::*;
     use manifold_node_engine::mesh::InstanceTransform;
     use manifold_node_engine::water::fluid_particles::FluidParticle;
     use manifold_node_engine::freeze::codegen::ENTRY;

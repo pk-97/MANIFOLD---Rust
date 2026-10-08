@@ -17,7 +17,7 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::runtime::*;
 use manifold_core::effect_graph_def::BindingTarget;
 fn owner() -> EffectGraphDef {
-    let mut owner = crate::node_graph::catalog_tests::math_view_fixtures::test_owner();
+    let mut owner = crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner();
     // Internal render-view preparation receives a canonical loaded document.
     manifold_core::phong_migration::migrate_phong_to_pbr(&mut owner);
     owner
@@ -779,8 +779,8 @@ fn math_view_instance_echoes_render_copies_and_vertices_only_path_is_unchanged()
     // its pre-instances behavior (unwired instances port).
     let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
-    let echo_owner = crate::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
-    let plain_owner = crate::node_graph::catalog_tests::math_view_fixtures::test_owner();
+    let echo_owner = crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
+    let plain_owner = crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner();
     let registry = PrimitiveRegistry::with_builtin();
     let render_math = |owner: &EffectGraphDef| {
         let mut params = manifest(owner);

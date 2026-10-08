@@ -5,7 +5,7 @@
     #[test]
     fn fluidsim_wires_a_trigger_into_the_seed_reset_trigger() {
         use manifold_core::effect_graph_def::EffectGraphDef;
-        let json = crate::bundled_presets::bundled_preset_json(
+        let json = manifold_nodes::bundled_presets::bundled_preset_json(
             &manifold_core::PresetTypeId::new("FluidSim2D"),
         )
         .expect("FluidSim2D bundled");

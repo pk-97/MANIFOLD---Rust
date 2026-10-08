@@ -87,7 +87,7 @@ the prototype's measurements.
 
 ## 1. Audit — what exists (verified 2026-09-29 at `c8961489d`)
 
-Paths abbreviated after first use: `R/` = `crates/manifold-renderer/src/node_graph/`,
+Paths abbreviated after first use: `R/` = `crates/manifold-nodes/src/node_graph/`,
 `P/` = `crates/manifold-physics/src/`. Extend, don't redesign.
 
 ### 1.1 In the tree
@@ -97,7 +97,7 @@ Paths abbreviated after first use: `R/` = `crates/manifold-renderer/src/node_gra
 | Particle-frame seam | GPU_FLUID_SURFACE_DESIGN.md section 3 (The particle-frame contract) | PROPOSED, not built. `FluidParticle` (32 B: `position_radius`, `velocity`, `id`) and the `particles_a/b`, `blend`, `span`, `solid_a/b`, lattice outputs are defined there. This design writes them. |
 | Surface atoms | GPU_FLUID_SURFACE_DESIGN.md section 4 (The atom chain) | PROPOSED, not built: interpolate, push-out, sort into cells, blobs, level set, marching cubes, `particles_to_copies`, the "Liquid Surface" group. |
 | FLIP domain node | `R/primitives/fluid_surface.rs:35` (`node.fluid_surface`), `:38-101` (`role_0..role_63: FluidRole`), `:102` (`acceleration_field: VectorField`), `:103` (`domain`, legacy `initial_volume` Transforms), `:115-121` (outputs), `:123-145` (params: seed, resolution, grid budget, six closed faces, fill height, density, gravity XYZ, speed, reset, …) | Exists. Its scene-facing ports and params are the contract `node.matter_domain` mirrors (D17). |
-| Scene layer keyed on the FLIP type id | `rg -n '"node\.fluid_surface"' crates -g '*.rs'` → 94 hits in 46 files at `c8961489d`; 53 in 25 non-test files, about 40 of them outside inline test modules, across `manifold-core` (scene-object migration, exposure tables, file loader), `manifold-editing` (Add Fluid, role commands), `manifold-app` (domain gizmo, scene projection), `manifold-renderer` (physics sampling, sources, carry, impulses, scene exposure, scene VM, force recipients, graph loader) | Exists. Every site tests a string literal; there is no liquid-domain predicate. P3a's seam (D17). |
+| Scene layer keyed on the FLIP type id | `rg -n '"node\.fluid_surface"' crates -g '*.rs'` → 94 hits in 46 files at `c8961489d`; 53 in 25 non-test files, about 40 of them outside inline test modules, across `manifold-core` (scene-object migration, exposure tables, file loader), `manifold-editing` (Add Fluid, role commands), `manifold-app` (domain gizmo, scene projection), `manifold-nodes` (physics sampling, sources, carry, impulses, scene exposure, scene VM, force recipients, graph loader) | Exists. Every site tests a string literal; there is no liquid-domain predicate. P3a's seam (D17). |
 | Role wire | `R/fluid_role.rs:20-25` (`FluidRoleKind`: InitialFill, Inflow, Outflow, Collider), `:36-44` (payload: `Arc<PreparedFluidGeometry { meshes: Vec<TriangleMesh> }>`, transform, enabled, velocity, inherit_motion, friction) | Exists, solver-agnostic. Consumed unchanged. |
 | Add Fluid and role authoring | `crates/manifold-editing/src/commands/graph/scene/fluid.rs:40` (`AddSceneFluidCommand`), `…/scene/fluid/roles.rs:24`; param surfaces `crates/manifold-ui/src/param_surface.rs` | Exists. P4b extends the command; role commands ride the predicate. |
 | Force recipients | `R/scene_modifier_expand/acceleration.rs:110` (a fluid is found as the producer of a scene object's `vertices`), `:267` (`ImpulseTarget::Fluid`) | Exists. Assumes the domain node itself feeds the object's mesh — false once a surface group sits in between (for FLIP too, after surface P7). P3a fixes the walk. |
@@ -111,8 +111,8 @@ Paths abbreviated after first use: `R/` = `crates/manifold-renderer/src/node_gra
 | Aliased, captured and provided arrays | `R/effect_node.rs:802` (`aliased_array_io`), `:909` (`state_capture_input_ports`), `:920` (`persistent_output_ports`), `:1054` (`provides_array_output`); `R/execution/array_growth.rs` | Exists — the same machinery `node.array_feedback` uses. Point state and lattice arrays ride it. |
 | 3D particle family and `node.array_feedback` | `R/primitives/scatter_particles_3d.rs` (`node.draw_particles_3d`), `euler_step_particles_3d.rs` (`node.move_particles_3d`), `container_bounds_3d.rs`, `sample_texture_3d_at_particles.rs`, `array_feedback.rs:32-50` | Exists, all on the 64-byte `Particle` in unit space; `array_feedback` is a one-frame delay typed on `Particle`. Not reused for simulation state — the surface design decided that record and space are wrong for scene-metre liquid; section 10 states how this design still rides their machinery. |
 | Readback | `R/primitives/color_sample.rs:12` (one frame late, no fence check); `crates/manifold-gpu/src/metal/frame_fence.rs:59` (`is_completed`) | Coupling needs the fenced form; content-thread fence exposure is the surface design's P2 entry check. |
-| Headless capture | `crates/manifold-renderer/examples/fluid_capture.rs` | Exists. Gains look metrics (P1, P4). |
-| Executor repeat region | none on main — `rg -n -i 'substep\|repeat_region' crates/manifold-renderer/src/node_graph -g '*.rs'` hits only FLIP and Box3D native substeps | New on main; exists on a paused branch (1.2). |
+| Headless capture | `crates/manifold-nodes/examples/fluid_capture.rs` | Exists. Gains look metrics (P1, P4). |
+| Executor repeat region | none on main — `rg -n -i 'substep\|repeat_region' crates/manifold-nodes/src/node_graph -g '*.rs'` hits only FLIP and Box3D native substeps | New on main; exists on a paused branch (1.2). |
 | Mesh signed distance | none — `rg -l -i 'signed.?distance\|mesh_sdf\|distance_field' crates -g '*.rs'` hits only analytic masks | **Correction to the brief:** Box3D hulls and FLIP roles produce `TriangleMesh`, not distance fields; FLIP's level sets live inside its C++ `MeshLevelSet`. The builder is new and lands in `manifold-physics` (D11). |
 
 ### 1.2 The MLS-MPM prototype (branch `wave/live-water`, paused)
@@ -1150,7 +1150,7 @@ wait costs about 0.8 ms per frame (2026-09-30, M-series GPU, floating-box scene)
 
 ## 9. Section 2.5 audit and codegen classification
 
-Per DECOMPOSING_GENERATORS.md section 2.5 (Precondition: audit by analogy before workflow step 1). Survey: `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'` (322 registered type ids at `c8961489d`). Reference presets read end to end:
+Per DECOMPOSING_GENERATORS.md section 2.5 (Precondition: audit by analogy before workflow step 1). Survey: `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-nodes/src/node_graph/primitives/ -g '*.rs'` (322 registered type ids at `c8961489d`). Reference presets read end to end:
 `WaterDamBreak.json` (FLIP node, column Transform, moving box, whitewater wiring),
 `FluidSim3D.json` (particles into a flat 3D accumulator, fixed-point resolve).
 
@@ -1283,7 +1283,7 @@ FLIP-only.
 | Every barrier-free atom on codegen | the existing classify source scans plus each atom's value test; `graph-tool fusion` output recorded per phase |
 | No new shared locks | negative gate: `git diff origin/main -- crates \| rg '^\+.*Arc<(Mutex\|RwLock)'` returns nothing |
 | Solver budget | `matter_solver_perf` (P1b, P4), p95 against 6 ms |
-| Material maths never reads the grid (D33) | negative gate: `rg -n '@group\|@binding\|var<storage\|var<workgroup' crates/manifold-renderer/src/node_graph/primitives/shaders/matter_material.wgsl` returns nothing; negative gate: constitutive maths outside the include, `rg -n 'j \* \(j - 1\.0\)\|\(j - 1\.0\) \* \(j - 1\.0\)' crates/manifold-renderer/src/node_graph/primitives/shaders -g 'matter_*.wgsl' -g 'grid_to_matter*.wgsl'` returns hits only in `matter_material.wgsl` |
+| Material maths never reads the grid (D33) | negative gate: `rg -n '@group\|@binding\|var<storage\|var<workgroup' crates/manifold-nodes/src/node_graph/primitives/shaders/matter_material.wgsl` returns nothing; negative gate: constitutive maths outside the include, `rg -n 'j \* \(j - 1\.0\)\|\(j - 1\.0\) \* \(j - 1\.0\)' crates/manifold-nodes/src/node_graph/primitives/shaders -g 'matter_*.wgsl' -g 'grid_to_matter*.wgsl'` returns hits only in `matter_material.wgsl` |
 | Stress splits cleanly (D33) | `matter_material_stress_splits` (every model, seeded random F and J: `deviatoric` trace below 1e-5 of its norm; `volumetric` unchanged when F̂ changes at fixed J; sum equals the f64 reference) ; `matter_material_rotation_is_stress_free` (every model with F, `s.j = 1`, zero `grad_v`: a pure rotation gives zero stress) |
 | Deformation follows its point (D34) | `matter_compaction_carries_deformation` (P3b: drain half a Goo blob; every surviving point keeps its F row bit for bit) |
 | Published record unchanged (D34) | the compile-time size assert on `FluidParticle` (`R/fluid_particles.rs`) |
@@ -1295,14 +1295,14 @@ FLIP-only.
 ## 13. Phasing
 
 Test scope for every phase: focused crate tests and clippy on touched crates. CPU tests
-carry a `matter_` prefix: `cargo nextest run -p manifold-renderer matter_`. GPU phases add
+carry a `matter_` prefix: `cargo nextest run -p manifold-nodes matter_`. GPU phases add
 `scripts/gpu_proofs_gate.py --filter matter_` (cargo test, never nextest). Verify once,
 at the end of the phase.
 
 ### P0a — Substep regions: types and compiler
 
-- **Entry state:** `rg -n -i 'SubstepBoundary' crates/manifold-renderer/src` returns
-  nothing. Re-derive the plan-consumer inventory: `rg -n 'plan.steps\(\)|late_capture_step_indices|hoistable|persistent_resources' crates/manifold-renderer/src`; write the list into the phase notes.
+- **Entry state:** `rg -n -i 'SubstepBoundary' crates/manifold-nodes/src` returns
+  nothing. Re-derive the plan-consumer inventory: `rg -n 'plan.steps\(\)|late_capture_step_indices|hoistable|persistent_resources' crates/manifold-nodes/src`; write the list into the phase notes.
 - **Read-back:** WATER_SIMULATION_DESIGN.md section 4 (Fixed substeps and graph compiler seam) whole; D7; the branch commits `8e003cbd6`, `e54db937f`, `7f0938782`, `478eb23de`, `b9630e64d` via `git show`; FREEZE_COMPILER_MAP.md section 9 (Executor contracts fusion leans on). Restate: regions are compile-time; no nesting; only final outputs escape.
 - **Deliverables:** `R/substeps.rs` with `SubstepBoundaryPorts`, `SubstepResultPorts`,
   `SubstepRegion` as the historical design pins them; `fn substep_boundary(&self) ->
@@ -1310,7 +1310,7 @@ at the end of the phase.
   `ExecutionPlan::substep_regions()`; region derivation, contraction and validation with
   compile errors naming NodeIds. Tests `substeps_region_*` from the branch, re-written
   against main.
-- **Gate:** `cargo nextest run -p manifold-renderer substeps_` green; clippy clean; every
+- **Gate:** `cargo nextest run -p manifold-nodes substeps_` green; clippy clean; every
   existing `execution_plan` test green.
 - **Demo:** none — L1.
 - **Forbidden:** cherry-picking from `wave/live-water`; executor changes (P0b); nested
@@ -1345,7 +1345,7 @@ at the end of the phase.
   `substeps_no_recycle_between_iterations`, `substeps_uniforms_distinct_per_iteration`,
   `substeps_frozen_unfrozen_match` (GPU), `substeps_execute_post_once`.
 - **Gate:** tests green; `scripts/gpu_proofs_gate.py --filter substeps_`; every existing
-  feedback, freeze and execution test green (`cargo nextest run -p manifold-renderer
+  feedback, freeze and execution test green (`cargo nextest run -p manifold-nodes
   execution freeze feedback`).
 - **Demo:** none — L1.
 - **Forbidden:** a second executor; changing `node.feedback` or `node.array_feedback`
@@ -1380,7 +1380,7 @@ at the end of the phase.
 
 ### P1 — Water kernel, look gates and the cost probe
 
-- **Entry state:** P0b merged; surface P1–P3 merged: `rg -n 'fn capture_particle_frame' crates/manifold-fluids/src`, `rg -n 'pub struct FluidParticle' crates/manifold-node-engine/src/water/fluid_particles.rs`, `rg -n 'node.particles_to_copies' crates/manifold-renderer/src/node_graph/primitives`. Content-thread frame fence reachable (surface P2).
+- **Entry state:** P0b merged; surface P1–P3 merged: `rg -n 'fn capture_particle_frame' crates/manifold-fluids/src`, `rg -n 'pub struct FluidParticle' crates/manifold-node-engine/src/water/fluid_particles.rs`, `rg -n 'node.particles_to_copies' crates/manifold-nodes/src/node_graph/primitives`. Content-thread frame fence reachable (surface P2).
 - **Read-back:** D3–D10, D14, D15, D17–D21; sections 3, 4, 7, 9, 10; ADDING_PRIMITIVES.md
   whole; the branch kernels in section 1.2 (read only). Restate the forbidden moves.
 - **Deliverables:** `R/matter.rs` records, fixed-point helpers and `pub fn
@@ -1399,7 +1399,7 @@ at the end of the phase.
   determinism, headroom, non-finite, substep rule, tick cap, frame ids). Probe
   `tests/gpu_proofs/matter_cost_probe.rs`: ns per point-substep at 500,000 points.
 - **Gate:** tests green; A1–A6 pass at Liveliness 0 (numbers at 0.9 reported); clippy;
-  `cargo run -p manifold-renderer --bin check-presets`; `cargo run -p manifold-app
+  `cargo run -p manifold-nodes --bin check-presets`; `cargo run -p manifold-app
   --bin graph-tool -- validate <preset> --kind generator` and `fusion` for both presets,
   output recorded.
 - **Kill check:** projected Dam Break solver time = probe × 500,000 × 34 + lattice term.
@@ -1475,7 +1475,7 @@ at the end of the phase.
 - **Read-back:** D6, D20, D21; section 8.
 - **Deliverables:** `tests/gpu_proofs/matter_solver_perf.rs` behind a new
   `matter-perf-proofs = ["gpu-proofs"]` feature shaped like `rt-perf-proofs`
-  (`crates/manifold-renderer/Cargo.toml`, `tests/gpu_proofs/rt_dynamic_perf.rs`): Dam
+  (`crates/manifold-nodes/Cargo.toml`, `tests/gpu_proofs/rt_dynamic_perf.rs`): Dam
   Break Matter at 64³ with the pool deepened until the live count is ≥ 500,000 (count
   reported), 16 warm-up and 120 measured frames, per-kernel GPU time via
   `GpuTimestampSampler` (the `src/bin/freeze_profile.rs` pattern), dispatch count,
@@ -1739,14 +1739,14 @@ Water targets withdrawn 2026-09-30 (section 7 (Look — artefacts, metrics and d
 water look and speed are out of scope. The brief below stands only as the record of what
 the gate was; it does not run for water.
 
-- **Entry state:** P3d merged; surface P5 and P6 merged: `rg -n 'node.volume_surface_mesh' crates/manifold-renderer/src/node_graph/primitives`.
+- **Entry state:** P3d merged; surface P5 and P6 merged: `rg -n 'node.volume_surface_mesh' crates/manifold-nodes/src/node_graph/primitives`.
 - **Read-back:** D19, D20; sections 7 and 8.
 - **Deliverables:** the mesh look-metrics mode of `fluid_capture` (A7–A11); the
   side-by-side: FLIP (preset defaults) and matter on the same domain, column, resolution,
   points per cell and Liquid Surface settings, 600 frames each, at Liveliness 0 and 0.9,
   into `/tmp/manifold_matter_vs_flip/{flip,matter_b0,matter_b09}` plus a contact sheet
   and the metrics JSON; the P1b perf proof re-run on the final solver.
-- **Gate:** `matter_surface_look_against_flip` (A7–A11) and `cargo test -p manifold-renderer --features matter-perf-proofs --test gpu_proofs matter_solver_perf` (p95 against 6.0 ms, machine, OS and build recorded). A miss on either stops the phase and goes to Peter with the dial table and the Peter-only lever table. Peter's look call, the Liveliness default and the go/no-go are recorded in a `decision` bead.
+- **Gate:** `matter_surface_look_against_flip` (A7–A11) and `cargo test -p manifold-nodes --features matter-perf-proofs --test gpu_proofs matter_solver_perf` (p95 against 6.0 ms, machine, OS and build recorded). A miss on either stops the phase and goes to Peter with the dial table and the Peter-only lever table. Peter's look call, the Liveliness default and the go/no-go are recorded in a `decision` bead.
 - **Demo:** the side-by-side. L2, Peter's call.
 - **Gesture:** scrub the Dam Break back to the start and trigger it again with both
   solvers in view.
@@ -1783,10 +1783,10 @@ Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P9 (Add Fluid authors the default liq
 - **Entry state:** P2b on main: `git merge-base --is-ancestor 6e39fd71b origin/main`.
   Anchors: `rg -n 'pub struct MatterPoint' crates/manifold-node-engine/src/water/matter.rs`
   (`:23`). Re-derive both inventories and list any new site before touching anything:
-  the inline water maths, `rg -n 'j \* \(j - 1\.0\)|\(j - 1\.0\) \* \(j - 1\.0\)|volume_ratio \*' crates/manifold-renderer/src/node_graph/primitives/shaders`
+  the inline water maths, `rg -n 'j \* \(j - 1\.0\)|\(j - 1\.0\) \* \(j - 1\.0\)|volume_ratio \*' crates/manifold-nodes/src/node_graph/primitives/shaders`
   (at `a28bc0dbb`: stress `matter_to_grid.wgsl:134` and `matter_stats.wgsl:134`, elastic
   energy `matter_stats.wgsl:149`, J update `grid_to_matter_body.wgsl:192`); and
-  `rg -n 'affine_z' crates/manifold-renderer/src -g '*.rs' -g '*.wgsl'` (11 hits in 8
+  `rg -n 'affine_z' crates/manifold-nodes/src -g '*.rs' -g '*.wgsl'` (11 hits in 8
   files; the writers are `grid_to_matter_body.wgsl:195` and `matter_fill_body.wgsl:104`,
   the rest declare or read). Record the pre-change point hash of the `MatterScene` run
   that `matter_deterministic_under_seed` uses (`tests/gpu_proofs/matter_scene.rs:555`,
@@ -1813,10 +1813,10 @@ Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P9 (Add Fluid authors the default liq
   `matter_material_seam_preserves_water` (GPU proof beside
   `matter_deterministic_under_seed`: the same `MatterScene` run, in process, hash equal
   to the recorded one) and `matter_material_stress_splits` (water row, CPU).
-- **Gate:** the tests; `cargo nextest run -p manifold-renderer matter_`;
+- **Gate:** the tests; `cargo nextest run -p manifold-nodes matter_`;
   `scripts/gpu_proofs_gate.py` (it maps the touched shaders);
   `matter_dam_break_energy_bounded`; both D33 negative gates of section 12; clippy on
-  manifold-renderer. If the hash differs only because the compiler fused a multiply-add
+  manifold-nodes. If the hash differs only because the compiler fused a multiply-add
   differently, `matter_transfer_matches_reference` at its section 12 bounds is the oracle
   and the delta goes in the phase notes; any other difference stops the phase.
 - **Demo:** none — L1.
@@ -1859,7 +1859,7 @@ ours.
 | P5b Snow | hardening and plasticity branch | `matter_snow_ball_fractures` (clump count > 1 after impact); Jp stays in [0.6, 20] | throw a snowball at the floor on the snare |
 | P5c Sand | Drucker–Prager branch | `matter_sand_pile_angle` (settled slope within 5° of the expected angle) | flip gravity on a fader and watch a pile avalanche |
 | P5d Lava | Bingham branch with Melt scaling the yield stress | `matter_bingham_flow_stops_below_yield` | lava flows down a slope, crusts when Melt drops, flows again on the beat |
-| P5e-0 Morph closure (CPU only) | entry: P5a–P5d merged. f64 fixtures in `matter/reference.rs`, no renderer change: one point, diagonal F, zero velocity gradient; compression, shear, rotation, Snow at its hardening bounds, both directions, reversals at 0.25 and 0.75, every endpoint pair; a written proof that the chosen plastic rule only removes energy. The lead writes the exact update order and J mapping into D38 | `matter_morph_parameter_work_identity` (dial work matches the energy change within 1e-8 relative); `matter_morph_plastic_dissipation` (no correction adds more than 1e-10 relative); `matter_morph_volume_handoff` (1e-10 relative); `matter_morph_round_trip` (residual shape stress ≤ 1e-8 of the modulus, unused Jp exactly 1). Gate: `cargo nextest run -p manifold-renderer matter_morph_`. Forbidden: damping, relaxed thresholds, GPU runs, any live surface | none — L1 |
+| P5e-0 Morph closure (CPU only) | entry: P5a–P5d merged. f64 fixtures in `matter/reference.rs`, no renderer change: one point, diagonal F, zero velocity gradient; compression, shear, rotation, Snow at its hardening bounds, both directions, reversals at 0.25 and 0.75, every endpoint pair; a written proof that the chosen plastic rule only removes energy. The lead writes the exact update order and J mapping into D38 | `matter_morph_parameter_work_identity` (dial work matches the energy change within 1e-8 relative); `matter_morph_plastic_dissipation` (no correction adds more than 1e-10 relative); `matter_morph_volume_handoff` (1e-10 relative); `matter_morph_round_trip` (residual shape stress ≤ 1e-8 of the modulus, unused Jp exactly 1). Gate: `cargo nextest run -p manifold-nodes matter_morph_`. Forbidden: damping, relaxed thresholds, GPU runs, any live surface | none — L1 |
 | P5e Material morph | entry: P5e-0 merged. Params `material`, `target_material`, `morph`; two material entries; the D38 record words; old projects load with `target_material = material`, `morph = 0`; `MatterMorph.json`; `scripts/ui-flows/scene-matter-morph.json` (save, reload, modulate again). Gate: the GPU filter and landing gate; stiffest-point solver p95 reported against 6 ms | CPU `matter_morph_slew_and_reverse`, `matter_morph_substep_bound`; GPU `matter_morph_conserves_mass` (mass bits unchanged, grid mass 1e-5, free-flight momentum 1e-4 over 60 ticks), `matter_morph_matches_reference`, `matter_morph_round_trip`, `matter_morph_deformation_follows_point`, `matter_morph_points_permanent`, `matter_morph_fixed_point_headroom` (below 2^30), `matter_morph_energy_accounted` (energy ≤ initial + signed dial work + 1%) | ride Goo → Snow through the build, reverse half-way, reach Snow, back to Goo on the drop |
 
 ### P6 — Whitewater

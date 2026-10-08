@@ -7,7 +7,7 @@
 use serde_json::{Value, json};
 
 fn smoothed_surface_with_pointwise_tail() -> manifold_core::effect_graph_def::EffectGraphDef {
-    let source = crate::bundled_presets::bundled_preset_json(
+    let source = manifold_nodes::bundled_presets::bundled_preset_json(
         &manifold_core::PresetTypeId::new("WaterDamBreakGpuFlip"),
     )
     .expect("WaterDamBreakGpuFlip bundled");

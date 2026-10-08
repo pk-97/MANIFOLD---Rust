@@ -1,9 +1,9 @@
 //! Tonemap + sRGB encode + PNG write, BRIEF.md step 7. Amendment (review):
 //! matches the app's actual curve, not an invented approximation — see
 //! `aces_narkowicz_raw`/`tonemap_sdr`'s default (curve 0) branch in
-//! `crates/manifold-renderer/src/effects/shaders/aces_tonemap_compute.wgsl`
+//! `crates/manifold-nodes/src/effects/shaders/aces_tonemap_compute.wgsl`
 //! (mode 0 = SDR, curve 0 = Narkowicz, `TonemapSettings::default()` in
-//! `crates/manifold-renderer/src/tonemap.rs`). Same constants, same
+//! `crates/manifold-nodes/src/tonemap.rs`). Same constants, same
 //! `saturate()` clamp; the sRGB OETF below is the standard IEC 61966-2-1
 //! curve, applied here because the app's WGSL never encodes sRGB itself —
 //! that happens implicitly when the compositor writes to an `_sRGB`-tagged

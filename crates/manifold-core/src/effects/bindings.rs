@@ -10,7 +10,7 @@ use super::{ParamEnvelope, ParameterDriver};
 // ─── User-Exposed Parameters ───
 
 /// Conversion shape for a user-exposed parameter — the core-side
-/// counterpart to `manifold-renderer`'s `ParamConvert`.
+/// counterpart to `manifold-nodes`'s `ParamConvert`.
 ///
 /// User bindings always route 1:1 from a host-visible slider straight
 /// to a single inner-node param, so the renderer's `EnumRemap` and

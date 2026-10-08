@@ -6,7 +6,7 @@ fn fluid_bricks_still_pool_installs_dense_clamp() {
     use manifold_node_engine::freeze::install::fuse_generator_view;
     use manifold_core::effect_graph_def::EffectGraphDef;
 
-    let json = crate::bundled_presets::bundled_preset_json(
+    let json = manifold_nodes::bundled_presets::bundled_preset_json(
         &manifold_core::PresetTypeId::new("WaterStillPoolMatter"),
     )
     .expect("Still Pool bundled");

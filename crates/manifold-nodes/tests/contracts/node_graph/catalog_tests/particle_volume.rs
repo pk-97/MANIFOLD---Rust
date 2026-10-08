@@ -1,5 +1,5 @@
 use manifold_node_engine::testkit::liquid_surface::{Harness, Lattice, read};
-use crate::node_graph::catalog_tests::liquid_surface::blob_bounds;
+use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
     use manifold_node_engine::water::primitives::particle_volume::*;
     use manifold_node_engine::water::fluid_particles::{CellRange, FluidBlob, bin_counts};
 

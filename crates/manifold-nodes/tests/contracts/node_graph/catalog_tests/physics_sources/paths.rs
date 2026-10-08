@@ -1,4 +1,4 @@
-use crate::node_graph::catalog_tests::physics_sources::*;
+use crate::contracts::node_graph::catalog_tests::physics_sources::*;
 
 fn string_value(value: &str) -> manifold_core::effect_graph_def::SerializedParamValue {
     manifold_core::effect_graph_def::SerializedParamValue::String {

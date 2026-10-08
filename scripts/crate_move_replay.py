@@ -16,7 +16,7 @@ import sys
 import tomllib
 
 CONFIG = {}
-R = 'crates/manifold-renderer/'
+R = 'crates/manifold-nodes/'
 E = 'crates/manifold-node-engine/'
 MODULES = {}
 

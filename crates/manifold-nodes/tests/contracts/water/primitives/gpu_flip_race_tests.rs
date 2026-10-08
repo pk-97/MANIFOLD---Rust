@@ -8,7 +8,7 @@
 //! allocate before any of them runs here.
 
 use manifold_node_engine::water::primitives::gpu_flip_preset::{PRESSURE_ITERATIONS, WaterScene};
-use crate::water::primitives::gpu_flip_scene_tests::{Run, divergence, particle_stats};
+use crate::contracts::water::primitives::gpu_flip_scene_tests::{Run, divergence, particle_stats};
 use manifold_node_engine::water::primitives::gpu_flip_still::write_still;
 use manifold_node_engine::water::primitives::gpu_flip_volume::VolumeDrift;
 use manifold_node_engine::water::fluid_particles::FluidParticle;

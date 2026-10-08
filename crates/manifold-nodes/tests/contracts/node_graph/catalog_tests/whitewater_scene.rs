@@ -23,7 +23,7 @@ use manifold_node_engine::testkit::gpu::encode_rgba8_png;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use crate::testkit::reference_fixtures::cpu_flip_preset_json;
+use manifold_nodes::testkit::reference_fixtures::cpu_flip_preset_json;
 
 
 
@@ -868,7 +868,7 @@ mod emitter_oracle {
     use manifold_node_engine::water::primitives::gpu_flip_preset::REST_PER_CELL;
     use manifold_node_engine::water::primitives::wavecrest_potential::WavecrestPotential;
     use manifold_node_engine::water::primitives::whitewater_type::WhitewaterType;
-    use crate::node_graph::catalog_tests::whitewater_scene::*;
+    use crate::contracts::node_graph::catalog_tests::whitewater_scene::*;
     use manifold_node_engine::bindings::Slot;
     use manifold_node_engine::water::fluid_particles::FluidParticle;
     use manifold_node_engine::water::liquid::grid::face_len;

@@ -7,7 +7,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 
 #[cfg(test)]
 mod tests {
-    use crate::freeze::space::*;
+    use crate::contracts::freeze::space::*;
 
     /// Camera Sky declares full-canvas scale and Over defaults to the canvas:
     /// both resolve to one space, so the pair still fuses into one kernel.

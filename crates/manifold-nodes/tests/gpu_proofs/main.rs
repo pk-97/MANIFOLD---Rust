@@ -3,7 +3,7 @@
 //! Slow, GPU-bound integration tests that need a real Metal device and
 //! readback. Gated behind the `gpu-proofs` cargo feature so the default
 //! `cargo test` / `cargo nextest` sweep stays fast and non-flaky — run
-//! deliberately with `cargo test -p manifold-renderer --features gpu-proofs`.
+//! deliberately with `cargo test -p manifold-nodes --features gpu-proofs`.
 //!
 //! Two suites live here, both sharing one `manifold_node_engine::testkit::gpu_harness::shared()` device so the
 //! ~5s `GpuDevice::new()` cost is paid once:
@@ -18,7 +18,9 @@
 //! effect impls were gone. Nothing runs through a legacy path anymore, so
 //! there is nothing left to be "at parity" with.)
 
+use manifold_nodes as _;
 mod scene_modifier_legacy;
+mod glb_conformance;
 
 mod alpha_contract;
 mod node_error_status;

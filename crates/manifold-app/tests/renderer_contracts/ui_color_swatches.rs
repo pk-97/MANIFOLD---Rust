@@ -4,7 +4,7 @@
 //! spike (docs section 23): `GpuDevice::new()` → `UIRenderer` immediate draws →
 //! texture readback → PNG.
 //!
-//! Run: `SWATCH_OUT=/some/dir cargo test -p manifold-renderer --test ui_color_swatches`
+//! Run: `SWATCH_OUT=/some/dir cargo test -p manifold-nodes --test ui_color_swatches`
 //! then open `$SWATCH_OUT/color_ramp.png`.
 
 #![cfg(target_os = "macos")]

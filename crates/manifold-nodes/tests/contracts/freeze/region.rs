@@ -12,7 +12,7 @@ fn registry() -> PrimitiveRegistry {
 
 #[cfg(test)]
 mod tests {
-    use crate::freeze::region::*;
+    use crate::contracts::freeze::region::*;
 
     /// D3 (BUG-114): a `BufferIndex`-tagged wire never unions and the array
     /// producer never becomes a region member — the array analogue of

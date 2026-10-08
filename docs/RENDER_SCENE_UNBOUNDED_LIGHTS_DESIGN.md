@@ -44,7 +44,7 @@ outside the existing light model.
 | Shader `Uniforms.lights: array<vec4<f32>, 8>`; three fragment loops `u.lights[i*2u]`, count from `u.scene_params.x` | [render_scene.wgsl:86](../crates/manifold-nodes-scene/src/node_graph/primitives/shaders/render_scene.wgsl#L86), :183, :229, :285 | array moves to `@binding(8) var<storage, read>`; loops repoint; count source unchanged |
 | Vertex-stage storage buffer already shipping in this pipeline | render_scene.wgsl:87 (`@binding(1) var<storage, read> verts`) | proof the render pipeline handles `var<storage>` in the VERTEX stage |
 | `GpuBinding::Bytes` on render pipelines → `setVertexBytes` + `setFragmentBytes`, slot-map indexed, missing slot skipped (`continue`) | [encoder.rs:1223-1240](../crates/manifold-gpu/src/metal/encoder.rs#L1223-L1240) | the binding mechanism; stripped-binding safe |
-| Fragment-stage `var<storage, read>` precedent | [tests/gpu_proofs/fragment_storage.rs](../crates/manifold-renderer/tests/gpu_proofs/fragment_storage.rs) | **PROVEN 2026-07-06** (was: none shipped — `blob_overlay_render.wgsl`'s storage array is a `@compute` kernel). Isolated proof: uniform@0 + `var<storage>`@8, both `Bytes`-backed, read per-pixel from a fragment entry point, byte-correct through SPIRV-Cross → MSL. See D7. |
+| Fragment-stage `var<storage, read>` precedent | [tests/gpu_proofs/fragment_storage.rs](../crates/manifold-nodes/tests/gpu_proofs/fragment_storage.rs) | **PROVEN 2026-07-06** (was: none shipped — `blob_overlay_render.wgsl`'s storage array is a `@compute` kernel). Isolated proof: uniform@0 + `var<storage>`@8, both `Bytes`-backed, read per-pixel from a fragment entry point, byte-correct through SPIRV-Cross → MSL. See D7. |
 | Objects generalization (the sibling change) | shipped on main (feat/render-scene-generalize) | the Rust-side template for every naming/cap change here |
 
 Extend, don't redesign: every change above is the objects change replayed on the
@@ -84,7 +84,7 @@ lights axis, plus one new GPU binding.
   buffer through the SPIRV-Cross → MSL render path. The isolated proof now ships:
   `gpu_proofs::fragment_storage::fragment_reads_storage_buffer_via_bytes_binding` —
   uniform@0 + storage@8, both `GpuBinding::Bytes`, fragment-read, byte-correct
-  (run: `cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs
+  (run: `cargo test -p manifold-nodes --features gpu-proofs --test gpu_proofs
   fragment_storage`). The phase still runs the render_scene ≤4-light pixel-parity
   gate FIRST — no longer as a mechanic probe, but as the refactor-correctness proof.
   A parity failure now indicts the render_scene change itself, not the platform:
@@ -149,7 +149,7 @@ renumbering in this shader must keep the slot map and the `bindings` array in st
 - **Order:** shader + binding change FIRST, run the D7 probe (below), then the Rust
   cap/naming deletions, then tests.
 - **Gate (mechanical):**
-  1. `cargo test -p manifold-renderer --features gpu-proofs render_scene` —
+  1. `cargo test -p manifold-nodes --features gpu-proofs render_scene` —
      the existing parity/gpu tests must pass with **pixel-identical output for the
      previously-representable range (≤4 lights)**. This is the D7 probe and the
      refactor-correctness proof in one.
@@ -159,7 +159,7 @@ renumbering in this shader must keep the slot map and the `bindings` array in st
   3. A zero-light GPU frame (unwire all lights) renders without validation errors —
      the D4 proof. And one frame at >4 lights (e.g. 8 wired) renders non-black —
      the actual feature proof.
-  4. `cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs`
+  4. `cargo test -p manifold-nodes --features gpu-proofs --test gpu_proofs`
      (alpha sweep + generator smoke) and `cargo clippy --workspace -- -D warnings`.
 - **Exit:** committed on a `feat/` branch, landed per GIT_TREE_DISCIPLINE section 2;
   NODE_CATALOG regenerated if it records the lights range.

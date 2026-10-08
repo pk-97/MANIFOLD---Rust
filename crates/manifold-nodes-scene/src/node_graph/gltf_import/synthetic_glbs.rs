@@ -219,7 +219,7 @@ pub(super) fn write_synthetic_ktx2_glb() -> std::path::PathBuf {
     // recognizes. The mime type, not the payload, is what makes this
     // KTX2/BasisU (a well-formed KTX2 file would fail to decode exactly
     // the same way — MANIFOLD's `image` crate has no BasisU transcoder,
-    // see `crates/manifold-renderer/Cargo.toml`'s `image` feature list).
+    // see `crates/manifold-nodes/Cargo.toml`'s `image` feature list).
     let ktx2_bytes: [u8; 8] = [0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB];
     bin.extend_from_slice(&ktx2_bytes);
 

@@ -1,6 +1,6 @@
 //! UI-local view-model of an editable node graph — the shape the graph canvas
-//! reads, mirroring `manifold_renderer::node_graph`'s snapshot surface without a
-//! `manifold-renderer` dependency.
+//! reads, mirroring `manifold_nodes::node_graph`'s snapshot surface without a
+//! `manifold-nodes` dependency.
 //!
 //! Phase 8 of `docs/UI_ARCHITECTURE_OVERHAUL.md` (sub-design
 //! `docs/CANVAS_API_DESIGN.md` section 0): the canvas moved into `manifold-ui`, so it
@@ -20,7 +20,7 @@ use manifold_foundation::NodeId;
 /// Live (post-modulation) per-node param values for one frame, keyed by stable
 /// [`NodeId`]. Each entry is `(node_id, [(param_name, value), …])`. Type-alias
 /// (not a newtype) so it is the *identical* type as
-/// `manifold_renderer::node_graph::LiveNodeParams` — the app hands it straight to
+/// `manifold_nodes::node_graph::LiveNodeParams` — the app hands it straight to
 /// the canvas with no conversion. Param names are `'static` registry strings.
 pub type LiveNodeParams = Vec<(NodeId, Vec<(&'static str, f32)>)>;
 
@@ -35,7 +35,7 @@ pub const GROUP_INPUT_TYPE_ID: &str = "system.group_input";
 pub const GROUP_OUTPUT_TYPE_ID: &str = "system.group_output";
 
 /// Owned, UI-local view of a graph for the editor canvas. Mirror of
-/// `manifold_renderer::node_graph::GraphSnapshot`.
+/// `manifold_nodes::node_graph::GraphSnapshot`.
 #[derive(Debug, Clone, Default)]
 pub struct GraphSnapshot {
     pub nodes: Vec<NodeSnapshot>,
@@ -45,7 +45,7 @@ pub struct GraphSnapshot {
 }
 
 /// One outer→inner routing entry. Mirror of
-/// `manifold_renderer::node_graph::OuterParamRouting`.
+/// `manifold_nodes::node_graph::OuterParamRouting`.
 #[derive(Debug, Clone)]
 pub struct OuterParamRouting {
     pub outer_label: String,
@@ -56,7 +56,7 @@ pub struct OuterParamRouting {
 }
 
 /// Tier marker for an [`OuterParamRouting`]. Mirror of
-/// `manifold_renderer::node_graph::OuterParamSource`.
+/// `manifold_nodes::node_graph::OuterParamSource`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OuterParamSource {
     /// Declared on the effect's `ChainSpec.bindings` at compile time.
@@ -66,7 +66,7 @@ pub enum OuterParamSource {
 }
 
 /// One node in the snapshot. Mirror of
-/// `manifold_renderer::node_graph::NodeSnapshot`, plus the resolved-at-translate
+/// `manifold_nodes::node_graph::NodeSnapshot`, plus the resolved-at-translate
 /// [`Self::category`] / [`Self::tooltip`].
 #[derive(Debug, Clone)]
 pub struct NodeSnapshot {
@@ -104,7 +104,7 @@ pub struct NodeSnapshot {
 }
 
 /// The body of a group node. Mirror of
-/// `manifold_renderer::node_graph::GroupSnapshot`. Recursive.
+/// `manifold_nodes::node_graph::GroupSnapshot`. Recursive.
 #[derive(Debug, Clone)]
 pub struct GroupSnapshot {
     pub nodes: Vec<NodeSnapshot>,
@@ -114,7 +114,7 @@ pub struct GroupSnapshot {
 }
 
 /// Snapshot of one inner-node parameter. Mirror of
-/// `manifold_renderer::node_graph::ParamSnapshot`, plus the
+/// `manifold_nodes::node_graph::ParamSnapshot`, plus the
 /// resolved-at-translate [`Self::tooltip`].
 #[derive(Debug, Clone)]
 pub struct ParamSnapshot {
@@ -148,7 +148,7 @@ pub struct ParamSnapshot {
 }
 
 /// Coarse-grained param type. Mirror of
-/// `manifold_renderer::node_graph::ParamSnapshotKind`.
+/// `manifold_nodes::node_graph::ParamSnapshotKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamSnapshotKind {
     Float,
@@ -176,7 +176,7 @@ pub enum ParamSnapshotKind {
 }
 
 /// One port (input or output) on a node. Mirror of
-/// `manifold_renderer::node_graph::PortSnapshot`.
+/// `manifold_nodes::node_graph::PortSnapshot`.
 #[derive(Debug, Clone)]
 pub struct PortSnapshot {
     pub name: String,
@@ -184,7 +184,7 @@ pub struct PortSnapshot {
 }
 
 /// One named typed channel on an `Array` port. Mirror of
-/// `manifold_renderer::node_graph::ChannelSnapshot`.
+/// `manifold_nodes::node_graph::ChannelSnapshot`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelSnapshot {
     pub name: String,
@@ -193,7 +193,7 @@ pub struct ChannelSnapshot {
 }
 
 /// Match-mode tag for an `Array` port. Mirror of
-/// `manifold_renderer::node_graph::ArrayMatchMode`.
+/// `manifold_nodes::node_graph::ArrayMatchMode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrayMatchMode {
     Exact,
@@ -201,7 +201,7 @@ pub enum ArrayMatchMode {
 }
 
 /// Simplified port type. Mirror of
-/// `manifold_renderer::node_graph::PortKindSnapshot`.
+/// `manifold_nodes::node_graph::PortKindSnapshot`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PortKindSnapshot {
     Texture2D,
@@ -230,7 +230,7 @@ pub enum PortKindSnapshot {
     VectorField,
 }
 
-/// One wire. Mirror of `manifold_renderer::node_graph::WireSnapshot`.
+/// One wire. Mirror of `manifold_nodes::node_graph::WireSnapshot`.
 #[derive(Debug, Clone)]
 pub struct WireSnapshot {
     pub from_node: u32,
@@ -240,7 +240,7 @@ pub struct WireSnapshot {
 }
 
 /// Node taxonomy bucket — drives the canvas's header tint by family. Mirror of
-/// `manifold_renderer::node_graph::Category`.
+/// `manifold_nodes::node_graph::Category`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
     Uncategorized,

@@ -16,7 +16,7 @@ fn registry() -> PrimitiveRegistry {
 
 #[cfg(test)]
 mod tests {
-    use crate::freeze::install::*;
+    use crate::contracts::freeze::install::*;
     #[test]
     fn content_keyed_cache_separates_edited_from_canonical_and_negative_caches() {
         // An edited shape (different topology) must get its own fused entry by its

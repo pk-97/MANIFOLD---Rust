@@ -8,7 +8,7 @@ inventory::submit!(preset_loader::PresetAssetsRoot {
 
 pub mod bundled_generator_presets;
 pub mod registry;
-pub(crate) mod bundled_presets;
+pub mod bundled_presets;
 pub mod catalog_gen;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;

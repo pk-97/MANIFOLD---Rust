@@ -1,4 +1,6 @@
 use manifold_nodes as _;
+#[path = "support/rust_items.rs"]
+mod rust_items;
 mod contracts;
 mod blob_v2_demo;
 mod blob_v2_presets;

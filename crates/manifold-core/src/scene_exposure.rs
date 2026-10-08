@@ -39,7 +39,7 @@ pub struct SceneParamMetadata {
 }
 
 /// Source of per-type param metadata used by the creation-site commands and the
-/// load-time migration. Implemented by `manifold_renderer` using
+/// load-time migration. Implemented by `manifold_nodes` using
 /// `PrimitiveRegistry`.
 pub trait SceneExposureMetadataProvider: Send + Sync {
     /// Return the full param manifest for `type_id`, in the order it should
@@ -427,7 +427,7 @@ type VocabNodeEntry = (
 /// unique across the def by construction, so this never collides with a
 /// top-level exposure.
 ///
-/// The vocabulary and section naming live in the caller (`manifold_renderer`)
+/// The vocabulary and section naming live in the caller (`manifold_nodes`)
 /// because this module intentionally has no primitive registry dependency.
 pub fn migrate_scene_exposures<F>(
     def: &mut EffectGraphDef,

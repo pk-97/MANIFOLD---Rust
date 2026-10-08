@@ -31,6 +31,7 @@
 //! tests use, into `look_metrics.csv` and `look_summary.txt`.
 
 use std::error::Error;
+use manifold_nodes as _;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};

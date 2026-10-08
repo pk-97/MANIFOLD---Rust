@@ -17,7 +17,7 @@ use manifold_nodes_scene::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
     #[test]
     fn bundled_scene_starter_preset_resolves_transform_material_and_vertex_count() {
         let preset_type = manifold_core::PresetTypeId::from_string("Scene".to_string());
-        let d = crate::bundled_presets::bundled_preset_def(&preset_type)
+        let d = manifold_nodes::bundled_presets::bundled_preset_def(&preset_type)
             .expect("Scene is a bundled preset");
         let vm = SceneVm::from_def(d).expect("Scene resolves");
         assert_eq!(vm.objects.len(), 1, "Cube");
@@ -76,7 +76,7 @@ use manifold_nodes_scene::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
     fn water_family_row_ownership() {
         for preset in ["WaterDamBreakGpuFlip", "WaterDamBreakParticles"] {
             let preset_type = manifold_core::PresetTypeId::new(preset);
-            let def = crate::bundled_presets::bundled_preset_def(&preset_type)
+            let def = manifold_nodes::bundled_presets::bundled_preset_def(&preset_type)
                 .expect("water family preset");
             let vm = SceneVm::from_def(def).expect("water family scene resolves");
             let family: Vec<_> = vm.objects.iter().filter_map(|object| match object {

@@ -42,15 +42,15 @@ class CacheTests(unittest.TestCase):
         self.write('scripts/ui-flows/manifest.json', '{"flows": {}, "path_triggers": {}}')
         self.write('scripts/codex_regressions.json', '{}\n')
         packages = [('base', ''), ('a', '[dependencies]\nbase = {path="../base"}\n'),
-                    ('b', ''), ('manifold-renderer', '[dependencies]\nbase = {path="../base"}\n'
+                    ('b', ''), ('manifold-nodes', '[dependencies]\nbase = {path="../base"}\n'
                      'manifold-node-engine = {path="../manifold-node-engine"}\n'),
                     ('manifold-node-engine', '[dependencies]\nbase = {path="../base"}\n'),
                     ('manifold-ui-paint', '[dependencies]\na = {path="../a"}\n')]
-        gpu_packages = {'manifold-renderer', 'manifold-node-engine', 'manifold-ui-paint'}
+        gpu_packages = {'manifold-nodes', 'manifold-node-engine', 'manifold-ui-paint'}
         for name, deps in packages:
             features = '[features]\ngpu-proofs = []\n' if name in gpu_packages else ''
             targets = ''
-            if name == 'manifold-renderer':
+            if name == 'manifold-nodes':
                 targets = ('\n[[test]]\nname = "gpu_proofs"\npath = "tests/gpu_proofs.rs"\n'
                            'required-features = ["gpu-proofs"]\n'
                            '\n[[test]]\nname = "glb_conformance"\npath = "tests/glb_conformance.rs"\n'
@@ -60,7 +60,7 @@ class CacheTests(unittest.TestCase):
             self.write(f'crates/{name}/Cargo.toml',
                        f'[package]\nname = "{name}"\nversion = "0.1.0"\n{deps}{features}{targets}')
             self.write(f'crates/{name}/src/lib.rs', 'pub fn original() {}\n')
-            if name == 'manifold-renderer':
+            if name == 'manifold-nodes':
                 self.write(f'crates/{name}/tests/gpu_proofs.rs', '')
                 self.write(f'crates/{name}/tests/glb_conformance.rs', '')
                 self.write(f'crates/{name}/tests/uniform_layout_proof.rs', '')
@@ -70,7 +70,7 @@ class CacheTests(unittest.TestCase):
         self.git('checkout', '-b', 'work')
         self.write('crates/a/src/lib.rs', 'pub fn changed() {}\n')
         self.write('crates/b/src/lib.rs', 'pub fn changed() {}\n')
-        self.write('crates/manifold-renderer/src/node_graph/primitives/invert.rs', 'pub fn invert() {}\n')
+        self.write('crates/manifold-nodes/src/node_graph/primitives/invert.rs', 'pub fn invert() {}\n')
         self.commit('BUG-cache branch change')
         self.real_host_inputs = cache.host_inputs
         self.host = patch.object(cache, 'host_inputs', return_value={'host': 'cpu-test'})
@@ -101,12 +101,12 @@ class CacheTests(unittest.TestCase):
 
     def run_spec(self):
         runs = self.scoped_runs()
-        return next(run for run in runs if run['package'] == 'manifold-renderer')
+        return next(run for run in runs if run['package'] == 'manifold-nodes')
 
     def scoped_runs(self):
         workspace = cache.Workspace(self.repo)
         plan = gpu_scope.plan_for_paths(
-            ['crates/manifold-renderer/src/node_graph/primitives/invert.rs'], self.repo,
+            ['crates/manifold-nodes/src/node_graph/primitives/invert.rs'], self.repo,
             workspace=workspace)
         return proofs.normalize_runs(workspace, [dict(run, full=False) for run in plan.runs()])
 
@@ -292,14 +292,14 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(scans(), 3)
 
     def test_changed_crate_invalidates_only_its_dependency_closure(self):
-        for name in ('a', 'b', 'manifold-renderer'):
+        for name in ('a', 'b', 'manifold-nodes'):
             self.clippy(name).save(0)
         self.write('crates/a/src/lib.rs', 'pub fn newer() {}\n')
         self.assertIsNone(self.clippy('a').record)
         self.assertIsNotNone(self.clippy('b').record)
-        self.assertIsNotNone(self.clippy('manifold-renderer').record)
+        self.assertIsNotNone(self.clippy('manifold-nodes').record)
         self.write('crates/base/src/lib.rs', 'pub fn newer() {}\n')
-        self.assertIsNone(self.clippy('manifold-renderer').record)
+        self.assertIsNone(self.clippy('manifold-nodes').record)
         self.assertIsNotNone(self.clippy('b').record)
 
     def test_dependency_modes_aliases_and_target_specific_edges(self):
@@ -308,7 +308,7 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(cache.dependency_paths(self.repo, ['b']), ['crates/a', 'crates/b', 'crates/base'])
 
     def test_metadata_added_and_removed_gpu_crate_updates_scope_and_cache(self):
-        renderer_path = 'crates/manifold-renderer/src/node_graph/primitives/invert.rs'
+        renderer_path = 'crates/manifold-nodes/src/node_graph/primitives/invert.rs'
         initial = self.run_spec()
         cache.proof_pass(self.repo, initial).save(0)
 
@@ -317,8 +317,8 @@ class CacheTests(unittest.TestCase):
         self.write('crates/gpu-leaf/Cargo.toml', leaf_manifest)
         self.write('crates/gpu-leaf/src/lib.rs', 'pub fn leaf() {}\n')
         self.write('crates/gpu-leaf/tests/gpu_proofs.rs', '#[test]\nfn leaf_gpu() {}\n')
-        renderer_manifest = (self.repo / 'crates/manifold-renderer/Cargo.toml').read_text()
-        self.write('crates/manifold-renderer/Cargo.toml',
+        renderer_manifest = (self.repo / 'crates/manifold-nodes/Cargo.toml').read_text()
+        self.write('crates/manifold-nodes/Cargo.toml',
                    renderer_manifest.replace(
                        'manifold-node-engine = {path="../manifold-node-engine"}\n',
                        'manifold-node-engine = {path="../manifold-node-engine"}\n'
@@ -337,14 +337,14 @@ class CacheTests(unittest.TestCase):
                           'adding a local dependency must invalidate the existing proof')
 
         refreshed = next(run for run in self.scoped_runs()
-                         if run['package'] == 'manifold-renderer')
+                         if run['package'] == 'manifold-nodes')
         cache.proof_pass(self.repo, refreshed).save(0)
         self.write('crates/gpu-leaf/src/lib.rs', 'pub fn revised_leaf() {}\n')
         self.assertIsNone(cache.proof_pass(self.repo, refreshed).record,
                           'a changed dependency must invalidate its dependent proof')
 
-        renderer_manifest = (self.repo / 'crates/manifold-renderer/Cargo.toml').read_text()
-        self.write('crates/manifold-renderer/Cargo.toml',
+        renderer_manifest = (self.repo / 'crates/manifold-nodes/Cargo.toml').read_text()
+        self.write('crates/manifold-nodes/Cargo.toml',
                    renderer_manifest.replace('gpu-leaf = {path="../gpu-leaf"}\n', ''))
         shutil.rmtree(self.repo / 'crates/gpu-leaf')
         workspace = cache.Workspace(self.repo)
@@ -420,11 +420,11 @@ class CacheTests(unittest.TestCase):
 
     def test_queue_and_gate_share_exact_proof_key(self):
         for run in gpu_scope.plan_for_paths(
-                ['crates/manifold-renderer/src/node_graph/primitives/invert.rs'], self.repo).runs():
-            with self.subTest(package=run.get('package', 'manifold-renderer')):
+                ['crates/manifold-nodes/src/node_graph/primitives/invert.rs'], self.repo).runs():
+            with self.subTest(package=run.get('package', 'manifold-nodes')):
                 command = proofs.cargo_test_cmd(
                     self.repo / 'Cargo.toml', run['targets'], lib=run['lib'],
-                    package=run.get('package', 'manifold-renderer'))
+                    package=run.get('package', 'manifold-nodes'))
                 command += ['--', '--test-threads=1', *run['filters']]
                 command += [a for skip in run['skips'] for a in ('--skip', skip)]
                 before = cache.queued_proof(command, self.repo)
@@ -481,7 +481,7 @@ class CacheTests(unittest.TestCase):
     def test_actual_standalone_wrapper_and_queue_save_for_landing(self):
         run = self.run_spec()
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
-                '--path', 'crates/manifold-renderer/src/node_graph/primitives/invert.rs']
+                '--path', 'crates/manifold-nodes/src/node_graph/primitives/invert.rs']
         with patch.object(sys, 'argv', argv), \
                 patch.object(proofs, 'build_tests', return_value=0), \
                 patch.object(proofs, 'run_gate', return_value=(0, '')) as executed, \
@@ -515,7 +515,7 @@ class CacheTests(unittest.TestCase):
         self.assertTrue(cache.proof_pass(self.repo, run).reused())
 
     def test_two_package_standalone_reuse_and_input_invalidation(self):
-        path = 'crates/manifold-renderer/src/node_graph/primitives/invert.rs'
+        path = 'crates/manifold-nodes/src/node_graph/primitives/invert.rs'
         runs = self.scoped_runs()
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
                 '--path', path]
@@ -542,7 +542,7 @@ class CacheTests(unittest.TestCase):
 
             # Renderer-only edits keep the engine pass. Engine edits also
             # invalidate renderer, which depends on the engine in production.
-            renderer_only = ['manifold-renderer']
+            renderer_only = ['manifold-nodes']
             engine_owners = {'manifold-node-engine',
                              *cache.Workspace(self.repo).reverse_dependencies(
                                  ['manifold-node-engine'])}
@@ -551,13 +551,13 @@ class CacheTests(unittest.TestCase):
                                       ('crates/manifold-node-engine/src/lib.rs', engine_change)]:
                 with self.subTest(changed=changed):
                     self.write(changed, 'pub fn revised() {}\n')
-                    stale = sorted({run.get('package', 'manifold-renderer') for run in runs
+                    stale = sorted({run.get('package', 'manifold-nodes') for run in runs
                                     if not cache.proof_pass(self.repo, run).record})
                     self.assertEqual(stale, expected)
                     self.assertEqual(proofs.main(), 0)
                     self.assertEqual(self.call_packages(executed.call_args_list), expected)
                     built = build.call_args.args[1]
-                    self.assertEqual(sorted({r.get('package', 'manifold-renderer') for r in built}), expected)
+                    self.assertEqual(sorted({r.get('package', 'manifold-nodes') for r in built}), expected)
                     hold.assert_called_once()
                     for mock in (build, executed, hold):
                         mock.reset_mock()
@@ -633,7 +633,7 @@ class CacheTests(unittest.TestCase):
 
     def test_budget_warning_reuses_pass_and_nightly_ignores_existing_pass(self):
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
-                '--path', 'crates/manifold-renderer/src/node_graph/primitives/invert.rs',
+                '--path', 'crates/manifold-nodes/src/node_graph/primitives/invert.rs',
                 '--budget', '360']
 
         def too_slow(manifest, filters, skips, targets, full, lib, timings, *rest):
@@ -675,13 +675,13 @@ class CacheTests(unittest.TestCase):
             if command[:3] == ['cargo', 'nextest', 'list']:
                 package = command[command.index('-p') + 1]
                 suites = {'fixture': {'binary-name': 'fixture', 'testcases': ['tests::fixture']}}
-                if package == 'manifold-renderer':
+                if package == 'manifold-nodes':
                     suites.update({
                         'uniform_layout_proof': {'binary-name': 'uniform_layout_proof',
-                                                 'testcases': ['fixture::test']},
+                                                 'testcases': ['uniform_layout_proof::fixture::test']},
                         'uniform_layout_extended': {'binary-name': 'uniform_layout_extended',
-                                                    'testcases': ['fixture::test']},
-                        'lib': {'binary-name': 'manifold_renderer',
+                                                    'testcases': ['uniform_layout_extended::fixture::test']},
+                        'lib': {'binary-name': 'manifold_nodes',
                                 'testcases': ['node_graph::primitives::invert::fixture',
                                               'regenerates_in_sync']},
                     })
@@ -713,7 +713,7 @@ class CacheTests(unittest.TestCase):
         elapsed = time.monotonic() - started
         self.assertEqual((code, calls, holds, proofs_run), (0, [], 0, 0))
         for label in ('design-status', 'deny', 'ignored-tests', 'clippy/a', 'clippy/b',
-                      'flow-gate', 'tests/a', 'tests/b', 'tests/manifold-renderer',
+                      'flow-gate', 'tests/a', 'tests/b', 'tests/manifold-nodes',
                       'gpu-proofs'):
             self.assertIn('[REUSED] ' + label, self.output.getvalue())
         print(f'unchanged simulated gate: {elapsed:.3f}s', file=sys.stderr)

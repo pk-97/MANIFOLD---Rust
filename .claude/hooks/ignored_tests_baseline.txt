@@ -6,5 +6,5 @@ crates/manifold-app/src/graph_dump.rs	2
 crates/manifold-audio/src/directory/coreaudio.rs	1
 crates/manifold-media/src/metal_encoder.rs	1
 crates/manifold-playback/src/audio_layer_playback.rs	2
-crates/manifold-renderer/src/node_graph/catalog_tests/fusion_proof.rs	1
-crates/manifold-renderer/src/node_graph/catalog_tests/runtime_generator_runtime.rs	1
+crates/manifold-nodes/src/node_graph/catalog_tests/fusion_proof.rs	1
+crates/manifold-nodes/src/node_graph/catalog_tests/runtime_generator_runtime.rs	1

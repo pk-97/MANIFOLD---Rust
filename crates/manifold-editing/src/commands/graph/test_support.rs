@@ -281,7 +281,7 @@ pub(super) fn project_with_one_generator_layer() -> (Project, LayerId) {
 }
 
 /// A single-param `SceneParamMetadata` fixture — stands in for what
-/// `manifold_renderer::node_graph::scene_exposure::metadata_for_node_type`
+/// `manifold_nodes::node_graph::scene_exposure::metadata_for_node_type`
 /// would compute from a real primitive's `ParamDef` (this crate can't
 /// depend on the renderer, so the app-side caller is the real source —
 /// see the cross-crate constraint note in

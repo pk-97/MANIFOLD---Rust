@@ -8,7 +8,7 @@ use manifold_nodes_scene::node_graph::scene_exposure::{look_metadata, testkit::S
         assert_eq!(metadata[0].label, "Size");
         assert!(!SCENE_VOCABULARY_TYPE_IDS.contains(&"node.platonic_solid_mesh"));
         for preset in ["PhysicsSolids", "PhysicsBoxes", "WaterFloatingBoxMatter"] {
-            let def = crate::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new(preset))
+            let def = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new(preset))
                 .expect("shipped preset");
             assert!(def.preset_metadata.as_ref().unwrap().params.iter().all(|spec| spec.name != "Size"),
                 "{preset} must not acquire Water look controls on load");

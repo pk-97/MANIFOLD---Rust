@@ -12,7 +12,7 @@ use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
 use manifold_core::preset_def::PresetKind;
-use {manifold_node_engine::persistence::EffectGraphDefExt, manifold_node_engine::persistence::PrimitiveRegistry, crate::bundled_presets::bundled_preset_def, crate::bundled_presets::bundled_preset_type_ids, manifold_node_engine::exec::execution_plan::compile};
+use {manifold_node_engine::persistence::EffectGraphDefExt, manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes::bundled_presets::bundled_preset_type_ids, manifold_node_engine::exec::execution_plan::compile};
 use manifold_node_engine::runtime::PresetRuntime;
 
 const SOURCE_VARIANTS: &[(&str, &[&str])] = &[
