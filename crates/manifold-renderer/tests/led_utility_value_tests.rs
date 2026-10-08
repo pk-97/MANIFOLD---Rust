@@ -62,10 +62,7 @@ struct LedUtilityFixture {
 fn preset_def(id: &str) -> EffectGraphDef {
     // Filename stem = preset id (the bundle contract). Read from disk rather
     // than the catalog so the test pins exactly what ships in this tree.
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/assets/generator-presets/"
-    )
+    let path = (manifold_renderer::testkit::assets::CATALOG_ASSETS_ROOT.to_owned() + "/generator-presets/")
     .to_string()
         + id
         + ".json";

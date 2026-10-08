@@ -8,7 +8,7 @@ use manifold_core::{EffectId, NodeId};
 fn migrated_dam_break_publishes_progress_while_live_preview_is_behind() {
     let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let mut def: EffectGraphDef = serde_json::from_str(
-        manifold_renderer::reference_fixtures::cpu_flip_preset_json("WaterDamBreak.json"),
+        manifold_renderer::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreak.json"),
     )
     .unwrap();
     manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def);

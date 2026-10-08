@@ -15,10 +15,9 @@ use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scen
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
-#[path = "common/scene_modifier.rs"]
-mod common;
+use manifold_renderer::testkit::scene_modifier as common;
 
-const HOST: &str = include_str!("fixtures/scene-modifiers/nested_multimaterial_v2.json");
+const HOST: &str = manifold_renderer::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON;
 
 fn host() -> EffectGraphDef {
     let mut host = serde_json::from_str(HOST).expect("nested v2 host parses");

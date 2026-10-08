@@ -21,8 +21,7 @@ use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
-#[path = "common/scene_modifier.rs"]
-mod common;
+use manifold_renderer::testkit::scene_modifier as common;
 
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

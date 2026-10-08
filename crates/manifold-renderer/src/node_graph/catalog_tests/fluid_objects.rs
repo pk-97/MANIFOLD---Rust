@@ -9,9 +9,9 @@
     use manifold_core::flatten::flatten_groups;
 
     const GPU_FLIP_DAM_BREAK_JSON: &str =
-        include_str!("../../../assets/generator-presets/WaterDamBreakGpuFlip.json");
+        manifold_renderer::testkit::assets::ASSETS_GENERATOR_PRESETS_WATERDAMBREAKGPUFLIP_JSON;
     const MATTER_DAM_BREAK_JSON: &str =
-        include_str!("../../../assets/generator-presets/WaterDamBreakMatter.json");
+        manifold_renderer::testkit::assets::ASSETS_GENERATOR_PRESETS_WATERDAMBREAKMATTER_JSON;
 
     /// Role wires into any liquid domain, at any group depth.
     fn domain_role_inputs(def: &EffectGraphDef) -> usize {

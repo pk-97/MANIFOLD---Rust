@@ -4,7 +4,6 @@ use manifold_renderer as _;
 mod support {
     pub mod rust_items;
     pub mod custom_abi_cases;
-    pub mod source_roots;
     pub mod texture_abi_cases;
     pub mod uniform_abi;
 }
@@ -172,11 +171,11 @@ mod texture {
     }
 }
 mod custom {
+    use manifold_renderer::testkit::source_roots::verify_wgsl_roots;
     use super::support;
     use std::{collections::BTreeSet, path::Path};
     use support::{
         custom_abi_cases,
-        source_roots::verify_wgsl_roots,
         texture_abi_cases,
         uniform_abi::*,
     };

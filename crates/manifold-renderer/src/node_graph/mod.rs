@@ -26,6 +26,3 @@ mod catalog_tests;
 mod scene_tests;
 #[cfg(test)]
 mod image_tests;
-
-#[cfg(any(test, feature = "gpu-proofs"))]
-pub mod liquid_conformance_fixtures;

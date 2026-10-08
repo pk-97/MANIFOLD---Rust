@@ -101,9 +101,7 @@ fn body_count_after_frames(def: &EffectGraphDef, frames: u32) -> f32 {
 
 #[test]
 fn deleted_gpu_flip_dam_break_obstacle_leaves_the_solver() {
-    let mut def: EffectGraphDef = serde_json::from_str(include_str!(
-        "../../../assets/generator-presets/WaterDamBreakGpuFlip.json"
-    ))
+    let mut def: EffectGraphDef = serde_json::from_str(manifold_renderer::testkit::assets::ASSETS_GENERATOR_PRESETS_WATERDAMBREAKGPUFLIP_JSON)
     .unwrap();
     manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
     assert_eq!(body_count_after_frames(&def, 4), 1.0, "the obstacle is a solver body");

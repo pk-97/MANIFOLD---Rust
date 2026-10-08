@@ -50,8 +50,8 @@ fn browser_popup_thumbnails_paint() {
     // A real committed factory thumbnail (verified elsewhere to render as a
     // clean Lissajous curve on black). Decode + register it exactly as the
     // app's per-frame thumbnail pass does.
-    let thumb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("assets/preset-thumbnails/generators/Lissajous.png");
+    let thumb = std::path::Path::new(manifold_renderer::testkit::assets::CATALOG_ASSETS_ROOT)
+        .join("preset-thumbnails/generators/Lissajous.png");
     let (tw, th, rgba) = manifold_compositor::preset_thumbnail::decode_png_rgba8(&thumb)
         .expect("decode committed Lissajous thumbnail");
     let thumb_path = thumb.to_string_lossy().to_string();

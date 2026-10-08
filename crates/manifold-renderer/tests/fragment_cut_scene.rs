@@ -7,8 +7,7 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 
-#[path = "common/scene_modifier.rs"]
-mod common;
+use manifold_renderer::testkit::scene_modifier as common;
 
 #[test]
 fn clean_cut_import_roundtrip_and_render_fixture() {

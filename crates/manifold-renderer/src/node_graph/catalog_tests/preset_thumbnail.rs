@@ -8,10 +8,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 /// from disk — exercises the real `system.source` → primitives →
 /// `system.final_output` shape, not a synthetic fixture.
 fn bloom_def() -> EffectGraphDef {
-    let json = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/assets/effect-presets/Bloom.json"
-    ))
+    let json = std::fs::read_to_string(std::path::Path::new(crate::testkit::assets::CATALOG_ASSETS_ROOT).join("effect-presets/Bloom.json"))
     .expect("read Bloom.json");
     serde_json::from_str(&json).expect("parse Bloom.json")
 }
@@ -19,8 +16,8 @@ fn bloom_def() -> EffectGraphDef {
 #[cfg(feature = "gpu-proofs")]
 fn generator_def(id: &str) -> EffectGraphDef {
     let json = std::fs::read_to_string(format!(
-        "{}/assets/generator-presets/{id}.json",
-        env!("CARGO_MANIFEST_DIR")
+        "{}/generator-presets/{id}.json",
+        crate::testkit::assets::CATALOG_ASSETS_ROOT
     ))
     .expect("read generator preset");
     serde_json::from_str(&json).expect("parse generator preset")

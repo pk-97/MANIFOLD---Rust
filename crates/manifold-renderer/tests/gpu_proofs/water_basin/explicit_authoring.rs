@@ -144,7 +144,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
     let mut fluid = AddSceneFluidCommand::new(
         target.clone(),
         scene,
-        manifold_renderer::reference_fixtures::cpu_flip_metadata(),
+        manifold_renderer::testkit::reference_fixtures::cpu_flip_metadata(),
         metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"),
         metadata_for_node_type("node.scene_object"),

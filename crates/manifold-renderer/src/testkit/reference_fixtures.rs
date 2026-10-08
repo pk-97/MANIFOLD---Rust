@@ -8,9 +8,9 @@
 /// name.
 pub fn cpu_flip_preset_json(name: &str) -> &'static str {
     match name {
-        "WaterBasin.json" => include_str!("../tests/fixtures/cpu-flip/WaterBasin.json"),
-        "WaterDamBreak.json" => include_str!("../tests/fixtures/cpu-flip/WaterDamBreak.json"),
-        "WaterDamBreakGpu.json" => include_str!("../tests/fixtures/cpu-flip/WaterDamBreakGpu.json"),
+        "WaterBasin.json" => include_str!("../../tests/fixtures/cpu-flip/WaterBasin.json"),
+        "WaterDamBreak.json" => include_str!("../../tests/fixtures/cpu-flip/WaterDamBreak.json"),
+        "WaterDamBreakGpu.json" => include_str!("../../tests/fixtures/cpu-flip/WaterDamBreakGpu.json"),
         _ => panic!("unknown CPU FLIP reference fixture: {name}"),
     }
 }

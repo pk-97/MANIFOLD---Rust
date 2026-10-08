@@ -333,7 +333,7 @@ use serde_json::{Value, json};
         let registry = PrimitiveRegistry::with_cpu_flip_reference();
         for name in [SHIPPED_PRESET, "WaterDamBreakGpu", "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
             let mut preset: Value = if name == "WaterDamBreakGpu" {
-                let source = crate::reference_fixtures::cpu_flip_preset_json("WaterDamBreakGpu.json");
+                let source = crate::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreakGpu.json");
                 serde_json::from_str(source).unwrap()
             } else {
                 let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
@@ -402,7 +402,7 @@ use serde_json::{Value, json};
     #[test]
     fn gpu_flip_surface_defaults_match_the_engine_on_both_dam_breaks() {
         let registry = PrimitiveRegistry::with_cpu_flip_reference();
-        let native = crate::reference_fixtures::cpu_flip_preset_json("WaterDamBreak.json");
+        let native = crate::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreak.json");
         let native = manifold_node_engine::runtime::PresetRuntime::from_json_str(native, &registry).unwrap();
         let gpu = manifold_node_engine::runtime::PresetRuntime::from_def(
             render_def(WaterScene::dam_break(64)), &registry, None,

@@ -12,8 +12,8 @@ inventory::submit!(preset_loader::PresetAssetsRoot {
 
 // Standalone CPU specification; deliberately absent from runtime builds.
 
-#[cfg(any(test, feature = "gpu-proofs"))]
-pub mod reference_fixtures;
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit;
 
 
 #[cfg(test)]
@@ -29,8 +29,7 @@ mod exec;
 mod freeze;
 
 #[cfg(test)]
-#[path = "../tests/support/source_roots.rs"]
-mod source_roots;
+use crate::testkit::source_roots;
 
 #[cfg(test)]
 #[path = "engine_contract_tests/palette.rs"]

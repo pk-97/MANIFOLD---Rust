@@ -15,7 +15,7 @@ use manifold_node_engine::water::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use manifold_node_engine::water::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use manifold_node_engine::water::primitives::gpu_flip_preset::{SHIPPED_PRESET, WaterScene, render_def};
 use manifold_node_engine::water::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
-use crate::reference_fixtures::cpu_flip_preset_json;
+use crate::testkit::reference_fixtures::cpu_flip_preset_json;
 
 use manifold_node_engine::water::liquid::conformance::*;
 

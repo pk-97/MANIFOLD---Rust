@@ -16,7 +16,7 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
 
-const PHYSICS_SOLIDS_JSON: &str = include_str!("../../assets/generator-presets/PhysicsSolids.json");
+const PHYSICS_SOLIDS_JSON: &str = manifold_renderer::testkit::assets::ASSETS_GENERATOR_PRESETS_PHYSICSSOLIDS_JSON;
 const FRAME_COUNT: u32 = 120;
 
 /// Compound scan proof for the scene-modifier path.  The importer keeps the
@@ -112,9 +112,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
         authored_vm.header.vertex_count_exact,
         "imported source totals remain exact"
     );
-    let recipe: EffectGraphDef = serde_json::from_str(include_str!(
-        "../../assets/scene-modifier-presets/Shatter.json"
-    ))
+    let recipe: EffectGraphDef = serde_json::from_str(manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_SHATTER_JSON)
     .expect("Shatter recipe parses");
     let instance = prepare_new_scene_modifier(
         &enabled,

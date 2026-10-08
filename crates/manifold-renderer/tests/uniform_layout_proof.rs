@@ -21,10 +21,9 @@ use manifold_node_engine::{
 
 mod support {
     pub mod rust_items;
-    pub mod source_roots;
 }
 
-use support::source_roots::{primitive_source_roots, verify_wgsl_roots};
+use manifold_renderer::testkit::source_roots::{primitive_source_roots, verify_wgsl_roots};
 
 /// One expected struct field: name as the hand struct spells it (raw param
 /// name — the WGSL-side reserved-word prefixing is a text concern, not a byte

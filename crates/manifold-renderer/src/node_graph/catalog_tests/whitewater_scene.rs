@@ -23,7 +23,7 @@ use manifold_node_engine::testkit::gpu::encode_rgba8_png;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use crate::reference_fixtures::cpu_flip_preset_json;
+use crate::testkit::reference_fixtures::cpu_flip_preset_json;
 
 
 

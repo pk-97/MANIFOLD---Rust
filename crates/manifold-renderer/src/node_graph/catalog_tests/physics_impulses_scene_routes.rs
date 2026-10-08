@@ -5,9 +5,7 @@ use manifold_core::scene_modifier_preset::SceneModifierInstanceDef;
 
 fn scene_fixture(targets: &[&str]) -> (EffectGraphDef, ParamManifest) {
     let mut def = fixture();
-    let recipe: EffectGraphDef = serde_json::from_str(include_str!(
-        "../../../assets/scene-modifier-presets/UniformForce.json"
-    ))
+    let recipe: EffectGraphDef = serde_json::from_str(manifold_renderer::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON)
     .unwrap();
     let mut metadata = recipe.preset_metadata.clone().unwrap();
     metadata.scene_modifier = None;
