@@ -130,6 +130,8 @@ VERBS = [
      "blob-bench", "blob_v2_native_bench.py", "measure the BlobDetector V2 C ABI"),
     ("Render and measure",
      "kick-labels", "kick_label_extract.py", "ground-truth kick times from drum stems"),
+    ("Render and measure",
+     "repair-audio-fixture", "repair_audio_fixture.py", "rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply"),
 
     ("CPU reference oracles (f64, seconds, no GPU)",
      "mgpcg-ref", "mgpcg_reference.py", "GPU FLIP pressure solve oracle"),

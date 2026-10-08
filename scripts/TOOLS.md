@@ -54,6 +54,7 @@ Render and measure:
   gltf-def-capture        capture importer def-JSON dumps for the equivalence gate  [scripts/gltf_def_capture.py]
   blob-bench              measure the BlobDetector V2 C ABI  [scripts/blob_v2_native_bench.py]
   kick-labels             ground-truth kick times from drum stems  [scripts/kick_label_extract.py]
+  repair-audio-fixture    rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply  [scripts/repair_audio_fixture.py]
 
 CPU reference oracles (f64, seconds, no GPU):
   mgpcg-ref               GPU FLIP pressure solve oracle  [scripts/mgpcg_reference.py]
