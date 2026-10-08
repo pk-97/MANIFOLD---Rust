@@ -10,6 +10,7 @@ watched process.
 from __future__ import annotations
 
 import argparse
+import codecs
 import os
 import re
 import sys
@@ -20,7 +21,6 @@ from typing import Callable, Iterable
 
 DEFAULT_HANG_SECONDS = 300.0
 DEFAULT_POLL_SECONDS = 1.0
-MAX_READ_BYTES = 1024 * 1024
 
 _RUN_RE = re.compile(
     r"^\[RUN\]\s+(?P<label>.+?)\s+\(live transcript:\s*(?P<path>.+?)\)\s*$"
@@ -31,19 +31,115 @@ _GATE_SUMMARY_RE = re.compile(
     r"(?P<failed>\d+)\s+failed,\s*(?P<skipped>\d+)\s+skipped\s*$"
 )
 _STATUS_RE = re.compile(r"^\[(?:PASS|FAIL|REUSED)\]\s+(?P<label>.+?)(?:\s+\([^)]*\))?\s*$")
+MAX_PARTIAL_BYTES = 64 * 1024
+READ_CHUNK_BYTES = 64 * 1024
 
 
-def _read(path: Path) -> str:
-    try:
-        # Logs are append-only and can span many gigabytes for a noisy build.
-        # All watcher markers are emitted at the tail, so bound each poll.
-        with path.open("rb") as stream:
-            stream.seek(0, os.SEEK_END)
-            size = stream.tell()
-            stream.seek(max(0, size - MAX_READ_BYTES))
-            return stream.read().decode("utf-8", errors="replace")
-    except (FileNotFoundError, OSError):
-        return ""
+class _LogState:
+    """Bounded parser state for one append-only transcript."""
+
+    def __init__(self, label: str, path: Path) -> None:
+        self.context = (label, path)
+        self.active: tuple[str, Path] | None = None
+        self.announced = False
+        self.transcripts: list[tuple[str, Path]] = []
+        self.failure: tuple[str, Path, tuple[str, str]] | None = None
+        self.summary: tuple[bool, bool] | None = None
+        self.complete = False
+        self.done = False
+        self._pending = ""
+
+    def feed(self, text: str) -> None:
+        self._pending += text
+        lines = self._pending.splitlines(keepends=True)
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            self._pending = lines.pop()
+        else:
+            self._pending = ""
+        for line in lines:
+            self._line(line, structural=True)
+        if self._pending:
+            # Markers can be emitted without a trailing newline. Structural
+            # lines wait for completion so a split RUN line is never guessed.
+            self._line(self._pending, structural=False)
+            if len(self._pending) > MAX_PARTIAL_BYTES:
+                self._pending = self._pending[-MAX_PARTIAL_BYTES:]
+
+    def _line(self, line: str, *, structural: bool) -> None:
+        stripped = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', line).strip()
+        parse_structure = structural or bool(
+            _RUN_RE.match(stripped) or _GATE_LOG_RE.match(stripped)
+            or _STATUS_RE.match(stripped))
+        if parse_structure:
+            run = _RUN_RE.match(stripped)
+            if run:
+                context = (run.group("label").strip(),
+                           Path(run.group("path").strip()))
+                self.context = context
+                self.active = context
+                self.announced = True
+                if context not in self.transcripts:
+                    self.transcripts.append(context)
+            gate_log = _GATE_LOG_RE.match(stripped)
+            if gate_log:
+                context = ("landing-gate", Path(gate_log.group("path").strip()))
+                if context not in self.transcripts:
+                    self.transcripts.append(context)
+            if _STATUS_RE.match(stripped):
+                self.active = None
+
+        marker = _marker(stripped)
+        if marker is not None and self.failure is None:
+            self.failure = (*self.context, marker)
+        summary = _summary_line(stripped)
+        if summary is not None:
+            self.summary = summary
+        if stripped == "[COMPLETE] landing gate: passed":
+            self.complete = True
+        if stripped.startswith("[land] DONE:"):
+            self.done = True
+
+
+class _IncrementalLogs:
+    """Consume each transcript byte once and retain only parser state."""
+
+    def __init__(self) -> None:
+        self._offsets: dict[Path, int] = {}
+        self._identities: dict[Path, tuple[int, int] | None] = {}
+        self._decoders: dict[Path, codecs.IncrementalDecoder] = {}
+        self._states: dict[Path, _LogState] = {}
+
+    def read(self, path: Path, label: str, context_path: Path) -> _LogState:
+        if path not in self._states:
+            self._states[path] = _LogState(label, context_path)
+            self._decoders[path] = codecs.getincrementaldecoder("utf-8")(
+                errors="replace")
+        state = self._states[path]
+        try:
+            stat = path.stat()
+            identity = (stat.st_ino, stat.st_dev)
+            offset = self._offsets.get(path, 0)
+            if (self._identities.get(path) not in (None, identity)
+                    or stat.st_size < offset):
+                offset = 0
+                state = _LogState(label, context_path)
+                self._states[path] = state
+                self._decoders[path] = codecs.getincrementaldecoder("utf-8")(
+                    errors="replace")
+            snapshot_end = stat.st_size
+            with path.open("rb") as stream:
+                stream.seek(offset)
+                while offset < snapshot_end:
+                    chunk = stream.read(min(READ_CHUNK_BYTES, snapshot_end - offset))
+                    if not chunk:
+                        break
+                    offset += len(chunk)
+                    state.feed(self._decoders[path].decode(chunk))
+            self._identities[path] = identity
+            self._offsets[path] = offset
+        except (FileNotFoundError, OSError):
+            pass
+        return state
 
 
 def _stat_token(path: Path) -> tuple[int, int] | None:
@@ -62,43 +158,6 @@ def _alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
-
-
-def _transcript_paths(text: str) -> list[Path]:
-    paths: list[Path] = []
-    for line in text.splitlines():
-        match = _RUN_RE.match(line)
-        if match:
-            paths.append(Path(match.group("path").strip()))
-        match = _GATE_LOG_RE.match(line)
-        if match:
-            paths.append(Path(match.group("path").strip()))
-    return paths
-
-
-def _active_leg(text: str) -> tuple[str, Path] | None:
-    """Return the most recently announced leg and its live transcript."""
-    active, _ = _scan_active(text)
-    return active
-
-
-def _scan_active(text: str) -> tuple[tuple[str, Path] | None, bool]:
-    """Return the current leg and whether this log has announced any leg."""
-    active: tuple[str, Path] | None = None
-    announced = False
-    for line in text.splitlines():
-        match = _RUN_RE.match(line)
-        if match:
-            announced = True
-            active = (match.group("label").strip(), Path(match.group("path").strip()))
-            continue
-        if active is not None and _STATUS_RE.match(line.strip()):
-            active = None
-    return active, announced
-
-
-def _has_status(text: str) -> bool:
-    return any(_STATUS_RE.match(line.strip()) for line in text.splitlines())
 
 
 def _marker(text: str) -> tuple[str, str] | None:
@@ -131,29 +190,11 @@ def _marker(text: str) -> tuple[str, str] | None:
     return None
 
 
-def _failure_context(text, label, path):
-    """Associate an outer-log failure with its leg, even after the next RUN."""
-    for line in text.splitlines():
-        run = _RUN_RE.match(line)
-        if run:
-            label, path = run['label'].strip(), Path(run['path'].strip())
-        marker = _marker(line)
-        if marker:
-            return label, path, marker
+def _summary_line(text: str) -> tuple[bool, bool] | None:
+    match = _GATE_SUMMARY_RE.match(text)
+    if match:
+        return int(match.group("failed")) == 0, True
     return None
-
-
-def _summary(text: str) -> tuple[bool, bool] | None:
-    """Return ``(is_green, is_summary)`` for the gate summary, if present."""
-    for line in text.splitlines():
-        match = _GATE_SUMMARY_RE.match(line.strip())
-        if match:
-            return int(match.group("failed")) == 0, True
-    return None
-
-
-def _done(text: str) -> bool:
-    return any(line.startswith("[land] DONE:") for line in text.splitlines())
 
 
 def _event(leg: str, failure: str, started: float, transcript: Path,
@@ -197,34 +238,40 @@ def watch(
     last_activity = started
     current_active: tuple[str, Path] | None = None
     previous_active_token: tuple[int, int] | None = None
+    logs = _IncrementalLogs()
 
     while True:
-        outer_text = _read(outer)
+        outer_label = "landing" if kind == "land" else "landing-gate"
+        known: dict[Path, tuple[str, Path]] = {outer: (outer_label, outer)}
         sources: list[Path] = [outer]
-        # A land log points at the gate log.  Include it in the observed set so
-        # an active leg that has not yet been forwarded to stdout is visible.
-        for path in _transcript_paths(outer_text):
-            if path not in sources:
-                sources.append(path)
+        states: dict[Path, _LogState] = {}
+        # Read every discovered transcript, including completed legs. A
+        # completed transcript can contain the red that the outer log only
+        # summarises as a later successful-looking step.
+        index = 0
+        while index < len(sources):
+            path = sources[index]
+            index += 1
+            label, context_path = known[path]
+            states[path] = logs.read(path, label, context_path)
+            for child_label, child_path in states[path].transcripts:
+                if child_path not in known:
+                    known[child_path] = (child_label, child_path)
+                    sources.append(child_path)
 
-        source_text: dict[Path, str] = {path: _read(path) for path in sources}
-        active, outer_announced = _scan_active(outer_text)
+        outer_state = states[outer]
+        active = outer_state.active
         # The gate transcript may be the only place where RUN lines exist when
         # this watcher is attached to a land process.
-        if not outer_announced and current_active is not None and not _has_status(outer_text):
-            # A bounded tail can omit the RUN line after a very noisy step;
-            # retain the known active leg until a status or newer RUN arrives.
-            active = current_active
-        elif not outer_announced:
+        if not outer_state.announced:
             for path in sources[1:]:
-                nested_active, _ = _scan_active(source_text[path])
+                nested_active = states[path].active
                 if nested_active is not None:
                     active = nested_active
                     break
 
         active_path = active[1] if active else outer
         active_label = active[0] if active else ("landing" if kind == "land" else "landing-gate")
-        active_text = _read(active_path) if active_path not in source_text else source_text[active_path]
 
         now = clock()
         if active != current_active:
@@ -238,26 +285,29 @@ def watch(
 
         # Red and refusal are terminal immediately, including the cancellation
         # marker emitted by a signal-interrupted gate.
-        for text in (outer_text, active_text):
-            found = _failure_context(text, active_label, active_path)
+        for path in sources:
+            found = states[path].failure
             if found:
-                label, path, marker = found
-                return _event(label, marker[0], started, path, clock, marker[1])
+                label, transcript, marker = found
+                return _event(label, marker[0], started, transcript, clock, marker[1])
 
-        summary = _summary(outer_text)
+        summary_path = outer
+        summary = outer_state.summary
         if summary is None:
             for path in sources[1:]:
-                summary = _summary(source_text[path])
+                summary = states[path].summary
                 if summary is not None:
+                    summary_path = path
                     break
         if summary is not None:
             green, _ = summary
             if not green:
-                return _event("landing-gate", "red", started, outer, clock, "landing gate summary has failed checks")
-            if kind == "gate":
+                return _event("landing-gate", "red", started, summary_path, clock,
+                              "landing gate summary has failed checks")
+            if kind == "gate" and states[summary_path].complete:
                 return _event("landing-gate", "none", started, outer, clock)
 
-        if kind == "land" and _done(outer_text):
+        if kind == "land" and outer_state.done:
             return _event("landing", "none", started, outer, clock)
 
         if not alive(pid):

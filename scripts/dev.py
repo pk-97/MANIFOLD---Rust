@@ -175,7 +175,7 @@ VERBS = [
 
 # Importable modules, self-tests and retired probes: not verbs, still accounted for.
 INTERNAL = {
-    "gate_readiness.py", "gate_workspace.py", "gate_policy.py", "dev.py", "cpu_scope.py", "diff_scope.py", "gate_passes.py", "codex_checks.py",
+    "gate_readiness.py", "gate_workspace.py", "gate_policy.py", "gate_cancellation.py", "dev.py", "cpu_scope.py", "diff_scope.py", "gate_passes.py", "codex_checks.py",
     "audit_rename.py", "rt_a2_term_cost.py", "rt_a3_term_cost.py",
     "gate_runner_selftest.sh", "uninstall-abletonosc-patch.sh",
 }

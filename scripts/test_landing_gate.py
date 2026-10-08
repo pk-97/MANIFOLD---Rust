@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import landing_gate
 import land_branch
@@ -338,12 +338,34 @@ class LandingTests(unittest.TestCase):
             failed=['deny', 'clippy', 'tests'],
             readiness_errors=[('entrypoints', 'missing executable')])
         self.assertEqual(code, 1)
-        self.assertEqual(called, self.checks[:-2])
-        self.assertEqual(timings['failed'], 4)
+        self.assertEqual(called, self.checks[:-3])
+        self.assertEqual(timings['failed'], 3)
+        self.assertFalse(any(event.startswith('hold-enter:') for event in self.events))
         self.assertIn('flows and GPU proofs were not run because', output)
-        for label in ('entrypoints', 'deny', 'clippy', 'tests/manifold-gpu'):
+        for label in ('entrypoints', 'deny', 'clippy'):
             self.assertIn('FAIL ' + label, output)
-        self.assertGreaterEqual(output.count('rerun: '), 8)
+        self.assertGreaterEqual(output.count('rerun: '), 6)
+
+    def test_terminal_success_follows_verdict_publication(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            root = Path(directory)
+            (root / 'scripts').mkdir()
+            (root / 'scripts/gate_runner.py').write_text(
+                'def append_verdict(*args): print("publication completed")\n')
+            stack.enter_context(patch.object(landing_gate, 'MAIN_CHECKOUT', root))
+            stack.enter_context(patch.object(landing_gate, 'run_cmd',
+                return_value=(0, 'BUG-fake', '', 0)))
+            for changes in (([], []), ([], ['changed-input'])):
+                with patch.object(landing_gate.gate_passes, 'changed_passes', side_effect=changes), \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    code = landing_gate.finish(root, 'base', [('PASS', 'fake', 1, [])])
+                text = output.getvalue()
+                self.assertIn('landing gate: 1 passed, 0 failed', text)
+                if code == 0:
+                    self.assertLess(text.index('publication completed'), text.index('[COMPLETE]'))
+                else:
+                    self.assertIn('[FAIL] inputs changed', text)
+                    self.assertNotIn('[COMPLETE]', text)
 
     def test_planning_fail_fast_stops_before_any_leg(self):
         code, called, *_ = self.exercise(extra=['--fail-fast'],
@@ -406,7 +428,7 @@ class LandingTests(unittest.TestCase):
         code, called, timings, commands, _, output, _ = self.exercise(
             readiness_errors=errors)
         self.assertEqual(code, 1)
-        self.assertEqual(called, self.checks[:-2])
+        self.assertEqual(called, self.checks[:-3])
         self.assertEqual([row["label"] for row in timings["checks"]][:2],
                          ["metadata", "references"])
         self.assertIn("[FAIL] metadata", output)
@@ -415,7 +437,7 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(len(reruns), 4)  # Immediate diagnostics and final summary.
         self.assertTrue(all('landing_gate.py --repo ' in line and '--plan-only' in line
                             for line in reruns))
-        self.assertIn("tests", called)
+        self.assertNotIn("tests", called)
         self.assertNotIn("flow-gate", called)
         self.assertNotIn("gpu-proofs", called)
 
@@ -438,10 +460,10 @@ class LandingTests(unittest.TestCase):
             readiness_errors=(("cpu-ownership",
                                "manifold-gpu: ownership mapping resolves to no tests"),))
         self.assertEqual(code, 1)
-        self.assertEqual(called, self.checks[:-2])
+        self.assertEqual(called, self.checks[:-3])
         self.assertIn("[FAIL] cpu-ownership", output)
         self.assertIn("resolves to no tests", output)
-        self.assertIn("tests", called)
+        self.assertNotIn("tests", called)
         self.assertNotIn("flow-gate", called)
         self.assertNotIn("gpu-proofs", called)
 
@@ -581,7 +603,7 @@ class LandingTests(unittest.TestCase):
         with patch.object(landing_gate, "freshness_problems", return_value=problems):
             code, called, timings, _, _, output, _ = self.exercise()
         self.assertEqual(code, 1)
-        self.assertEqual(called, self.checks[:-2])
+        self.assertEqual(called, self.checks[:-3])
         self.assertIn("rerun: regen-cmd", output)
 
     def test_build_failure_stops_before_the_hold(self):
@@ -1225,6 +1247,101 @@ class DiffScopeTests(unittest.TestCase):
 
 
 class CancellationTests(unittest.TestCase):
+    def test_gate_imports_work_in_both_orders(self):
+        scripts = str(Path(__file__).resolve().parent)
+        for modules in ('landing_gate, gpu_proofs_gate', 'gpu_proofs_gate, landing_gate'):
+            result = subprocess.run([sys.executable, '-B', '-c',
+                f'import sys; sys.path.insert(0, {scripts!r}); import {modules}'],
+                capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_proof_cleanup_timeout_retains_ownership_without_killing_runner(self):
+        proc = Mock(pid=123, _requires_cleanup=True)
+        proc.poll.return_value = None
+        proc.wait.side_effect = [subprocess.TimeoutExpired('proof', 5), 143]
+        with patch.object(landing_gate, 'kill_tree') as kill, \
+                patch.object(landing_gate.os, 'killpg') as killpg:
+            landing_gate.stop_child(proc, graceful=True)
+        proc.send_signal.assert_called_once_with(signal.SIGTERM)
+        self.assertEqual(proc.wait.call_count, 2)
+        self.assertEqual(proc.wait.call_args.kwargs, {})
+        kill.assert_not_called()
+        killpg.assert_not_called()
+
+    def test_cancel_proof_descendants_without_process_enumeration(self):
+        scripts = str(Path(__file__).resolve().parent)
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=sig), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                binary = (
+                    'import os, pathlib, time\n'
+                    f'pathlib.Path({str(root / "test.pid")!r}).write_text(str(os.getpid()))\n'
+                    'print("fake proof running", flush=True)\n'
+                    'time.sleep(120)\n')
+                cargo = (
+                    'import os, pathlib, subprocess, sys\n'
+                    f'pathlib.Path({str(root / "cargo.pid")!r}).write_text(str(os.getpid()))\n'
+                    f'subprocess.run([sys.executable, "-u", "-c", {binary!r}])\n')
+                runner = root / 'gpu_proofs_gate.py'
+                runner.write_text(
+                    'import sys\nfrom pathlib import Path\n'
+                    f'sys.path.insert(0, {scripts!r})\n'
+                    'import gpu_proofs_gate as p\n'
+                    f'p.cargo_test_cmd = lambda *a: [sys.executable, "-u", "-c", {cargo!r}]\n'
+                    'p._main = lambda: p.run_gate(Path("/fake/Cargo.toml"), [], [])[0]\n'
+                    'status = p.main()\n'
+                    f'Path({str(root / "cleanup-ready")!r}).touch()\n'
+                    'import time\n'
+                    f'while not Path({str(root / "cleanup-release")!r}).exists(): time.sleep(.01)\n'
+                    'sys.exit(status)\n')
+                parent = (
+                    'import pathlib, sys\n'
+                    f'sys.path.insert(0, {scripts!r})\n'
+                    'import landing_gate as g, gpu_queue\n'
+                    f'root = pathlib.Path({directory!r})\n'
+                    'original = g.subprocess.run\n'
+                    'def no_ps(cmd, *a, **k):\n'
+                    ' if cmd[0] == "ps": raise OSError("fake ps unavailable")\n'
+                    ' return original(cmd, *a, **k)\n'
+                    'g.subprocess.run = no_ps\n'
+                    'def body(stack):\n'
+                    ' stack.enter_context(gpu_queue.hold("fake proof", directory=root / "queue"))\n'
+                    ' g.run_cmd([sys.executable, "-u", str(root / "gpu_proofs_gate.py")], root, 120, live_log=root / "proof.log")\n'
+                    'g._main = body\n'
+                    'sys.argv = ["landing_gate.py", "--repo", str(root)]\n'
+                    'sys.exit(g.main())\n')
+                proc = subprocess.Popen([sys.executable, '-u', '-c', parent],
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, start_new_session=True)
+                try:
+                    deadline = time.monotonic() + 10
+                    while not (root / 'test.pid').exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue((root / 'test.pid').exists())
+                    cargo_pid = int((root / 'cargo.pid').read_text())
+                    test_pid = int((root / 'test.pid').read_text())
+                    self.assertTrue((root / 'queue/gpu.holder').exists())
+                    proc.send_signal(sig)
+                    deadline = time.monotonic() + 10
+                    while not (root / 'cleanup-ready').exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue((root / 'cleanup-ready').exists())
+                    self.assertFalse(process_alive(cargo_pid))
+                    self.assertFalse(process_alive(test_pid))
+                    self.assertTrue((root / 'queue/gpu.holder').exists())
+                    (root / 'cleanup-release').touch()
+                    output, _ = proc.communicate(timeout=15)
+                    self.assertEqual(proc.returncode, 128 + sig, output)
+                    self.assertIn('descendants stopped', (root / 'proof.log').read_text())
+                    self.assertFalse(process_alive(cargo_pid))
+                    self.assertFalse(process_alive(test_pid))
+                    self.assertFalse((root / 'queue/gpu.holder').exists())
+                finally:
+                    (root / 'cleanup-release').touch()
+                    if proc.poll() is None:
+                        landing_gate.stop_child(proc)
+                    proc.stdout.close()
+
     def test_signals_reap_children_release_lock_and_keep_incomplete_log(self):
         # Real dummy processes, private file lock; no Cargo or GPU device.
         scripts = str(Path(__file__).resolve().parent)

@@ -74,10 +74,31 @@ def cap_main_target(dry_run):
 def run_cmd(cmd, cwd, timeout):
     """Run subprocess, return (exit, stdout, stderr, duration)."""
     start = time.time()
-    r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
-                       env=gate_env())
+    # Cargo and the feature matrix can launch nested builds.  Their process
+    # creation is admitted under the same guard used by reserve(), so a
+    # campaign cannot appear between a reservation check and a build launch.
+    nested_build = (Path(cmd[0]).name == "cargo" or
+                    any(Path(arg).name == "feature_matrix.py" for arg in cmd))
+    if nested_build:
+        r = gpu_queue.run_admitted(
+            cmd,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=gate_env(),
+        )
+        if r is None:
+            raise ReservationDeferred
+    else:
+        r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+                           env=gate_env())
     duration = time.time() - start
     return r.returncode, r.stdout, r.stderr, duration
+
+
+class ReservationDeferred(RuntimeError):
+    """A nested build was prevented from launching by a campaign reservation."""
 
 
 def reservation_message(info):
@@ -221,9 +242,18 @@ def main():
 
         try:
             exit_, out, err, duration = run_cmd(cmd, cwd=MAIN_CHECKOUT, timeout=5400)
-            status = "PASS" if exit_ == 0 else "FAIL"
+            deferred = exit_ == 0 and "[DEFER]" in out
+            status = "DEFER" if deferred else ("PASS" if exit_ == 0 else "FAIL")
             print(f"[{status}] {cmd_str} ({duration:.0f}s)")
             log_lines.append(out + err + f"\n[{status}] ({duration:.0f}s)\n")
+
+            # feature_matrix exits cleanly after an atomic admission refusal;
+            # keep that retry signal from looking like a green gate that could
+            # close an existing red bead.
+            if deferred:
+                if not args.dry_run:
+                    log_path.write_text("".join(log_lines))
+                return 3
 
             if exit_ != 0:
                 tail = (out + err).rstrip().splitlines()[-10:]
@@ -235,6 +265,13 @@ def main():
             print(f"[FAIL] {cmd_str} (timed out)")
             log_lines.append(f"[FAIL] (timed out)\n")
             red_gates.append((cmd_str, f"[FAIL] {cmd_str} (timed out)", "timeout"))
+        except ReservationDeferred:
+            line = "[trunk-health] deferred: nightly GPU reservation became active"
+            print(line)
+            log_lines.append(line + "\n")
+            if not args.dry_run:
+                log_path.write_text("".join(log_lines))
+            return 3
         except FileNotFoundError as e:
             # The gate never ran, so main's health is unknown. Filing a red
             # bead here blames the gate for the environment and buries the
@@ -251,8 +288,11 @@ def main():
     for cmd in cpu_gates:
         if defer_if_reserved(log_path, log_lines, args.dry_run):
             return 0
-        if run_gate(cmd) == 2:
+        result = run_gate(cmd)
+        if result == 2:
             return 2
+        if result == 3:
+            return 0
     # Each GPU leg is independent. Releasing between legs lets an announced
     # landing take the next admission while a proof already in flight finishes.
     for cmd in gpu_gates:
@@ -261,8 +301,11 @@ def main():
         gpu_hold = (contextlib.nullcontext() if args.dry_run else
                     gpu_queue.hold("trunk_health gpu legs", priority="nightly"))
         with gpu_hold:
-            if run_gate(cmd) == 2:
+            result = run_gate(cmd)
+            if result == 2:
                 return 2
+            if result == 3:
+                return 0
 
     if args.dry_run:
         # Simulate bead dedupe logic for the fake red gate

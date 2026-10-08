@@ -310,6 +310,90 @@ class GpuQueueTests(unittest.TestCase):
         self.assertTrue(acquired.wait(2))
         worker.join(timeout=2)
 
+    def test_reservation_suspends_existing_nightly_fairness_barrier(self):
+        directory = self.dir / "q"
+        directory.mkdir(parents=True)
+        (directory / gpu_queue.NIGHTLY_WAITING).write_text(
+            "pid=9999\nstart=other\nbatch=old\n")
+        gpu_queue.reserve("campaign", "reserved GPU", 60, directory=directory)
+
+        def identity(pid=None):
+            return "self" if pid in (None, os.getpid()) else "other"
+
+        with patch.object(gpu_queue, "process_start_identity", side_effect=identity), \
+                patch.object(gpu_queue.os, "kill"):
+            started = time.monotonic()
+            held = gpu_queue.acquire("landing", directory=directory, poll=0.01, report=0.1)
+        try:
+            self.assertLess(time.monotonic() - started, 1)
+        finally:
+            held.release()
+
+    def test_admitted_build_defers_before_launching(self):
+        directory = self.dir / "q"
+        gpu_queue.reserve("campaign", "reserved GPU", 60, directory=directory)
+        with patch.object(gpu_queue.subprocess, "Popen") as popen:
+            self.assertIsNone(gpu_queue.run_admitted(["cargo", "build"], directory=directory))
+        popen.assert_not_called()
+
+    def test_admitted_build_preserves_missing_executable_error(self):
+        with patch.object(gpu_queue.subprocess, "Popen",
+                          side_effect=FileNotFoundError("cargo")):
+            with self.assertRaises(FileNotFoundError):
+                gpu_queue.run_admitted(["cargo", "build"], directory=self.dir / "q")
+
+    def test_admitted_build_lock_covers_launch_but_not_communicate(self):
+        directory = self.dir / "q"
+        popen_entered = threading.Event()
+        release_popen = threading.Event()
+        communicate_entered = threading.Event()
+        release_communicate = threading.Event()
+        reservation_done = threading.Event()
+        results = []
+
+        class Child:
+            returncode = 0
+
+            def communicate(self, timeout=None):
+                communicate_entered.set()
+                if not release_communicate.wait(2):
+                    raise AssertionError("communicate was not released")
+                return "out", "err"
+
+        child = Child()
+
+        def fake_popen(*args, **kwargs):
+            popen_entered.set()
+            if not release_popen.wait(2):
+                raise AssertionError("Popen was not released")
+            return child
+
+        def launch():
+            results.append(gpu_queue.run_admitted(["cargo", "build"], directory=directory))
+
+        worker = threading.Thread(target=launch)
+        with patch.object(gpu_queue.subprocess, "Popen", side_effect=fake_popen):
+            worker.start()
+            self.assertTrue(popen_entered.wait(2))
+
+            reserver = threading.Thread(
+                target=lambda: (gpu_queue.reserve("campaign", "window", 60,
+                                                  directory=directory), reservation_done.set()))
+            reserver.start()
+            self.assertFalse(reservation_done.wait(0.1),
+                             "reservation must not slip between check and Popen")
+
+            release_popen.set()
+            self.assertTrue(communicate_entered.wait(2))
+            self.assertTrue(reservation_done.wait(2),
+                            "reservation should proceed while build communicates")
+            release_communicate.set()
+            worker.join(timeout=2)
+            reserver.join(timeout=2)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].returncode, 0)
+
     def test_raw_heavy_run_cannot_create_reusable_receipt(self):
         passed = MagicMock()
         passed.reused.return_value = False

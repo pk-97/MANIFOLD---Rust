@@ -29,7 +29,8 @@ from datetime import datetime, timezone
 import time
 from pathlib import Path
 
-from landing_gate import (CHECKS_RED, Cancelled, cancellation_signals, record_incomplete,
+from gate_cancellation import Cancelled, cancellation_signals
+from landing_gate import (CHECKS_RED, record_incomplete,
                           run_cmd, landing_log_path, stop_child)
 
 MAIN = Path("/Users/peterkiemann/MANIFOLD - Rust")
@@ -56,6 +57,7 @@ def run_landing_gate(cmd, cwd, log_path):
         proc = subprocess.Popen(
             cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1, start_new_session=True)
+        proc._requires_cleanup = True
         try:
             for line in proc.stdout:
                 log.write(line)

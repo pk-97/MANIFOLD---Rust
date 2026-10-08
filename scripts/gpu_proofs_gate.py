@@ -49,6 +49,7 @@ import argparse
 import codecs
 import contextlib
 import fcntl
+import functools
 import json
 import os
 import queue
@@ -67,6 +68,7 @@ import gpu_scope
 import diff_scope
 import gate_passes
 from gate_workspace import Workspace
+from gate_cancellation import Cancelled, cancellation_signals
 
 # Reserved for input changes; child failures with this status become ordinary reds.
 INPUTS_CHANGED = 78
@@ -197,6 +199,15 @@ def target_from_binary(label: str, target_specs: list[dict]) -> str | None:
     return None
 
 
+def cancellable_proof(function):
+    @functools.wraps(function)
+    def run(*args, **kwargs):
+        with cancellation_signals():
+            return function(*args, **kwargs)
+    return run
+
+
+@cancellable_proof
 def run_gate(
     manifest_path: Path,
     filters: list[str],
@@ -233,15 +244,6 @@ def run_gate(
                 if target_specs is not None else None)
     watchdog = Watchdog(gpu_scope.read_times(gpu_scope.TIMES_PATH), hang_floor,
                         package=package, target=target, target_resolver=resolver)
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=0,
-        start_new_session=True,
-        env=build_environment(),
-    )
-    assert proc.stdout is not None
     chunks: queue.Queue = queue.Queue()
 
     def pump() -> None:
@@ -249,12 +251,23 @@ def run_gate(
             chunks.put(chunk)
         chunks.put(None)
 
-    pump_thread = threading.Thread(target=pump, daemon=True)
-    pump_thread.start()
+    # Defer cancellation across spawn/registration so the handler can never
+    # unwind without a handle to the newly created Cargo process group.
+    blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+    proc = None
+    pump_thread = None
     lines: list[str] = []
     state: dict = {"t": None, "bin": ""}
     pending = ""
     try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            bufsize=0, start_new_session=True, env=build_environment(),
+        )
+        assert proc.stdout is not None
+        pump_thread = threading.Thread(target=pump, daemon=True)
+        pump_thread.start()
+        signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
         while True:
             try:
                 chunk = chunks.get(timeout=WATCH_TICK_S)
@@ -291,15 +304,23 @@ def run_gate(
                 if hung is not None:
                     hung.append((name, waited))
                 break
-    except KeyboardInterrupt:
-        _kill_group(proc)
+        if pending:
+            lines.append(pending)
+        exit_code = proc.wait()
+        pump_thread.join()
+    except BaseException:
+        if proc is not None:
+            _kill_group(proc)
+            proc.wait()
+            # EOF confirms that Cargo's descendants released the inherited
+            # pipe. Do not let our parent release GPU ownership before this.
+            if pump_thread is not None:
+                pump_thread.join()
         raise
-    if pending:
-        lines.append(pending)
-    exit_code = proc.wait()
-    pump_thread.join(timeout=5)
-    if not pump_thread.is_alive() and hasattr(proc.stdout, "close"):
-        proc.stdout.close()
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+        if proc is not None and hasattr(proc.stdout, 'close'):
+            proc.stdout.close()
     return exit_code, "".join(lines)
 
 
@@ -323,7 +344,7 @@ def _chunks(stream):
 
 def _kill_group(proc) -> None:
     """SIGKILL the process group this gate started; never anything else."""
-    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGKILL)
 
 
@@ -862,8 +883,12 @@ def all_runs(workspace: Workspace) -> list[dict]:
 
 
 def main() -> int:
-    with gate_passes.session():
-        return _main()
+    try:
+        with cancellation_signals(), gate_passes.session():
+            return _main()
+    except Cancelled as error:
+        print(f'[INCOMPLETE] GPU proofs cancelled by {error}; descendants stopped', flush=True)
+        return 128 + error.signum
 
 
 def _main() -> int:

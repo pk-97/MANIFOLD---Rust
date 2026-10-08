@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import gpu_queue
+from gate_cancellation import Cancelled, cancellation_signals
 from gpu_proofs_gate import INPUTS_CHANGED as PROOF_INPUTS_CHANGED
 
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
@@ -152,27 +153,6 @@ def kill_tree(root):
             os.kill(pid, signal.SIGKILL)
 
 
-class Cancelled(BaseException):
-    def __init__(self, signum):
-        self.signum = signum
-        super().__init__(signal.Signals(signum).name)
-
-
-@contextlib.contextmanager
-def cancellation_signals():
-    def cancel(signum, _frame):
-        # Ignore subsequent signals while children are being reaped.
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(sig, signal.SIG_IGN)
-        raise Cancelled(signum)
-    previous = {sig: signal.signal(sig, cancel) for sig in (signal.SIGINT, signal.SIGTERM)}
-    try:
-        yield
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
-
-
 def stop_child(proc, graceful=False):
     """Reap our child; nested gates get time to release their own holds."""
     if graceful and proc.poll() is None:
@@ -180,9 +160,17 @@ def stop_child(proc, graceful=False):
             proc.send_signal(signal.SIGTERM)
         try:
             proc.wait(timeout=5)
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
             return
         except subprocess.TimeoutExpired:
-            pass
+            if getattr(proc, '_requires_cleanup', False):
+                # The proof runner owns a separate Cargo session. Killing the
+                # runner would discard the only reliable handle to that group
+                # when ps is unavailable. Retain ownership until it reaps it.
+                print('[cancellation] waiting for proof descendant cleanup; GPU ownership retained', flush=True)
+                proc.wait()
+                return
     kill_tree(proc.pid)
     with contextlib.suppress(OSError):
         os.killpg(proc.pid, signal.SIGKILL)
@@ -210,6 +198,7 @@ def run_cmd(cmd, cwd, timeout, live_log=None):
     proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, errors="replace",
                             env=environment, start_new_session=True)
+    proc._requires_cleanup = any(Path(str(part)).name == 'gpu_proofs_gate.py' for part in cmd)
     streams = {"out": [], "err": []}
     log = open(live_log, "w") if live_log else None
     log_lock = threading.Lock()
@@ -239,9 +228,9 @@ def run_cmd(cmd, cwd, timeout, live_log=None):
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
-        stop_child(proc)
+        stop_child(proc, graceful=True)
     except BaseException:
-        stop_child(proc)
+        stop_child(proc, graceful=True)
         raise
     finally:
         for reader, pipe in zip(readers, (proc.stdout, proc.stderr)):
@@ -761,8 +750,9 @@ def _main(stack):
     # Keep the hold for scoped nextest: transitive helpers can open a device,
     # so source-path inspection alone cannot prove a selected test CPU-only.
     proofs_pending = run_gpu and not proof_cached and "gpu-proofs" not in unbuilt
-    expensive_allowed = args.keep_going or not any(row[0] == "FAIL" for row in results)
-    if pending_tests or (expensive_allowed and ((flows_pending and "flow-gate" not in unbuilt) or proofs_pending)):
+    if expensive_blocked(args, results):
+        return refuse(repo, base_sha, results)
+    if pending_tests or (flows_pending and "flow-gate" not in unbuilt) or proofs_pending:
         print("[gpu-queue] taking the GPU lock for the flow-gate, tests and gpu-proofs legs", flush=True)
         started = time.monotonic()
         stack.enter_context(gpu_queue.hold("landing_gate flows+tests+gpu-proofs", out=sys.stdout))
@@ -884,8 +874,8 @@ def expensive_blocked(args, results):
         return False
     RAN_EVERY_CHECK.set(False)
     reason = "cheap legs failed: " + ", ".join(reds)
-    print("[INCOMPLETE] flows and GPU proofs were not run because " + reason, flush=True)
-    for label in ('flow-gate', 'gpu-proofs'):
+    print("[INCOMPLETE] remaining device tests, flows and GPU proofs were not run because " + reason, flush=True)
+    for label in ('tests', 'flow-gate', 'gpu-proofs'):
         skip(results, label, reason)
     return True
 
@@ -1020,6 +1010,7 @@ def finish(repo, base_sha, results):
             print(f"[WARN] self-verdict failed: {e}")
 
     if failed == 0:
+        print('[COMPLETE] landing gate: passed', flush=True)
         return 0
     moved = any(status == 'FAIL' and label == 'stable-tree' for status, label, _, _ in results)
     return CHECKS_RED if RAN_EVERY_CHECK.get() and not moved else 1

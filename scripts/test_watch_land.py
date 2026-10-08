@@ -104,13 +104,97 @@ class FakeWatch(unittest.TestCase):
                 with leg.open("a") as stream:
                     stream.write(f"progress {writes}\n")
             if writes == 3:
-                self.log.write_text("landing gate: 1 passed, 0 failed, 0 skipped\n")
+                self.log.write_text("landing gate: 1 passed, 0 failed, 0 skipped\n"
+                                    "[COMPLETE] landing gate: passed\n")
 
         code, output = self.run_watch(hang=2.0, step=refresh)
 
         self.assertEqual(code, 0)
         self.assertIn("failure=none", output)
         self.assertEqual(writes, 3)
+
+    def test_green_summary_waits_for_terminal_success_marker(self):
+        self.log.write_text("landing gate: 1 passed, 0 failed, 0 skipped\n")
+        steps = 0
+
+        def finish():
+            nonlocal steps
+            steps += 1
+            if steps == 1:
+                with self.log.open("a") as stream:
+                    stream.write("[COMPL")
+            elif steps == 2:
+                with self.log.open("a") as stream:
+                    stream.write("ETE] landing gate: passed\n")
+
+        code, output = self.run_watch(step=finish)
+
+        self.assertEqual(code, 0)
+        self.assertIn("failure=none", output)
+        self.assertEqual(steps, 2)
+
+    def test_late_red_after_green_summary_wins_before_completion(self):
+        self.log.write_text("landing gate: 1 passed, 0 failed, 0 skipped\n")
+        steps = 0
+
+        def finish():
+            nonlocal steps
+            steps += 1
+            if steps == 1:
+                with self.log.open("a") as stream:
+                    stream.write("[FAIL] changed input\n")
+
+        code, output = self.run_watch(step=finish)
+
+        self.assertEqual(code, 1)
+        self.assertIn("failure=red", output)
+        self.assertIn("changed input", output)
+
+    def test_failure_before_nested_transcript_attachment_survives_noise(self):
+        nested = self.root / "nested.log"
+        nested.write_text("[FAIL] nested test failed\n" + "x" * 1_050_000)
+        self.log.write_text("")
+
+        def attach():
+            self.log.write_text(f"[RUN] tests (live transcript: {nested})\n")
+
+        code, output = self.run_watch(step=attach)
+
+        self.assertEqual(code, 1)
+        self.assertIn("failure=red", output)
+        self.assertIn("nested test failed", output)
+
+    def test_failure_between_polls_survives_noise(self):
+        leg = self.root / "leg.log"
+        self.log.write_text(f"[RUN] tests (live transcript: {leg})\n")
+        leg.write_text("started\n")
+
+        def fail_with_noise():
+            with leg.open("a") as stream:
+                stream.write("[FAIL] test failed between polls\n" + "x" * 1_050_000)
+
+        code, output = self.run_watch(step=fail_with_noise)
+
+        self.assertEqual(code, 1)
+        self.assertIn("failure=red", output)
+        self.assertIn("between polls", output)
+
+    def test_completed_nested_transcript_red_is_not_lost(self):
+        earlier = self.root / "earlier.log"
+        current = self.root / "current.log"
+        earlier.write_text("[FAIL] earlier test failed\n")
+        current.write_text("still running\n")
+        self.log.write_text(
+            f"[RUN] earlier (live transcript: {earlier})\n"
+            "[PASS] earlier (1s)\n"
+            f"[RUN] current (live transcript: {current})\n"
+        )
+
+        code, output = self.run_watch()
+
+        self.assertEqual(code, 1)
+        self.assertIn("leg=earlier failure=red", output)
+        self.assertIn("earlier test failed", output)
 
     def test_actual_nextest_red_is_reported(self):
         leg = self.root / "leg.log"

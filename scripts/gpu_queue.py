@@ -531,10 +531,11 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
 
             with _admission_guard(directory):
                 waiting = _nightly_waiting(directory)
+                campaign = _read_reservation_locked(directory)
+                reservation_active = bool(campaign)
                 allowed = True
                 campaign_reserved = False
                 if priority == "nightly":
-                    campaign = _read_reservation_locked(directory)
                     if campaign:
                         campaign_reserved = True
                         allowed = False
@@ -557,7 +558,7 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
                         pending = pending_landings(directory)
                         allowed = not any(info["path"] in _batch_paths(waiting)
                                           for info in pending if info.get("path"))
-                elif priority != "nightly" and waiting:
+                elif priority != "nightly" and waiting and not reservation_active:
                     allowed = not _normal_waits_for_nightly_locked(directory)
 
                 if allowed and acquired:
@@ -696,6 +697,37 @@ def _run_build(command):
     except OSError as err:
         print(f"gpu_queue: cannot run {command[0]}: {err}", file=sys.stderr)
         return 127
+
+
+def run_admitted(command, *, directory=None, **kwargs):
+    """Launch one process atomically with respect to campaign reservations.
+
+    The reservation check and ``Popen`` share ``gpu.admission``.  A campaign
+    can therefore either observe the build already launched or prevent the
+    launch; it cannot slip between the check and process creation.  The
+    process itself runs after the guard is released, so a long build does not
+    block a reservation from being created.  ``None`` means the caller should
+    defer and retry the complete operation later.
+    """
+    directory = Path(directory) if directory else queue_dir()
+    popen_kwargs = dict(kwargs)
+    timeout = popen_kwargs.pop("timeout", None)
+    if popen_kwargs.pop("capture_output", False):
+        popen_kwargs.setdefault("stdout", subprocess.PIPE)
+        popen_kwargs.setdefault("stderr", subprocess.PIPE)
+    with _admission_guard(directory):
+        if _read_reservation_locked(directory):
+            return None
+        child = subprocess.Popen(command, **popen_kwargs)
+    try:
+        stdout, stderr = child.communicate(timeout=timeout)
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            child.kill()
+        with contextlib.suppress(BaseException):
+            child.communicate()
+        raise
+    return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
 
 
 def _ancestor_holds(directory=None):
