@@ -21,34 +21,27 @@ mod compositor_tests;
 
 // Catalog contracts keep their engine module identities across the P1 split.
 #[cfg(test)]
-#[path = "engine_contract_tests/exec.rs"]
 mod exec;
 
 #[cfg(test)]
-#[path = "engine_contract_tests/freeze.rs"]
 mod freeze;
 
 #[cfg(test)]
 use crate::testkit::source_roots;
 
 #[cfg(test)]
-#[path = "engine_contract_tests/palette.rs"]
 mod palette;
 
 #[cfg(test)]
-#[path = "engine_contract_tests/preview_encoding.rs"]
 mod preview_encoding;
 
 #[cfg(test)]
-#[path = "engine_contract_tests/water.rs"]
 mod water;
 
 #[cfg(test)]
-#[path = "engine_contract_tests/load.rs"]
 mod load;
 
 #[cfg(test)]
-#[path = "engine_contract_tests/runtime.rs"]
 mod runtime;
 
 use manifold_nodes_image as _;
@@ -56,3 +49,6 @@ use manifold_nodes_image as _;
 use manifold_nodes_scene as _;
 
 use manifold_compositor as _;
+
+#[cfg(test)]
+mod primitive_registry;

@@ -20,7 +20,7 @@ use manifold_node_engine::water::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE};
 use manifold_node_engine::water::liquid::fields::LIQUID_FIELD;
 
 fn gather_sources() -> [String; 2] {
-    let source = include_str!("../../../manifold-node-engine/src/water/primitives/shaders/gpu_flip_step.wgsl");
+    let source = include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/gpu_flip_step.wgsl");
     // Restore the original dynamic-axis gather only in the test oracle.
     // Keep its support decisions and floating-point accumulation verbatim.
     let inner = r#"                    for (var a = 0; a < 3; a = a + 1) {

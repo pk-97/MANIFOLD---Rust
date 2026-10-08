@@ -9,7 +9,6 @@
 
 pub(crate) mod bundled_presets;
 pub mod catalog_gen;
-pub mod primitives;
 
 
 

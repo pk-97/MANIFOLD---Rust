@@ -16,12 +16,9 @@ use manifold_core::Beats;
 use manifold_physics::VectorField;
 use std::{borrow::Cow, cell::Cell};
 
-#[path = "physics_impulses_source.rs"]
 mod source_tests;
-#[path = "physics_impulses_scene_routes.rs"]
 mod scene_routes_tests;
 #[cfg(feature = "gpu-proofs")]
-#[path = "physics_impulses_coupled_playback.rs"]
 mod coupled_playback_tests;
 
 const DT: f64 = 1.0 / 60.0;

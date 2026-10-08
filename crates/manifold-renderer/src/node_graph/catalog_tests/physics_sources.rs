@@ -6,7 +6,6 @@ use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGra
 use manifold_node_engine::runtime::testkit::prepare_sources as prepare;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
-#[path = "physics_source_path_tests.rs"]
 mod paths;
 
 const PHYSICS_SOLIDS: &str = include_str!(concat!(

@@ -1,4 +1,3 @@
-#[path = "fluid_role_source/geometry.rs"]
 mod geometry;
 
 mod tests {
