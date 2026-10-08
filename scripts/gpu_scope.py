@@ -135,7 +135,8 @@ def glb_conformance_route(workspace):
     routes = set()
     for package in workspace.feature_packages('gpu-proofs'):
         for target in workspace.targets(package, 'test'):
-            if target['name'] == 'glb_conformance':
+            if (target['name'] == 'glb_conformance'
+                    or Path(target['src_path']).name == 'glb_conformance.rs'):
                 routes.add((package, target['name'], ''))
                 continue
             if 'gpu-proofs' not in target.get('required-features', []):
@@ -201,7 +202,8 @@ class Plan:
                        else self.final_filters())
             targets = [t['name'] for t in self.workspace.targets(package, 'test')
                        if 'gpu-proofs' in t.get('required-features', [])
-                       and t['name'] not in GLB_TESTS and t['name'] != 'glb_conformance']
+                       and t['name'] not in GLB_TESTS
+                       and not (route and route[:2] == (package, t['name']) and not route[2])]
             has_lib = bool(self.workspace.targets(package, 'lib'))
             if has_lib:
                 runs.append({'package': package, 'targets': [], 'lib': True, 'target': 'lib',
