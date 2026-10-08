@@ -125,7 +125,12 @@ class ScopeTests(unittest.TestCase):
 
     def test_repathed_shader_rows_select_existing_owning_proofs(self):
         repo = Path(__file__).resolve().parent.parent
-        names = g.read_times(repo / "scripts/gpu_test_times.json")
+        # Reviewed allowances are a timing sample, not a complete test inventory.
+        names = set()
+        for source in (repo / W).rglob("*.rs"):
+            lines = len(source.read_text().splitlines())
+            names.update(g.changed_test_filters(source.relative_to(repo).as_posix(), repo,
+                         "HEAD", patch=f"@@ -0,0 +1,{lines} @@"))
         cases = {
             "liquid_fill": "gpu_flip_",
             "face_sample_component": "face_grid_tests::",
@@ -167,7 +172,8 @@ class ScopeTests(unittest.TestCase):
         self.assertIn("freeze::install::", result.filters)
         self.assertNotIn("engine_contract_tests::freeze_install::", result.filters)
         names = g.read_times(repo / "scripts/gpu_test_times.json")
-        self.assertTrue(any(name.startswith("freeze::install::tests::") for name in names))
+        self.assertTrue(any(key.split("/", 2)[-1].startswith("freeze::install::tests::")
+                            for key in names))
         self.assertFalse(result.unmapped)
 
     def test_unmounted_contract_is_unmapped(self):

@@ -34,6 +34,14 @@ def run_gate(*, targets=None, lib=False, full_suite=False, filters=None, skips=N
 
 
 class GpuProofsGateTests(unittest.TestCase):
+    def test_committed_allowances_have_package_target_test_keys(self):
+        path = Path(__file__).with_name("gpu_test_times.json")
+        rows = json.loads(path.read_text())["tests"]
+        invalid = [key for key in rows
+                   if len(key.split("/")) != 3
+                   or any(part in ("", "?") for part in key.split("/"))]
+        self.assertEqual(invalid, [], "proof allowances must name package/target/test")
+
     def test_ui_paint_command_uses_own_lib_binary(self):
         cmd = gate.cargo_test_cmd(Path("/tmp/Cargo.toml"), targets=[], lib=True,
                                   package="manifold-ui-paint")
