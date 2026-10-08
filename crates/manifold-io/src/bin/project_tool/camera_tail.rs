@@ -6,8 +6,11 @@
 //! tone map stays last and blur runs on HDR color, as in the importer where
 //! nothing sits after motion blur. Lens and bokeh rows on the Camera card are
 //! stamped at load by `migrate_scene_exposures` (both are scene vocabulary);
-//! motion blur is not vocabulary, so its two rows are stamped here, matching
-//! the importer's ids and labels.
+//! motion blur is not vocabulary, so its Max Blur row is stamped here,
+//! matching the importer's id and label. No Motion Blur on/off row: placed
+//! before a tone map, motion blur always fuses, and a fused member's `enabled`
+//! breaks the load and is never read (BUG-3xdec (fusion ignores Bool on/off
+//! params)). Shutter 0 is the exact off. Stamp the toggle once that is fixed.
 
 use serde_json::{Value, json};
 
@@ -159,37 +162,26 @@ fn dof_group(fresh: &mut impl FnMut() -> u64) -> (u64, u64, Value) {
     (group_id, bokeh_id, group)
 }
 
-/// Same ids, labels and convert as the importer's and the v1.13.0
-/// migration's motion-blur Camera rows.
+/// Same id and label as the importer's motion-blur Max Blur row.
 fn stamp_motion_blur_rows(map: &mut serde_json::Map<String, Value>, mb_id: u64) {
     let Some(meta) = map.get_mut("presetMetadata").and_then(Value::as_object_mut) else {
         return;
     };
-    let rows = [
-        ("max_blur_px", "Max Blur (px)", 0.0, 128.0, 32.0, false),
-        ("enabled", "Motion Blur", 0.0, 1.0, 1.0, true),
-    ];
-    for (param, label, min, max, default, toggle) in rows {
-        let id = format!("{mb_id}_{param}");
-        let mut spec = json!({
-            "id": id, "name": label, "min": min, "max": max, "defaultValue": default,
-            "section": "Camera", "cardVisible": false,
-        });
-        let mut binding = json!({
-            "id": id, "label": label, "defaultValue": default,
-            "target": {"kind": "node", "nodeId": "motion_blur", "param": param},
-            "defaultMirrorsNodeParam": true,
-        });
-        if toggle {
-            spec["isToggle"] = json!(true);
-            binding["convert"] = json!({"type": "BoolThreshold"});
-        }
-        if let Some(params) = meta.get_mut("params").and_then(Value::as_array_mut) {
-            params.push(spec);
-        }
-        if let Some(bindings) = meta.get_mut("bindings").and_then(Value::as_array_mut) {
-            bindings.push(binding);
-        }
+    let id = format!("{mb_id}_max_blur_px");
+    let spec = json!({
+        "id": id, "name": "Max Blur (px)", "min": 0.0, "max": 128.0, "defaultValue": 32.0,
+        "section": "Camera", "cardVisible": false,
+    });
+    let binding = json!({
+        "id": id, "label": "Max Blur (px)", "defaultValue": 32.0,
+        "target": {"kind": "node", "nodeId": "motion_blur", "param": "max_blur_px"},
+        "defaultMirrorsNodeParam": true,
+    });
+    if let Some(params) = meta.get_mut("params").and_then(Value::as_array_mut) {
+        params.push(spec);
+    }
+    if let Some(bindings) = meta.get_mut("bindings").and_then(Value::as_array_mut) {
+        bindings.push(binding);
     }
 }
 
