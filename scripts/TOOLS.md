@@ -41,7 +41,7 @@ Render and measure:
   node-catalog            regenerate docs/NODE_CATALOG.md from the primitive registry  [cargo run -p manifold-renderer --bin gen_node_catalog --]
   thumbnails              regenerate preset picker thumbnails  [scripts/gpu_queue.py -- cargo run -p manifold-renderer --bin generate-preset-thumbnails --]
   freeze-profile          profile the freeze compiler's fused kernels  [scripts/gpu_queue.py -- cargo run -p manifold-renderer --bin freeze-profile --]
-  project-tool            .manifold files: info, json, tempo show|set|at, clip add-audio, scene set-model (never hand-edit the ZIP)  [cargo run -p manifold-io --bin project_tool --]
+  project-tool            .manifold files: info, json, tempo show|set|at, clip add-audio, scene set-model|add-camera-tail (never hand-edit the ZIP)  [cargo run -p manifold-io --bin project_tool --]
   rt-toggle-matrix        one rt-capture per RT toggle; the RT A/B harness  [scripts/rt_toggle_matrix.py]
   rt-quality-matrix       RT quality oracle against the committed baseline  [scripts/rt_quality_matrix.py]
   rt-region-probe         region-mean probe for the multi-bounce GI gate  [scripts/rt_region_probe.py]

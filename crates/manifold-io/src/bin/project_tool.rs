@@ -11,6 +11,7 @@
 //!     --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]
 //! project_tool scene set-model <file.manifold> <model_path>
 //!     --layer <index> [--layer-name <name>]
+//! project_tool scene add-camera-tail <file.manifold> --layer <index>
 //! ```
 //!
 //! ## Why mutations are raw-JSON surgery, not model round-trips
@@ -58,6 +59,9 @@ use manifold_core::units::{Beats, Bpm, Seconds};
 use manifold_io::archive::save_v2_archive;
 use manifold_io::loader::{load_project, load_project_from_json};
 
+#[path = "project_tool/camera_tail.rs"]
+mod camera_tail;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -103,6 +107,8 @@ USAGE:
   project_tool clip add-audio <file.manifold> --layer <name> --path <audio>
       --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]
   project_tool scene set-model <file.manifold> <model_path> --layer <index> [--layer-name <name>]
+  project_tool scene add-camera-tail <file.manifold> --layer <index>
+      (the GLB import's lens + depth of field + motion blur chain, for hand-authored scenes)
   project_tool settings set-rt-quality <file.manifold> <realtime|export> <field> <value>
       field: shadows|ao|gi|reflections  value: ultra_low|low|medium|high|extra_high|ultra
       field: ray_resolution             value: quarter|half|three_quarter|native
@@ -815,12 +821,44 @@ fn run_scene(rest: &[String]) -> ExitCode {
     };
     match sub.as_str() {
         "set-model" => scene_set_model(rest),
+        "add-camera-tail" => scene_add_camera_tail(rest),
         other => {
             eprintln!("error: unknown scene subcommand '{other}'\n");
             print_usage();
             ExitCode::from(2)
         }
     }
+}
+
+fn scene_add_camera_tail(rest: &[String]) -> ExitCode {
+    let (Some(path), Some(layer)) = (rest.first().filter(|a| !a.starts_with("--")), flag_value(rest, "--layer")) else {
+        eprintln!("error: scene add-camera-tail requires <file.manifold> --layer <index>\n");
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let Ok(layer) = layer.parse::<usize>() else {
+        eprintln!("error: --layer must be a number (0-based index)");
+        return ExitCode::from(2);
+    };
+    let mut root = match read_raw_json(path).and_then(|j| parse_root(&j)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let Some(graph) = root.pointer_mut(&format!("/timeline/layers/{layer}/genParams/graph")) else {
+        eprintln!("error: layer {layer} has no generator graph");
+        return ExitCode::FAILURE;
+    };
+    match camera_tail::add_camera_tail(graph) {
+        Ok(summary) => println!("layer {layer}: {summary}"),
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    validate_and_save(&root, path)
 }
 
 fn scene_set_model(rest: &[String]) -> ExitCode {
