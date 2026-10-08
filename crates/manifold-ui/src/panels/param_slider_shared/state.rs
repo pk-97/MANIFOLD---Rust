@@ -370,6 +370,17 @@ impl ParamModState {
         }
     }
 
+    /// Per-frame rebuild for `param_count` rows: every model-mirrored field
+    /// resets (the caller re-syncs them), session-only UI state survives.
+    /// Hosts call this, never `allocate`, so a new session-only field is
+    /// carried here once instead of by each host.
+    pub fn rebuild(&mut self, param_count: usize) {
+        let mut matrix_open = std::mem::take(&mut self.audio_matrix_open);
+        matrix_open.resize(param_count, false);
+        *self = Self::allocate(param_count);
+        self.audio_matrix_open = matrix_open;
+    }
+
     /// Sync audio-modulation display state from the retained row stream.
     pub fn sync_audio(
         &mut self,

@@ -214,13 +214,7 @@ impl AudioTriggerSection {
                     release_ms: AUDIO_RELEASE_DEFAULT_MS,
                     ..Default::default()
                 });
-        // `audio_matrix_open` is session-only (the drawer's "Custom" cell) —
-        // carry it across this re-allocate (the same per-frame wipe the param
-        // card's configure has) or the matrix closes a frame after every
-        // click. `sync_audio` resizes it to `n`.
-        let matrix_open = std::mem::take(&mut self.mod_state.audio_matrix_open);
-        self.mod_state = ParamModState::allocate(n);
-        self.mod_state.audio_matrix_open = matrix_open;
+        self.mod_state.rebuild(n);
         self.mod_state.sync_audio(audio_rows, &config.sends);
     }
 

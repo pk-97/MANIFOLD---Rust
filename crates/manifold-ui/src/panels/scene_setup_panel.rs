@@ -824,16 +824,15 @@ impl SceneCardState {
         }
     }
 
-    /// Resize every per-row vector to `n`, rebuilding `mod_state` fresh (the
-    /// build pass re-syncs every row's modulation facts from the VM's
-    /// `RowModulation` every frame — same "no rotting" contract the rest of
-    /// this panel already has, so nothing here needs to survive the
+    /// Resize every per-row vector to `n`. `mod_state` is rebuilt (the build
+    /// pass re-syncs its model facts every frame; its session-only flags
+    /// survive inside `ParamModState::rebuild`).
     /// `mod_active_tab` survives a mid-gesture rebuild; the gesture itself is
     /// owned by `RowHost`, which captures the wire address rather than a row
     /// index and therefore remains valid across structural snapshots.
     fn resize(&mut self, n: usize) {
         self.rows.resize(n, placeholder_param_info());
-        self.mod_state = ParamModState::allocate(n);
+        self.mod_state.rebuild(n);
         self.current_values.resize(n, 0.0);
         // NaN seed = "never pushed"; the sync's is_nan clause forces the first
         // push for a fresh slot. Existing slots keep their value across the
