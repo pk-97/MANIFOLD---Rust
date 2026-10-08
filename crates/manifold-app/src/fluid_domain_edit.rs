@@ -15,8 +15,8 @@ use manifold_editing::command::Command;
 use manifold_editing::commands::effects::ChangeGraphParamCommand;
 use manifold_editing::commands::graph::SetGraphNodeParamCommand;
 use manifold_node_engine::water::fluid::{FluidDomainLayout, domain_layout};
-use manifold_renderer::node_graph::scene_vm::{ParamAddr, SceneObjectVm, SceneVm, TransformVm};
-use {manifold_renderer::node_graph::GizmoAxis, manifold_renderer::node_graph::GizmoMode, manifold_renderer::node_graph::GizmoTarget, manifold_renderer::node_graph::GizmoTargetKind, manifold_node_engine::parameters::ParamValue, manifold_node_engine::param_binding::convert_param_value, manifold_renderer::node_graph::drag_write, manifold_renderer::node_graph::gizmo_target_for};
+use manifold_nodes_scene::node_graph::scene_vm::{ParamAddr, SceneObjectVm, SceneVm, TransformVm};
+use {manifold_nodes_scene::node_graph::viewport_gizmo::GizmoAxis, manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode, manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTarget, manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetKind, manifold_node_engine::parameters::ParamValue, manifold_node_engine::param_binding::convert_param_value, manifold_nodes_scene::node_graph::viewport_gizmo::drag_write, manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for};
 
 const DEFAULT_FLUID_RESOLUTION: u32 = 24;
 
@@ -181,7 +181,7 @@ fn node_at_scope<'a>(
 
 fn fluid_resolution(
     def: &EffectGraphDef,
-    row: &manifold_renderer::node_graph::scene_vm::SceneObjectKnownRow,
+    row: &manifold_nodes_scene::node_graph::scene_vm::SceneObjectKnownRow,
 ) -> Result<u32, String> {
     let fluid = fluid_surface_node(def, row)?;
     let resolution = fluid
@@ -201,7 +201,7 @@ fn fluid_resolution(
 
 fn fluid_surface_node<'a>(
     def: &'a EffectGraphDef,
-    row: &manifold_renderer::node_graph::scene_vm::SceneObjectKnownRow,
+    row: &manifold_nodes_scene::node_graph::scene_vm::SceneObjectKnownRow,
 ) -> Result<&'a EffectGraphNode, String> {
     row.liquid_domain
         .as_ref()
@@ -788,7 +788,7 @@ mod tests {
 
     fn added_fluid_project() -> (Project, LayerId, u32) {
         use manifold_editing::commands::graph::AddSceneFluidCommand;
-        use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
+        use manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type;
         let mut project = Project::default();
         let index = project.timeline.add_layer(
             "Scene",

@@ -1195,7 +1195,7 @@ Source ──→ Gain(in, gain=wire) ──→ output
 
 Four inner nodes (BeatGate, Value, Math, Gain) plus the Source / FinalOutput boundaries. The strobe value flows scalar-to-scalar through the whole chain — `BeatGate.out` (scalar) → `Math.b` (scalar input) → `Math.out` (scalar) → `Gain.gain` (scalar input). Nothing materialises in a texture until the final `Gain` writes the per-pixel result.
 
-Implemented in `crates/manifold-renderer/src/node_graph/composites/strobe_opacity.rs` with three GPU parity tests: off-phase (passthrough), on-phase at amount=1.0 (output is black, alpha preserved), on-phase at amount=0.5 (output is 0.5×source). All three match the legacy fused `node.strobe` shader at the same beat positions within fp16 tolerance — the f32 register path of the legacy and the f32 scalar-wire path of the decomposed graph produce equivalent results.
+Implemented in `crates/manifold-nodes-image/src/node_graph/composites/strobe_opacity.rs` with three GPU parity tests: off-phase (passthrough), on-phase at amount=1.0 (output is black, alpha preserved), on-phase at amount=0.5 (output is 0.5×source). All three match the legacy fused `node.strobe` shader at the same beat positions within fp16 tolerance — the f32 register path of the legacy and the f32 scalar-wire path of the decomposed graph produce equivalent results.
 
 White-mode and Gain-mode follow the same pattern but need additional primitives (`ConstantColor` for Mix-to-white, `Math(Add, 1.0, Math(Multiply, 2.0, strobe))` for the brightening factor). Deferred until the V0 proof-point — Opacity-mode parity — landed.
 

@@ -444,7 +444,7 @@ mod tests {
 
         // Import through the same path a dropped .glb takes.
         let (def, report) =
-            manifold_renderer::node_graph::gltf_import::assemble_import_graph(&outcome.glb_path)
+            manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&outcome.glb_path)
                 .expect("assemble_import_graph must succeed on the converted glb");
         assert!(report.object_count > 0, "converted rig must import at least one object");
 

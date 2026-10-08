@@ -672,7 +672,7 @@ def test_sed_write_guard_file_operands_are_not_scripts():
     silent = [
         'W="/x/slot-2"; sed -n 1,99p $W/particle_tests.rs; rg -n busy $W/../ -l | head',
         'W=".claude/worktrees/slot-1"; rg -n fn -A40 $W/crates/a.rs | sed -n 10,40p',
-        'sed -n 720,790p $W/crates/manifold-renderer/src/node_graph/gltf_import/object_group.rs',
+        'sed -n 720,790p $W/crates/manifold-nodes-scene/src/node_graph/gltf_import/object_group.rs',
         "sed -i '' 's/a/b/' $W/f.rs",
         "sed -i '' 's/^## Owed before any engine work$/## Owed before engine work/' docs/X.md; "
         "git commit -q -F - -- docs/X.md <<'EOF'\nP4 is\nPeter's call.\nEOF\ngit push -q origin main",

@@ -9,7 +9,7 @@ use syn::{
     visit::{self, Visit},
 };
 
-use super::source_roots::WGSL_SRC_ROOTS;
+use super::{rust_items::test_only, source_roots::WGSL_SRC_ROOTS};
 
 /// Source trees referenced by the extended ABI cases. These include the
 /// non-primitive engine helpers whose shader declarations are proved here.
@@ -26,7 +26,8 @@ pub fn abi_source_roots() -> Result<Vec<PathBuf>, String> {
         .map(|relative| {
             let path = manifest.join(relative);
             if path.is_dir() {
-                path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))
+                path.canonicalize()
+                    .map_err(|e| format!("{}: {e}", path.display()))
             } else {
                 Err(format!("missing ABI case source root: {}", path.display()))
             }
@@ -46,7 +47,10 @@ pub fn resolve_source_path(source: &str) -> Result<PathBuf, String> {
     candidates
         .into_iter()
         .find(|path| path.is_file())
-        .map(|path| path.canonicalize().map_err(|e| format!("{}: {e}", path.display())))
+        .map(|path| {
+            path.canonicalize()
+                .map_err(|e| format!("{}: {e}", path.display()))
+        })
         .transpose()?
         .ok_or_else(|| format!("missing ABI case source: {source}"))
 }
@@ -60,9 +64,7 @@ fn find_shader_file(root: &Path, shader: &Path) -> Result<Option<PathBuf>, Strin
             if let Some(found) = find_shader_file(&path, shader)? {
                 return Ok(Some(found));
             }
-        } else if path.extension().is_some_and(|ext| ext == "wgsl")
-            && path.ends_with(shader)
-        {
+        } else if path.extension().is_some_and(|ext| ext == "wgsl") && path.ends_with(shader) {
             return Ok(Some(path));
         }
     }
@@ -87,7 +89,10 @@ pub fn resolve_shader_path(source: &Path, shader: &str) -> Result<PathBuf, Strin
     for root in WGSL_SRC_ROOTS {
         let root = manifest.join(root);
         if !root.is_dir() {
-            return Err(format!("missing WGSL crate source root: {}", root.display()));
+            return Err(format!(
+                "missing WGSL crate source root: {}",
+                root.display()
+            ));
         }
         if let Some(path) = find_shader_file(&root, shader_file)? {
             return path
@@ -115,33 +120,17 @@ struct Source {
     defs: BTreeMap<String, syn::ItemStruct>,
     constants: BTreeMap<String, Expr>,
     duplicates: Vec<String>,
+    macro_errors: Vec<String>,
 }
 
-fn test_only(attrs: &[syn::Attribute]) -> bool {
-    fn requires_test(meta: &syn::Meta) -> bool {
-        match meta {
-            syn::Meta::Path(p) => p.is_ident("test"),
-            syn::Meta::List(list) if list.path.is_ident("all") || list.path.is_ident("any") => {
-                use syn::parse::Parser;
-                let parser =
-                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
-                let Ok(items) = parser.parse2(list.tokens.clone()) else {
-                    return false;
-                };
-                if list.path.is_ident("all") {
-                    items.iter().any(requires_test)
-                } else {
-                    !items.is_empty() && items.iter().all(requires_test)
-                }
-            }
-            _ => false,
+impl<'a> Visit<'a> for Source {
+    fn visit_item_macro(&mut self, item: &'a syn::ItemMacro) {
+        match super::rust_items::testkit_item(item) {
+            Ok(Some(expanded)) => self.visit_item(&expanded),
+            Ok(None) => {}
+            Err(error) => self.macro_errors.push(error.to_string()),
         }
     }
-    attrs.iter().any(|a| {
-        a.path().is_ident("cfg") && a.parse_args::<syn::Meta>().is_ok_and(|m| requires_test(&m))
-    })
-}
-impl<'a> Visit<'a> for Source {
     fn visit_item_mod(&mut self, item: &'a syn::ItemMod) {
         if !test_only(&item.attrs) {
             visit::visit_item_mod(self, item);
@@ -172,6 +161,12 @@ fn source(text: &str) -> Result<Source, String> {
     let file = syn::parse_file(text).map_err(|e| e.to_string())?;
     let mut out = Source::default();
     out.visit_file(&file);
+    if !out.macro_errors.is_empty() {
+        return Err(format!(
+            "invalid testkit_visible declaration: {}",
+            out.macro_errors.join("; ")
+        ));
+    }
     Ok(out)
 }
 fn integer(e: &Expr, src: &Source, depth: usize) -> Result<u32, String> {
@@ -589,6 +584,31 @@ pub fn rust_string_constant(path: &Path, name: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn finds_testkit_visible_production_structs_in_both_arms() {
+        for name in ["testkit_visible", "manifold_core::testkit_visible"] {
+            for body in [
+                "#[repr(C)] struct U { dispatch_count: u32 }",
+                "testkit { #[repr(C)] pub struct U { test_only_field: f32 } }
+                 production { #[repr(C)] struct U { dispatch_count: u32 } }",
+            ] {
+                let src = source(&format!("{name}! {{ {body} }}")).unwrap();
+                assert_eq!(src.defs.len(), 1);
+                assert!(src.duplicates.is_empty());
+                let layout = rust_struct("U", &src, 0).unwrap();
+                assert_eq!(layout.leaves[0].name, "dispatch_count");
+                assert_eq!(layout.leaves[0].kind, "u32");
+            }
+        }
+        assert!(source("testkit_visible! { testkit {} production {} }").is_err());
+        assert!(
+            source("#[cfg(test)] testkit_visible! { struct U; }")
+                .unwrap()
+                .defs
+                .is_empty()
+        );
+    }
+
     const HOST: &str = "#[repr(C)] struct U { a: f32, b: u32, c: [f32; 2] }";
     const SHADER: &str = "struct U { a: f32, b: u32, c: vec2<f32> }";
     #[test]

@@ -31,7 +31,7 @@ use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, Por
 use {manifold_node_engine::ports::ArrayType, manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::exec::effect_node::EffectNodeContext, manifold_node_engine::exec::effect_node::EffectNodeType, manifold_node_engine::exec::effect_node::NodeErrorTap, manifold_node_engine::parameters::ParamDef, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_renderer::node_graph::bundled_preset_def, manifold_renderer::node_graph::bundled_preset_type_ids};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-use manifold_renderer::preset_thumbnail::{THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, render_preset_thumbnail};
+use manifold_compositor::preset_thumbnail::{THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, render_preset_thumbnail};
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::json;
 
@@ -1820,7 +1820,7 @@ fn with_force_and_impulse(def: &EffectGraphDef, strength: f32) -> (EffectGraphDe
         metadata.bindings.iter_mut().find(|binding| binding.id == id).unwrap().default_value = value;
     }
     let top = |node: &str| SceneNodeRef { scope: vec![], node: NodeId::new(node) };
-    let instance = manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+    let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
         def,
         &recipe,
         NodeId::new("impulse"),

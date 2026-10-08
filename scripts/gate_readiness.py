@@ -11,6 +11,7 @@ import subprocess
 import cpu_scope
 import gpu_scope
 from gate_workspace import Workspace
+from gate_policy import is_inert_plan_path
 
 
 def reference_problems(repo, workspace, packages):
@@ -165,6 +166,7 @@ def selected_tooling(repo, paths):
 
 
 def plan(repo, paths, base=None):
+    paths = [path for path in paths if not is_inert_plan_path(path)]
     result = {'packages': [], 'dependents': [], 'cpu': None, 'gpu': None,
               'workspace': None, 'errors': [],
               'flows': [], 'tooling': [],

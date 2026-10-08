@@ -249,7 +249,7 @@ pub fn sync_inspector_data(
     // marker, resolved): the selection's own layer, falling back to
     // `active_layer`.
     if ui.scene_setup_panel.is_open() {
-        use manifold_renderer::node_graph::scene_vm::{SceneVm, is_param_driven, is_param_exposed};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, is_param_driven, is_param_exposed};
         use manifold_ui::panels::scene_setup_panel::{
             AtmosphereRowVm, EnvironmentRowVm, ObjectMaterialVm, ObjectRowVm, RowAddr, RowValue,
             SceneSetupState, SceneSetupVm, TransformRowVm,
@@ -407,7 +407,7 @@ pub fn sync_inspector_data(
                                 )),
                                 value: v,
                             };
-                            let transform_row = |t: &manifold_renderer::node_graph::scene_vm::TransformVm| {
+                            let transform_row = |t: &manifold_nodes_scene::node_graph::scene_vm::TransformVm| {
                                 // D12 fix: `t`'s own addresses already carry
                                 // the correct `scope_path` (empty for a
                                 // root/ungrouped atom, `[group_node_id]` for
@@ -481,9 +481,9 @@ pub fn sync_inspector_data(
                                 })
                             };
                             let material_row =
-                                |m: &manifold_renderer::node_graph::scene_vm::MaterialVm| match m
+                                |m: &manifold_nodes_scene::node_graph::scene_vm::MaterialVm| match m
                                 {
-                                    manifold_renderer::node_graph::scene_vm::MaterialVm::Known(row_data) => {
+                                    manifold_nodes_scene::node_graph::scene_vm::MaterialVm::Known(row_data) => {
                                         // D12 fix: `row_data.scope_path`
                                         // already carries the correct scope
                                         // (see `transform_row`'s identical
@@ -553,7 +553,7 @@ pub fn sync_inspector_data(
                                             ObjectMaterialVm::Other { color }
                                         }
                                     }
-                                    manifold_renderer::node_graph::scene_vm::MaterialVm::None => {
+                                    manifold_nodes_scene::node_graph::scene_vm::MaterialVm::None => {
                                         ObjectMaterialVm::None
                                     }
                                 };
@@ -561,8 +561,8 @@ pub fn sync_inspector_data(
                                 .objects
                                 .iter()
                                 .map(|o| match o {
-                                    manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(known) => {
-                                        let manifold_renderer::node_graph::scene_vm::SceneObjectKnownRow {
+                                    manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(known) => {
+                                        let manifold_nodes_scene::node_graph::scene_vm::SceneObjectKnownRow {
                                             index,
                                             object_node_id,
                                             group_node_id,
@@ -624,7 +624,7 @@ pub fn sync_inspector_data(
                                             .collect();
                                         let default_scope = visible_addr.scope_path.clone();
                                         let skin = known.skin.as_ref().map(|s| {
-                                            use manifold_renderer::node_graph::scene_vm::SkinTargetMap as RTarget;
+                                            use manifold_nodes_scene::node_graph::scene_vm::SkinTargetMap as RTarget;
                                             use manifold_ui::panels::scene_setup_panel::SkinTargetMap as UITarget;
                                             manifold_ui::panels::scene_setup_panel::SkinRowVm {
                                                 source_node_id: Some(s.source_node_id),
@@ -696,7 +696,7 @@ pub fn sync_inspector_data(
                                             },
                                         ))
                                     }
-                                    manifold_renderer::node_graph::scene_vm::SceneObjectVm::Custom { index } => {
+                                    manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Custom { index } => {
                                         ObjectRowVm::Custom { index: *index }
                                     }
                                 })
@@ -735,7 +735,7 @@ pub fn sync_inspector_data(
                                 .lights
                                 .iter()
                                 .map(|l| match l {
-                                    manifold_renderer::node_graph::scene_vm::SceneLightVm::Known(r) => {
+                                    manifold_nodes_scene::node_graph::scene_vm::SceneLightVm::Known(r) => {
                                         manifold_ui::panels::scene_setup_panel::LightRowVm::Known(Box::new(
                                             manifold_ui::panels::scene_setup_panel::LightKnownRow {
                                                 index: r.index,
@@ -794,12 +794,12 @@ pub fn sync_inspector_data(
                                             },
                                         ))
                                     }
-                                    manifold_renderer::node_graph::scene_vm::SceneLightVm::Custom { index } => {
+                                    manifold_nodes_scene::node_graph::scene_vm::SceneLightVm::Custom { index } => {
                                         manifold_ui::panels::scene_setup_panel::LightRowVm::Custom { index: *index }
                                     }
                                 })
                                 .collect();
-                            let lens_row = |l: &manifold_renderer::node_graph::scene_vm::LensRow| {
+                            let lens_row = |l: &manifold_nodes_scene::node_graph::scene_vm::LensRow| {
                                 manifold_ui::panels::scene_setup_panel::LensRowVm {
                                     focus_distance: mrow(l.node_doc_id, "focus_distance", row(
                                         l.node_doc_id,
@@ -829,7 +829,7 @@ pub fn sync_inspector_data(
                                 }
                             };
                             let camera = match &vm.camera {
-                                manifold_renderer::node_graph::scene_vm::CameraVm::Orbit(c) => {
+                                manifold_nodes_scene::node_graph::scene_vm::CameraVm::Orbit(c) => {
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::Orbit(Box::new(
                                         manifold_ui::panels::scene_setup_panel::OrbitCameraRowVm {
                                             orbit: mrow(c.node_doc_id, "orbit", row(c.node_doc_id, "orbit", 0.7, is_driven(c.node_doc_id, "orbit"), -std::f32::consts::TAU, std::f32::consts::TAU)),
@@ -840,7 +840,7 @@ pub fn sync_inspector_data(
                                         },
                                     ))
                                 }
-                                manifold_renderer::node_graph::scene_vm::CameraVm::Free(c) => {
+                                manifold_nodes_scene::node_graph::scene_vm::CameraVm::Free(c) => {
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::Free(Box::new(
                                         manifold_ui::panels::scene_setup_panel::FreeCameraRowVm {
                                             pos: (
@@ -856,7 +856,7 @@ pub fn sync_inspector_data(
                                         },
                                     ))
                                 }
-                                manifold_renderer::node_graph::scene_vm::CameraVm::LookAt(c) => {
+                                manifold_nodes_scene::node_graph::scene_vm::CameraVm::LookAt(c) => {
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::LookAt(Box::new(
                                         manifold_ui::panels::scene_setup_panel::LookAtCameraRowVm {
                                             pos: (
@@ -874,16 +874,16 @@ pub fn sync_inspector_data(
                                         },
                                     ))
                                 }
-                                manifold_renderer::node_graph::scene_vm::CameraVm::Custom { .. } => {
+                                manifold_nodes_scene::node_graph::scene_vm::CameraVm::Custom { .. } => {
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::Custom
                                 }
                                 // Loop camera rows live in the Scene Loop
                                 // section (SCENE_LOOP_DESIGN P2), not the
                                 // Camera card.
-                                manifold_renderer::node_graph::scene_vm::CameraVm::Loop(_) => {
+                                manifold_nodes_scene::node_graph::scene_vm::CameraVm::Loop(_) => {
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::Custom
                                 }
-                                manifold_renderer::node_graph::scene_vm::CameraVm::None => {
+                                manifold_nodes_scene::node_graph::scene_vm::CameraVm::None => {
                                     manifold_ui::panels::scene_setup_panel::CameraRowVm::None
                                 }
                             };
@@ -912,13 +912,13 @@ pub fn sync_inspector_data(
                             let camera_sections = sections_for_nodes(def.as_ref(), &vm.camera_controls);
                             let camera_parameter_ids = matches!(
                                 vm.camera,
-                                manifold_renderer::node_graph::scene_vm::CameraVm::Custom { .. }
-                                    | manifold_renderer::node_graph::scene_vm::CameraVm::Loop(_)
+                                manifold_nodes_scene::node_graph::scene_vm::CameraVm::Custom { .. }
+                                    | manifold_nodes_scene::node_graph::scene_vm::CameraVm::Loop(_)
                             )
                             .then(|| super::scene::parameter_ids_for_nodes(def.as_ref(), &vm.camera_controls));
                             let world_sections = sections_for_nodes(def.as_ref(), &vm.world_controls);
                             let environment = match vm.environment {
-                                manifold_renderer::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
+                                manifold_nodes_scene::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
                                         // BUG-260's dead-chip case (design
                                         // doc section 3b.9): reads through
@@ -956,7 +956,7 @@ pub fn sync_inspector_data(
                                         hdri_file: e.hdri_file_value,
                                     }
                                 }
-                                manifold_renderer::node_graph::scene_vm::EnvironmentVm::Bare(e) => {
+                                manifold_nodes_scene::node_graph::scene_vm::EnvironmentVm::Bare(e) => {
                                     EnvironmentRowVm::Bare {
                                         intensity: mrow(
                                             e.node_doc_id,
@@ -984,15 +984,15 @@ pub fn sync_inspector_data(
                                         ),
                                     }
                                 }
-                                manifold_renderer::node_graph::scene_vm::EnvironmentVm::Custom { .. } => {
+                                manifold_nodes_scene::node_graph::scene_vm::EnvironmentVm::Custom { .. } => {
                                     EnvironmentRowVm::Custom
                                 }
-                                manifold_renderer::node_graph::scene_vm::EnvironmentVm::None => {
+                                manifold_nodes_scene::node_graph::scene_vm::EnvironmentVm::None => {
                                     EnvironmentRowVm::None
                                 }
                             };
                             let atmosphere = match vm.atmosphere {
-                                manifold_renderer::node_graph::scene_vm::AtmosphereVm::Wired(a) => {
+                                manifold_nodes_scene::node_graph::scene_vm::AtmosphereVm::Wired(a) => {
                                     AtmosphereRowVm::Wired {
                                         density: mrow(
                                             a.node_doc_id,
@@ -1026,7 +1026,7 @@ pub fn sync_inspector_data(
                                         ),
                                     }
                                 }
-                                manifold_renderer::node_graph::scene_vm::AtmosphereVm::None => {
+                                manifold_nodes_scene::node_graph::scene_vm::AtmosphereVm::None => {
                                     AtmosphereRowVm::None
                                 }
                             };
@@ -1277,7 +1277,7 @@ pub fn sync_inspector_data(
                         .iter()
                         .map(|l| l.layer_id.clone())
                         .collect();
-                    let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def_with_layers(
+                    let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def_with_layers(
                         &def, &layer_ids,
                     )?;
                     let gp = layer.gen_params()?;
@@ -1946,7 +1946,7 @@ fn modifier_display_name(type_id: &str) -> String {
 
 fn object_modifier_rows(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
-    chain: &[manifold_renderer::node_graph::scene_vm::ModifierVm],
+    chain: &[manifold_nodes_scene::node_graph::scene_vm::ModifierVm],
     owned: &[manifold_core::NodeId],
 ) -> Vec<manifold_ui::panels::scene_setup_panel::ModifierKnownRow> {
     chain.iter().enumerate().map(|(index, modifier)| {
@@ -1968,7 +1968,7 @@ mod modifier_card_ownership_tests {
     use super::object_modifier_rows;
     use crate::ui_bridge::projection::scene::{object_controls, parameter_ids_for_nodes};
     use manifold_core::effect_graph_def::EffectGraphDef;
-    use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
     use std::collections::BTreeSet;
 
     #[test]

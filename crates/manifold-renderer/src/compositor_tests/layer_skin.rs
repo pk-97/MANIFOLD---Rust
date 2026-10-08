@@ -18,18 +18,18 @@ use manifold_core::BlendMode;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
 #[cfg(feature = "gpu-proofs")]
-use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 #[cfg(feature = "gpu-proofs")]
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 #[cfg(feature = "gpu-proofs")]
-use crate::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
+use manifold_compositor::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
 #[cfg(feature = "gpu-proofs")]
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 #[cfg(feature = "gpu-proofs")]
 use manifold_node_engine::gpu::render_target::RenderTarget;
 #[cfg(feature = "gpu-proofs")]
-use crate::tonemap::TonemapSettings;
+use manifold_compositor::tonemap::TonemapSettings;
 
 #[cfg(feature = "gpu-proofs")]
 const W: u32 = 320;

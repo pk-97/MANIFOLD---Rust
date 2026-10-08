@@ -658,7 +658,7 @@ impl UIRoot {
                     let p = lib.thumbnail_path(kind, reg.id.as_str());
                     p.is_file().then(|| p.to_string_lossy().into_owned())
                 } else {
-                    manifold_renderer::preset_thumbnail::factory_thumbnail_path(kind, reg.id.as_str())
+                    manifold_compositor::preset_thumbnail::factory_thumbnail_path(kind, reg.id.as_str())
                         .filter(|p| p.is_file())
                         .map(|p| p.to_string_lossy().into_owned())
                 };

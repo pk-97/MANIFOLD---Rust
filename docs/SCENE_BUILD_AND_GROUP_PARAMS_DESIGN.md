@@ -46,7 +46,7 @@ a moved anchor is an escalation, not a guess.
 
 | Piece | Where | State |
 |---|---|---|
-| `render_scene` per-object params | `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:223-296` (`rebuild`) | 9 TRS `ParamDef`s per object, labels identical across objects ("Position X" ×N). `Cow<'static, str>` names, generated from counts — the node cannot know object names |
+| `render_scene` per-object params | `crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs:223-296` (`rebuild`) | 9 TRS `ParamDef`s per object, labels identical across objects ("Position X" ×N). `Cow<'static, str>` names, generated from counts — the node cannot know object names |
 | `render_scene` param consumption | `render_scene.rs:640-655` (`evaluate`) | Nine `ctx.params.get(format!("pos_x_{n}"))` reads → `model_matrix(pos, rot, scale)` at `:419` |
 | CPU-struct input accessors | `render_scene.rs:552-566` — `ctx.inputs.camera(..)`, `.light(..)`, `.material(..)` at `:614` | The Camera/Light/Material port pattern is proven end-to-end; a Transform port is a fourth instance of it, not new plumbing |
 | No Transform port | `crates/manifold-node-engine/src/ports.rs:17-53` (`PortType`) | Negative claim, search run: variants are Texture2D(+Typed), Texture3D, Scalar, Array, Camera, Light, Material. No Transform/Mat4 |
@@ -58,7 +58,7 @@ a moved anchor is an escalation, not a guess.
 | Node-face rows | `GRAPH_EDITOR_REDESIGN.md` on-node phases 1–6 (all ✅ 2026-07-01); `graph_canvas/model.rs` (`NodeRow`, `compute_node_rows`) | Regular nodes render param rows with sliders/checkboxes/editors; the row substrate P4 reuses. Canvas already computes wire-driven/outer-driven state (`apply_driven_state`, `outer_routings`) |
 | Group box rendering | `graph_canvas/model.rs:114-123` (`is_group`, `group_tint`) | Groups draw as tinted boxes with interface ports only — no param rows |
 | Group exposure policy | `NODE_GROUPS_UI_DESIGN.md` status | Phase D (interface editing) **dropped** — Peter 2026-06-13: organisation-only, exposure direct-to-card. This design keeps that; **no live group-param runtime**. *(F14 clarification 2026-07-10: `COMPONENT_LIBRARY_DESIGN.md` section 4 (The interaction set (the actual UX))/section 4a is the sanctioned `GroupParamDef` consumer — but declaration-only: component macros are `GroupParamDef` entries that **lower onto ordinary card `BindingDef`s at expose** (COMPONENT section 4b), so the thing this design kills — a live group-param interface runtime — stays dead. "`GroupParamDef` stays unused" was too strong; "no live group-param runtime" is the real invariant.)* |
-| glTF importer | `crates/manifold-renderer/src/node_graph/gltf_import/mod.rs:274-669` (`build_import_graph`) | Already builds one named+tinted group per material with stable inner `node_id`s; curates a 13-slider card (camera/sun/reflections + per-object metallic/roughness with " 2"-style suffixes); sets recenter via `pos_x_{k}` params ON the render node (`:510-518`); **no transform sliders on the card at all** |
+| glTF importer | `crates/manifold-nodes-scene/src/node_graph/gltf_import/mod.rs:274-669` (`build_import_graph`) | Already builds one named+tinted group per material with stable inner `node_id`s; curates a 13-slider card (camera/sun/reflections + per-object metallic/roughness with " 2"-style suffixes); sets recenter via `pos_x_{k}` params ON the render node (`:510-518`); **no transform sliders on the card at all** |
 | Stale importer cap | `gltf_import.rs:45` (`MAX_RENDER_SCENE_OBJECTS = 8`) | Comment says "mirrored from node.render_scene's own MAX_OBJECTS" — that constant was deleted 2026-07-05 (`render_scene.rs:64`, `OBJECT_SLIDER_MAX = 64`). Imports silently drop materials past 8 while the renderer is uncapped. Fixed in P2 |
 | Migration chain | `crates/manifold-io/src/migrate.rs:5-84` | Version-gated `Value → Value` steps, top currently `1.11.0`; `migrations/param_storage_v14.rs` is the quarantined-module precedent |
 | Fan-out bindings | `effect_graph_def.rs:404-413` (`BindingDef`, one id → many targets, per-target `scale`/`offset`) | Ableton-style macros are already representable — a load-bearing input to the Phase-D kill |
@@ -315,7 +315,7 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
 
 ### P2 — the swap: `render_scene` ports, migration, importer (one strong session)
 
-- **Entry state:** P1 landed; `rg -n "pos_x_" crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` shows the param generation; the migration-chain top re-derived (D4 command); `~/Downloads/meshImportTests.manifold` present (ask Peter if moved).
+- **Entry state:** P1 landed; `rg -n "pos_x_" crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs` shows the param generation; the migration-chain top re-derived (D4 command); `~/Downloads/meshImportTests.manifold` present (ask Peter if moved).
 - **Read-back:** section 2 D3/D4/D9, section 3, section 8; `render_scene.rs` whole; `gltf_import.rs:274-669`;
   `migrations/param_storage_v14.rs` (the quarantine pattern); DESIGN_DOC_STANDARD section 5
   round-trip gate. Restate: what is deleted, what replaces it, the forbidden fallback.
@@ -350,7 +350,7 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
   now wire transform nodes; the shader and uniforms are untouched — if any .wgsl diff
   appears in this phase, stop, something went wrong). Full workspace sweep + clippy
   (port type + migration = infra). Negative:
-  `rg -n "pos_x_|rot_y_|scale_z_" crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` → **0 hits**;
+  `rg -n "pos_x_|rot_y_|scale_z_" crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs` → **0 hits**;
   `rg -n "MAX_RENDER_SCENE_OBJECTS" crates/` → 0 hits.
 - **Demo (L2):** headless render of the migrated meshImportTests project — PNG diff
   against a pre-migration render of the same project on the parent commit; identical

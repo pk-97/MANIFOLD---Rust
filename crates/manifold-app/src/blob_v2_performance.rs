@@ -326,7 +326,7 @@ fn enable_profiling(ct: &mut ContentThread) {
     for renderer in ct.engine.renderers_mut() {
         if let Some(generator) = renderer
             .as_any_mut()
-            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>(
+            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
         ) {
             generator.set_profiling(true);
         }
@@ -409,7 +409,7 @@ fn measure_case(
         ..Samples::default()
     };
     let malloc_before = malloc_snapshot();
-    manifold_renderer::node_graph::primitives::start_region_perf_samples();
+    manifold_nodes_image::node_graph::primitives::detect_regions::start_region_perf_samples();
     for _ in 0..MEASURED_FRAMES {
         let start = Instant::now();
         ct.tick_frame(state_tx);
@@ -467,7 +467,7 @@ fn measure_case(
             samples.memory.push(snapshot.current_allocated_bytes);
         }
     }
-    let region_perf = manifold_renderer::node_graph::primitives::take_region_perf_samples();
+    let region_perf = manifold_nodes_image::node_graph::primitives::detect_regions::take_region_perf_samples();
     let malloc_after = malloc_snapshot();
     if spec.name != "legacy_default" {
         assert_eq!(

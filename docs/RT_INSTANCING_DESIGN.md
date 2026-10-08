@@ -18,7 +18,7 @@ stays fixed. Existing in-band zero-scale producers remain compatible.
 
 | What | Where | State |
 |---|---|---|
-| The limitation | `crates/manifold-renderer/src/node_graph/primitives/render_scene.rs:5482-5489` (KNOWN LIMITATION comment) | accel build maps one `RtObjectGeometry` per `opaque_draws` entry, `transform: d.uniforms.model` |
+| The limitation | `crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs:5482-5489` (KNOWN LIMITATION comment) | accel build maps one `RtObjectGeometry` per `opaque_draws` entry, `transform: d.uniforms.model` |
 | RT scene shape | `crates/manifold-gpu/src/metal/raytrace.rs:67-112` | per-object BLAS + ONE TLAS over an instance-descriptor buffer; one descriptor per object, `accelerationStructureIndex = object index`, CPU-written (`build_instance_buffer` :385) |
 | instance_id = object index | `raytrace.rs:818-823` + kernels | `gi_materials[iid]`, `normal_sources[iid]`, `n4.w = float(primary_iid)` (:1610) all index by committed instance_id |
 | Object motion table | `raytrace.rs:3018-3028` | `obj_motion[oid]` where `oid = n4.w` — breaks when instance_id expands past object count (D6) |
@@ -78,7 +78,7 @@ Section 2.5 audit statement (DECOMPOSING_GENERATORS.md): no new render primitive
 - **Gates:** clippy + nextest `-p manifold-renderer`; `scripts/gpu_proofs_gate.py`.
 
 ### P2 — proofs + noise gate
-- **Scope:** `crates/manifold-renderer/tests/gpu_proofs/rt_instancing.rs` (new, registered like its siblings): (a) INV-RTI1 loop proof; (b) INV-RTI2 mirror proof (position + normal); (c) dead-slot miss; (d) capacity-vs-count (count=3 of capacity 8: exactly 3 copies traced); (e) INV-RTI4 probe assertion (no dispatch logged across 3 static frames). All synthetic — build tiny vertex/instance buffers in-test, CPU computes expectations. Run `scripts/gpu_proofs_gate.py` and `scripts/rt_noise_gate.py` (record NOTHING unless drift is real; drift with zero golden change = BUG-cam (gpu-proofs-firmware-fault-class) environment class — document, don't re-baseline).
+- **Scope:** `crates/manifold-nodes-scene/tests/gpu_proofs/rt_instancing.rs` (new, registered like its siblings): (a) INV-RTI1 loop proof; (b) INV-RTI2 mirror proof (position + normal); (c) dead-slot miss; (d) capacity-vs-count (count=3 of capacity 8: exactly 3 copies traced); (e) INV-RTI4 probe assertion (no dispatch logged across 3 static frames). All synthetic — build tiny vertex/instance buffers in-test, CPU computes expectations. Run `scripts/gpu_proofs_gate.py` and `scripts/rt_noise_gate.py` (record NOTHING unless drift is real; drift with zero golden change = BUG-cam (gpu-proofs-firmware-fault-class) environment class — document, don't re-baseline).
 - **Gates:** both scripts green.
 
 ### P3 — emissive table per-slot (D8)

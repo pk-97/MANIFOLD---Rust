@@ -12,7 +12,7 @@ Instrument frame: these are the "why won't this load" and "why is it black" mome
 
 | Piece | Where | State |
 |---|---|---|
-| Import entry: `gltf::import(path)` convenience call | `crates/manifold-renderer/src/node_graph/gltf_load.rs:276,337,632` | 3 call sites, all path-based, all subject to the crate's `extensionsRequired` validation veto |
+| Import entry: `gltf::import(path)` convenience call | `crates/manifold-nodes-scene/src/node_graph/gltf_load.rs:276,337,632` | 3 call sites, all path-based, all subject to the crate's `extensionsRequired` validation veto |
 | Default-scene requirement | `gltf_load.rs:281,289,633` | 3 sites `document.default_scene().ok_or_else(…)` — hard error when absent |
 | Geometry summary walk | `gltf_load.rs:587-625` (`summarize_node`) | Keys per-material vertex counts by `material().index()`; `None` (default material) counted separately |
 | Default-material geometry | `gltf_load.rs:573-582` (`GltfImportSummary.default_material_vertex_count`) | Reported, **explicitly not imported** ("v1 does not import these") — materials list at `gltf_load.rs:656-667` filters on `m.index()?` |

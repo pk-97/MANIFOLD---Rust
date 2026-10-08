@@ -51,7 +51,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
             w,
             h,
         )),
-        Box::new(manifold_renderer::generator_renderer::GeneratorRenderer::new(
+        Box::new(manifold_compositor::generator_renderer::GeneratorRenderer::new(
             Arc::clone(&native_device),
             w,
             h,
@@ -64,7 +64,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
     engine.set_live_clip_manager(manifold_playback::live_clip_manager::LiveClipManager::new());
 
     let mut content_pipeline = ContentPipeline::new(Box::new(
-        manifold_renderer::layer_compositor::LayerCompositor::new(&native_device, w, h),
+        manifold_compositor::layer_compositor::LayerCompositor::new(&native_device, w, h),
     ));
     content_pipeline.set_native_gpu(native_device);
 

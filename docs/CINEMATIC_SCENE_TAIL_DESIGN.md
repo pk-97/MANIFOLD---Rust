@@ -18,13 +18,13 @@ Binding constraints: **persistence** (every existing 3D project must load and ga
 
 | Piece | Where | State |
 |---|---|---|
-| `node.camera_lens` (focus_distance / f_stop / shutter_angle / exposure_ev) | `crates/manifold-renderer/src/node_graph/primitives/camera_lens.rs:40` | Shipped, working |
+| `node.camera_lens` (focus_distance / f_stop / shutter_angle / exposure_ev) | `crates/manifold-nodes-scene/src/node_graph/primitives/camera_lens.rs:40` | Shipped, working |
 | `node.coc_from_depth` (thin-lens CoC) | `primitives/coc_from_depth.rs:69` | Shipped, gpu-proofed |
 | `node.coc_dilate` (3x3 neighborhood-max — the hard-cutoff fix) | `primitives/coc_dilate.rs:51` | Shipped (dof-polish batch 1, 2026-07-13) |
 | `node.bokeh_gather` (occlusion-aware disc gather — the blocky-blur fix) | `primitives/bokeh_gather.rs:60` | Shipped (dof-polish batch 1, 2026-07-13) |
 | `node.motion_blur` (velocity-directed gather) | `primitives/motion_blur.rs:82` | Shipped but **no visible effect live — BUG-136, OPEN, root unknown** |
 | Reference wiring of the full chain | `assets/reference-presets/CinematicScene.json` (lens → coc → coc_dilate → bokeh → motion_blur → out) | Shipped, headless-renderable |
-| Import graph assembly | `crates/manifold-renderer/src/node_graph/gltf_import/scene.rs:634-690` | **SSAO-only** (`ssao_gtao → bilateral_blur H/V → mix`); lens/DoF/motion absent since `72135693`; `scene.rs:720` notes the motion_blur removal under BUG-136 |
+| Import graph assembly | `crates/manifold-nodes-scene/src/node_graph/gltf_import/scene.rs:634-690` | **SSAO-only** (`ssao_gtao → bilateral_blur H/V → mix`); lens/DoF/motion absent since `72135693`; `scene.rs:720` notes the motion_blur removal under BUG-136 |
 | Scene Setup lens rows (the dead sliders) | `crates/manifold-ui/src/panels/scene_setup_panel.rs:3151-3153` (`RowAddr::root(71, …)` focus_distance/f_stop/shutter_angle) | Rows write lens params; in import graphs nothing consumes them |
 | BUG-136 probe state | `docs/BUG_BACKLOG.md:1240-1272` | Inputs proven correct headlessly (velocity nonzero, shutter at atom, 30/30 frames); **output pixels never diffed against input** — the unprobed gap; drag-propagation suspect killed by Peter 2026-08-26 (camera was moving) |
 | Migration machinery | `crates/manifold-io/src/migrations/` (`scene_transform_v1120.rs`, `param_storage_v14.rs`) | Two precedents, versioned, load-time |
@@ -102,7 +102,7 @@ This is CinematicScene.json's wiring transcribed; the import assembler and the m
 - **Test scope:** `-p manifold-renderer` + gpu-proofs.
 
 ### P1 — Import-graph tail (fresh imports)
-- **Entry state:** P0 landed; `rg node.motion_blur crates/manifold-renderer/src/node_graph/gltf_import/scene.rs` shows only the removal note.
+- **Entry state:** P0 landed; `rg node.motion_blur crates/manifold-nodes-scene/src/node_graph/gltf_import/scene.rs` shows only the removal note.
 - **Read-back:** D1, D5, section 3 (chain topology); CinematicScene.json read end-to-end (the template); `scene.rs:600-730` (the SSAO block it appends after).
 - **Deliverables:** tail injection in `gltf_import/scene.rs`; I1 and I2 tests; I4 measurement.
 - **Gate:** `graph-tool validate` on a regenerated import graph; I1 byte-compare green; I4 number reported; `scripts/gpu_proofs_gate.py` green. Held-out input: `tests/fixtures/rt/apricot_tl05.glb` (never developed against in this design).

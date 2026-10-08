@@ -258,6 +258,41 @@ class P1PlannerTests(unittest.TestCase):
             (flow_dir / 'automation-drag.json').write_text('[]')
             self.assertEqual(gate_readiness.flow_problems(repo, ['src/main.rs']), [])
 
+    def test_crate_move_plans_are_inert_for_all_scope_planners(self):
+        root = ".claude/orchestration/crate-split/"
+        paths = [root + relative for relative in (
+            "p2a/templates/crates/manifold-nodes-image/tests/gpu_proofs/main.rs",
+            "p2b/templates/crates/manifold-nodes-scene/src/primitives/shaders/example.wgsl",
+            "p2c/templates/crates/manifold-compositor/Cargo.toml",
+            "future/tests/gpu_proofs/example.rs",
+            "future/shaders/example.wgsl",
+            "future/moves.tsv",
+        )]
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertFalse(gpu_scope.is_gpu_path(path, self.workspace))
+        cpu = cpu_scope.plan_for_paths(paths, ROOT, self.workspace)
+        self.assertFalse(cpu.packages)
+        self.assertFalse(cpu.filters)
+        self.assertFalse(cpu.gpu_binaries)
+        gpu = gpu_scope.plan_for_paths(paths, ROOT, workspace=self.workspace)
+        self.assertFalse(gpu.active)
+        self.assertFalse(gpu.filters)
+        self.assertFalse(gpu.unmapped)
+        self.assertEqual(gpu.runs(), [])
+        with patch.object(gate_readiness, "Workspace", return_value=self.workspace), \
+             patch.object(gate_readiness, "selected_tooling", wraps=gate_readiness.selected_tooling) as tooling:
+            ready = gate_readiness.plan(ROOT, paths)
+        tooling.assert_called_once_with(ROOT, [])
+        self.assertFalse(ready['errors'])
+        self.assertFalse(ready['packages'])
+        self.assertFalse(ready['cpu'].packages)
+        self.assertFalse(ready['gpu'].active)
+        self.assertTrue(gpu_scope.is_gpu_path(
+            "crates/manifold-nodes-scene/tests/gpu_proofs/main.rs", self.workspace))
+        self.assertTrue(gpu_scope.is_gpu_path(
+            ".claude/orchestration/crate-split-other/shaders/example.wgsl", self.workspace))
+
     def test_new_gpu_package_needs_explicit_default_test_group_ownership(self):
         workspace = copy.deepcopy(self.workspace)
         original = workspace.nextest_gpu_filter()

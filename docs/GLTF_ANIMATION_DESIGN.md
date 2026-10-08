@@ -14,8 +14,8 @@ Honesty about certification: this doc barely moves the conformance number — mo
 ## 1. Audit — what exists (verified 2026-07-16; RE-DERIVE at execution)
 
 ```
-rg -n 'JOINTS_0|WEIGHTS_0|read_morph|animations\(\)|skins\(\)' crates/manifold-renderer/src/node_graph/gltf_load.rs   # expect: still zero hits
-rg -n 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/{morph_mesh,bend_mesh,displace_mesh,gltf_mesh_source}.rs
+rg -n 'JOINTS_0|WEIGHTS_0|read_morph|animations\(\)|skins\(\)' crates/manifold-nodes-scene/src/node_graph/gltf_load.rs   # expect: still zero hits
+rg -n 'purpose: "' crates/manifold-nodes-scene/src/node_graph/primitives/{morph_mesh,bend_mesh,displace_mesh,gltf_mesh_source}.rs
 rg -n 'anim_progress|trigger_count' crates/manifold-renderer/src/node_graph/effect_runtime.rs | head
 ```
 
@@ -46,15 +46,15 @@ Snapshot: meshes flow through the graph as first-class data — `gltf_mesh_sourc
 **Entry state:** `origin/main` HEAD `39bff66c` (E6 SHIPPED). `tests/fixtures/gltf/khronos/BoxAnimated.glb` present. `AnimatedCube`/`AnimatedTriangle` (named in the handoff prompt) have **no glTF-Binary variant at the Khronos pin** (`docs/GLB_CONFORMANCE_STATUS.md:155-156`) — not fetchable, not a blocker; `BoxAnimated.glb` alone is the doc's own A1 gate fixture (section 3).
 
 **Read-back / re-derived inventory:**
-- `crates/manifold-renderer/src/node_graph/gltf_load.rs` — zero hits for `animations()`/`skins()`/JOINTS/WEIGHTS (confirmed live, matches section 1's audit). Add animation-track parsing here, alongside the existing mesh-flatten parse — same "one parse entry" doctrine as `MANIFOLD_SUPPORTED_EXTENSIONS`/`the_one_parse_entry` (file header).
-- `crates/manifold-renderer/src/node_graph/gltf_import/mod.rs::build_import_graph` — each material becomes a node **group** containing its own `node.transform_3d` (line ~1008-1020), currently seeded with a static recenter translation only (`pos_x/y/z = -center`). Critically: **`node.transform_3d`'s all nine TRS params (`pos_x/y/z`, `rot_x/y/z`, `scale_x/y/z`) are ALREADY port-shadowed by same-named optional scalar input ports** (`crates/manifold-renderer/src/node_graph/primitives/transform_3d.rs`). D1 — "animating a rigid node = animating params" — is therefore: wire a new source node's per-channel scalar outputs into this existing `transform_3d`'s input ports. No change to `render_scene` needed.
+- `crates/manifold-nodes-scene/src/node_graph/gltf_load.rs` — zero hits for `animations()`/`skins()`/JOINTS/WEIGHTS (confirmed live, matches section 1's audit). Add animation-track parsing here, alongside the existing mesh-flatten parse — same "one parse entry" doctrine as `MANIFOLD_SUPPORTED_EXTENSIONS`/`the_one_parse_entry` (file header).
+- `crates/manifold-nodes-scene/src/node_graph/gltf_import/mod.rs::build_import_graph` — each material becomes a node **group** containing its own `node.transform_3d` (line ~1008-1020), currently seeded with a static recenter translation only (`pos_x/y/z = -center`). Critically: **`node.transform_3d`'s all nine TRS params (`pos_x/y/z`, `rot_x/y/z`, `scale_x/y/z`) are ALREADY port-shadowed by same-named optional scalar input ports** (`crates/manifold-nodes-scene/src/node_graph/primitives/transform_3d.rs`). D1 — "animating a rigid node = animating params" — is therefore: wire a new source node's per-channel scalar outputs into this existing `transform_3d`'s input ports. No change to `render_scene` needed.
 - `node.beat_ramp` and `node.lfo` (shape=Saw, in `LFO_SHAPES`) already exist — the saw-LFO performer gesture (section 3 A1 gate) wires an existing `node.lfo` (shape=Saw) into the new source node's `progress` input port; no new LFO primitive needed.
 - `ParamValue::Table(Arc<TableData>)` (`parameters.rs:111` `TableData{ rows: Vec<Vec<f32>>, cols }`) is the existing vocabulary for small 2D numeric blobs and is Table params' proven serialization path (V1/V2 project formats already round-trip `ParamValue` variants) — use it to carry parsed keyframe tracks (one row per keyframe: `[time_s, x, y, z]` for translation/scale, `[time_s, x, y, z, w]` for rotation quaternion) rather than inventing a new param/wire type.
 - **Known scope boundary, not solved this phase:** glTF animation channels target scene-graph *node* indices; MANIFOLD's import graph groups objects by *material* (`summarize_node` keys by `material().index()`, world-combining node instances). For `BoxAnimated.glb` (one node, one mesh, one material) this is 1:1 and the vertical slice is unaffected. Multi-node-per-material assets (instancing) are out of scope for A1 — re-derive at A2/A4 if a real asset needs it.
 
 **Deliverables:**
 1. `gltf_load.rs`: parse `document.animations()` into a per-animation, per-node list of TRS keyframe tracks (translation/rotation/scale, each optional per node), attached to `GltfImportSummary` (new field, e.g. `animations: Vec<GltfAnimationInfo>`). Held-out input: the gate fixture list already includes `AnimatedColorsCube.glb`/`AnimatedMorphCube.glb` in `tests/fixtures/gltf/khronos/` — parse-only (not wired) smoke test against `AnimatedColorsCube.glb` as the held-out asset (translation/rotation channels only; ignore its color-animation extension) proves the parser isn't shaped around `BoxAnimated` alone.
-2. New primitive `node.gltf_animation_source` (`crates/manifold-renderer/src/node_graph/primitives/gltf_animation_source.rs`, CPU-only, `boundary_reason: NonGpu`, same family as `beat_ramp`/`lfo`): inputs `progress: ScalarF32` (0..1, port-shadowed, default beat-drive per D3 when unwired: `wrap(beat * rate / clip_beats)` reading `FrameTime::beats`, `clip_beats` computed from a `duration_s` param + live BPM); params carry the keyframe `Table`s (one per animated channel) plus `duration_s`; outputs the nine scalars `pos_x/y/z, rot_x/y/z, scale_x/y/z` (binary-search + lerp for translation/scale, slerp for rotation quaternion→Euler at sample time, per spec) so they wire directly into an object's `transform_3d` input ports. Channels absent from the clip pass through as the node's static default (0 for pos/rot, 1 for scale) — never fabricate motion for an unanimated channel.
+2. New primitive `node.gltf_animation_source` (`crates/manifold-nodes-scene/src/node_graph/primitives/gltf_animation_source.rs`, CPU-only, `boundary_reason: NonGpu`, same family as `beat_ramp`/`lfo`): inputs `progress: ScalarF32` (0..1, port-shadowed, default beat-drive per D3 when unwired: `wrap(beat * rate / clip_beats)` reading `FrameTime::beats`, `clip_beats` computed from a `duration_s` param + live BPM); params carry the keyframe `Table`s (one per animated channel) plus `duration_s`; outputs the nine scalars `pos_x/y/z, rot_x/y/z, scale_x/y/z` (binary-search + lerp for translation/scale, slerp for rotation quaternion→Euler at sample time, per spec) so they wire directly into an object's `transform_3d` input ports. Channels absent from the clip pass through as the node's static default (0 for pos/rot, 1 for scale) — never fabricate motion for an unanimated channel.
 3. `gltf_import.rs::build_import_graph`: when `summary.animations` is non-empty for an object's source node, insert one `node.gltf_animation_source` per group, wired into that group's `transform_3d` scalar input ports (additive to the existing static recenter — recenter stays as the node's own param default, the animation source's output overrides at runtime same as any port-shadow).
 4. Round-trip: `Table` params and the new node type must survive V1 JSON save→reload (existing param-serialization path — no new format work expected, but the gate must prove it, not assume it).
 5. Four-phase PNG goldens: `BoxAnimated.glb` imported and rendered headless at progress 0 / 0.25 / 0.5 / 0.75 — four visibly distinct PNGs (the box's translation animation moving it across frame).
@@ -138,7 +138,7 @@ turned out to be the WRONG stress axis (see Deviation from D2 below).
   frame to find the range — cheap at the joint counts these fixtures carry, confirmed by
   the hot-path gate below) instead of one Table per channel.
 - **section 2.5 audit (CLAUDE.md, mandatory before proposing `node.skin_mesh`):**
-  `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"` — no
+  `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"` — no
   existing primitive does per-vertex joint blending, matrix-palette lookup, or anything
   adjacent (`node.morph_mesh` is the nearest relative — a coincident two-mesh lerp with
   an optional coincident weights buffer — and it directly informed the `joints`/`weights`
@@ -249,7 +249,7 @@ assumed):**
   A2's node-transform deviation (see A2 brief above): the doc's assumption doesn't survive
   contact with the real assets.
 - section 2.5 audit (CLAUDE.md, mandatory before proposing new primitives):
-  `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/` — no existing
+  `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/` — no existing
   primitive does N-ary weighted delta-sum blending. `node.morph_mesh` and
   `node.blend_copies` are the nearest relatives, both strictly 2-ary. Genuinely new,
   confirmed.

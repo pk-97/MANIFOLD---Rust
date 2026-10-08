@@ -169,7 +169,7 @@ fn render(
     let mut encoder = device.create_encoder("gpu flip frame perf");
     if let Some(sampler) = sampler {
         encoder.enable_dispatch_profiling(sampler.clone(), device);
-        manifold_renderer::node_graph::primitives::water_perf::arm();
+        manifold_nodes_scene::node_graph::primitives::render_scene::water_perf::arm();
     }
     runtime.set_profiling(sampler.is_some());
     let encode_started = Instant::now();
@@ -213,7 +213,7 @@ fn render(
     let mut captured_draws = 0;
     // SAFETY: this frame completed above; no later frame has reused the buffers.
     unsafe {
-        manifold_renderer::node_graph::primitives::water_perf::finish(|count| {
+        manifold_nodes_scene::node_graph::primitives::render_scene::water_perf::finish(|count| {
             assert!(count.drawn_vertices <= count.capacity_vertices);
             assert_eq!(count.drawn_vertices % 3, 0);
             captured_draws += 1;

@@ -1974,7 +1974,7 @@ mod automation_clipboard_host_tests {
     }
 
     fn prepare_water_family(h: &mut Harness) -> (LayerId, u32, u32) {
-        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
         let index = h.project.timeline.add_layer(
             "Water",

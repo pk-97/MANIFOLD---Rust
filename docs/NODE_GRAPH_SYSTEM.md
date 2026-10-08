@@ -39,7 +39,7 @@ Every node in the graph is an instance of a [`Primitive`](../crates/manifold-nod
 - **`params`** — typed scalar parameters with default + range + optional enum labels.
 - A **`run`** method — executes one frame given an `EffectNodeContext` with bound inputs, outputs, params, GPU encoder, and optional `StateStore` for stateful primitives.
 
-Primitives are registered via `inventory::submit!` so adding a new file under `crates/manifold-renderer/src/node_graph/primitives/` is the only step required — no central registry edit. See [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md).
+Primitives are registered via `inventory::submit!` so adding a file and module declaration under the owning image or scene primitive root registers it — no central registry edit. See [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md).
 
 ### 3.2 Graphs
 
@@ -91,9 +91,9 @@ These close the loop between image content and scalar modulation. ColorCompass u
 
 Live registries beat hand-maintained tables — the inventory channels populate the catalog at compile time, and the JSON preset directory is browsable directly.
 
-- **Primitives** — 30+ shipping in `crates/manifold-renderer/src/node_graph/primitives/`. See [NODE_CATALOG.md](NODE_CATALOG.md) for the curated naming + categorisation spec, [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) for the design rationale and decomposition recipes.
+- **Primitives** — shipping in `crates/manifold-nodes-image/src/node_graph/primitives/` and `crates/manifold-nodes-scene/src/node_graph/primitives/`, with engine built-ins and water under `crates/manifold-node-engine/src/`. See [NODE_CATALOG.md](NODE_CATALOG.md) for the curated naming + categorisation spec, [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) for the design rationale and decomposition recipes.
 - **Atomic complex primitives** — `crates/manifold-node-engine/src/atomic/` holds the three irreducible kernels (Plasma, FluidSim2D, Glitch); FluidSim3D lives alongside the primitives. These don't decompose to atoms without losing what they are.
-- **Composite Rust builders** — `crates/manifold-renderer/src/node_graph/composites/` (Bloom, Halation, Infrared, Mirror, SoftFocus, StrobeOpacity). Dev fixtures for parity tests; new composites ship as JSON.
+- **Composite Rust builders** — `crates/manifold-nodes-image/src/node_graph/composites/` (Bloom, Halation, Infrared, Mirror, SoftFocus, StrobeOpacity). Dev fixtures for parity tests; new composites ship as JSON.
 - **Shipping presets** — `crates/manifold-renderer/assets/effect-presets/` (29 as of 2026-05-19). Each is one JSON file; the build script codegens the bundled table.
 
 ---

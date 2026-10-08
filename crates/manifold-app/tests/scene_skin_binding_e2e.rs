@@ -54,7 +54,7 @@ fn gltf_fixture_project() -> manifold_core::project::Project {
 fn imported_def() -> EffectGraphDef {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
-    manifold_renderer::node_graph::gltf_import::assemble_import_graph(&path)
+    manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path)
         .unwrap_or_else(|e| panic!("assemble_import_graph failed: {e}"))
         .0
 }
@@ -73,7 +73,7 @@ fn skin_binding_survives_save_reload_and_missing_source() {
         SetSceneObjectSkinSourceCommand, SkinTargetMap as EditTarget,
     };
     use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
-    use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
     let mut project = gltf_fixture_project();
     let scene_lid = project.timeline.layers[0].layer_id.clone();
@@ -141,7 +141,7 @@ fn skin_binding_survives_save_reload_and_missing_source() {
 
     let skin = skin_of(&project);
     assert_eq!(skin.source_layer_id.as_deref(), Some(source_lid.as_ref()));
-    assert_eq!(skin.target_map, manifold_renderer::node_graph::scene_vm::SkinTargetMap::Emissive);
+    assert_eq!(skin.target_map, manifold_nodes_scene::node_graph::scene_vm::SkinTargetMap::Emissive);
     assert!(!skin.source_missing);
 
     // Save → reload (the same Project serde the .manifold writers use).

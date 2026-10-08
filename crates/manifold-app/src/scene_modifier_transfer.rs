@@ -265,7 +265,7 @@ pub(crate) fn transfer(
         };
         if let SceneTargetSelection::Explicit { objects } = &instance.targets {
             let reachable =
-                manifold_renderer::node_graph::scene_modifier_authoring::scene_modifier_objects(
+                manifold_nodes_scene::node_graph::scene_modifier_authoring::scene_modifier_objects(
                     &graph,
                     &instance.scene,
                 )
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn clipboard_paste_remaps_math_view_carrier_and_roundtrips_undo_redo() {
-        let (imported, report) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(
+        let (imported, report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(
             std::path::Path::new(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../../tests/fixtures/gltf/cc0__japanese_thistle_cirsium_japonicum.glb"
@@ -495,7 +495,7 @@ mod tests {
         let carrier_b = NodeId::new("carrier_b");
         let view_id = NodeId::new("math_view");
         let carrier = |id: NodeId, graph: &EffectGraphDef| {
-            manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+            manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
                 graph,
                 carrier_recipe,
                 id,
@@ -521,7 +521,7 @@ mod tests {
         .unwrap()
         .graph;
         let mut view =
-            manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+            manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
                 &source_graph,
                 view_recipe,
                 view_id.clone(),

@@ -399,6 +399,18 @@ def case_main_executed_verdict(tmp):
             capture.assert_called_once()
 
 
+def case_furnace_selection():
+    for output, expected in (
+        ("test result: ok. 0 passed; 0 failed; 0 ignored;", False),
+        ("test result: ok. 2 passed; 0 failed; 0 ignored;", True),
+        ("test result: ok. 0 passed; 0 failed; 2 ignored;", False),
+        ("", False),
+    ):
+        with patch.object(gate, "run_cmd", return_value=(0, output, "", 0)) as run:
+            check("furnace requires executed tests", gate.run_furnace_oracle(Path("/tmp"))[0], expected)
+            check_true("furnace uses scene owner", "manifold-nodes-scene" in run.call_args.args[0])
+
+
 def main():
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
@@ -410,6 +422,7 @@ def main():
         case_baseline_prerequisites(tmp)
         case_main_prerequisites(tmp)
         case_main_executed_verdict(tmp)
+    case_furnace_selection()
     case_contamination()
     case_median()
     case_ceilings()

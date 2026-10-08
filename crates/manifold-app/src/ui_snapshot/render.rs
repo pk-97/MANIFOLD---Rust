@@ -30,8 +30,8 @@ use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
 use manifold_ui_paint::clip_thumb_gpu::ClipThumbGpu;
-use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback, SrgbRgba8};
-use manifold_renderer::presentation::UI_FORMAT;
+use manifold_compositor::display_capture::{AlphaInterpretation, LinearUiReadback, SrgbRgba8};
+use manifold_compositor::presentation::UI_FORMAT;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_ui_paint::ui_cache_manager::UICacheManager;
 use manifold_ui_paint::ui_renderer::UIRenderer;

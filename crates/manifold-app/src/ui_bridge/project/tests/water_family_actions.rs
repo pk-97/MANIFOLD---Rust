@@ -2,7 +2,7 @@
 
 use super::*;
 use manifold_editing::service::EditingService;
-use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
 fn add_water(project: &mut Project, layer: &LayerId, render: u32) {
     let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
@@ -48,7 +48,7 @@ fn build_scene_tree(ui: &mut crate::ui_root::UIRoot) {
     ui.tree.end_region(region, content_start);
 }
 
-fn rows(project: &Project, layer: &LayerId) -> Vec<manifold_renderer::node_graph::scene_vm::SceneObjectKnownRow> {
+fn rows(project: &Project, layer: &LayerId) -> Vec<manifold_nodes_scene::node_graph::scene_vm::SceneObjectKnownRow> {
     let def = effective_def(project, layer);
     SceneVm::from_def(&def)
         .expect("scene VM")
@@ -354,7 +354,7 @@ fn water_and_imported_compound_rename_use_object_node_id() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
     let default = effective_def(&project, &layer);
-    let plan = manifold_renderer::node_graph::gltf_import::assemble_merge_plan(&default, &fixture)
+    let plan = manifold_nodes_scene::node_graph::gltf_import::assemble_merge_plan(&default, &fixture)
         .expect("import compound fixture");
     let mut editing = EditingService::new();
     editing.execute(

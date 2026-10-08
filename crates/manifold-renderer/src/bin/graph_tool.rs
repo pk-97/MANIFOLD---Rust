@@ -31,6 +31,7 @@
 //! Exit codes: `0` valid / report produced, `1` invalid graph (`validate`
 //! only — errors present), `2` usage / file-read / parse failure.
 
+use manifold_renderer as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -263,7 +264,7 @@ fn run_render(args: &[String]) -> ExitCode {
     // renders with the proven-recipe defaults; there's no live instance here
     // to source live knobs from.
     let def = if relight {
-        manifold_renderer::node_graph::relight::relight_augment(
+        manifold_nodes_scene::node_graph::relight::relight_augment(
             &def,
             &PrimitiveRegistry::with_builtin(),
             &manifold_core::effects::RelightParams::default(),
@@ -274,11 +275,11 @@ fn run_render(args: &[String]) -> ExitCode {
 
     let device = std::sync::Arc::new(GpuDevice::new_queued("graph-tool"));
     let result = if linear {
-        manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file_linear(
+        manifold_compositor::preset_thumbnail::render_preset_thumbnail_to_file_linear(
             &device, kind, &def, size, size, &out,
         )
     } else {
-        manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file(
+        manifold_compositor::preset_thumbnail::render_preset_thumbnail_to_file(
             &device, kind, &def, size, size, &out,
         )
     };

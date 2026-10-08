@@ -6,9 +6,9 @@ use manifold_ui::param_surface as ui;
 /// layer skin as base colour. Lit materials retain the emissive default.
 pub(crate) fn default_skin_target(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
-    material: &manifold_renderer::node_graph::scene_vm::MaterialVm,
+    material: &manifold_nodes_scene::node_graph::scene_vm::MaterialVm,
 ) -> manifold_ui::panels::scene_setup_panel::SkinTargetMap {
-    use manifold_renderer::node_graph::scene_vm::MaterialVm;
+    use manifold_nodes_scene::node_graph::scene_vm::MaterialVm;
     use manifold_ui::panels::scene_setup_panel::SkinTargetMap;
     if let (Some(def), MaterialVm::Known(row)) = (def, material) {
         let is_base_color =
@@ -147,9 +147,9 @@ fn node_at<'a>(
 pub(super) fn inspector_info(
     project: &manifold_core::project::Project,
     def: &EffectGraphDef,
-    object: &manifold_renderer::node_graph::scene_vm::SceneObjectKnownRow,
+    object: &manifold_nodes_scene::node_graph::scene_vm::SceneObjectKnownRow,
 ) -> Option<manifold_ui::panels::scene_setup_panel::MaterialInspectorInfo> {
-    use manifold_renderer::node_graph::scene_vm::{MaterialTextureSource, MaterialVm};
+    use manifold_nodes_scene::node_graph::scene_vm::{MaterialTextureSource, MaterialVm};
     use manifold_ui::panels::scene_setup_panel::{MaterialInspectorInfo, MaterialTextureInfo};
     let MaterialVm::Known(material) = &object.material else {
         return None;

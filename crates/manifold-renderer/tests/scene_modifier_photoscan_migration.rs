@@ -1,7 +1,8 @@
+use manifold_renderer as _;
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue,
 };
-use manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
+use manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
 const FIXTURES: &[(&str, &str)] = &[

@@ -67,7 +67,7 @@ Historical pre-retirement inventory: CPU FLIP runtime entries below are now proo
 
 ### 1.4 Section 2.5 primitive audit (DECOMPOSING_GENERATORS.md section 2.5 (primitive audit))
 
-Survey: `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`, plus the MPM water presets read end to end. No `FluidParticle` tick boundary, stats reduction or frame publisher exists; the precedents (`node.matter_state`, `node.matter_stats`, `node.matter_frame`) are typed on the 80-byte `MatterPoint`, and `node.array_feedback` on the 64-byte `Particle`. So `node.liquid_state`, `node.liquid_stats` and `node.liquid_frame` are genuinely new, each shaped like its MPM precedent. `node.matter_solid_distance` already computes walls plus bodies on the solid lattice with nothing MPM-specific: one rename away. Face resampling is genuinely new (two per-element gathers, P10).
+Survey: `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`, plus the MPM water presets read end to end. No `FluidParticle` tick boundary, stats reduction or frame publisher exists; the precedents (`node.matter_state`, `node.matter_stats`, `node.matter_frame`) are typed on the 80-byte `MatterPoint`, and `node.array_feedback` on the 64-byte `Particle`. So `node.liquid_state`, `node.liquid_stats` and `node.liquid_frame` are genuinely new, each shaped like its MPM precedent. `node.matter_solid_distance` already computes walls plus bodies on the solid lattice with nothing MPM-specific: one rename away. Face resampling is genuinely new (two per-element gathers, P10).
 
 ## 2. Decisions
 

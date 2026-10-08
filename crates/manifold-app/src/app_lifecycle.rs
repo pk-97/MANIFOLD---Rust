@@ -799,7 +799,7 @@ impl Application {
         &mut self,
         path: &std::path::Path,
         mut graph: manifold_core::effect_graph_def::EffectGraphDef,
-        report: manifold_renderer::node_graph::gltf_import::ImportReport,
+        report: manifold_nodes_scene::node_graph::gltf_import::ImportReport,
         conversion_report_line: Option<String>,
         drop_beat: f32,
         layer_under_cursor: Option<usize>,
@@ -952,7 +952,7 @@ impl Application {
         // assets are parsed only once and notices are not duplicated.
         if !action.material_upgrade_applied {
             if let Some(project) = action.apply_project.as_mut() {
-                let material_report = manifold_renderer::node_graph::gltf_import::upgrade_project_materials(project);
+                let material_report = manifold_nodes_scene::node_graph::gltf_import::upgrade_project_materials(project);
                 if material_report.changed_graphs > 0 {
                     crate::project_io::install_project_preset_overlay(project);
                     project.load_report.unresolved_preset_templates =
@@ -1365,7 +1365,7 @@ impl Application {
                 surface,
             ));
             self.send_content_cmd(crate::content_command::ContentCommand::UpdateDisplayCapabilities {
-                destination: manifold_renderer::presentation::DisplayDestination::Output, capabilities,
+                destination: manifold_compositor::presentation::DisplayDestination::Output, capabilities,
             });
         }
 
@@ -1468,7 +1468,7 @@ impl Application {
             &*window,
             size.width.max(1),
             size.height.max(1),
-            manifold_renderer::presentation::UI_FORMAT,
+            manifold_compositor::presentation::UI_FORMAT,
             true,
         );
         surface.set_maximum_drawable_count(3);
@@ -1484,7 +1484,7 @@ impl Application {
         let capabilities = crate::edr_surface::query_window_capabilities(&window);
         self.graph_display_capabilities = capabilities;
         self.send_content_cmd(crate::content_command::ContentCommand::UpdateDisplayCapabilities {
-            destination: manifold_renderer::presentation::DisplayDestination::GraphEditor,
+            destination: manifold_compositor::presentation::DisplayDestination::GraphEditor,
             capabilities,
         });
 
@@ -1493,7 +1493,7 @@ impl Application {
             width: size.width.max(1),
             height: size.height.max(1),
             depth: 1,
-            format: manifold_renderer::presentation::UI_FORMAT,
+            format: manifold_compositor::presentation::UI_FORMAT,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
             label: "Graph Editor Offscreen",

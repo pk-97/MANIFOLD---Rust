@@ -30,7 +30,7 @@ use manifold_node_engine::testkit::mesh_revision::*;
         #[test]
         fn mesh_change_declared_deformer_tracks_input_topology() {
             use manifold_node_engine::scene::mesh_change::MeshAspect;
-            use crate::node_graph::primitives::NormalWaveMesh;
+            use manifold_nodes_scene::node_graph::primitives::normal_wave_mesh::NormalWaveMesh;
 
             let (src, (_unchanged, _pending, src_rule)) = MeshNode::producer(Some(fixed_rule()));
             let mut g = Graph::new();
@@ -166,7 +166,7 @@ use manifold_node_engine::testkit::mesh_revision::*;
 
             // Part 1 — the unfused class, straight off the stock declarations
             // the preset's graph compiles today.
-            let wave_node = crate::node_graph::primitives::NormalWaveMesh::new();
+            let wave_node = manifold_nodes_scene::node_graph::primitives::normal_wave_mesh::NormalWaveMesh::new();
             let wave = Primitive::mesh_output_rule(&wave_node, "out");
             match wave.topology {
                 MeshRevisionRule::Dependencies(deps) => {
@@ -176,7 +176,7 @@ use manifold_node_engine::testkit::mesh_revision::*;
                 other => panic!("wave topology must be Dependencies([in.Topology]), got {other:?}"),
             }
             assert!(matches!(wave.positions, MeshRevisionRule::Written));
-            let morph_node = crate::node_graph::primitives::MorphMesh::new();
+            let morph_node = manifold_nodes_scene::node_graph::primitives::morph_mesh::MorphMesh::new();
             let morph = Primitive::mesh_output_rule(&morph_node, "out");
             match morph.topology {
                 MeshRevisionRule::Dependencies(deps) => {

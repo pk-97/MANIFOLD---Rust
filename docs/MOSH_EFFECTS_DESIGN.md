@@ -12,11 +12,11 @@ Snapshot at dfb5c0514ec3a0639c9bd2d6051717e326764a44; extend existing infrastruc
 
 | Piece | Source | Finding |
 |---|---|---|
-| Native optical flow | `crates/manifold-renderer/src/node_graph/primitives/optical_flow_estimate.rs` | Existing Farneback worker, RGBA = x/confidence/y/valid. Allocates per update, lacks reset, no busy guard, asynchronous arrival varies by execution speed. |
+| Native optical flow | `crates/manifold-nodes-image/src/node_graph/primitives/optical_flow_estimate.rs` | Existing Farneback worker, RGBA = x/confidence/y/valid. Allocates per update, lacks reset, no busy guard, asynchronous arrival varies by execution speed. |
 | GPU readback | `crates/manifold-renderer/src/gpu_readback.rs` | Existing previous-frame completion contract; allocates GPU and CPU buffers per submission. Extend with reusable storage. |
-| Feedback | `crates/manifold-renderer/src/node_graph/primitives/temporal.rs` | Existing state-store loop and late-capture ping-pong. Seed available on allocation; resets currently clear to zero. |
-| Flow warp | `crates/manifold-renderer/src/node_graph/primitives/uv_displace_by_flow.rs` | Existing signed R/B flow consumer; positive weight gathers backward current-to-previous vectors. |
-| Block fields | `crates/manifold-renderer/src/node_graph/primitives/block_displace_field.rs` | Existing offset and aligned hash. Wire its time input from an explicit Pattern control to suppress clock fallback. |
+| Feedback | `crates/manifold-nodes-image/src/node_graph/primitives/temporal.rs` | Existing state-store loop and late-capture ping-pong. Seed available on allocation; resets currently clear to zero. |
+| Flow warp | `crates/manifold-nodes-image/src/node_graph/primitives/uv_displace_by_flow.rs` | Existing signed R/B flow consumer; positive weight gathers backward current-to-previous vectors. |
+| Block fields | `crates/manifold-nodes-image/src/node_graph/primitives/block_displace_field.rs` | Existing offset and aligned hash. Wire its time input from an explicit Pattern control to suppress clock fallback. |
 | Composition | `assets/effect-presets/Glitch.json`, `StylizedFeedback.json` under manifold-renderer | Existing remap, channel mixer, vector length, smoothstep and masked blend cover reconstruction. No active SmearMosh preset despite older documentation. |
 | Clip responses | `assets/generator-presets/Plasma.json`, `FluidSim3D.json`, `assets/effect-presets/Strobe.json` | Trigger count, baseline, gate, never-repeat index, scalar switches. Reuse; no embedded envelope timing. |
 | State ownership | `src/preset_runtime/core.rs`, `src/layer_compositor.rs` under manifold-renderer | Content-owned chain/state-store; idle/seek/project-load clear hooks; topology may harvest compatible node state. Verify actual bypass behavior rather than relying on stale lifecycle prose. |

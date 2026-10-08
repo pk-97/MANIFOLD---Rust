@@ -2,6 +2,7 @@
 //! Complements the existing scalar buffer proof; no GPU is needed.
 use manifold_renderer as _;
 mod support {
+    pub mod rust_items;
     pub mod custom_abi_cases;
     pub mod source_roots;
     pub mod texture_abi_cases;
@@ -11,7 +12,7 @@ mod support {
 // `region_types.rs` is a wire boundary rather than a generated GPU uniform.
 // Include the production declarations so this integration proof checks the
 // compiler's actual repr(C) layout instead of reproducing the structs here.
-#[path = "../src/node_graph/primitives/region_types.rs"]
+#[path = "../../manifold-nodes-image/src/node_graph/primitives/region_types.rs"]
 mod region_wire_abi;
 
 const BLOB_V2_UNIFORM_MIRRORS: &[(&str, &str)] = &[
@@ -41,7 +42,7 @@ mod blob_v2 {
 
     #[test]
     fn blob_v2_uniform_mirrors_match_generated_or_custom_layout() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-nodes-image/src/node_graph/primitives");
         let registry = PrimitiveRegistry::with_builtin();
         let mut failures = Vec::new();
         for &(source, rust_struct) in BLOB_V2_UNIFORM_MIRRORS {
@@ -213,7 +214,7 @@ mod custom {
     }
     #[test]
     fn custom_gpu_uniforms_match_their_actual_shader_declarations() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/node_graph/primitives");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-nodes-image/src/node_graph/primitives");
         let mut failures = Vec::new();
         for case in custom_abi_cases::CASES {
             let result = (|| {
@@ -468,9 +469,7 @@ mod custom {
 #[cfg(test)]
 mod dispatch_regression {
     use manifold_node_engine::freeze::codegen::{standalone_for_node, standalone_for_spec};
-    use manifold_renderer::node_graph::primitives::{
-        BlobOverlayRender, DrawConnections, DrawDots, DrawGauge, DrawMarkers, DrawTicks,
-    };
+    use manifold_nodes_image::node_graph::primitives::{blob_overlay_render::BlobOverlayRender, draw_connections::DrawConnections, draw_dots::DrawDots, draw_gauge::DrawGauge, draw_markers::DrawMarkers, draw_ticks::DrawTicks};
 
     fn same<P: manifold_node_engine::primitive::Primitive + Default + 'static>() {
         let typed = standalone_for_spec::<P>().expect("typed standalone codegen");

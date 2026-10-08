@@ -28,7 +28,7 @@ Existing/one-wire-away/new: the parser, samplers' math, loop/trigger machinery, 
 ## 2. Decisions
 
 - **D1 — Keyframe payload never lives in the graph def.** The def stores: `path` (stringBinding, same convention as every gltf source), clip metadata (`clip_durations` stays — it is tiny and UI-relevant), topology scalars (`joint_count`), and selection params. All track data (`translation/rotation/scale_tracks`, per-target weight tracks, `joint_parent/root_world/inverse_bind` tables) moves to a runtime cache loaded from the file. Rationale: payload-in-def is the root cause of the 5.2 GB residency, project.json bloat, snapshot/undo weight, and delete-doesn't-free. Rejected: keeping tables but sharing them via `Arc` interning — still bloats serialization, still per-def, and dedup-by-accident; the class fix is payload-out-of-def.
-- **D2 — One shared `GltfAnimCache`, `Weak`-held, background-loaded.** New module `crates/manifold-renderer/src/node_graph/gltf_anim_cache.rs`:
+- **D2 — One shared `GltfAnimCache`, `Weak`-held, background-loaded.** New module `crates/manifold-nodes-scene/src/node_graph/gltf_anim_cache.rs`:
   ```rust
   pub struct GltfAnimSet {          // one per file, immutable after load
       pub clips: Vec<AnimClip>,     // index == glTF animations[] index
@@ -57,7 +57,7 @@ Existing/one-wire-away/new: the parser, samplers' math, loop/trigger machinery, 
 
 | Invariant | Enforcement |
 |---|---|
-| No keyframe payload in any def the importer emits | Negative gate: `rg -n '"translation_tracks"\|"rotation_tracks"\|"scale_tracks"\|weight_tracks' crates/manifold-renderer/src/node_graph/gltf_import/mod.rs` → zero hits after P2; plus test `imported_def_json_stays_small` — serialize the dragon-scale synthetic import def, assert < 256 KB |
+| No keyframe payload in any def the importer emits | Negative gate: `rg -n '"translation_tracks"\|"rotation_tracks"\|"scale_tracks"\|weight_tracks' crates/manifold-nodes-scene/src/node_graph/gltf_import/mod.rs` → zero hits after P2; plus test `imported_def_json_stays_small` — serialize the dragon-scale synthetic import def, assert < 256 KB |
 | Sampling never linear-scans keyframes | `row_range_for_key`/`row_range_for_compound_key` DELETED (`rg` zero hits, P2); slice samplers take `partition_point` — reviewed shape, plus perf test below |
 | Dragon-scale posing stays under budget | Test `pose_sampling_dragon_scale_under_1ms` (P1): synthetic AnimSet (52 clips × 630 channels × ~160 keys), 300 joints, one full pose sample < 1 ms release / < 8 ms debug |
 | Deleting the last referencing node frees the payload | Test `anim_cache_drops_when_last_arc_drops` (P1): load, drop all Arcs, assert `Weak::upgrade()` is `None` |

@@ -53,12 +53,12 @@ fn object_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
     ) else {
         return Vec::new();
     };
-    manifold_renderer::node_graph::scene_vm::SceneVm::from_def(def)
+    manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def)
         .map(|vm| {
             vm.objects
                 .into_iter()
                 .filter_map(|object| match object {
-                    manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row) => {
+                    manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) => {
                         Some(row.object_node_id)
                     }
                     _ => None,
@@ -73,12 +73,12 @@ fn light_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
         project,
         &manifold_core::GraphTarget::Generator(layer.clone()),
     )
-    .and_then(manifold_renderer::node_graph::scene_vm::SceneVm::from_def)
+    .and_then(manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def)
     .map(|vm| {
         vm.lights
             .into_iter()
             .filter_map(|light| match light {
-                manifold_renderer::node_graph::scene_vm::SceneLightVm::Known(row) => {
+                manifold_nodes_scene::node_graph::scene_vm::SceneLightVm::Known(row) => {
                     Some(row.node_doc_id)
                 }
                 _ => None,

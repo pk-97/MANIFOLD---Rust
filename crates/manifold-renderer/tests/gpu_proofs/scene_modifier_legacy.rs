@@ -4,7 +4,7 @@
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_renderer::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
+use manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 
 // Frozen fixtures were captured for structure and intentionally lack lighting.

@@ -7,7 +7,7 @@ use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::water::physics::PhysicsStepScope;
-use manifold_renderer::node_graph::primitives::WaveShearMesh;
+use manifold_nodes_scene::node_graph::primitives::wave_shear_mesh::WaveShearMesh;
 use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
 

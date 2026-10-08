@@ -65,7 +65,7 @@ If your effect can be expressed by composing primitives that already exist, that
 - **`presetMetadata.available`** — set `false` to hide from the picker but still load saved projects.
 - **`presetMetadata.params`** — the card-UI slider list. Each entry is one effect-card slider.
 - **`presetMetadata.bindings`** — how each slider routes to inner state. `target.kind: "handleNode"` is the common case; `handle` is the inner node's `handle` string and `param` is the param name on that primitive.
-- **`nodes[].typeId`** — must reference a registered primitive (browseable at `crates/manifold-renderer/src/node_graph/primitives/`) or one of the system nodes (`system.source`, `system.final_output`).
+- **`nodes[].typeId`** — must reference a registered primitive (browseable in the image, scene, engine and water roots listed in [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md)) or one of the system nodes (`system.source`, `system.final_output`).
 - **`nodes[].handle`** — a string label used by bindings and wires. Must be unique within the preset.
 - **`nodes[].params`** — initial param values for this instance. Format is the same tagged-enum used everywhere: `{"type": "Float", "value": 0.5}`, `{"type": "Enum", "value": 2}`, `{"type": "Int", "value": 24}`, `{"type": "Vec2", "value": [0.5, 0.2]}`.
 - **`wires`** — connections between ports. `fromPort` / `toPort` must exist on the referenced primitive's port list.

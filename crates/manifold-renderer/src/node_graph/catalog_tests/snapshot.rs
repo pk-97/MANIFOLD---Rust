@@ -15,7 +15,7 @@ use manifold_node_engine::{graph::Graph, snapshot::GraphSnapshot};
             "source",
             Box::new(manifold_node_engine::scene::boundary_nodes::Source::new()),
         );
-        let handle = crate::node_graph::composites::build_soft_focus(&mut g, (src, "out"))
+        let handle = manifold_nodes_image::node_graph::composites::build_soft_focus(&mut g, (src, "out"))
             .expect("build_soft_focus");
         let _out = g.add_node_named(
             "final_output",
@@ -66,7 +66,7 @@ use manifold_node_engine::{graph::Graph, snapshot::GraphSnapshot};
             "source",
             Box::new(manifold_node_engine::scene::boundary_nodes::Source::new()),
         );
-        let handle = crate::node_graph::composites::build_soft_focus(&mut g, (src, "out"))
+        let handle = manifold_nodes_image::node_graph::composites::build_soft_focus(&mut g, (src, "out"))
             .expect("build_soft_focus");
         let final_out = g.add_node_named(
             "final_output",

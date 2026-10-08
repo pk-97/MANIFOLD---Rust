@@ -8,7 +8,7 @@ mod gpu {
     use super::super::*;
     use crate::content_command::ContentCommand;
     use manifold_core::LayerId;
-    use manifold_renderer::node_graph::scene_vm::{SceneObjectKnownRow, SceneObjectVm, SceneVm};
+    use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectKnownRow, SceneObjectVm, SceneVm};
     use std::path::{Path, PathBuf};
 
     const W: u32 = 640;

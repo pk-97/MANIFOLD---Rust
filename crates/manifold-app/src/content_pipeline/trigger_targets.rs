@@ -6,7 +6,7 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::layer::Layer;
 use manifold_core::{EffectId, LayerId};
-use manifold_renderer::generator_renderer::GeneratorRenderer;
+use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_playback::modulation::{TriggerPulse, TriggerPulseKind};
 
 struct Owner {

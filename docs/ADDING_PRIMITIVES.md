@@ -2,13 +2,13 @@
 
 Authoring guide for the `primitive!` macro. Companion to [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) (design rationale + decomposition recipes) and [NODE_CATALOG.md](NODE_CATALOG.md) (the catalog of what's shipping today).
 
-Primitives auto-register via `inventory::submit!` from inside the macro — dropping a file under `crates/manifold-renderer/src/node_graph/primitives/` is the only step required. Nothing else has to be edited to register a new primitive; `cargo build` picks it up and the palette + bundled-preset loader see it on next startup.
+Primitives auto-register via `inventory::submit!` from inside the macro — add the file and its module declaration in the owning primitive family (image or scene). Water remains under `crates/manifold-node-engine/src/water/primitives/`; engine built-ins stay under `crates/manifold-node-engine/src/primitives/` (the fixed list in RENDERER_CRATE_SPLIT_DESIGN.md D11). No central registry edit is needed; `cargo build` picks it up and the palette + bundled-preset loader see it on next startup.
 
 ## Audit precondition (mandatory)
 
 Before authoring any new primitive, complete the read-only audit per [DECOMPOSING_GENERATORS.md section 2.5 (Precondition: audit by analogy before workflow step 1)](DECOMPOSING_GENERATORS.md):
 
-1. **Survey existing primitives** — `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'`. One line per node telling you what it does.
+1. **Survey existing primitives** — `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'`. One line per node telling you what it does.
 2. **Check the registered-but-unused atoms** — `mip_chain`, `uv_displace_by_flow`, `centered_uv`, `polar_field`, `distance_to_point`, `noise`, `depth_estimate_midas`, `blob_detect_ffi`, `blob_overlay_render`, `optical_flow_estimate`, `envelope_follower_ar`, `peak`, `render_3d_mesh`, `render_instanced_3d_mesh`, `generate_cube_mesh`, `generate_platonic_solid`, `generate_instance_transforms`, `integrate_particles`, and the unused noise/coordinate atoms. Many of these *exactly* cover what a new primitive proposal is reaching for; activate them by wiring them into your graph rather than building a new one. (Photoreal PBR is *not* an atom to wire up — it lives inside `node.render_3d_mesh`'s `node.pbr_material`; the standalone `cook_torrance_specular` / `equirect_envmap_sample` were removed 2026-05-30.)
 3. **Read the nearest reference preset end-to-end** ([NODE_CATALOG.md section 5 (Effect presets) / section 6.1 (JSON-defined)](NODE_CATALOG.md), [DECOMPOSING_GENERATORS.md section 2.5](DECOMPOSING_GENERATORS.md)).
 4. **Reconcile your sketch** — state explicitly which existing primitives you'll reuse, which you'll extend, and which are genuinely new. State the audit findings in the PR description before any new-primitive code.
@@ -44,11 +44,13 @@ What's **fine** when it's the right granularity:
 
 ## Files you touch per primitive
 
+`<family-root>` is `crates/manifold-nodes-image/src/node_graph/primitives/` for image atoms or `crates/manifold-nodes-scene/src/node_graph/primitives/` for scene nodes. The engine water and built-in roots above are reserved for those owners. The renderer holds the catalog and cross-family tests.
+
 | File | Why |
 |---|---|
-| `crates/manifold-renderer/src/node_graph/primitives/<name>.rs` | The `primitive!` declaration + `Primitive::run` body |
-| `crates/manifold-renderer/src/node_graph/primitives/shaders/<name>.wgsl` | Compute shader (only if your primitive runs GPU work — control-rate primitives like `value`/`math`/`lfo` don't need shaders) |
-| `crates/manifold-renderer/src/node_graph/primitives/mod.rs` | `pub mod <name>;` to include the file |
+| `<family-root>/<name>.rs` | The `primitive!` declaration + `Primitive::run` body |
+| `<family-root>/shaders/<name>.wgsl` | Compute shader (only if your primitive runs GPU work — control-rate primitives like `value`/`math`/`lfo` don't need shaders) |
+| `<family-root>/mod.rs` | `pub mod <name>;` to include the file |
 | `crates/manifold-renderer/tests/parity_<effect>.rs` | Parity test vs the legacy effect this replaces (only when replacing a legacy fused shader) |
 
 That's it. The macro generates the `EffectNode` impl, type-id constants, `PrimitiveSpec` metadata, the AI-surface `PrimitiveDescription`, and the `inventory::submit!` registration for the auto-populated palette.
@@ -68,9 +70,9 @@ around it from merging. A chain of them costs N GPU dispatches where a fused run
 frames, i.e. a broken show. This is hot-path discipline at the instrument level, not an
 optimization nicety.
 
-The codegen authoring shape (reference: [`contrast.rs`](../crates/manifold-renderer/src/node_graph/primitives/contrast.rs)
-texture-domain, [`displace_mesh.rs`](../crates/manifold-renderer/src/node_graph/primitives/displace_mesh.rs)
-buffer + texture, [`neighbor_smooth.rs`](../crates/manifold-renderer/src/node_graph/primitives/neighbor_smooth.rs)
+The codegen authoring shape (reference: [`contrast.rs`](../crates/manifold-nodes-image/src/node_graph/primitives/contrast.rs)
+texture-domain, [`displace_mesh.rs`](../crates/manifold-nodes-scene/src/node_graph/primitives/displace_mesh.rs)
+buffer + texture, [`neighbor_smooth.rs`](../crates/manifold-nodes-image/src/node_graph/primitives/neighbor_smooth.rs)
 buffer gather):
 
 1. **Author a `wgsl_body` fragment**, not a whole kernel. `shaders/<name>_body.wgsl`

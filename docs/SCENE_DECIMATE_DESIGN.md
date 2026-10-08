@@ -165,7 +165,7 @@ the recipe, the static-vertices RT declaration — **genuinely new, small**.
 ### 3.1 The atom
 
 ```rust
-// crates/manifold-renderer/src/node_graph/primitives/mesh_decimate.rs
+// crates/manifold-nodes-scene/src/node_graph/primitives/mesh_decimate.rs
 crate::primitive! {
     name: MeshDecimate,
     type_id: "node.mesh_decimate",
@@ -367,7 +367,7 @@ readback, cache.
 | 5. Renderer uses capacity-derived counts | Correct for the current `render_scene` mesh draws (`mesh_vertex_count` at `:1702`, RT count at `:5296`). The proposed single renderer input is the wrong ownership: one renderer consumes multiple `SceneObject`s. Count belongs to each object's mesh, then its `ObjectDraw`. |
 | 6. Skin/morph refusal already follows from source atoms | Separate atoms exist; Decimate refusal does not yet exist. A direct-producer check misses group boundaries, skin/morph operations and intervening modifiers. Existing `frames.rs:59–81,237–257` refusal is scoped to recipes needing a qualified coordinate frame, not generic Decimate validation. Refusal can be a conservative V1 policy, but justify it as unqualified lineage/deformation behavior. Simplifying a mesh *after* skinning does not inherently require rewriting the original joint data; applying the reduced stream before skinning would. |
 
-Paths without a crate prefix above are under `crates/manifold-renderer/src/node_graph/`, with recipes under `crates/manifold-renderer/assets/scene-modifier-presets/`.
+Paths without a crate prefix above are under `crates/manifold-nodes-scene/src/node_graph/`, with recipes under `crates/manifold-renderer/assets/scene-modifier-presets/`.
 
 ### 8.2 Recommended cheaper shape: simplify a reference, publish a map
 

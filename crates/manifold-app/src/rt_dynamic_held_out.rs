@@ -37,7 +37,7 @@ const MEASURED_FRAMES: usize = 120;
 const PROFILE_SAMPLER_MAX_SPANS: usize = 8192;
 const REFERENCE_TRIANGLES: u64 = 65_536;
 const REFERENCE_JSON: &str = include_str!(
-    "../../manifold-renderer/tests/fixtures/scene-modifiers/rt_dynamic_reference.json"
+    "../../manifold-nodes-scene/tests/fixtures/scene-modifiers/rt_dynamic_reference.json"
 );
 
 fn hash_bytes(bytes: &[u8]) -> String {
@@ -393,7 +393,7 @@ fn measure_project(
         for renderer in ct.engine.renderers_mut() {
             if let Some(generator) = renderer
                 .as_any_mut()
-                .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>(
+                .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
             ) {
                 cpu_total_nanos += generator
                     .take_step_profiles()

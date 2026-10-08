@@ -10,8 +10,8 @@ use manifold_editing::commands::graph::{
     AddSceneFluidCommand, AddSceneObjectCommand, EnableSceneObjectPhysicsCommand,
     SetGraphNodeParamCommand,
 };
-use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-use manifold_renderer::node_graph::{bundled_preset_def, scene_exposure::metadata_for_node_type};
+use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+use {manifold_renderer::node_graph::bundled_preset_def, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Sample {

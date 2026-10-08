@@ -38,7 +38,7 @@ mod scene_card_convergence_tests {
     use manifold_core::project::Project;
     use manifold_core::types::LayerType;
     use manifold_core::types::{BeatDivision, DriverWaveform};
-    use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, SceneVm};
+    use manifold_nodes_scene::node_graph::scene_vm::{AtmosphereVm, SceneVm};
     use manifold_ui::{
         AudioSetupAction, EditingAction, MappingAction, ModulationAction, ParamsAction,
     };
@@ -65,7 +65,7 @@ mod scene_card_convergence_tests {
         let scene = def.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
         let mut fog = manifold_editing::commands::graph::AddSceneFogCommand::new(
             manifold_core::GraphTarget::Generator(layer_id.clone()), Vec::new(), scene,
-            (0.0, 0.0), manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.atmosphere"), def,
+            (0.0, 0.0), manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type("node.atmosphere"), def,
         );
         manifold_editing::command::Command::execute(&mut fog, project);
     }
@@ -184,7 +184,7 @@ mod scene_card_convergence_tests {
         );
         let layer_id = project.timeline.layers[index].layer_id.clone();
         let mut def = fog_density_addr(&project, &layer_id);
-        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
+        manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
         let meta = def.preset_metadata.as_ref().unwrap();
         let r = meta
             .bindings

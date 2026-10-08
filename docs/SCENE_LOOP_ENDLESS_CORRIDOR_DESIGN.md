@@ -40,8 +40,8 @@ D1–D11 remain cited; this doc revises the instance model), `docs/RT_INSTANCING
 
 | Piece | Where | State |
 |---|---|---|
-| `node.scene_array` | `crates/manifold-renderer/src/node_graph/primitives/scene_array.rs:72-159` | Source atom, NO inputs. `count` (1..8) copies at `i * cell_size` along `axis`; optional jitter from a hash of `index % jitter_period` (`scene_array_body.wgsl`). Output buffer capacity = count's range max 8 (`array_output_capacity` `:162-184`); surplus slots masked zero-scale. `SceneArrayStasisKey` (`:62-70`) skips the rewrite when {count, axis, cell_size, jitter_seed, jitter_amount, rebuild_epoch} hold — INV-RTI4 producer stasis. |
-| `node.loop_camera` | `crates/manifold-renderer/src/node_graph/primitives/loop_camera.rs:235-339` | Emits `Camera` + `pos_x/pos_y/pos_z`. Travel = `home + d(phase)·stride·cell_size`, `d(p) = p − flow·sin(2πp)/(2π)` (`:292-294`). `stride` = whole cells per loop, range 1..8 (`:164-171`). All movement terms phase-periodic (INV-3). |
+| `node.scene_array` | `crates/manifold-nodes-scene/src/node_graph/primitives/scene_array.rs:72-159` | Source atom, NO inputs. `count` (1..8) copies at `i * cell_size` along `axis`; optional jitter from a hash of `index % jitter_period` (`scene_array_body.wgsl`). Output buffer capacity = count's range max 8 (`array_output_capacity` `:162-184`); surplus slots masked zero-scale. `SceneArrayStasisKey` (`:62-70`) skips the rewrite when {count, axis, cell_size, jitter_seed, jitter_amount, rebuild_epoch} hold — INV-RTI4 producer stasis. |
+| `node.loop_camera` | `crates/manifold-nodes-scene/src/node_graph/primitives/loop_camera.rs:235-339` | Emits `Camera` + `pos_x/pos_y/pos_z`. Travel = `home + d(phase)·stride·cell_size`, `d(p) = p − flow·sin(2πp)/(2π)` (`:292-294`). `stride` = whole cells per loop, range 1..8 (`:164-171`). All movement terms phase-periodic (INV-3). |
 | Plan builder | `crates/manifold-renderer/src/node_graph/scene_modifier.rs:569-756` (`build_scene_loop_plan`) | Mints loop_phase/scene_array/loop_camera (+switch); cell_size = 2× Z-extent (D4 gap rule, `:586-588`); home = −cell/2; wires `loop_phase.out → loop_camera.phase` ONLY — scene_array takes no input. |
 | Stride coupling | `scene_modifier.rs:450-492` | Stride row writes {loop_camera.stride, scene_array.count = K+2 clamped 8, scene_array.jitter_period = K}. **K ≥ 7 outruns the array** — the cap the corridor dissolves. |
 | Spacing coupling | `scene_modifier.rs:471-485` | cell_size row writes both nodes' cell_size + home = −cell/2 (INV-4). Unchanged by this design. |
@@ -50,7 +50,7 @@ D1–D11 remain cited; this doc revises the instance model), `docs/RT_INSTANCING
 | Wrap-parity gates | `crates/manifold-renderer/tests/scene_loop_wrap_parity.rs` | INV-3 pixel gates: exact seam (beat 0 vs 8, diff == 0), near-seam bounded (phase 0.99999, ≤8 px / ≤48 delta), bars-change continuity. **The near-seam gate today needs far=22 clipping** (`:283-303`) because the finite array's far-edge hole otherwise confounds the measurement — the corridor removes that crutch. |
 | RT instancing | `docs/RT_INSTANCING_DESIGN.md` D1/D9/INV-RTI4/5 | Instance buffers GPU-resident; `instance_count = buffer_size/32` (CAPACITY, not live count — `render_scene.rs:4909-4919`); capacity rides the topo key (rebuild), values ride refit; INV-RTI4: static instance buffers trigger no descriptor dispatch/refit beyond the transform-driven cadence. |
 | Camera struct | `crates/manifold-node-engine/src/scene/camera.rs:83-101` | Carries `pos`, `near`, `far` — enough to derive the window from a wired camera. |
-| Camera-input codegen atom | `crates/manifold-renderer/src/node_graph/primitives/project_3d.rs:65-127` | Precedent: `fusion_kind: Pointwise` + `wgsl_body` atom with an optional `camera: Camera` input resolved CPU-side into uniforms (`cam_pos`/`cam_right`/`cam_up`/`cam_fwd`/`cam_near`/`use_camera`). The corridor atom copies this seam shape exactly. |
+| Camera-input codegen atom | `crates/manifold-nodes-scene/src/node_graph/primitives/project_3d.rs:65-127` | Precedent: `fusion_kind: Pointwise` + `wgsl_body` atom with an optional `camera: Camera` input resolved CPU-side into uniforms (`cam_pos`/`cam_right`/`cam_up`/`cam_fwd`/`cam_near`/`use_camera`). The corridor atom copies this seam shape exactly. |
 
 ### 1.2 Section 2.5 audit statement (DECOMPOSING_GENERATORS.md)
 
@@ -237,7 +237,7 @@ nothing**.
 ### 3.1 `node.scene_array` — committed surface
 
 ```rust
-// crates/manifold-renderer/src/node_graph/primitives/scene_array.rs
+// crates/manifold-nodes-scene/src/node_graph/primitives/scene_array.rs
 inputs:  { camera: Camera optional }
 outputs: { out: Array(InstanceTransform) }
 params: [
@@ -426,7 +426,7 @@ predicate as the doc-level contract; no code lands for it here.
 | INV-EC1 | Wrap purity by construction: travel per loop = K·P·cells ≡ 0 (mod P); all visible content is a function of Euclidean `cell rem P` | `wrap_parity_phase_0_vs_phase_1` extended to the four (K,P) shapes of D8.2 (exact 0, unclipped, regression sentinel); the D8.1 near-seam buffer-equality test (negative base_cells, P ∈ 2..8) is the enforcing gate; a CPU test asserts `patterns_per_loop · pattern_length ≡ 0 (mod pattern_length)` for the full 1..8 × 1..8 grid. |
 | INV-EC2 | Output capacity is the constant 32, never a live value | Existing BUG-757c (scene-loop-copies-param-inert) capacity test repurposed: `array_output_capacity` returns 32 for any params. |
 | INV-EC3 | The window always covers the visible range: `ahead ≥ ceil(far/cell) + 1` and `BEHIND + ahead + 1 ≤ CAPACITY` | Unit test over the real far band (row curation `min(1.0, default)` .. `(20·cell).min(10000)` — `scene_modifier.rs:533-536`; plan default 4·cell — `:684`) asserts the D5 formula's bound, including far < cell (ahead floors at 4); clamp path asserted at hand-set far beyond the band. |
-| INV-EC4 | Stasis key completeness: every frame-varying input is in the key (`use_camera` included — D6) | RT_INSTANCING's INV-RTI4 gpu_proofs stay green on a corridor graph with the camera parked AND at speed — the existing dispatch-count proof (`crates/manifold-renderer/tests/gpu_proofs/rt_instancing.rs:672-696`) extended with a corridor case asserting descriptor dispatches happen on cell-crossing frames only; `rt_noise_gate.py` green; completeness is the review rule on the key struct (every `run` input has a key field) — no debug_assert, the dispatch-count proof is the enforcement. |
+| INV-EC4 | Stasis key completeness: every frame-varying input is in the key (`use_camera` included — D6) | RT_INSTANCING's INV-RTI4 gpu_proofs stay green on a corridor graph with the camera parked AND at speed — the existing dispatch-count proof (`crates/manifold-nodes-scene/tests/gpu_proofs/rt_instancing.rs:672-696`) extended with a corridor case asserting descriptor dispatches happen on cell-crossing frames only; `rt_noise_gate.py` green; completeness is the review rule on the key struct (every `run` input has a key field) — no debug_assert, the dispatch-count proof is the enforcement. |
 | INV-EC5 | Migrated saved loops load, trace, and wrap pure | `scene_loop_roundtrip.rs` + `scene_loop_roundtrip_gate.rs` extended: a pre-corridor fixture (count/stride/jitter_period shape) loads → trace finds all three atoms → exposures are exactly the new whitelist → wrap-parity gate green on the migrated graph. Cases: P1-era (no stride/jitter_period), P4 card-written (J = S), hand-desynced (S=7, J=3 → travel 7→6 cells per the D7 ruling). Negative gate: zero `count`/`jitter_period`/`stride` param hits in the migrated def. |
 
 ## 5. Phasing
@@ -478,7 +478,7 @@ semantics for migration (D7) · touching per-object mesh modifier chains
   parallel old path. Re-derivation command (run at execution time; if the
   count differs from the two/two listed, stop and list the new sites before
   touching anything):
-  `rg -n '"stride"|"jitter_period"|"count"' crates/manifold-renderer/src/node_graph/scene_modifier.rs crates/manifold-renderer/src/node_graph/primitives/scene_array.rs crates/manifold-renderer/src/node_graph/primitives/loop_camera.rs crates/manifold-renderer/tests/scene_loop_*.rs`
+  `rg -n '"stride"|"jitter_period"|"count"' crates/manifold-renderer/src/node_graph/scene_modifier.rs crates/manifold-nodes-scene/src/node_graph/primitives/scene_array.rs crates/manifold-nodes-scene/src/node_graph/primitives/loop_camera.rs crates/manifold-renderer/tests/scene_loop_*.rs`
   Gate: gates green; negative `rg` (zero `stride`/`count`/`jitter_period`
   hits in migrated fixtures + zero in the whitelist/coupled tables);
   round-trip gate green.

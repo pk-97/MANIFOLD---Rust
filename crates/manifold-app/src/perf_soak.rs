@@ -999,7 +999,7 @@ fn run_profile(
     for renderer in ct.engine.renderers_mut() {
         if let Some(gen_renderer) = renderer
             .as_any_mut()
-            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>(
+            .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
         ) {
             gen_renderer.set_profiling(true);
         }
@@ -1054,7 +1054,7 @@ fn run_profile(
         for renderer in ct.engine.renderers_mut() {
             if let Some(gen_renderer) = renderer
                 .as_any_mut()
-                .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>(
+                .downcast_mut::<manifold_compositor::generator_renderer::GeneratorRenderer>(
             ) {
                 cpu_profiles.extend(gen_renderer.take_step_profiles());
             }

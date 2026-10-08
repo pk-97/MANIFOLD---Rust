@@ -187,7 +187,7 @@ fn imported_gltf_scene(path: &std::path::Path, scene_name: &str, fallback_name: 
     use manifold_editing::command::Command;
     use manifold_editing::commands::layer::ImportModelLayerCommand;
 
-    let (def, report) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(path)
+    let (def, report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(path)
         .unwrap_or_else(|e| panic!("ui-snap {scene_name}: assemble_import_graph({}) failed: {e}", path.display()));
     eprintln!("ui-snap {scene_name}: import report: {report:?}");
 
@@ -239,7 +239,7 @@ pub(super) fn heldout_merge_scene() -> SceneData {
     use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
     use manifold_editing::command::Command;
     use manifold_editing::commands::layer::ImportModelLayerCommand;
-    use manifold_renderer::node_graph::gltf_import::{assemble_import_graph, assemble_merge_plan};
+    use manifold_nodes_scene::node_graph::gltf_import::{assemble_import_graph, assemble_merge_plan};
 
     let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf");
     let warehouse = fixtures.join("abandoned_warehouse_-_interior_scene.glb");
@@ -298,7 +298,7 @@ pub(super) fn gltf_anim_scene() -> SceneData {
 
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/khronos/BoxAnimated.glb");
-    let (def, report) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(&path)
+    let (def, report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(&path)
         .unwrap_or_else(|e| panic!("ui-snap gltfanimscene: assemble_import_graph({}) failed: {e}", path.display()));
     eprintln!("ui-snap gltfanimscene: import report: {report:?}");
 

@@ -17,7 +17,7 @@ Companion docs: [archive/PRESET_BROWSER_AUDITION_DESIGN.md](archive/PRESET_BROWS
 
 | Piece | Where | State |
 |---|---|---|
-| Headless preset renderer | `crates/manifold-renderer/src/preset_thumbnail.rs` | Works. Effects render over a test input at defaults; generators self-render |
+| Headless preset renderer | `crates/manifold-compositor/src/preset_thumbnail.rs` | Works. Effects render over a test input at defaults; generators self-render |
 | Test input | `preset_thumbnail.rs:258` `build_gradient_input` | Pure math gradient R=x,G=y,B=(x+y)/2 — no edges, no detail, no hue spread. This is why old thumbnails looked bad |
 | Generator capture state | `preset_thumbnail.rs:159-219` | Already deterministic: 60 warm-up frames at dt=1/60, 120bpm, anim sweep 0→1, IO/warmup settle wait. Generators-at-sensible-state is solved |
 | Factory thumbnail cache | `assets/preset-thumbnails/{effects,generators}/<id>.png` via `factory_thumbnail_path` (`preset_thumbnail.rs:129`) | Committed PNGs; resolution packaged-bundle else dev workspace |

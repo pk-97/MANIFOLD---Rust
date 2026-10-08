@@ -1,0 +1,37 @@
+[
+  {
+    "path": "Cargo.toml",
+    "before": "    \"crates/manifold-node-engine\",\n",
+    "after": "    \"crates/manifold-node-engine\",\n    \"crates/manifold-nodes-image\",\n"
+  },
+  {
+    "path": "crates/manifold-app/Cargo.toml",
+    "before": "[dependencies]\n",
+    "after": "[dependencies]\nmanifold-nodes-image = { path = \"../manifold-nodes-image\" }\n"
+  },
+  {
+    "path": "crates/manifold-renderer/Cargo.toml",
+    "before": "[dependencies]\n",
+    "after": "[dependencies]\nmanifold-nodes-image = { path = \"../manifold-nodes-image\" }\n"
+  },
+  {
+    "path": "crates/manifold-renderer/Cargo.toml",
+    "before": "gpu-proofs = [",
+    "after": "gpu-proofs = [\"manifold-nodes-image/gpu-proofs\", "
+  },
+  {
+    "path": "Cargo.lock",
+    "before": "[[package]]\nname = \"manifold-physics\"\n",
+    "after": "[[package]]\nname = \"manifold-nodes-image\"\nversion = \"0.1.0\"\ndependencies = [\n \"ahash\",\n \"bytemuck\",\n \"core-foundation 0.9.4\",\n \"core-graphics\",\n \"core-text\",\n \"half\",\n \"image\",\n \"inventory\",\n \"log\",\n \"manifold-core\",\n \"manifold-foundation\",\n \"manifold-gpu\",\n \"manifold-native\",\n \"manifold-node-engine\",\n \"manifold-physics\",\n \"naga\",\n \"serde_json\",\n \"tiff 0.9.1\",\n]\n\n[[package]]\nname = \"manifold-physics\"\n"
+  },
+  {
+    "path": "Cargo.lock",
+    "before": "[[package]]\nname = \"manifold-app\"\nversion = \"0.1.0\"\ndependencies = [\n \"ahash\",\n \"arboard\",\n \"core-foundation 0.10.1\",\n \"crossbeam-channel\",\n \"env_logger\",\n \"half\",\n \"image\",\n \"io-surface\",\n \"libc\",\n \"log\",\n \"manifold-audio\",\n \"manifold-core\",\n \"manifold-editing\",\n \"manifold-gpu\",\n \"manifold-io\",\n \"manifold-led\",\n \"manifold-media\",\n \"manifold-node-engine\",\n \"manifold-playback\",\n \"manifold-profiler\",\n \"manifold-recording\",\n \"manifold-renderer\",\n \"manifold-spectral\",\n \"manifold-ui\",\n \"manifold-ui-paint\",\n \"mimalloc\",\n \"muda\",\n \"objc2 0.6.4\",\n \"objc2-app-kit 0.3.2\",\n \"objc2-foundation 0.3.2\",\n \"parking_lot\",\n \"png\",\n \"raw-window-handle\",\n \"rfd\",\n \"serde\",\n \"serde_json\",\n \"sha2\",\n \"smallvec\",\n \"winit\",\n]\n",
+    "after": "[[package]]\nname = \"manifold-app\"\nversion = \"0.1.0\"\ndependencies = [\n \"ahash\",\n \"arboard\",\n \"core-foundation 0.10.1\",\n \"crossbeam-channel\",\n \"env_logger\",\n \"half\",\n \"image\",\n \"io-surface\",\n \"libc\",\n \"log\",\n \"manifold-audio\",\n \"manifold-core\",\n \"manifold-editing\",\n \"manifold-gpu\",\n \"manifold-io\",\n \"manifold-led\",\n \"manifold-media\",\n \"manifold-node-engine\",\n \"manifold-nodes-image\",\n \"manifold-playback\",\n \"manifold-profiler\",\n \"manifold-recording\",\n \"manifold-renderer\",\n \"manifold-spectral\",\n \"manifold-ui\",\n \"manifold-ui-paint\",\n \"mimalloc\",\n \"muda\",\n \"objc2 0.6.4\",\n \"objc2-app-kit 0.3.2\",\n \"objc2-foundation 0.3.2\",\n \"parking_lot\",\n \"png\",\n \"raw-window-handle\",\n \"rfd\",\n \"serde\",\n \"serde_json\",\n \"sha2\",\n \"smallvec\",\n \"winit\",\n]\n"
+  },
+  {
+    "path": "Cargo.lock",
+    "before": "[[package]]\nname = \"manifold-renderer\"\nversion = \"0.1.0\"\ndependencies = [\n \"ahash\",\n \"arc-swap\",\n \"arrayvec\",\n \"bytemuck\",\n \"core-foundation 0.9.4\",\n \"core-graphics\",\n \"core-text\",\n \"glam\",\n \"gltf\",\n \"half\",\n \"image\",\n \"inventory\",\n \"log\",\n \"manifold-core\",\n \"manifold-editing\",\n \"manifold-fluids\",\n \"manifold-foundation\",\n \"manifold-gpu\",\n \"manifold-io\",\n \"manifold-native\",\n \"manifold-node-engine\",\n \"manifold-physics\",\n \"manifold-playback\",\n \"manifold-ui\",\n \"manifold-ui-paint\",\n \"naga\",\n \"objc2 0.6.4\",\n \"parking_lot\",\n \"png\",\n \"serde\",\n \"serde_json\",\n \"sha2\",\n \"syn 2.0.117\",\n \"tiff 0.9.1\",\n \"zstd\",\n]\n",
+    "after": "[[package]]\nname = \"manifold-renderer\"\nversion = \"0.1.0\"\ndependencies = [\n \"ahash\",\n \"arc-swap\",\n \"arrayvec\",\n \"bytemuck\",\n \"core-foundation 0.9.4\",\n \"core-graphics\",\n \"core-text\",\n \"glam\",\n \"gltf\",\n \"half\",\n \"image\",\n \"inventory\",\n \"log\",\n \"manifold-core\",\n \"manifold-editing\",\n \"manifold-fluids\",\n \"manifold-foundation\",\n \"manifold-gpu\",\n \"manifold-io\",\n \"manifold-native\",\n \"manifold-node-engine\",\n \"manifold-nodes-image\",\n \"manifold-physics\",\n \"manifold-playback\",\n \"manifold-ui\",\n \"manifold-ui-paint\",\n \"naga\",\n \"objc2 0.6.4\",\n \"parking_lot\",\n \"png\",\n \"serde\",\n \"serde_json\",\n \"sha2\",\n \"syn 2.0.117\",\n \"tiff 0.9.1\",\n \"zstd\",\n]\n"
+  }
+]

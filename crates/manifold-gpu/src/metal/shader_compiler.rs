@@ -598,7 +598,7 @@ struct Params {
 @group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
 "#,
         include_str!(
-            "../../../manifold-renderer/src/node_graph/primitives/shaders/gradient_ramp_body.wgsl"
+            "../../../manifold-nodes-image/src/node_graph/primitives/shaders/gradient_ramp_body.wgsl"
         ),
         r#"
 @compute @workgroup_size(16, 16)

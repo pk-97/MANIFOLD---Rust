@@ -1,7 +1,7 @@
 use manifold_node_engine::validation::validate;
 use manifold_node_engine::persistence::*;
 use manifold_node_engine::{graph::Graph, parameters::ParamValue, scene::boundary_nodes::Source, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::SOURCE_TYPE_ID, scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID, exec::execution_plan::compile};
-use crate::node_graph::primitives::{self, Blur, Threshold};
+use {manifold_nodes_image::node_graph::primitives::filter::Blur, manifold_nodes_image::node_graph::primitives::filter::Threshold};
 use std::collections::BTreeMap;
 fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
     fn expect_err(result: Result<Graph, LoadError>) -> LoadError {
@@ -21,16 +21,16 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
         let expected: &[&str] = &[
             SOURCE_TYPE_ID,
             FINAL_OUTPUT_TYPE_ID,
-            primitives::BRIGHTNESS_TYPE_ID,
-            primitives::CHANNEL_MIX_TYPE_ID,
-            primitives::COLOR_RAMP_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::BRIGHTNESS_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::CHANNEL_MIX_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::COLOR_RAMP_TYPE_ID,
             manifold_node_engine::primitives::mix::MIX_TYPE_ID,
-            primitives::THRESHOLD_TYPE_ID,
-            primitives::BLUR_TYPE_ID,
-            primitives::GAUSSIAN_BLUR_TYPE_ID,
-            primitives::FEEDBACK_TYPE_ID,
-            primitives::WET_DRY_TYPE_ID,
-            primitives::WATERCOLOR_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::filter::THRESHOLD_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::filter::BLUR_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::GAUSSIAN_BLUR_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::FEEDBACK_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::WET_DRY_TYPE_ID,
+            manifold_nodes_image::node_graph::primitives::watercolor::WATERCOLOR_TYPE_ID,
         ];
         for id in expected {
             assert!(
@@ -145,7 +145,7 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
             nodes: vec![NodeDocument {
                 id: 0,
                 node_id: manifold_core::NodeId::default(),
-                type_id: primitives::THRESHOLD_TYPE_ID.to_string(),
+                type_id: manifold_nodes_image::node_graph::primitives::filter::THRESHOLD_TYPE_ID.to_string(),
                 handle: None,
                 params,
                 exposed_params: Default::default(),
@@ -179,7 +179,7 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
             nodes: vec![NodeDocument {
                 id: 0,
                 node_id: manifold_core::NodeId::default(),
-                type_id: primitives::THRESHOLD_TYPE_ID.to_string(),
+                type_id: manifold_nodes_image::node_graph::primitives::filter::THRESHOLD_TYPE_ID.to_string(),
                 handle: None,
                 params,
                 exposed_params: Default::default(),

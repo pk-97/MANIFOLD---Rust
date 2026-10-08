@@ -83,7 +83,7 @@ use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, Por
 
     #[test]
     fn conditional_requirement_unmet_when_cel_material_lacks_light() {
-        use crate::node_graph::primitives::CelMaterial;
+        use manifold_nodes_scene::node_graph::primitives::cel_material::CelMaterial;
 
         let mut g = Graph::new();
         let mat = g.add_node(Box::new(CelMaterial::new()));
@@ -107,7 +107,7 @@ use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, Por
 
     #[test]
     fn conditional_requirement_satisfied_with_light_wired() {
-        use crate::node_graph::primitives::{CelMaterial, LightNode};
+        use manifold_nodes_scene::node_graph::primitives::{cel_material::CelMaterial, light::LightNode};
 
         let mut g = Graph::new();
         let mat = g.add_node(Box::new(CelMaterial::new()));
@@ -125,7 +125,7 @@ use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, Por
         // A renderer that only requires `light` on Cel should be
         // happy with an Unlit material and no light wired — the rule
         // doesn't fire for Unlit.
-        use crate::node_graph::primitives::UnlitMaterial;
+        use manifold_nodes_scene::node_graph::primitives::unlit_material::UnlitMaterial;
 
         let mut g = Graph::new();
         let mat = g.add_node(Box::new(UnlitMaterial::new()));
