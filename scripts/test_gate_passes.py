@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -38,14 +39,32 @@ class CacheTests(unittest.TestCase):
         self.write('Cargo.toml', '[workspace]\nmembers = ["crates/*"]\n')
         self.write('Cargo.lock', 'version = 4\n')
         self.write('.gitignore', 'target/\n.claude/orchestration/\ntests/fixtures/ignored.bin\n')
-        self.write('scripts/ui-flows/manifest.json', '{"path_triggers": {}}')
-        for name, deps in [('base', ''), ('a', '[dependencies]\nbase = {path="../base"}\n'),
-                           ('b', ''), ('manifold-renderer', '[dependencies]\nbase = {path="../base"}\n'
-                            'manifold-node-engine = {path="../manifold-node-engine"}\n'),
-                           ('manifold-node-engine', '[dependencies]\nbase = {path="../base"}\n'),
-                           ('manifold-ui-paint', '[dependencies]\na = {path="../a"}\n')]:
-            self.write(f'crates/{name}/Cargo.toml', f'[package]\nname = "{name}"\nversion = "0.1.0"\n{deps}')
+        self.write('scripts/ui-flows/manifest.json', '{"flows": {}, "path_triggers": {}}')
+        self.write('scripts/codex_regressions.json', '{}\n')
+        packages = [('base', ''), ('a', '[dependencies]\nbase = {path="../base"}\n'),
+                    ('b', ''), ('manifold-renderer', '[dependencies]\nbase = {path="../base"}\n'
+                     'manifold-node-engine = {path="../manifold-node-engine"}\n'),
+                    ('manifold-node-engine', '[dependencies]\nbase = {path="../base"}\n'),
+                    ('manifold-ui-paint', '[dependencies]\na = {path="../a"}\n')]
+        gpu_packages = {'manifold-renderer', 'manifold-node-engine', 'manifold-ui-paint'}
+        for name, deps in packages:
+            features = '[features]\ngpu-proofs = []\n' if name in gpu_packages else ''
+            targets = ''
+            if name == 'manifold-renderer':
+                targets = ('\n[[test]]\nname = "gpu_proofs"\npath = "tests/gpu_proofs.rs"\n'
+                           'required-features = ["gpu-proofs"]\n'
+                           '\n[[test]]\nname = "glb_conformance"\npath = "tests/glb_conformance.rs"\n'
+                           'required-features = ["gpu-proofs"]\n'
+                           '\n[[test]]\nname = "uniform_layout_proof"\npath = "tests/uniform_layout_proof.rs"\n'
+                           '\n[[test]]\nname = "uniform_layout_extended"\npath = "tests/uniform_layout_extended.rs"\n')
+            self.write(f'crates/{name}/Cargo.toml',
+                       f'[package]\nname = "{name}"\nversion = "0.1.0"\n{deps}{features}{targets}')
             self.write(f'crates/{name}/src/lib.rs', 'pub fn original() {}\n')
+            if name == 'manifold-renderer':
+                self.write(f'crates/{name}/tests/gpu_proofs.rs', '')
+                self.write(f'crates/{name}/tests/glb_conformance.rs', '')
+                self.write(f'crates/{name}/tests/uniform_layout_proof.rs', '')
+                self.write(f'crates/{name}/tests/uniform_layout_extended.rs', '')
         self.commit('base')
         self.git('branch', 'origin/main')
         self.git('checkout', '-b', 'work')
@@ -81,8 +100,196 @@ class CacheTests(unittest.TestCase):
                                   ['cargo', 'clippy', '-p', name, '--tests', '--', '-D', 'warnings'])
 
     def run_spec(self):
-        return gpu_scope.plan_for_paths(
-            ['crates/manifold-renderer/src/node_graph/primitives/invert.rs'], self.repo).runs()[0]
+        runs = self.scoped_runs()
+        return next(run for run in runs if run['package'] == 'manifold-renderer')
+
+    def scoped_runs(self):
+        workspace = cache.Workspace(self.repo)
+        plan = gpu_scope.plan_for_paths(
+            ['crates/manifold-renderer/src/node_graph/primitives/invert.rs'], self.repo,
+            workspace=workspace)
+        return proofs.normalize_runs(workspace, [dict(run, full=False) for run in plan.runs()])
+
+    @staticmethod
+    def call_packages(calls):
+        # run_gate appends package, target and budgeted after the test lists.
+        return sorted({call.args[-4] for call in calls})
+
+    def test_bad_receipt_is_cache_miss_and_fresh_execution_passes(self):
+        for unreadable in (False, True):
+            with self.subTest(unreadable=unreadable), cache.session():
+                original = self.clippy('a')
+                original.directory.mkdir(parents=True, exist_ok=True)
+                original.path.write_text('{broken json')
+                real_read = Path.read_text
+
+                def read(path, *args, **kwargs):
+                    if unreadable and path == original.path:
+                        raise PermissionError('receipt unreadable')
+                    return real_read(path, *args, **kwargs)
+
+                with patch.object(Path, 'read_text', read):
+                    planned = self.clippy('a')
+                self.assertEqual(planned.key, original.key)
+                self.assertIsNone(planned.record)
+                with patch.object(landing, 'run_cmd', return_value=(0, '', '', 0.01)) as run:
+                    result = landing.run_check('clippy/a', ['cargo', 'clippy', '-p', 'a'],
+                                               self.repo, 30, passed=planned)
+                self.assertEqual(result[0], 0)
+                run.assert_called_once()
+                self.assertIsNotNone(self.clippy('a').record)
+
+    def test_failed_receipt_write_still_validates_ignored_inputs_at_verdict(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        with cache.session(), patch.object(landing, 'MAIN_CHECKOUT', self.repo), \
+                patch.object(landing, 'GATED_HEAD') as head:
+            head.get.return_value = None
+            landing.RAN_EVERY_CHECK.set(True)
+            planned = self.clippy('a')
+            with patch.object(cache.os, 'replace', side_effect=PermissionError('cache unavailable')), \
+                    patch.object(landing, 'run_cmd', return_value=(0, '', '', 0.01)):
+                result = landing.run_check('clippy/a', ['cargo', 'clippy', '-p', 'a'],
+                                           self.repo, 30, passed=planned)
+            self.assertEqual(result[0], 0)
+            self.assertIn(planned, cache.accepted_passes())
+            self.assertFalse(planned.path.exists())
+            self.write('tests/fixtures/ignored.bin', 'after')
+            self.assertEqual(landing.finish(self.repo, 'origin/main',
+                                            [('PASS', 'clippy/a', 0, [])]), 1)
+            self.assertFalse(landing.RAN_EVERY_CHECK.get())
+            self.assertIn('inputs changed before verdict publication', self.output.getvalue())
+
+    def test_proof_input_change_is_a_nonwaivable_gate_refusal(self):
+        landing.RAN_EVERY_CHECK.set(True)
+        with patch.object(landing, 'run_cmd', return_value=(
+                proofs.INPUTS_CHANGED, 'GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)', '', 0.01)):
+            result = landing.run_check('gpu-proofs', ['python3', 'scripts/gpu_proofs_gate.py'],
+                                       self.repo, 30)
+        self.assertEqual(result[0], proofs.INPUTS_CHANGED)
+        self.assertFalse(landing.RAN_EVERY_CHECK.get())
+
+    def test_failed_execution_with_changed_inputs_is_a_gate_refusal(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        with cache.session():
+            planned = self.clippy('a')
+
+            def fail(*args, **kwargs):
+                self.write('tests/fixtures/ignored.bin', 'after')
+                return 1, '', 'test failure', 0.01
+
+            landing.RAN_EVERY_CHECK.set(True)
+            with patch.object(landing, 'run_cmd', side_effect=fail):
+                result = landing.run_check('clippy/a', ['cargo', 'clippy', '-p', 'a'],
+                                           self.repo, 30, passed=planned)
+            self.assertEqual(result[0], 1)
+            self.assertFalse(landing.RAN_EVERY_CHECK.get())
+            self.assertIn(planned, cache.accepted_passes())
+
+    def test_publication_input_change_refuses_even_if_content_is_restored(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        real_dump = json.dump
+
+        def mutate(*args, **kwargs):
+            real_dump(*args, **kwargs)
+            self.write('tests/fixtures/ignored.bin', 'after')
+
+        with cache.session():
+            planned = self.clippy('a')
+            landing.RAN_EVERY_CHECK.set(True)
+            with patch.object(cache.json, 'dump', side_effect=mutate), \
+                    patch.object(landing, 'run_cmd', return_value=(0, '', '', 0.01)):
+                result = landing.run_check('clippy/a', ['cargo', 'clippy', '-p', 'a'],
+                                           self.repo, 30, passed=planned)
+            self.assertEqual(result[0], 1)
+            self.assertFalse(landing.RAN_EVERY_CHECK.get())
+            self.assertFalse(planned.path.exists())
+            self.write('tests/fixtures/ignored.bin', 'before')
+            self.assertEqual(cache.changed_passes(cache.accepted_passes()), ['clippy/a'])
+
+    def test_ignored_fixture_change_between_planning_and_reuse_refuses(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        self.clippy('a').save(0)
+        with cache.snapshot():
+            planned = self.clippy('a')
+        self.assertIsNotNone(planned.record)
+        self.write('tests/fixtures/ignored.bin', 'after')
+        self.assertFalse(planned.reused())
+        self.assertEqual(cache.changed_passes([planned]), ['clippy/a'])
+        with patch.object(landing, 'run_cmd') as run:
+            result = landing.run_check('clippy/a', ['cargo', 'clippy', '-p', 'a'],
+                                       self.repo, 30, passed=planned)
+        self.assertEqual(result[0], 1)
+        run.assert_not_called()
+        with patch.object(cache.os, 'replace') as publish:
+            planned.save(0)
+        publish.assert_not_called()
+
+    def test_ignored_fixture_changed_by_build_refuses_before_gpu_admission(self):
+        self.assertEqual(self.run_landing()[0], 0)
+        self.write('crates/b/src/lib.rs', 'pub fn build_new_b() {}\n')
+        self.commit('force one package build while other passes are cached')
+        code, calls, holds, proofs_run = self.run_landing(
+            on_build=lambda: self.write('tests/fixtures/ignored.bin', 'changed during build'))
+        self.assertEqual((code, holds, proofs_run), (1, 0, 0))
+        self.assertIn('inputs changed after build planning', self.output.getvalue())
+        self.assertFalse(any(c[:3] == ['cargo', 'nextest', 'run'] and '--no-run' not in c
+                             for c in calls))
+
+    def test_fresh_publication_check_catches_late_ignored_fixture_change(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        planned = self.clippy('a')
+        real_dump = json.dump
+
+        def changed_during_write(*args, **kwargs):
+            real_dump(*args, **kwargs)
+            self.write('tests/fixtures/ignored.bin', 'after')
+
+        with patch.object(cache.json, 'dump', side_effect=changed_during_write), \
+                patch.object(cache.os, 'replace') as publish:
+            planned.save(0)
+        publish.assert_not_called()
+        self.assertFalse(planned.path.exists())
+
+    def test_host_tool_subprocesses_once_across_many_legs(self):
+        with cache.session(), \
+                patch.object(cache.platform, 'platform', return_value='test-platform'), \
+                patch.object(cache.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'version', b'')) as run:
+            for _ in range(20):
+                self.real_host_inputs(self.repo, True)
+            expected = 7 if sys.platform == 'darwin' else 5
+            self.assertEqual(run.call_count, expected)
+        with cache.session(), \
+                patch.object(cache.platform, 'platform', return_value='test-platform'), \
+                patch.object(cache.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'version', b'')) as run:
+            self.real_host_inputs(self.repo, True)
+            self.assertEqual(run.call_count, expected)
+
+    def test_planning_shares_snapshot_but_validation_observes_new_content(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        with patch.object(cache, 'selected_entries', wraps=cache.selected_entries) as selected:
+            with cache.snapshot():
+                passes = [self.clippy('a') for _ in range(10)]
+            calls = selected.call_count
+            self.assertLess(calls, 25)
+            self.write('tests/fixtures/ignored.bin', 'after')
+            self.assertEqual(len(cache.changed_passes(passes)), 10)
+            self.assertEqual(selected.call_count, calls * 2)
+
+    def test_tracked_root_scan_shared_only_within_each_boundary(self):
+        self.write('tests/tracked.txt', 'root included in tooling scope')
+        self.commit('track fixture root')
+        with patch.object(cache, 'git', wraps=cache.git) as git:
+            with cache.snapshot():
+                passes = [cache.command_pass(self.repo, 'tool', ['python3', 'check.py'])
+                          for _ in range(3)]
+            scans = lambda: sum(call.args[1:] == ('ls-files', '-z')
+                                for call in git.call_args_list)
+            self.assertEqual(scans(), 1)
+            self.assertEqual(cache.changed_passes(passes), [])
+            self.assertEqual(scans(), 2)
+            self.write('tests/fixtures/ignored.bin', 'changed after execution')
+            self.assertEqual(len(cache.changed_passes(passes)), 3)
+            self.assertEqual(scans(), 3)
 
     def test_changed_crate_invalidates_only_its_dependency_closure(self):
         for name in ('a', 'b', 'manifold-renderer'):
@@ -99,6 +306,57 @@ class CacheTests(unittest.TestCase):
         self.write('crates/b/Cargo.toml', '[package]\nname="b"\nversion="0.1.0"\n'
                    '[target.\'cfg(unix)\'.build-dependencies]\nrenamed = {package="a", path="../a", optional=true}\n')
         self.assertEqual(cache.dependency_paths(self.repo, ['b']), ['crates/a', 'crates/b', 'crates/base'])
+
+    def test_metadata_added_and_removed_gpu_crate_updates_scope_and_cache(self):
+        renderer_path = 'crates/manifold-renderer/src/node_graph/primitives/invert.rs'
+        initial = self.run_spec()
+        cache.proof_pass(self.repo, initial).save(0)
+
+        leaf_manifest = ('[package]\nname = "gpu-leaf"\nversion = "0.1.0"\n'
+                         '[features]\ngpu-proofs = []\n')
+        self.write('crates/gpu-leaf/Cargo.toml', leaf_manifest)
+        self.write('crates/gpu-leaf/src/lib.rs', 'pub fn leaf() {}\n')
+        self.write('crates/gpu-leaf/tests/gpu_proofs.rs', '#[test]\nfn leaf_gpu() {}\n')
+        renderer_manifest = (self.repo / 'crates/manifold-renderer/Cargo.toml').read_text()
+        self.write('crates/manifold-renderer/Cargo.toml',
+                   renderer_manifest.replace(
+                       'manifold-node-engine = {path="../manifold-node-engine"}\n',
+                       'manifold-node-engine = {path="../manifold-node-engine"}\n'
+                       'gpu-leaf = {path="../gpu-leaf"}\n', 1))
+
+        workspace = cache.Workspace(self.repo)
+        self.assertIn(('gpu-leaf', 'gpu-proofs'), workspace.feature_matrix())
+        cpu = __import__('cpu_scope').plan_for_paths(
+            ['crates/gpu-leaf/src/lib.rs'], self.repo, workspace=workspace)
+        self.assertIn('gpu-leaf', cpu.packages)
+        scope = gpu_scope.plan_for_paths([renderer_path], self.repo, workspace=workspace)
+        self.assertIn('gpu-leaf', {run['package'] for run in scope.runs()})
+        nightly = getattr(proofs, 'nightly_runs', proofs.all_runs)(workspace)
+        self.assertIn('gpu-leaf', {run['package'] for run in nightly})
+        self.assertIsNone(cache.proof_pass(self.repo, initial).record,
+                          'adding a local dependency must invalidate the existing proof')
+
+        refreshed = next(run for run in self.scoped_runs()
+                         if run['package'] == 'manifold-renderer')
+        cache.proof_pass(self.repo, refreshed).save(0)
+        self.write('crates/gpu-leaf/src/lib.rs', 'pub fn revised_leaf() {}\n')
+        self.assertIsNone(cache.proof_pass(self.repo, refreshed).record,
+                          'a changed dependency must invalidate its dependent proof')
+
+        renderer_manifest = (self.repo / 'crates/manifold-renderer/Cargo.toml').read_text()
+        self.write('crates/manifold-renderer/Cargo.toml',
+                   renderer_manifest.replace('gpu-leaf = {path="../gpu-leaf"}\n', ''))
+        shutil.rmtree(self.repo / 'crates/gpu-leaf')
+        workspace = cache.Workspace(self.repo)
+        self.assertNotIn(('gpu-leaf', 'gpu-proofs'), workspace.feature_matrix())
+        scope = gpu_scope.plan_for_paths([renderer_path], self.repo, workspace=workspace)
+        self.assertNotIn('gpu-leaf', {run['package'] for run in scope.runs()})
+        nightly = getattr(proofs, 'nightly_runs', proofs.all_runs)(workspace)
+        self.assertNotIn('gpu-leaf', {run['package'] for run in nightly})
+        restored = cache.proof_pass(self.repo, refreshed)
+        self.assertEqual(restored.key, cache.proof_pass(self.repo, initial).key)
+        self.assertIsNotNone(restored.record,
+                             'removing the dependency must restore the original proof identity')
 
     def test_dirty_content_survives_commit_and_other_worktree(self):
         self.write('crates/a/src/lib.rs', 'pub fn uncommitted() {}\n')
@@ -227,15 +485,16 @@ class CacheTests(unittest.TestCase):
         with patch.object(sys, 'argv', argv), \
                 patch.object(proofs, 'build_tests', return_value=0), \
                 patch.object(proofs, 'run_gate', return_value=(0, '')) as executed, \
-                patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
+            patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
             self.assertEqual(proofs.main(), 0)
-            self.assertEqual(executed.call_count, 2)
+            self.assertEqual(executed.call_count, len(self.scoped_runs()))
             self.assertTrue(cache.proof_pass(self.repo, run).reused())
         self.assertEqual(self.run_landing()[3], 0)
         # A changed source gets its pass from the queue entry point instead.
         self.write('crates/base/src/lib.rs', 'pub fn queue_checked() {}\n')
         self.commit('queue checked tree')
-        command = proofs.cargo_test_cmd(self.repo / 'Cargo.toml', run['targets'], lib=run['lib'])
+        command = proofs.cargo_test_cmd(self.repo / 'Cargo.toml', run['targets'], lib=run['lib'],
+                                        package=run['package'])
         command += ['--', '--test-threads=1', *run['filters']]
         command += [a for skip in run['skips'] for a in ('--skip', skip)]
         # Construct and save outside the Popen mock, since fingerprinting
@@ -246,6 +505,7 @@ class CacheTests(unittest.TestCase):
                 patch.object(gpu_queue, '_ancestor_holds', return_value=False), \
                 patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()), \
                 patch.object(gpu_queue.subprocess, 'Popen') as process, \
+                patch.object(passed, 'unchanged', return_value=True), \
                 patch.object(passed, 'save') as saved:
             process.return_value.wait.return_value = 0
             self.assertEqual(gpu_queue.run_queued(command), 0)
@@ -256,20 +516,20 @@ class CacheTests(unittest.TestCase):
 
     def test_two_package_standalone_reuse_and_input_invalidation(self):
         path = 'crates/manifold-renderer/src/node_graph/primitives/invert.rs'
-        runs = gpu_scope.plan_for_paths([path], self.repo).runs()
+        runs = self.scoped_runs()
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
                 '--path', path]
-        packages = ['manifold-renderer', 'manifold-node-engine']
+        packages = sorted({run['package'] for run in runs})
         with patch.object(sys, 'argv', argv), \
                 patch.object(proofs, 'build_tests', return_value=0) as build, \
                 patch.object(proofs, 'run_gate', return_value=(0, '')) as executed, \
                 patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()) as hold:
             self.assertEqual(proofs.main(), 0)
-            self.assertEqual([call.args[-1] for call in executed.call_args_list], packages)
+            self.assertEqual(self.call_packages(executed.call_args_list), packages)
             passes = [cache.proof_pass(self.repo, run) for run in runs]
             self.assertTrue(all(p.record for p in passes))
-            self.assertNotEqual(passes[0].path, passes[1].path)
-            self.assertEqual(len(list(passes[0].directory.glob('*.json'))), 2)
+            self.assertEqual(len({p.path for p in passes}), len(passes))
+            self.assertEqual(len(list(passes[0].directory.glob('*.json'))), len(passes))
             for mock in (build, executed, hold):
                 mock.reset_mock()
             self.assertEqual(proofs.main(), 0)
@@ -282,17 +542,22 @@ class CacheTests(unittest.TestCase):
 
             # Renderer-only edits keep the engine pass. Engine edits also
             # invalidate renderer, which depends on the engine in production.
-            for changed, expected in [(path, packages[:1]),
-                                      ('crates/manifold-node-engine/src/lib.rs', packages)]:
+            renderer_only = ['manifold-renderer']
+            engine_owners = {'manifold-node-engine',
+                             *cache.Workspace(self.repo).reverse_dependencies(
+                                 ['manifold-node-engine'])}
+            engine_change = [package for package in packages if package in engine_owners]
+            for changed, expected in [(path, renderer_only),
+                                      ('crates/manifold-node-engine/src/lib.rs', engine_change)]:
                 with self.subTest(changed=changed):
                     self.write(changed, 'pub fn revised() {}\n')
-                    stale = [run.get('package', 'manifold-renderer') for run in runs
-                             if not cache.proof_pass(self.repo, run).record]
+                    stale = sorted({run.get('package', 'manifold-renderer') for run in runs
+                                    if not cache.proof_pass(self.repo, run).record})
                     self.assertEqual(stale, expected)
                     self.assertEqual(proofs.main(), 0)
-                    self.assertEqual([call.args[-1] for call in executed.call_args_list], expected)
+                    self.assertEqual(self.call_packages(executed.call_args_list), expected)
                     built = build.call_args.args[1]
-                    self.assertEqual([r.get('package', 'manifold-renderer') for r in built], expected)
+                    self.assertEqual(sorted({r.get('package', 'manifold-renderer') for r in built}), expected)
                     hold.assert_called_once()
                     for mock in (build, executed, hold):
                         mock.reset_mock()
@@ -324,7 +589,7 @@ class CacheTests(unittest.TestCase):
     def test_unknown_dependency_runs_and_explains_why(self):
         self.write('crates/a/Cargo.toml', '[package]\nname="a"\n[dependencies]\nbad={path="../../../outside"}\n')
         self.assertIsNone(self.clippy('a').key)
-        self.assertIn('external path dependency', self.output.getvalue())
+        self.assertIn('cargo metadata failed', self.output.getvalue())
 
     def test_raw_queue_long_run_does_not_certify_watchdog(self):
         passed = MagicMock()
@@ -339,6 +604,22 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(gpu_queue.run_queued(['cargo', 'test']), 0)
         passed.save.assert_not_called()
         self.assertIn('cannot establish per-test hang allowances', self.output.getvalue())
+
+    def test_raw_ninety_second_proof_is_not_reusable_by_landing(self):
+        run = self.run_spec()
+        passed = cache.proof_pass(self.repo, run)
+        with patch.object(cache, 'queued_proof', return_value=passed), \
+                patch.object(passed, 'unchanged', return_value=True), \
+                patch.object(gpu_queue, '_run_build', return_value=0), \
+                patch.object(gpu_queue, '_ancestor_holds', return_value=False), \
+                patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()), \
+                patch.object(gpu_queue.subprocess, 'Popen') as process, \
+                patch.object(gpu_queue.time, 'monotonic', side_effect=[0, 90]):
+            process.return_value.wait.return_value = 0
+            self.assertEqual(gpu_queue.run_queued(['cargo', 'test']), 0)
+        self.assertFalse(passed.path.exists())
+        self.assertFalse(cache.proof_pass(self.repo, run).reused())
+        self.assertGreater(self.run_landing()[3], 0)
 
     def test_worker_identity_is_not_rust_input_but_runtime_switch_is(self):
         with patch.dict(os.environ, {'CODEX_THREAD_ID': 'worker'}, clear=True), \
@@ -362,11 +643,12 @@ class CacheTests(unittest.TestCase):
         with patch.object(sys, 'argv', argv), \
                 patch.object(proofs, 'build_tests', return_value=0), \
                 patch.object(proofs, 'remember_times'), \
+                patch.object(proofs, 'unmeasured_heavy', return_value=[]), \
                 patch.object(proofs, 'run_gate', side_effect=too_slow) as run, \
                 patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
             self.assertEqual(proofs.main(), 0)
             self.assertEqual(proofs.main(), 0)
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_count, len(self.scoped_runs()))
         self.assertEqual(cache.proof_pass(self.repo, self.run_spec()).record['seconds'], 400)
         with patch.object(sys, 'argv', argv[:3] + ['--all']), \
                 patch.object(proofs, 'build_tests', return_value=0) as build, \
@@ -374,11 +656,12 @@ class CacheTests(unittest.TestCase):
                 patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
             self.assertEqual(proofs.main(), 0)
             self.assertEqual(build.call_count, 1)
-            self.assertEqual(run.call_count, 3)
-            self.assertEqual([call.args[-1] for call in run.call_args_list],
-                             ['manifold-renderer', 'manifold-node-engine', 'manifold-ui-paint'])
+            nightly = proofs.all_runs(cache.Workspace(self.repo))
+            self.assertEqual(run.call_count, len(nightly))
+            self.assertEqual(self.call_packages(run.call_args_list),
+                             [entry['package'] for entry in nightly])
 
-    def run_landing(self, failed=None, keep_going=True):
+    def run_landing(self, failed=None, keep_going=True, on_build=None):
         calls = []
         real_run = landing.run_cmd
         argv = ['landing_gate.py', '--repo', str(self.repo)] + ([] if keep_going else ['--fail-fast'])
@@ -387,6 +670,22 @@ class CacheTests(unittest.TestCase):
             if command[0] == 'git':
                 return real_run(command, cwd, timeout, live_log)
             calls.append(command)
+            if on_build and '--no-run' in command:
+                on_build()
+            if command[:3] == ['cargo', 'nextest', 'list']:
+                package = command[command.index('-p') + 1]
+                suites = {'fixture': {'binary-name': 'fixture', 'testcases': ['tests::fixture']}}
+                if package == 'manifold-renderer':
+                    suites.update({
+                        'uniform_layout_proof': {'binary-name': 'uniform_layout_proof',
+                                                 'testcases': ['fixture::test']},
+                        'uniform_layout_extended': {'binary-name': 'uniform_layout_extended',
+                                                    'testcases': ['fixture::test']},
+                        'lib': {'binary-name': 'manifold_renderer',
+                                'testcases': ['node_graph::primitives::invert::fixture',
+                                              'regenerates_in_sync']},
+                    })
+                return 0, json.dumps({'rust-suites': suites}), '', 0.01
             if command[:2] == ['python3', 'scripts/gpu_proofs_gate.py']:
                 with patch.object(sys, 'argv', command[1:] + ['--manifest-path', str(self.repo / 'Cargo.toml')]):
                     return proofs.main(), '', '', 0.01
@@ -397,6 +696,9 @@ class CacheTests(unittest.TestCase):
             stack.enter_context(patch.object(landing, 'MAIN_CHECKOUT', self.repo))
             stack.enter_context(patch.object(landing, 'run_cmd', side_effect=run))
             stack.enter_context(patch.object(landing, 'reverse_deps', return_value=[]))
+            # The disposable fixture has no full nextest grouping table; the
+            # ownership and pass invalidation assertions remain real.
+            stack.enter_context(patch.object(cache.Workspace, 'validate_nextest', return_value=None))
             stack.enter_context(patch('codex_checks.tooling_checks', return_value=[]))
             hold = stack.enter_context(patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()))
             stack.enter_context(patch.object(proofs, 'build_tests', return_value=0))
@@ -411,7 +713,8 @@ class CacheTests(unittest.TestCase):
         elapsed = time.monotonic() - started
         self.assertEqual((code, calls, holds, proofs_run), (0, [], 0, 0))
         for label in ('design-status', 'deny', 'ignored-tests', 'clippy/a', 'clippy/b',
-                      'flow-gate', 'tests/1', 'gpu-proofs', 'fresh-docs-index'):
+                      'flow-gate', 'tests/a', 'tests/b', 'tests/manifold-renderer',
+                      'gpu-proofs'):
             self.assertIn('[REUSED] ' + label, self.output.getvalue())
         print(f'unchanged simulated gate: {elapsed:.3f}s', file=sys.stderr)
 
@@ -461,12 +764,16 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(self.run_landing()[0], 0)
         self.write('crates/a/src/lib.rs', 'pub fn next_revision() {}\n')
         self.commit('only a changed')
+        expected_proofs = sum(not cache.proof_pass(self.repo, run).record
+                              for run in self.scoped_runs())
         code, calls, _, proof_runs = self.run_landing()
         self.assertEqual(code, 0)
-        self.assertEqual(proof_runs, 0)
+        self.assertEqual(proof_runs, expected_proofs)
         cargo = [c for c in calls if c[0] == 'cargo']
         self.assertTrue(cargo)
-        self.assertTrue(all(c[c.index('-p') + 1] == 'a' for c in cargo), cargo)
+        expected_packages = {'a', *cache.Workspace(self.repo).reverse_dependencies(['a'])}
+        package_args = {c[c.index('-p') + 1] for c in cargo if '-p' in c}
+        self.assertEqual(package_args, expected_packages)
 
     def test_changed_tree_during_gate_never_stamps_verdict(self):
         with patch.object(landing, 'GATED_HEAD') as expected, \
@@ -480,7 +787,9 @@ class CacheTests(unittest.TestCase):
         source = Path(__file__).resolve().parent.parent
         for path in ('scripts/gate_runner.py', '.claude/hooks/agent-launch-guard.py'):
             self.write(path, (source / path).read_text())
-        self.write('scripts/ui-flows/manifest.json', '{"path_triggers":{"crates/a/":["a-flow"]}}')
+            (self.repo / path).chmod((source / path).stat().st_mode & 0o777)
+        self.write('scripts/ui-flows/manifest.json', '{"flows":{"a-flow":"scene"},"path_triggers":{"crates/a/":["a-flow"]}}')
+        self.write('scripts/ui-flows/a-flow.json', '[]')
         self.commit('gate writer fixture')
         self.assertEqual(self.run_landing()[0], 0)
         self.assertEqual(self.run_landing()[1], [])
