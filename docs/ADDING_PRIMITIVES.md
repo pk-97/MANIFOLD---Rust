@@ -206,9 +206,10 @@ For `EffectNode` hand-written nodes (not using `primitive!`), add a
 `prewarm_pipelines(&device)` static method and register it in the generator
 registry's startup prewarm list.
 
-The gpu-proofs suite enforces this: `compile_contract_p2.rs` constructs each
-data-skip primitive with empty data and asserts no new `PipelineCompile` cold
-touch on first run.
+The former `compile_contract_p2.rs` source was unmounted and did not enforce
+this contract. BUG-zmpf9 (restore compile-contract P2 proofs) tracks restoring
+the four image-node proofs from git history: construct each data-skip primitive
+with empty data and assert no new `PipelineCompile` cold touch on first run.
 
 ## Skeleton
 
