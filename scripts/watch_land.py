@@ -38,11 +38,12 @@ READ_CHUNK_BYTES = 64 * 1024
 class _LogState:
     """Bounded parser state for one append-only transcript."""
 
-    def __init__(self, label: str, path: Path) -> None:
+    def __init__(self, label: str, path: Path, *, gate_log: bool) -> None:
+        self.gate_log = gate_log
         self.context = (label, path)
         self.active: tuple[str, Path] | None = None
         self.announced = False
-        self.transcripts: list[tuple[str, Path]] = []
+        self.transcripts: list[tuple[str, Path, bool]] = []
         self.failure: tuple[str, Path, tuple[str, str]] | None = None
         self.summary: tuple[bool, bool] | None = None
         self.complete = False
@@ -66,11 +67,14 @@ class _LogState:
                 self._pending = self._pending[-MAX_PARTIAL_BYTES:]
 
     def _line(self, line: str, *, structural: bool) -> None:
-        stripped = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', line).strip()
+        plain = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', line).rstrip()
+        stripped = plain.strip()
         parse_structure = structural or bool(
             _RUN_RE.match(stripped) or _GATE_LOG_RE.match(stripped)
             or _STATUS_RE.match(stripped))
-        if parse_structure:
+        # Gate output is unindented; its quoted transcript tails are not.
+        control_line = self.gate_log and plain == stripped
+        if control_line and parse_structure:
             run = _RUN_RE.match(stripped)
             if run:
                 context = (run.group("label").strip(),
@@ -78,25 +82,28 @@ class _LogState:
                 self.context = context
                 self.active = context
                 self.announced = True
-                if context not in self.transcripts:
-                    self.transcripts.append(context)
+                child = (*context, False)
+                if child not in self.transcripts:
+                    self.transcripts.append(child)
             gate_log = _GATE_LOG_RE.match(stripped)
             if gate_log:
                 context = ("landing-gate", Path(gate_log.group("path").strip()))
-                if context not in self.transcripts:
-                    self.transcripts.append(context)
+                child = (*context, True)
+                if child not in self.transcripts:
+                    self.transcripts.append(child)
             if _STATUS_RE.match(stripped):
                 self.active = None
 
-        marker = _marker(stripped)
+        marker = (_marker(stripped, gate_log=self.gate_log)
+                  if control_line or not self.gate_log else None)
         if marker is not None and self.failure is None:
             self.failure = (*self.context, marker)
-        summary = _summary_line(stripped)
+        summary = _summary_line(stripped) if control_line else None
         if summary is not None:
             self.summary = summary
-        if stripped == "[COMPLETE] landing gate: passed":
+        if control_line and stripped == "[COMPLETE] landing gate: passed":
             self.complete = True
-        if stripped.startswith("[land] DONE:"):
+        if control_line and stripped.startswith("[land] DONE:"):
             self.done = True
 
 
@@ -109,9 +116,9 @@ class _IncrementalLogs:
         self._decoders: dict[Path, codecs.IncrementalDecoder] = {}
         self._states: dict[Path, _LogState] = {}
 
-    def read(self, path: Path, label: str, context_path: Path) -> _LogState:
+    def read(self, path: Path, label: str, context_path: Path, *, gate_log: bool) -> _LogState:
         if path not in self._states:
-            self._states[path] = _LogState(label, context_path)
+            self._states[path] = _LogState(label, context_path, gate_log=gate_log)
             self._decoders[path] = codecs.getincrementaldecoder("utf-8")(
                 errors="replace")
         state = self._states[path]
@@ -122,7 +129,7 @@ class _IncrementalLogs:
             if (self._identities.get(path) not in (None, identity)
                     or stat.st_size < offset):
                 offset = 0
-                state = _LogState(label, context_path)
+                state = _LogState(label, context_path, gate_log=gate_log)
                 self._states[path] = state
                 self._decoders[path] = codecs.getincrementaldecoder("utf-8")(
                     errors="replace")
@@ -160,10 +167,24 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _marker(text: str) -> tuple[str, str] | None:
-    """Classify the first terminal marker found in a log."""
+def _marker(text: str, *, gate_log: bool) -> tuple[str, str] | None:
+    """Keep gate control output separate from test-runner verdicts.
+
+    Arbitrary diagnostics (including caught/expected panics) are not runner
+    verdicts. A panic becomes a red when the runner reports the test failed.
+    """
     for line in text.splitlines():
         stripped = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', line).strip()
+        if re.match(r"^GPU-PROOFS GATE:\s*HUNG\b", stripped):
+            return "hang", stripped
+        if "SubmissionsIgnored" in stripped:
+            return "red", stripped
+        if not gate_log:
+            if (re.match(r"^test\s+\S+\s+\.\.\.\s+FAILED\b", stripped)
+                    or re.match(r"^FAIL\s+\[\s*[\d.]+s\]\s+\S+", stripped)
+                    or re.match(r"^test result: FAILED\.\s+\d+ passed;\s+\d+ failed;", stripped)):
+                return "red", stripped
+            continue
         if ("[INCOMPLETE]" in stripped or "[REFUSAL]" in stripped
                 or "[REFUSED]" in stripped
                 or "cancelled by SIGTERM" in stripped
@@ -173,19 +194,7 @@ def _marker(text: str) -> tuple[str, str] | None:
             return "refusal", stripped
         if stripped.startswith("[land] FAILED") or "no --named-red/--reason" in stripped:
             return "red", stripped
-        if re.search(r"(?:^|\s)\[FAIL\](?:\s|$)", stripped):
-            return "red", stripped
-        if re.match(r"^(?:FAIL(?:\s|\[)|FAILED\b)", stripped):
-            return "red", stripped
-        if re.match(r"^test\s+\S+\s+\.\.\.\s+FAILED\b", stripped):
-            return "red", stripped
-        if re.match(r"^GPU-PROOFS GATE:\s*HUNG\b", stripped):
-            return "hang", stripped
-        if re.search(r"\btest result:\s+FAILED\b", stripped):
-            return "red", stripped
-        if re.search(r"\bGPU-PROOFS GATE:\s*FAIL\b", stripped):
-            return "red", stripped
-        if re.match(r"^error(?:\[[^]]+\])?:\s*", stripped):
+        if stripped.startswith("[FAIL] "):
             return "red", stripped
     return None
 
@@ -242,7 +251,7 @@ def watch(
 
     while True:
         outer_label = "landing" if kind == "land" else "landing-gate"
-        known: dict[Path, tuple[str, Path]] = {outer: (outer_label, outer)}
+        known: dict[Path, tuple[str, Path, bool]] = {outer: (outer_label, outer, True)}
         sources: list[Path] = [outer]
         states: dict[Path, _LogState] = {}
         # Read every discovered transcript, including completed legs. A
@@ -252,11 +261,11 @@ def watch(
         while index < len(sources):
             path = sources[index]
             index += 1
-            label, context_path = known[path]
-            states[path] = logs.read(path, label, context_path)
-            for child_label, child_path in states[path].transcripts:
+            label, context_path, gate_log = known[path]
+            states[path] = logs.read(path, label, context_path, gate_log=gate_log)
+            for child_label, child_path, child_gate_log in states[path].transcripts:
                 if child_path not in known:
-                    known[child_path] = (child_label, child_path)
+                    known[child_path] = (child_label, child_path, child_gate_log)
                     sources.append(child_path)
 
         outer_state = states[outer]
