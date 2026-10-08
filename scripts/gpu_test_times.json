@@ -2423,7 +2423,7 @@
     "manifold-nodes-scene/lib/node_graph::gltf_import::tests::build_import_graph_ao_group_consumes_ao_mask": 0,
     "manifold-nodes-scene/lib/node_graph::gltf_import::tests::build_import_graph_seeds_source_vertex_count_and_bbox_radius": 0,
     "manifold-nodes-scene/lib/node_graph::gltf_import::tests::compound_part_names_never_collide_with_sibling_inner_handles": 0,
-    "manifold-nodes-scene/lib/node_graph::gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node": 0,
+    "manifold-renderer/lib/node_graph::catalog_tests::gltf_import::corrupted_assembler_output_fails_validation_naming_the_node": 0,
     "manifold-nodes-scene/lib/node_graph::gltf_import::tests::draco_primitive_reports_instead_of_vanishing_silently": 0,
     "manifold-nodes-scene/lib/node_graph::gltf_import::tests::duck_import_adds_extra_camera_card_default_camera_unchanged": 0,
     "manifold-nodes-scene/lib/node_graph::gltf_import::tests::import_camera_far_scales_with_scene_size": 0,

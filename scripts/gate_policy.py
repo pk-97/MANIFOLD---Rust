@@ -5,6 +5,7 @@ import re
 
 SHARED_ASSETS = ['crates/manifold-foundation/assets/fonts']
 GPU_DEFAULT_CPU_ONLY = {
+    "manifold-nodes-scene": "Device proofs require gpu-proofs; ungated imported-graph validation lives in the catalog",
     "manifold-compositor": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     "manifold-nodes-image": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     'manifold-ui-paint': 'GPU test modules require gpu-proofs; default tests do not open devices',
@@ -13,9 +14,8 @@ GPU_DEFAULT_CPU_ONLY = {
 }
 NEXTTEST_GPU_FILTER = '''
     package(manifold-gpu)
-  | (binary_id(manifold-nodes-scene) & test(/^node_graph::gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node$/))
   | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
-  | (binary_id(manifold-renderer) & test(/^node_graph::(gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
+  | (binary_id(manifold-renderer) & test(/^node_graph::(catalog_tests::gltf_import::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
   | (binary_id(manifold-node-engine) & test(/^(exec::execution::tests::aliased_output_assertion_fires_on_silent_primitive|load::graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan))$/))
   | binary_id(manifold-renderer::ableton_picker_scroll_proof)
   | binary_id(manifold-renderer::dropdown_clip_proof)
