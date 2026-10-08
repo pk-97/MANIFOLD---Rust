@@ -129,6 +129,35 @@ def is_gltf_path(path):
     return any(path.startswith(p) for p in GLTF_PATHS)
 
 
+def glb_conformance_route(workspace):
+    """Discover the standalone target or its module in a folded GPU test root."""
+    from crate_move_replay import module_items
+    routes = set()
+    for package in workspace.feature_packages('gpu-proofs'):
+        for target in workspace.targets(package, 'test'):
+            if target['name'] == 'glb_conformance':
+                routes.add((package, target['name'], ''))
+                continue
+            if 'gpu-proofs' not in target.get('required-features', []):
+                continue
+            source = Path(target['src_path'])
+            if not source.is_file():
+                continue
+            text = source.read_text()
+            for start, end, head, scope in module_items(text):
+                declaration = re.fullmatch(r'(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;', text[head:end])
+                if not declaration:
+                    continue
+                name = declaration[1]
+                attrs = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', text[start:head])
+                filename = Path(attrs[-1]).name if attrs else name + '.rs'
+                if filename == 'glb_conformance.rs':
+                    routes.add((package, target['name'], '::'.join((*scope, name)) + '::'))
+    if len(routes) > 1:
+        raise ValueError('ambiguous glb_conformance GPU target: ' + repr(sorted(routes)))
+    return next(iter(routes), None)
+
+
 @dataclass
 class Plan:
     paths: list = field(default_factory=list)       # GPU paths considered
@@ -163,6 +192,9 @@ class Plan:
             return []
         if self.workspace is None:
             raise ValueError('GPU plan has no Cargo ownership inventory')
+        route = glb_conformance_route(self.workspace)
+        if self.glb and route is None:
+            raise ValueError('no glb_conformance GPU target in Cargo inventory')
         runs = []
         for package in self.workspace.feature_packages('gpu-proofs'):
             filters = (UI_PAINT_FILTERS if self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
@@ -176,14 +208,18 @@ class Plan:
                              'filters': [] if package in self.whole_packages else filters,
                              'skips': self.final_skips(), 'budgeted': True})
             for target in targets:
+                whole = package in self.whole_packages or (package, target) in self.required_binaries
+                skips = [] if whole else self.final_skips()
+                if route and route[:2] == (package, target) and route[2]:
+                    # The folded sweep retains its separate, unbudgeted run.
+                    skips = sorted(set(skips) | {route[2]})
                 runs.append({'package': package, 'targets': [target], 'lib': False, 'target': target,
-                             'filters': [] if package in self.whole_packages or (package, target) in self.required_binaries else self.final_filters(),
-                             'skips': [] if package in self.whole_packages or (package, target) in self.required_binaries else self.final_skips(),
-                             'budgeted': True})
+                             'filters': [] if whole else self.final_filters(),
+                             'skips': skips, 'budgeted': True})
         if self.glb:
-            runs.append({'package': self.workspace.binary_owner('glb_conformance'),
-                         'targets': ['glb_conformance'], 'lib': False, 'target': 'glb_conformance',
-                         'filters': [], 'skips': [], 'budgeted': False})
+            package, target, prefix = route
+            runs.append({'package': package, 'targets': [target], 'lib': False, 'target': target,
+                         'filters': [prefix] if prefix else [], 'skips': [], 'budgeted': False})
         return runs
 
     def describe(self):

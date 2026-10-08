@@ -53,6 +53,64 @@ def fixture_workspace(repo):
 
 
 class ScopeTests(unittest.TestCase):
+    def folded_glb_workspace(self, repo, module='glb_conformance'):
+        workspace = fixture_workspace(repo)
+        renderer = workspace.packages['manifold-renderer']
+        standalone = next(t for t in renderer['targets'] if t['name'] == 'glb_conformance')
+        renderer['targets'].remove(standalone)
+        scene = dict(renderer, name='manifold-nodes-scene', targets=[{
+            'name': 'scene_gpu_checks', 'kind': ['test'], 'required-features': ['gpu-proofs'],
+            'src_path': str(repo / 'crates/manifold-nodes-scene/tests/gpu_proofs/main.rs'),
+        }])
+        workspace.packages[scene['name']] = scene
+        workspace.roots[scene['name']] = 'crates/manifold-nodes-scene'
+        root = Path(scene['targets'][0]['src_path'])
+        root.parent.mkdir(parents=True)
+        attribute = '#[path = "glb_conformance.rs"]\n' if module != 'glb_conformance' else ''
+        root.write_text(f'{attribute}mod {module};\nmod other;\n')
+        (root.parent / 'glb_conformance.rs').write_text('#[test] fn glb_conformance_sweep() {}\n')
+        return workspace
+
+    def test_folded_glb_uses_discovered_owner_target_and_prefix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = self.folded_glb_workspace(Path(directory))
+            result = g.Plan(paths=['gltf'], glb=True, workspace=workspace)
+            for whole, required in ((set(), set()), ({'manifold-nodes-scene'}, set()),
+                                    (set(), {('manifold-nodes-scene', 'scene_gpu_checks')})):
+                result.whole_packages, result.required_binaries = whole, required
+                runs = result.runs()
+                self.assertEqual(runs[-1], {
+                    'package': 'manifold-nodes-scene', 'targets': ['scene_gpu_checks'],
+                    'lib': False, 'target': 'scene_gpu_checks', 'filters': ['glb_conformance::'],
+                    'skips': [], 'budgeted': False,
+                })
+                regular = next(r for r in runs if r['package'] == 'manifold-nodes-scene' and r['budgeted'])
+                self.assertIn('glb_conformance::', regular['skips'])
+            result.glb = False
+            self.assertTrue(all(r['budgeted'] for r in result.runs()))
+            regular = next(r for r in result.runs() if r['package'] == 'manifold-nodes-scene')
+            self.assertIn('glb_conformance::', regular['skips'])
+
+    def test_folded_glb_resolves_module_alias(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = self.folded_glb_workspace(Path(directory), module='conformance')
+            self.assertEqual(g.glb_conformance_route(workspace),
+                             ('manifold-nodes-scene', 'scene_gpu_checks', 'conformance::'))
+
+    def test_glb_missing_or_ambiguous_target_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = self.folded_glb_workspace(Path(directory))
+            root = Path(workspace.packages['manifold-nodes-scene']['targets'][0]['src_path'])
+            root.write_text('mod other;\n')
+            result = g.Plan(paths=['gltf'], glb=True, workspace=workspace)
+            with self.assertRaisesRegex(ValueError, 'no glb_conformance'):
+                result.runs()
+            root.write_text('mod glb_conformance;\n')
+            duplicate = dict(workspace.packages['manifold-nodes-scene']['targets'][0], name='duplicate')
+            workspace.packages['manifold-nodes-scene']['targets'].append(duplicate)
+            with self.assertRaisesRegex(ValueError, 'ambiguous glb_conformance'):
+                result.runs()
+
     def test_moved_lattice_shaders_select_concrete_fill_pits_proofs(self):
         repo = Path(__file__).resolve().parent.parent
         names = g.read_times(repo / "scripts/gpu_test_times.json")
