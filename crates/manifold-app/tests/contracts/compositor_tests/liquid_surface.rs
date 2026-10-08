@@ -8,7 +8,7 @@ fn fluid_clamp_scheduled_boundary_renders_like_unfrozen() {
 
     let device = manifold_gpu::testkit::test_device();
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let json = manifold_renderer::node_graph::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
+    let json = manifold_renderer::node_graph::bundled_preset_json(&manifold_core::PresetTypeId::new(
         "WaterStillPoolMatter",
     ))
     .expect("Still Pool bundled");

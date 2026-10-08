@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 pub const PRIMITIVE_SOURCE_ROOTS: &[&str] = &[
     "../manifold-nodes-scene/src/node_graph/primitives",
     "../manifold-nodes-image/src/node_graph/primitives",
-    "src/node_graph/primitives",
     "../manifold-node-engine/src/primitives",
     "../manifold-node-engine/src/water/primitives",
 ];

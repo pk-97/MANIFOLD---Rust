@@ -24,12 +24,12 @@ const LAYERS: &[Layer] = &[
     Layer {
         package: "manifold-renderer",
         normal_and_build: &["manifold-compositor", "manifold-core", "manifold-fluids", "manifold-foundation", "manifold-gpu", "manifold-native", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-physics", "manifold-playback"],
-        dev: &["manifold-compositor", "manifold-editing", "manifold-gpu", "manifold-io", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-ui", "manifold-ui-paint"],
+        dev: &["manifold-renderer", "manifold-compositor", "manifold-editing", "manifold-gpu", "manifold-io", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-ui", "manifold-ui-paint"],
     },
     Layer {
         package: "manifold-app",
         normal_and_build: &["manifold-audio", "manifold-compositor", "manifold-core", "manifold-editing", "manifold-gpu", "manifold-io", "manifold-led", "manifold-media", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-playback", "manifold-profiler", "manifold-recording", "manifold-renderer", "manifold-spectral", "manifold-ui", "manifold-ui-paint"],
-        dev: &[],
+        dev: &["manifold-foundation", "manifold-physics", "manifold-fluids", "manifold-renderer", "manifold-compositor", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene"],
     },
 
     Layer {

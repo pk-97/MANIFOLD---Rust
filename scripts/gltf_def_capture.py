@@ -25,7 +25,7 @@ Usage:
 
     --bin           path to a prebuilt `render-import` binary (avoids a
                     145x cargo rebuild); if omitted, falls back to
-                    `cargo run -p manifold-renderer --bin render-import`.
+                    `cargo run -p manifold-app --bin render-import`.
     --out           capture output directory (created; NOT the repo).
     --fixtures-root root to enumerate *.glb / *.gltf under when no explicit
                     fixtures are given (default: <repo>/tests/fixtures/gltf).

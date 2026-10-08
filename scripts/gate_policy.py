@@ -29,7 +29,7 @@ NEXTTEST_GPU_FILTER = '''
   | binary_id(manifold-renderer::scene_loop_wrap_parity)
   | binary_id(manifold-renderer::text_clip_to_node_bounds)
   | binary_id(manifold-renderer::ui_cell_arc_repro)
-  | binary_id(manifold-renderer::ui_color_swatches)
+  | (binary_id(manifold-app::renderer_contracts) & test(/^ui_color_swatches::/))
   | binary_id(manifold-app::led_edge_identity)
   | (binary_id(manifold-app::bin/manifold) & test(/^(content_thread::tests::paused_|gap_start_probe::|mute_visibility_probe::|viewport_p5c_demo::|viewport_p6_demo::|ui_bridge::project::tests::sdr_controls_route_pointer_gestures_to_content_and_undo$)/))
 '''
@@ -48,7 +48,8 @@ CATALOG_PATHS = ('crates/manifold-nodes-scene/src/node_graph/primitives/',
 
 RENDERER_SRC = "crates/manifold-renderer/src/"
 ENGINE_SRC = "crates/manifold-node-engine/src/"
-CONTRACT_TESTS_DIR = RENDERER_SRC + "engine_contract_tests/"
+CONTRACT_TESTS_DIR = tuple(RENDERER_SRC + module for module in
+                           ("exec", "freeze", "load", "runtime", "water", "palette", "preview_encoding"))
 UI_PAINT_DIR = "crates/manifold-ui-paint/"
 UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::"]
 PROOFS_DIR = "crates/manifold-renderer/tests/gpu_proofs/"
@@ -420,7 +421,7 @@ def godfile_paths():
 # Cross-file contracts: path -> (owning package, integration binaries).
 INTEGRATION_ROWS = {
     "Cargo.toml": ("manifold-app", ["crate_layering"]),
-    "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
+    "crates/manifold-renderer/src/primitive_registry.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
     "crates/manifold-nodes-image/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
     "crates/manifold-nodes-scene/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
     "crates/manifold-node-engine/src/water/fluid.rs": ("manifold-renderer", ["gpu_proofs"]),
@@ -505,6 +506,9 @@ CATALOG_TEST_ROWS = [
     ("crates/manifold-node-engine/src/water/primitives/push_out_of_solid", "particle_frame_blend_tests", True),
     ("crates/manifold-node-engine/src/water/primitives/particle_publication", "particle_publication_gpu_tests", False),
 ]
-PREFIX_ROWS += [(prefix, ".rs", CATALOG_PACKAGE,
-                 ["node_graph::catalog_tests::" + module], [])
+APP_CATALOG_MODULES = {"layer_compositor", "preset_thumbnail", "generator_renderer_tests",
+                       "generator_renderer_warmup_tests", "fluid_objects", "bokeh_gather"}
+PREFIX_ROWS += [(prefix, ".rs", "manifold-app" if module in APP_CATALOG_MODULES else CATALOG_PACKAGE,
+                 ["contracts::node_graph::catalog_tests::" + module] if module in APP_CATALOG_MODULES
+                 else ["node_graph::catalog_tests::" + module], [])
                 for prefix, module, cpu in CATALOG_TEST_ROWS if cpu]

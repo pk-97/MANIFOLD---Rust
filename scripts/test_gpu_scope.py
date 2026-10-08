@@ -266,7 +266,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_contract_mounts_select_real_module_names(self):
         repo = Path(__file__).resolve().parent.parent
-        path = R + "engine_contract_tests/freeze_install.rs"
+        path = R + "freeze/install.rs"
         result = plan([path], repo=repo)
         self.assertIn(path, result.paths)
         self.assertIn("freeze::install::", result.filters)
@@ -277,7 +277,7 @@ class ScopeTests(unittest.TestCase):
         self.assertFalse(result.unmapped)
 
     def test_unmounted_contract_is_unmapped(self):
-        path = R + "engine_contract_tests/orphan.rs"
+        path = R + "freeze/orphan.rs"
         result = plan([path], repo=self._repo_with(path))
         self.assertEqual([row[0] for row in result.unmapped], [path])
 

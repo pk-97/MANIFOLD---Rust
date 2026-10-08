@@ -9,7 +9,8 @@ use syn::{
     visit::{self, Visit},
 };
 
-use super::{rust_items::test_only, source_roots::WGSL_SRC_ROOTS};
+use super::rust_items::test_only;
+use manifold_renderer::testkit::source_roots::WGSL_SRC_ROOTS;
 
 /// Source trees referenced by the extended ABI cases. These include the
 /// non-primitive engine helpers whose shader declarations are proved here.
@@ -33,7 +34,7 @@ pub fn abi_source_roots() -> Result<Vec<PathBuf>, String> {
             }
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let mut roots = super::source_roots::primitive_source_roots()?;
+    let mut roots = manifold_renderer::testkit::source_roots::primitive_source_roots()?;
     roots.extend(extra);
     Ok(roots)
 }

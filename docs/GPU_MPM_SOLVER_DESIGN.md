@@ -1399,7 +1399,7 @@ at the end of the phase.
   determinism, headroom, non-finite, substep rule, tick cap, frame ids). Probe
   `tests/gpu_proofs/matter_cost_probe.rs`: ns per point-substep at 500,000 points.
 - **Gate:** tests green; A1–A6 pass at Liveliness 0 (numbers at 0.9 reported); clippy;
-  `cargo run -p manifold-renderer --bin check-presets`; `cargo run -p manifold-renderer
+  `cargo run -p manifold-renderer --bin check-presets`; `cargo run -p manifold-app
   --bin graph-tool -- validate <preset> --kind generator` and `fusion` for both presets,
   output recorded.
 - **Kill check:** projected Dam Break solver time = probe × 500,000 × 34 + lattice term.

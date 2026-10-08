@@ -1113,6 +1113,15 @@ class DiffScopeTests(unittest.TestCase):
             self.assertEqual(plan.filters, set())
             self.assertEqual(plan.packages, set())
 
+    def test_deleted_bin_target_selects_no_binary(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-renderer/src/bin/graph_tool.rs"
+            workspace = synthetic_workspace(d, [path])
+            (Path(d) / path).unlink()
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertEqual(plan.filters, set())
+            self.assertEqual(plan.packages, set())
+
     def test_renamed_integration_test_selects_only_new_binary(self):
         with tempfile.TemporaryDirectory() as d:
             crate = Path(d) / "crates/manifold-renderer"

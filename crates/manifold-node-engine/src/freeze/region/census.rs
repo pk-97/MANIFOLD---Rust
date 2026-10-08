@@ -6,7 +6,7 @@
 //! fuses. `refusal_census_matches_classify_node` pins that agreement.
 //!
 //! The report is `docs/fusion_census.md`, written by
-//! `cargo run -p manifold-renderer --example fusion_census`.
+//! `cargo run -p manifold-app --example fusion_census`.
 
 use super::*;
 use crate::persistence::PrimitiveRegistry;

@@ -204,7 +204,7 @@ fn attach(mut owner: EffectGraphDef, ids: &[&str]) -> EffectGraphDef {
                         ),
                         "{id}: {error}"
                     );
-                    super::rt_dynamic_current_frame::modifier_combo_scene().scene_modifiers[0]
+                    manifold_renderer::testkit::rt_dynamic::modifier_combo_scene().scene_modifiers[0]
                         .mesh_frames
                         .clone()
                 }
@@ -925,7 +925,7 @@ fn rt_dynamic_catalog_authored_unknown_mesh_writer() {
 
 fn authored_unknown_writer_graph() -> EffectGraphDef {
     let mut graph: serde_json::Value =
-        serde_json::from_str(super::rt_dynamic_current_frame::scene_json()).unwrap();
+        serde_json::from_str(manifold_renderer::testkit::rt_dynamic::scene_json()).unwrap();
     let shader = r#"
 struct MeshVertex {
     position:vec3<f32>,

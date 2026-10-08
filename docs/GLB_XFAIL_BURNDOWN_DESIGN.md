@@ -86,7 +86,7 @@ Batch P1–P4 per the 2–3-phase batching rule (P1+P2, then P3+P4, or all four 
 ## 6. Repro commands (all verified failing 2026-07-16)
 
 ```
-cargo run -q -p manifold-renderer --bin render-import -- tests/fixtures/gltf/khronos/<ASSET>.glb --out /tmp/<asset>.png
+cargo run -q -p manifold-app --bin render-import -- tests/fixtures/gltf/khronos/<ASSET>.glb --out /tmp/<asset>.png
 # BUG-164 TextureSettingsTest · BUG-165 BoomBox (fetch per manifest pin) · BUG-166 UnlitTest
 # BUG-167 SpecGlossVsMetalRough · BUG-168 SimpleInstancing · BUG-169 MetalRoughSpheresNoTextures
 # BUG-170 AnimatedColorsCube · BUG-171 BoxVertexColors · BUG-172 RecursiveSkeletons

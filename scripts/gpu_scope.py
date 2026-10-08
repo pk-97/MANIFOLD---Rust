@@ -117,7 +117,7 @@ def is_gpu_path(path, workspace=None):
             return True
     if path.endswith(".wgsl"):
         return True
-    if path.startswith((GPU_BACKEND_ROOT, UI_PAINT_DIR, ENGINE_SRC, CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
+    if path.startswith((GPU_BACKEND_ROOT, UI_PAINT_DIR, ENGINE_SRC, *CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
         return True
     if "shaders/" in path or "gpu::gpu_encoder" in path:
         return True
@@ -293,8 +293,7 @@ def contract_module_filters(path, repo):
                 child = base.joinpath(*scope, name + ".rs")
                 if not child.is_file():
                     child = base.joinpath(*scope, name, "mod.rs")
-            if "engine_contract_tests" in child.parts:
-                walk(child, prefix + scope + (name,), ancestors | {source})
+            walk(child, prefix + scope + (name,), ancestors | {source})
 
     walk(repo / RENDERER_SRC / "lib.rs", (), set())
     return sorted(found)

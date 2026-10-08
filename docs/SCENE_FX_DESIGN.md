@@ -269,7 +269,7 @@ presets, so warmup rides the existing preset-prewarm path.
 - **Deliverables:** a hand-authored graph JSON: gltf mesh source → scene_object with
   a texture-producing atom wired into `emissive_map` → render_scene. Rendered PNG.
   Written verdict in the session record: in-graph skins work / what exactly blocks.
-- **Gate:** `cargo run -p manifold-renderer --bin graph-tool -- render <graph.json>`
+- **Gate:** `cargo run -p manifold-app --bin graph-tool -- render <graph.json>`
   exits 0; PNG region-mean probe at the model's screen position is non-zero and
   differs from the unwired baseline by a stated threshold (computed, not eyeballed).
 - **Demo:** the two PNGs, L2 — Peter looks.

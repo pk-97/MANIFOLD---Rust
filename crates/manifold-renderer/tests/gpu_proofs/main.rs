@@ -18,7 +18,6 @@
 //! effect impls were gone. Nothing runs through a legacy path anymore, so
 //! there is nothing left to be "at parity" with.)
 
-mod generator_provider;
 mod scene_modifier_legacy;
 
 mod alpha_contract;
@@ -36,9 +35,7 @@ mod render_scene_subsurface;
 mod render_scene_material_upgrade;
 mod render_legacy_parity;
 mod render_scene_map_set;
-mod physics_solids;
 mod physics_boxes;
-mod water_basin;
 mod physics_takes;
 mod fluid_array_growth;
 mod render_scene_ao_mask;
@@ -61,7 +58,6 @@ mod rt_gesture_response;
 mod rt_dynamic_geometry;
 mod rt_dynamic_current_frame;
 mod rt_dynamic_refit;
-mod rt_dynamic_catalog;
 #[cfg(feature = "fluid-perf-proofs")]
 mod fluid_surface_perf;
 #[cfg(feature = "water-race-probes")]
@@ -84,7 +80,6 @@ mod matter_scene;
 mod matter_transfer;
 mod matter_bodies;
 mod matter_coupling;
-mod liquid_conformance;
 mod liquid_indexed;
 mod smoke;
 mod substeps;
