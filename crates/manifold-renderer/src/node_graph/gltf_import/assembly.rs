@@ -1,14 +1,6 @@
 //! Shared graph-op constructors (`plain_node`, `wire`, param value ctors)
 //! and naming helpers used across the importer's assembly modules.
 
-#[cfg(any(test, feature = "testkit"))]
-macro_rules! testkit_visible {
-    ($(#[$meta:meta])* fn $($item:tt)*) => { $(#[$meta])* pub fn $($item)* };
-}
-#[cfg(not(any(test, feature = "testkit")))]
-macro_rules! testkit_visible {
-    ($(#[$meta:meta])* fn $($item:tt)*) => { $(#[$meta])* pub(super) fn $($item)* };
-}
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,8 +29,8 @@ pub(super) fn plain_node(id: u32, node_id: &str, type_id: &str, handle: &str) ->
     }
 }
 
-testkit_visible! {
-fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
+manifold_core::testkit_visible! {
+pub(super) fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
     EffectGraphWire {
         from_node,
         from_port: from_port.to_string(),
@@ -48,23 +40,23 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
 }
 }
 
-testkit_visible! {
-fn float(v: f32) -> SerializedParamValue {
+manifold_core::testkit_visible! {
+pub(super) fn float(v: f32) -> SerializedParamValue {
     SerializedParamValue::Float { value: v }
 }
 }
-testkit_visible! {
-fn int(v: i32) -> SerializedParamValue {
+manifold_core::testkit_visible! {
+pub(super) fn int(v: i32) -> SerializedParamValue {
     SerializedParamValue::Int { value: v }
 }
 }
-testkit_visible! {
-fn bool_val(v: bool) -> SerializedParamValue {
+manifold_core::testkit_visible! {
+pub(super) fn bool_val(v: bool) -> SerializedParamValue {
     SerializedParamValue::Bool { value: v }
 }
 }
-testkit_visible! {
-fn enum_val(v: u32) -> SerializedParamValue {
+manifold_core::testkit_visible! {
+pub(super) fn enum_val(v: u32) -> SerializedParamValue {
     SerializedParamValue::Enum { value: v }
 }
 }

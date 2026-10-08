@@ -18,20 +18,8 @@ const LOOP_SIGNATURE: &[(&str, &str)] = &[
 ];
 
 // Catalog tests live outside this module; production visibility stays local.
-#[cfg(any(test, feature = "testkit"))]
-macro_rules! testkit_visible {
-    ($(#[$attribute:meta])* $visibility:vis fn $name:ident $($body:tt)*) => {
-        $(#[$attribute])* pub fn $name $($body)*
-    };
-}
-#[cfg(not(any(test, feature = "testkit")))]
-macro_rules! testkit_visible {
-    ($(#[$attribute:meta])* $visibility:vis fn $name:ident $($body:tt)*) => {
-        $(#[$attribute])* $visibility fn $name $($body)*
-    };
-}
 
-testkit_visible! {
+manifold_core::testkit_visible! {
 /// Upgrade a complete, known fixed-row Scene Loop graph in place.
 ///
 /// A graph with no Loop identity is ignored.  A graph with any Loop identity
@@ -174,7 +162,7 @@ fn doc_id(docs: &[(&str, u32)], node_id: &str) -> u32 {
         .expect("validated loop signature")
 }
 
-testkit_visible! {
+manifold_core::testkit_visible! {
 fn node_mut(def: &mut EffectGraphDef, doc_id: u32) -> &mut EffectGraphNode {
     def.nodes
         .iter_mut()

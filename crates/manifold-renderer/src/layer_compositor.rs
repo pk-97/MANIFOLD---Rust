@@ -19,18 +19,6 @@ use std::time::Instant;
 
 // Catalog tests call the same compositor helpers through testkit after P2c.
 // Keep every production item at its original visibility.
-#[cfg(any(test, feature = "testkit"))]
-macro_rules! compositor_testkit_visible {
-    ($(#[$attribute:meta])* $visibility:vis $kind:ident $($body:tt)*) => {
-        $(#[$attribute])* pub $kind $($body)*
-    };
-}
-#[cfg(not(any(test, feature = "testkit")))]
-macro_rules! compositor_testkit_visible {
-    ($(#[$attribute:meta])* $visibility:vis $kind:ident $($body:tt)*) => {
-        $(#[$attribute])* $visibility $kind $($body)*
-    };
-}
 
 /// Descriptor for a single clip to composite.
 pub struct CompositeClipDescriptor<'a> {
@@ -298,7 +286,7 @@ fn has_enabled_effects(effects: &[PresetInstance]) -> bool {
     false
 }
 
-compositor_testkit_visible! {
+manifold_core::testkit_visible! {
 /// One unique per-clip chain topology (WARMUP_DESIGN P7 D17): a clip's
 /// effective post-fx set — the layer's effects followed by the clip's own
 /// (`TimelineClip::effects`, the legacy per-clip field; empty in projects
@@ -313,7 +301,7 @@ pub(crate) struct ClipChainTopology {
 }
 }
 
-compositor_testkit_visible! {
+manifold_core::testkit_visible! {
 /// Walk every clip on every visual layer and collect the UNIQUE effective
 /// chain topologies, deduped by the production topology hash (WARMUP_DESIGN
 /// P7 D17). Bounded by unique topology, not clip count — the design's point:
@@ -409,7 +397,7 @@ impl LedRoute {
     }
 }
 
-compositor_testkit_visible! {
+manifold_core::testkit_visible! {
 /// Output descriptor for a single processed layer, ready for the blend pass.
 ///
 /// Uses a raw pointer for the texture reference to avoid borrow checker conflicts
@@ -681,7 +669,7 @@ fn led_scope(group_id: &LayerId) -> String {
 /// owner_key 0 (main master) or any layer/clip hash.
 const LED_MASTER_OWNER_KEY: i64 = i64::MIN + 1;
 
-compositor_testkit_visible! {
+manifold_core::testkit_visible! {
 /// How many render() calls a per-layer effect chain may stay unused before
 /// it's dropped as a memory-hygiene safety net. Acts ALONGSIDE the
 /// event-based eviction in `trim_excess_buffers` (which drops a chain
@@ -872,7 +860,7 @@ impl LayerCompositor {
             .insert(layer_id.clone(), self.frame_counter);
     }
 
-    compositor_testkit_visible! {
+    manifold_core::testkit_visible! {
     /// Ensure a chain exists for the given `LayerId`. Stable across frames and
     /// layer reorders — the chain's cached `PresetRuntime` (with primitive state)
     /// is preserved as long as the layer is touched within `CHAIN_GRACE_FRAMES`.
@@ -1787,7 +1775,7 @@ impl LayerCompositor {
         WarmupOutcome::Quiescent
     }
 
-    compositor_testkit_visible! {
+    manifold_core::testkit_visible! {
     /// Hybrid pool eviction policy:
     ///
     /// 1. **Event-based (immediate)**: drop any pool entry whose `LayerId`
@@ -1883,7 +1871,7 @@ impl LayerCompositor {
         }
     }
 
-    compositor_testkit_visible! {
+    manifold_core::testkit_visible! {
     /// Release cached runtimes whose authored effect owner has been removed.
     ///
     /// A layer can remain in the project, and therefore inside the grace pool,
@@ -2093,7 +2081,7 @@ impl LayerCompositor {
             .and_then(|rt| rt.chain_debug_info())
     }
 
-    compositor_testkit_visible! {
+    manifold_core::testkit_visible! {
     /// Phase A: Process each layer's clips + effects into per-layer output textures.
     ///
     /// For single-clip layers without layer effects, the output is the clip texture

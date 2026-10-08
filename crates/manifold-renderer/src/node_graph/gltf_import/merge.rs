@@ -2,14 +2,6 @@
 //! `render_scene`: reuse the per-object group builder against the target
 //! scene's node-id / object-index range, no camera/envmap/lights/lens.
 
-#[cfg(any(test, feature = "testkit"))]
-macro_rules! testkit_visible {
-    ($(#[$meta:meta])* fn $($item:tt)*) => { $(#[$meta])* pub fn $($item)* };
-}
-#[cfg(not(any(test, feature = "testkit")))]
-macro_rules! testkit_visible {
-    ($(#[$meta:meta])* fn $($item:tt)*) => { $(#[$meta])* pub(super) fn $($item)* };
-}
 
 use std::path::Path;
 
@@ -66,7 +58,7 @@ pub struct MergePlan {
     pub report_lines: Vec<String>,
 }
 
-testkit_visible! {
+manifold_core::testkit_visible! {
 /// D5 — merge a second (third, nth) glTF's objects into `def`'s EXISTING
 /// `node.render_scene`, reusing [`build_object_group`] (the SAME per-object
 /// shape [`build_import_graph`] emits) for every incoming material. Never
@@ -99,7 +91,7 @@ testkit_visible! {
 /// a scene with no known-radius mesh-source node at all (a hand-built scene
 /// with no glTF import in its history). No top-level `node.orbit_camera`
 /// either → normalization is skipped entirely (native units), never guessed.
-fn merge_import_into_graph(
+pub(super) fn merge_import_into_graph(
     def: &EffectGraphDef,
     summary: &GltfImportSummary,
     path: &Path,

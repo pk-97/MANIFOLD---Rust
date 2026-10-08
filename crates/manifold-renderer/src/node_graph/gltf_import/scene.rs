@@ -3,14 +3,6 @@
 //! framing camera, sun/fill/strip lights, the IBL envmap and the outer
 //! performance card surface.
 
-#[cfg(any(test, feature = "testkit"))]
-macro_rules! testkit_visible {
-    ($(#[$meta:meta])* fn $($item:tt)*) => { $(#[$meta])* pub fn $($item)* };
-}
-#[cfg(not(any(test, feature = "testkit")))]
-macro_rules! testkit_visible {
-    ($(#[$meta:meta])* fn $($item:tt)*) => { $(#[$meta])* pub(super) fn $($item)* };
-}
 
 use std::path::Path;
 
@@ -49,7 +41,7 @@ pub(super) const IMPORT_FILL_DEFAULT: f32 = 0.6;
 /// The Strip Lights card fader dials it live.
 pub(super) const IMPORT_STRIPS_DEFAULT: f32 = 3.0;
 
-testkit_visible! {
+manifold_core::testkit_visible! {
 /// Assemble the generator graph from an already-parsed [`GltfImportSummary`].
 /// Split from [`assemble_import_graph`] (which owns the single file parse) so the
 /// graph shape — including the per-object node **grouping** — is testable against
@@ -66,7 +58,7 @@ testkit_visible! {
 /// `instantiate_def`) to the exact same flat graph, and every inner node keeps its
 /// stable `node_id`, so the card/string bindings that target `mesh_k`/`mat_k`/
 /// `tex_k`/`transform_k` by id resolve unchanged (see `docs/GROUPING_GRAPHS.md` section 2).
-fn build_import_graph(
+pub(super) fn build_import_graph(
     summary: &GltfImportSummary,
     path: &Path,
 ) -> Result<(EffectGraphDef, ImportReport), String> {
