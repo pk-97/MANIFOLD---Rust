@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import json, tempfile, unittest, sys, types
 from pathlib import Path
 import codex_prepare

@@ -6,6 +6,8 @@ use Git blob IDs and modes (the leaves of the selected Git trees), overlaying
 working-tree edits so a standalone pass survives committing the same content.
 Unknown commands/dependencies and unreadable inputs run without reuse.
 """
+import contextlib
+import contextvars
 import hashlib
 import json
 import os
@@ -17,7 +19,78 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA = 1
+from gate_workspace import Workspace
+from gate_policy import SHARED_ASSETS
+
+SCHEMA = 3
+SESSION = contextvars.ContextVar('pass_session', default=None)
+SNAPSHOT = contextvars.ContextVar('pass_snapshot', default=None)
+
+
+class Snapshot:
+    """One content observation, shared only within a planning/validation batch."""
+    def __init__(self):
+        self.entries = {}
+        self.roots = {}
+        self.workspaces = {}
+        self.tracked = {}
+
+    def tracked_roots(self, repo):
+        if repo not in self.tracked:
+            self.tracked[repo] = {p.split('/')[0] for p in
+                                  git(repo, 'ls-files', '-z').split('\0') if p}
+        return self.tracked[repo]
+
+    def selected(self, repo, paths):
+        if repo not in self.entries:
+            roots = set(self.tracked_roots(repo))
+            roots.update(p.split('/')[0] for p in paths)
+            self.entries[repo] = selected_entries(repo, sorted(roots))
+            self.roots[repo] = roots
+        missing = {p.split('/')[0] for p in paths} - self.roots[repo]
+        if missing:
+            self.entries[repo].update(selected_entries(repo, sorted(missing)))
+            self.roots[repo].update(missing)
+        return {path: entry for path, entry in self.entries[repo].items()
+                if any(path == p or path.startswith(p.rstrip('/') + '/') for p in paths)}
+
+
+@contextlib.contextmanager
+def session():
+    token = SESSION.set({'tools': {}, 'accepted': [], 'planning': Snapshot()})
+    try:
+        yield
+    finally:
+        SESSION.reset(token)
+
+
+@contextlib.contextmanager
+def snapshot():
+    token = SNAPSHOT.set(Snapshot())
+    try:
+        yield
+    finally:
+        SNAPSHOT.reset(token)
+
+
+def changed_passes(passes):
+    # New snapshot for every boundary, including ignored fixtures and modes.
+    with snapshot():
+        return [p.label for p in passes if p and not p.unchanged()]
+
+
+def accepted_passes():
+    return SESSION.get()['accepted'] if SESSION.get() is not None else []
+
+
+def workspace_inputs(repo):
+    current = SNAPSHOT.get()
+    if current is None:
+        return Workspace(repo)
+    if repo not in current.workspaces:
+        current.workspaces[repo] = Workspace(repo)
+    return current.workspaces[repo]
+
 
 
 def git(repo, *args):
@@ -41,40 +114,8 @@ def dependency_paths(repo, packages):
     root = tomllib.loads((repo / 'Cargo.toml').read_text())
     if root.get('patch') or root.get('replace'):
         raise ValueError('Cargo patch/replace requires a dependency-scope audit')
-    workspace = root.get('workspace', {})
-    manifests = {}
-    for pattern in workspace.get('members', []):
-        for directory in repo.glob(pattern):
-            data = tomllib.loads((directory / 'Cargo.toml').read_text())
-            manifests[data['package']['name']] = (directory, data)
-    found, pending = set(), list(packages)
-    while pending:
-        name = pending.pop()
-        if name in found:
-            continue
-        if name not in manifests:
-            raise ValueError(f'unknown local package {name}')
-        found.add(name)
-        directory, data = manifests[name]
-        tables = [data, *data.get('target', {}).values()]
-        for table in tables:
-            for kind in ('dependencies', 'dev-dependencies', 'build-dependencies'):
-                for alias, dep in table.get(kind, {}).items():
-                    if not isinstance(dep, dict):
-                        continue
-                    owner = directory
-                    if dep.get('workspace'):
-                        dep = workspace.get('dependencies', {})[alias]
-                        owner = repo
-                    if isinstance(dep, dict) and 'path' in dep:
-                        path = (owner / dep['path']).resolve()
-                        if not path.is_relative_to(repo):
-                            raise ValueError(f'external path dependency: {path}')
-                        child = tomllib.loads((path / 'Cargo.toml').read_text())
-                        child_name = child['package']['name']
-                        manifests[child_name] = (path, child)
-                        pending.append(child_name)
-    return sorted(str(manifests[n][0].relative_to(repo)) for n in found)
+    workspace = workspace_inputs(repo)
+    return sorted(workspace.roots[n] for n in workspace.dependencies(packages))
 
 
 def host_inputs(repo, cargo=False):
@@ -101,10 +142,14 @@ def host_inputs(repo, cargo=False):
         if sys.platform == 'darwin':
             commands += [['clang', '--version'], ['xcrun', '--show-sdk-version']]
         for command in commands:
-            out = subprocess.run(command, cwd=repo, capture_output=True, timeout=15)
-            if out.returncode:
-                raise ValueError(f'cannot identify tool: {command}')
-            facts[' '.join(command)] = out.stdout.decode()
+            key = (str(repo), tuple(command))
+            tools = SESSION.get()['tools'] if SESSION.get() is not None else {}
+            if key not in tools:
+                out = subprocess.run(command, cwd=repo, capture_output=True, timeout=15)
+                if out.returncode:
+                    raise ValueError(f'cannot identify tool: {command}')
+                tools[key] = out.stdout.decode()
+            facts[' '.join(command)] = tools[key]
         # Cargo reads config in ancestors and CARGO_HOME, outside Git.
         homes = [*repo.parents, Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))]
         configs = {p for home in homes for p in
@@ -139,7 +184,9 @@ def selected_entries(repo, prefixes):
     untracked = git(repo, 'ls-files', '--others', '--exclude-standard', '-z').split('\0')
     # Fixtures ignored by Git still change test results. Limit the scan to
     # selected input roots; never walk target or another slot's checkout.
-    roots = [p for p in prefixes if p.split('/')[0] in {'crates', 'tests', 'assets', 'tools'}]
+    roots = [p for p in prefixes if (repo / p).is_dir()
+             and not any(part in {'target', '.git', '.claude', '__pycache__'}
+                         for part in Path(p).parts)]
     ignored = git(repo, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z',
                   '--', *roots).split('\0') if roots else []
     for path in set(dirty + untracked + ignored):
@@ -167,8 +214,7 @@ def rust_paths(repo, packages):
         'Cargo.toml', 'Cargo.lock', 'rust-toolchain', 'rust-toolchain.toml',
         '.cargo', '.config', 'deny.toml', 'clippy.toml', '.clippy.toml',
         'scripts', 'tests', 'assets', 'tools', 'native', 'shaders', 'vendor',
-        'crates/manifold-foundation/assets/fonts',
-        'docs/node_catalog', '.gitignore']
+        'docs/node_catalog', '.gitignore', *SHARED_ASSETS]
 
 
 def command_spec(repo, label, cmd):
@@ -200,8 +246,8 @@ def command_spec(repo, label, cmd):
                 'Cargo.toml', 'Cargo.lock', '.cargo', '.config'], normalized, label == 'flow-gate'
     # Tooling and ratchet checks can inspect any tracked source. Whole-tree
     # scope is deliberately conservative; never guess a test's imports.
-    roots = [p.split('/', 1)[0] for p in git(repo, 'ls-files', '-z').split('\0') if p]
-    return sorted(set(roots)), cmd, False
+    roots = (SNAPSHOT.get() or Snapshot()).tracked_roots(repo)
+    return sorted(roots), cmd, False
 
 
 class Pass:
@@ -209,48 +255,88 @@ class Pass:
         self.repo, self.label, self.spec = Path(repo).resolve(), label, spec
         self.key = self.record = None
         self.reason = None
+        self.inputs_changed = False
+        self.path = self.directory = None
         try:
-            self.key = self.fingerprint()
-            common = git(self.repo, 'rev-parse', '--git-common-dir')
-            self.directory = (self.repo / common).resolve() / 'gate-passes-v1'
-            self.path = self.directory / (self.key + '.json')
-            if self.path.exists():
-                record = json.loads(self.path.read_text())
-                if (isinstance(record, dict) and record.get('schema') == SCHEMA and record.get('key') == self.key
-                        and record.get('pass') is True and isinstance(record.get('seconds'), (int, float))
-                        and record['seconds'] >= 0 and record.get('commit') and record.get('time')):
-                    self.record = record
+            current = SESSION.get()
+            token = SNAPSHOT.set(SNAPSHOT.get() or (current['planning'] if current else Snapshot()))
+            try:
+                self.key = self.fingerprint()
+            finally:
+                SNAPSHOT.reset(token)
         except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
             self.key = None
             self.reason = str(error)
             print(f'[NO REUSE] {label}: {error}', flush=True)
+            return
+        # Receipt storage is optional; failure here cannot invalidate inputs.
+        try:
+            common = git(self.repo, 'rev-parse', '--git-common-dir')
+            self.directory = (self.repo / common).resolve() / 'gate-passes-v1'
+            self.path = self.directory / (self.key + '.json')
+            record = json.loads(self.path.read_text())
+            if (isinstance(record, dict) and record.get('schema') == SCHEMA and record.get('key') == self.key
+                    and record.get('pass') is True and isinstance(record.get('seconds'), (int, float))
+                    and record['seconds'] >= 0 and record.get('commit') and record.get('time')):
+                self.record = record
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
+            self.record = None
+            self.reason = str(error)
+            print(f'[NO REUSE] {label}: cannot load receipt: {error}', flush=True)
 
     def fingerprint(self):
         paths, identity, cargo = self.spec()
         paths = sorted(set(paths + ['scripts/gate_passes.py', 'scripts/landing_gate.py']))
         return digest({'schema': SCHEMA, 'identity': identity,
-                       'paths': paths, 'entries': selected_entries(self.repo, paths),
+                       'paths': paths, 'entries': (SNAPSHOT.get() or Snapshot()).selected(self.repo, paths),
                        'implementation': {
                            name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
                            for name in ('gate_passes.py', 'landing_gate.py', 'gpu_proofs_gate.py',
                                         'gpu_queue.py', 'gpu_scope.py', 'cpu_scope.py', 'diff_scope.py')},
                        'host': host_inputs(self.repo, cargo)})
 
+    def unchanged(self):
+        if not self.key or self.inputs_changed:
+            return False
+        try:
+            return self.fingerprint() == self.key
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError):
+            return False
+
+    def accepted(self):
+        current = SESSION.get()
+        if current is not None and self not in current['accepted']:
+            current['accepted'].append(self)
+
     def reused(self):
-        if self.record:
+        if self.record and not changed_passes([self]):
+            self.accepted()
             print(f"[REUSED] {self.label} (passed at {self.record['commit']}, {self.record['time']})", flush=True)
             return True
         return False
 
     def save(self, code, seconds=0):
+        """Return False only for unstable inputs, independently of cache writes."""
         if not self.key:
             return
+        # Executed legs remain verdict inputs even when execution or storage
+        # fails; neither failure may hide a later ignored-input mutation.
+        self.accepted()
+        changed = bool(changed_passes([self]))
+        if changed:
+            self.inputs_changed = True
+            print(f'[NO REUSE] {self.label}: inputs changed during execution', flush=True)
+        temporary = None
         try:
             if code:
-                self.path.unlink(missing_ok=True)
-                return
-            if self.fingerprint() != self.key:
-                print(f'[NO REUSE] {self.label}: inputs changed during execution', flush=True)
+                if self.path is not None:
+                    self.path.unlink(missing_ok=True)
+                return False if changed else None
+            if changed:
+                return False
+            if self.directory is None:
                 return
             self.directory.mkdir(parents=True, exist_ok=True)
             record = {'schema': SCHEMA, 'key': self.key, 'pass': True,
@@ -259,9 +345,20 @@ class Pass:
             fd, temporary = tempfile.mkstemp(dir=self.directory, prefix='.pass-')
             with os.fdopen(fd, 'w') as stream:
                 json.dump(record, stream)
+            # Recheck immediately before publication, after preparing the record.
+            if changed_passes([self]):
+                self.inputs_changed = True
+                print(f'[NO REUSE] {self.label}: inputs changed before publication', flush=True)
+                return False
             os.replace(temporary, self.path)
         except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
             print(f'[NO REUSE] {self.label}: cannot record pass: {error}', flush=True)
+            if changed:
+                return False
+        finally:
+            if temporary is not None:
+                with contextlib.suppress(OSError):
+                    os.unlink(temporary)
 
 
 def command_pass(repo, label, cmd):
@@ -275,7 +372,7 @@ def command_pass(repo, label, cmd):
 
 def proof_pass(repo, run):
     # Canonical per-invocation selection shared by the proof gate and queue.
-    package = run.get('package', 'manifold-renderer')
+    package = run['package']
     identity = {'kind': 'gpu-proof-run', 'package': package, 'features': ['gpu-proofs'],
                 'targets': sorted(run['targets'] if run['targets'] is not None
                                   else ([] if run['lib'] else ['gpu_proofs'])), 'lib': run['lib'],
@@ -324,11 +421,11 @@ def queued_proof(command, repo):
                 run['filters'].append(arg)
     except (StopIteration, ValueError):
         return None
-    if (len(packages) != 1 or packages[0] not in (
-            'manifold-renderer', 'manifold-node-engine', 'manifold-ui-paint')
-            or sorted(features) != ['gpu-proofs'] or threads != 1):
+    if (len(packages) != 1 or sorted(features) != ['gpu-proofs'] or threads != 1):
         return None
     if not (run['targets'] or run['lib']):
+        return None
+    if packages[0] not in Workspace(repo).feature_packages('gpu-proofs'):
         return None
     run['package'] = packages[0]
     return proof_pass(repo, run)

@@ -16,7 +16,40 @@ P = R + "node_graph/primitives/"
 
 
 def plan(paths, users=None, repo=None):
-    return g.plan_for_paths(paths, repo or Path("/nonexistent"), shader_users=users or (lambda p: []))
+    repo = repo or Path("/nonexistent")
+    workspace = None if (repo / "Cargo.toml").is_file() else fixture_workspace(repo)
+    return g.plan_for_paths(paths, repo, shader_users=users or (lambda p: []), workspace=workspace)
+
+
+def fixture_workspace(repo):
+    """Metadata-only workspace for path-rule tests without a Cargo checkout."""
+    repo = repo.resolve()
+    packages = []
+    rows = {
+        "manifold-renderer": ("crates/manifold-renderer", True, ["gpu_proofs", "glb_conformance"]),
+        "manifold-node-engine": ("crates/manifold-node-engine", True, []),
+        "manifold-ui-paint": ("crates/manifold-ui-paint", True, []),
+        "manifold-gpu": ("crates/manifold-gpu", False, []),
+    }
+    for index, (name, (root, gpu, tests)) in enumerate(rows.items()):
+        targets = [{"name": name, "kind": ["lib"], "src_path": str(repo / root / "src/lib.rs"),
+                    "required-features": []}]
+        targets.extend({"name": target, "kind": ["test"],
+                        "src_path": str(repo / root / "tests" / f"{target}.rs"),
+                        "required-features": ["gpu-proofs"]}
+                       for target in tests)
+        packages.append({
+            "id": f"path+file://{repo}/{root}#{name}@0.1.0",
+            "name": name,
+            "manifest_path": str(repo / root / "Cargo.toml"),
+            "features": {"gpu-proofs": []} if gpu else {},
+            "dependencies": [],
+            "targets": targets,
+        })
+    return g.Workspace(repo, metadata={
+        "workspace_members": [package["id"] for package in packages],
+        "packages": packages,
+    })
 
 
 class ScopeTests(unittest.TestCase):
@@ -108,8 +141,11 @@ class ScopeTests(unittest.TestCase):
     def test_ui_paint_selects_own_lib_proofs_and_renderer_smoke(self):
         result = plan(["crates/manifold-ui-paint/src/native_text.rs"])
         self.assertFalse(result.unmapped)
-        self.assertEqual(result.runs()[0]["filters"], sorted(g.SMOKE_FILTERS))
-        paint = next(run for run in result.runs() if run.get("package") == "manifold-ui-paint")
+        renderer = next(run for run in result.runs()
+                        if run.get("package") == "manifold-renderer" and run["target"] == "lib")
+        self.assertEqual(renderer["filters"], sorted(g.SMOKE_FILTERS))
+        paint = next(run for run in result.runs()
+                     if run.get("package") == "manifold-ui-paint" and run["target"] == "lib")
         self.assertEqual(paint["package"], "manifold-ui-paint")
         self.assertTrue(paint["lib"])
         self.assertEqual(paint["targets"], [])
@@ -260,8 +296,15 @@ class ScopeTests(unittest.TestCase):
         p = plan(["crates/manifold-gpu/src/metal/device.rs"])
         self.assertEqual(p.final_filters(), sorted(set(g.SMOKE_FILTERS + g.BROAD_FILTERS)))
         self.assertFalse(p.glb)
-        self.assertEqual(len(p.runs()), 3)
-        self.assertEqual(p.runs()[2]["package"], "manifold-ui-paint")
+        runs = p.runs()
+        expected = sum(bool(p.workspace.targets(package, "lib"))
+                       + len([target for target in p.workspace.targets(package, "test")
+                              if "gpu-proofs" in target.get("required-features", [])
+                              and target["name"] not in g.GLB_TESTS
+                              and target["name"] != "glb_conformance"])
+                       for package in p.workspace.feature_packages("gpu-proofs"))
+        self.assertEqual(len(runs), expected)
+        self.assertIn("manifold-ui-paint", {run["package"] for run in runs})
 
     def test_broad_set_is_bounded(self):
         # Never a bare gpu_proofs/lib sweep: every filter names something specific.
@@ -274,10 +317,10 @@ class ScopeTests(unittest.TestCase):
         p = plan([E + 'exec/execution/foo.rs'])
         self.assertTrue(set(g.RUNTIME_FILTERS) <= p.filters)
 
-    def test_rt_row_keeps_particletext_skip_and_union_with_freeze(self):
+    def test_rt_row_keeps_union_with_freeze_without_muting_particletext(self):
         p = plan(["crates/manifold-gpu/src/metal/raytrace.rs", E + 'freeze/x.rs'])
         self.assertTrue({"rt_", "freeze::"} <= p.filters)
-        self.assertEqual(sorted(set(p.final_skips()) - {n for n, _ in g.slow_tests()}), ["particletext"])
+        self.assertEqual(sorted(set(p.final_skips()) - {n for n, _ in g.slow_tests()}), [])
         self.assertEqual(p.broad, [])
 
     def test_skip_dropped_when_it_would_hide_a_selected_filter(self):
@@ -373,11 +416,12 @@ class ScopeTests(unittest.TestCase):
     def test_over_threshold_measured_test_is_skipped_and_reported(self):
         self.with_times({"a::slow": 61.0, "a::fast": 59.0, "a::exact": 60.0})
         p = plan([W + 'matter_fill.rs'])
-        self.assertIn("a::slow", p.final_skips())
+        # Timing is a warning only; an owning filter is never dropped.
+        self.assertNotIn("a::slow", p.final_skips())
         self.assertNotIn("a::fast", p.final_skips())
         self.assertNotIn("a::exact", p.final_skips())
         p.filters.add("a::")
-        self.assertIn("GPU-PROOFS DEFERRED: a::slow (61s)", p.describe())
+        self.assertNotIn("GPU-PROOFS DEFERRED", p.describe())
         self.assertEqual(p.runs()[0]["skips"], p.final_skips())
 
     def test_glb_sweep_time_never_skips_or_reports_the_sweep(self):
@@ -387,7 +431,7 @@ class ScopeTests(unittest.TestCase):
         self.assertNotIn("glb_conformance_sweep", p.final_skips())
         self.assertNotIn("glb_conformance_sweep", p.describe())
         self.assertEqual(p.runs()[-1]["skips"], [])
-        self.assertIn("a::slow", p.final_skips())
+        self.assertNotIn("a::slow", p.final_skips())
 
     def test_test_missing_from_times_file_runs(self):
         self.with_times({"a::slow": 500.0})
@@ -422,20 +466,15 @@ class ScopeTests(unittest.TestCase):
                                ("@@ -11 +11 @@", {"liquid_conformance::nested::slower"}),
                                ("@@ -6 +6,0 @@", {"liquid_conformance::slow"}),
                                ("@@ -2 +2 @@", set())]:
+            patch_text = f"diff --git a/{path} b/{path}\n+++ b/{path}\n{hunk}\n"
             with mock.patch.object(g.subprocess, "run", return_value=mock.Mock(
-                    returncode=0, stdout=hunk)):
+                    returncode=0, stdout=patch_text)):
                 p = plan([path], repo=repo)
             exact = {f for f in p.filters if not f.endswith("::")}
             self.assertEqual(exact, expected)
             self.assertTrue(expected.isdisjoint(p.final_skips()))
-            deferred = {n for n, _ in p.deferred()}
-            self.assertEqual(deferred, {"liquid_conformance::slow",
-                                       "liquid_conformance::nested::slower"} - expected)
-            line = next(l for l in p.describe().splitlines()
-                        if l.startswith("GPU-PROOFS DEFERRED:"))
-            self.assertNotIn("unrelated", line)
-            for name in expected:
-                self.assertNotIn(name + " (", line)
+            self.assertEqual(p.deferred(), [])
+            self.assertNotIn("GPU-PROOFS DEFERRED", p.describe())
 
     def test_result_returning_test_bodies_are_promoted(self):
         path = g.PROOFS_DIR + "liquid_conformance.rs"
@@ -504,8 +543,8 @@ class ScopeTests(unittest.TestCase):
 
     def test_committed_times_file_seeds_the_known_slow_tests(self):
         names = {n for n, _ in g.slow_tests()}
-        self.assertIn("matter_bodies::matter_fill_skips_colliders", names)
-        self.assertIn("matter_look::matter_momentum_conserved_free_blob", names)
+        self.assertIn("manifold-renderer/gpu_proofs/matter_bodies::matter_fill_skips_colliders", names)
+        self.assertIn("manifold-renderer/gpu_proofs/matter_look::matter_momentum_conserved_free_blob", names)
 
     def test_proof_file_maps_to_its_own_module(self):
         p = plan([g.PROOFS_DIR + "render_scene_fog.rs"])
@@ -535,9 +574,17 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(p.unmapped[0][0], R + "node_graph/something.bin")
 
     def test_main_run_targets_lib_and_gpu_proofs_never_glb(self):
-        run = plan([P + "invert.rs"]).runs()[0]
+        runs = plan([P + "invert.rs"]).runs()
+        run = next(run for run in runs
+                   if run["package"] == "manifold-renderer" and run["target"] == "lib")
+        proof = next(run for run in runs
+                     if run["package"] == "manifold-renderer" and run["target"] == "gpu_proofs")
         self.assertTrue(run["lib"])
-        self.assertEqual(run["targets"], ["gpu_proofs"])
+        self.assertEqual(run["targets"], [])
+        self.assertFalse(proof["lib"])
+        self.assertEqual(proof["targets"], ["gpu_proofs"])
+        self.assertTrue(all(run.get("package") for run in runs))
+        self.assertFalse(any("glb_conformance" in run["targets"] for run in runs))
 
     def test_preset_runtime_test_file_maps_to_its_declared_module(self):
         repo = self._repo_with(E + 'runtime/mod.rs')

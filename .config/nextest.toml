@@ -40,6 +40,8 @@ slow-timeout = { period = "30s", terminate-after = 2 }
 #
 # The filter is the set of default-feature tests that reach a device
 # constructor. A new ungated test that opens a device belongs here too.
+# Both profiles are validated against gate_policy.py and Cargo metadata by
+# the landing readiness phase; stale package or target ownership is red.
 [test-groups]
 gpu = { max-threads = 1 }
 
