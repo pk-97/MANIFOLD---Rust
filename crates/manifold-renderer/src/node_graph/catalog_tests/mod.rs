@@ -150,3 +150,5 @@ mod gltf_card_precedence;
 mod surface_mesh_normals;
 
 mod preset_thumbnail;
+
+mod registered_assets;
