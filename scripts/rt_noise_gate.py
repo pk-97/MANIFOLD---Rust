@@ -274,7 +274,7 @@ def run_furnace_oracle(repo, timeout=1800):
 
     Returns (passed, output)."""
     cmd = [
-        "cargo", "test", "-p", "manifold-renderer", "--features", "gpu-proofs",
+        "cargo", "test", "-p", "manifold-nodes-scene", "--features", "gpu-proofs",
         "--test", "gpu_proofs", "--", "rt_furnace", "--test-threads=1",
     ]
     exit_, out, err, dur = run_cmd(cmd, cwd=repo, timeout=timeout)
@@ -283,7 +283,8 @@ def run_furnace_oracle(repo, timeout=1800):
     # exactly the furnace tests, so a non-zero exit with a build failure and a
     # non-zero exit with a failed assertion are both a red correctness leg.
     summary = next((l for l in output.splitlines() if "test result:" in l), None)
-    if exit_ != 0:
+    passed = re.search(r"test result: ok\. ([0-9]+) passed; 0 failed; 0 ignored;", output)
+    if exit_ != 0 or passed is None or int(passed[1]) == 0:
         log(f"[rt-noise] furnace oracle FAILED after {dur:.0f}s"
             + (f" — {summary.strip()}" if summary else ""))
         return False, output
