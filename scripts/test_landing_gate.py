@@ -1288,9 +1288,9 @@ class CancellationTests(unittest.TestCase):
 
 
 class DeliveryTests(unittest.TestCase):
-    def test_delivery_never_narrows_the_gate(self):
-        # Every mandatory result is the gate's default; a named red needs
-        # them all and no caller may ask for a first-red stop.
+    def test_delivery_requests_complete_run_only_for_named_red(self):
+        # Ordinary landings retain the cheap-first default. A named red asks
+        # for complete coverage; missing reason/coverage still cannot land.
         cases = [[], ["--named-red", "BUG-test", "--reason", "reviewed"],
                  ["--named-red", "BUG-test"],
                  ["--named-red", "BUG-test", "--reason", "reviewed", "--skip-gpu", "deferred"]]
@@ -1304,7 +1304,7 @@ class DeliveryTests(unittest.TestCase):
                     land_branch.main()
                 argv = gate.call_args.args[0]
                 self.assertNotIn("--fail-fast", argv)
-                self.assertNotIn("--keep-going", argv)
+                self.assertEqual("--keep-going" in argv, "--named-red" in extra)
                 self.assertEqual(argv[argv.index("--repo") + 1], str(Path(d).resolve()))
 
     def test_progress_is_forwarded_before_child_exits(self):

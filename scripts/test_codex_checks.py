@@ -44,6 +44,7 @@ class PlannerTests(unittest.TestCase):
             if path.endswith(".py"):
                 expected.append("scripts/test_dev.py")  # every script is inventoried
             if path == 'scripts/trunk_health.py':
+                expected.append('scripts/test_trunk_health.py')
                 expected.append('scripts/test_gpu_queue.py')
             self.assertEqual([c["name"] for c in checks], expected)
             self.assertEqual(checks[0]["argv"],

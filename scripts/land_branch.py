@@ -10,7 +10,8 @@ The JUDGMENT stays with the lead: the review, the named-red call (pass
 --named-red BUG-id --reason "..."), the design-doc status edits. This
 script is the fixed git+gate sequence only — every step exits on failure
 with the step named, and push happens only after a green gate (or an
-explicit named red over a gate that ran every check).
+explicit named red over a gate that ran every check). --named-red requests
+the complete gate run; ordinary landings stop before expensive legs on cheap reds.
 
 Usage:
   scripts/land_branch.py <branch> --worktree <path> --message '<merge msg>' \
@@ -133,8 +134,11 @@ def _main():
     step("fetch", ["git", "fetch", "origin", "main"], MAIN)
     step("merge origin/main into branch", ["git", "merge", "origin/main", "--no-edit"], wt)
 
-    # Inherit the cheap-first default. A named red cannot waive unrun legs.
+    # A reviewed named red needs every leg's result, including when the known
+    # red is cheap. Completion is still enforced by CHECKS_RED below.
     gate_cmd = [sys.executable, "-u", "scripts/landing_gate.py", "--repo", str(wt.resolve())]
+    if a.named_red:
+        gate_cmd.append("--keep-going")
     if a.skip_gpu:
         gate_cmd += ["--skip-gpu", a.skip_gpu]
     log_dir = wt / "target" / "landing-logs"
