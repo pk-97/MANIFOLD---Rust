@@ -289,8 +289,12 @@ class Pass:
     def fingerprint(self):
         paths, identity, cargo = self.spec()
         paths = sorted(set(paths + ['scripts/gate_passes.py', 'scripts/landing_gate.py']))
+        entries = (SNAPSHOT.get() or Snapshot()).selected(self.repo, paths)
+        if self.label == 'gpu-proofs':
+            # Timing allowances are policy. Selection changes still change identity.
+            entries.pop('scripts/gpu_test_times.json', None)
         return digest({'schema': SCHEMA, 'identity': identity,
-                       'paths': paths, 'entries': (SNAPSHOT.get() or Snapshot()).selected(self.repo, paths),
+                       'paths': paths, 'entries': entries,
                        'implementation': {
                            name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
                            for name in ('gate_passes.py', 'landing_gate.py', 'gpu_proofs_gate.py',
@@ -318,7 +322,7 @@ class Pass:
             return True
         return False
 
-    def save(self, code, seconds=0):
+    def save(self, code, seconds=0, *, timings=None):
         """Return False only for unstable inputs, independently of cache writes."""
         if not self.key:
             return
@@ -343,6 +347,8 @@ class Pass:
             record = {'schema': SCHEMA, 'key': self.key, 'pass': True,
                       'commit': git(self.repo, 'rev-parse', 'HEAD'),
                       'time': datetime.now(timezone.utc).isoformat(), 'seconds': seconds}
+            if timings is not None:
+                record['timings'] = timings
             fd, temporary = tempfile.mkstemp(dir=self.directory, prefix='.pass-')
             with os.fdopen(fd, 'w') as stream:
                 json.dump(record, stream)

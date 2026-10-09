@@ -137,6 +137,9 @@ class SlowTestParsingTests(unittest.TestCase):
 
 class LandingTests(unittest.TestCase):
     def setUp(self):
+        self._gpu_queue_tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(
+            os.environ, {"MANIFOLD_GPU_QUEUE_DIR": self._gpu_queue_tmp}))
         self.enterContext(patch.object(landing_gate.gpu_scope, "learned_times_path", return_value=None))
 
     checks = ["tooling", "design-status", "ignored-tests", "deny",
@@ -698,6 +701,65 @@ class LandingTests(unittest.TestCase):
                 time.sleep(0.1)
             self.assertFalse(process_alive(grandchild), "grandchild survived the timeout")
 
+    def test_timeout_report_precedes_sigterm_child_failure_and_keeps_raw_transcript(self):
+        # A nested gate may turn the deadline's SIGTERM into a test-looking
+        # assertion and exit 143.  The parent deadline remains authoritative.
+        with tempfile.TemporaryDirectory() as d, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            script = (
+                "import signal, sys, time\n"
+                "def on_term(_signum, _frame):\n"
+                "    print('assertion failed: child exit 143', file=sys.stderr, flush=True)\n"
+                "    sys.exit(143)\n"
+                "signal.signal(signal.SIGTERM, on_term)\n"
+                "print('child started', flush=True)\n"
+                "time.sleep(120)\n"
+            )
+            script_path = Path(d) / "nested_gate.py"
+            script_path.write_text(script)
+            receipt = Mock()
+            receipt.unchanged.return_value = True
+            receipt.reused.return_value = False
+            receipt.save.side_effect = AssertionError('timeout must not publish a receipt')
+            exit_, out, err, duration = landing_gate.run_check(
+                "nested", [sys.executable, "-u", str(script_path)], Path(d), 1, passed=receipt)
+            tail = (out + err).rstrip().splitlines()[-20:]
+            landing_gate.print_result("nested", "FAIL", duration, tail)
+            report = output.getvalue()
+            self.assertEqual(exit_, -1)
+            self.assertGreaterEqual(report.count("[FAIL] nested timed out at configured 1 seconds"), 2)
+            self.assertIn("TIMEOUT: timed out at configured 1 seconds", report)
+            self.assertIn("rerun: ", report)
+            self.assertNotIn("assertion failed", report)
+            self.assertNotIn("[FAIL] nested (", report)
+            logs = list((Path(d) / "target/landing-logs").glob("*.log"))
+            self.assertEqual(len(logs), 1)
+            self.assertIn("assertion failed", logs[0].read_text())
+            self.assertNotIn("TIMEOUT:", logs[0].read_text())
+            receipt.save.assert_not_called()
+            self.assertLess(duration, 10)
+
+    def test_gpu_timeout_preserves_raw_transcript_and_timeout_only_tail(self):
+        raw = 'AssertionError: child caught SIGTERM and returned 143\n'
+
+        def timeout(cmd, cwd, seconds, live_log=None):
+            live_log.write_text(raw)
+            return -1, raw, '', seconds + 2
+
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(landing_gate, 'run_cmd', side_effect=timeout), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code, out, err, _ = landing_gate.run_check(
+                'gpu-proofs', ['python3', 'scripts/gpu_proofs_gate.py'], Path(d), 120)
+            self.assertEqual(code, -1)
+            self.assertEqual(out, '')
+            self.assertNotIn('AssertionError', err)
+            self.assertIn('timed out at configured 120 seconds', err)
+            self.assertIn('rerun: ', err)
+            logs = list((Path(d) / 'target/landing-logs').glob('*.log'))
+            self.assertEqual(len(logs), 1)
+            self.assertEqual(logs[0].read_text(), raw)
+
     def test_live_log_holds_lines_before_the_command_exits(self):
         with tempfile.TemporaryDirectory() as d:
             live = Path(d) / "live.log"
@@ -800,6 +862,31 @@ class LandingTests(unittest.TestCase):
 
 
 class NightlyQueueTests(unittest.TestCase):
+    def setUp(self):
+        self._gpu_queue_tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(
+            os.environ, {"MANIFOLD_GPU_QUEUE_DIR": self._gpu_queue_tmp}))
+
+    def test_live_parent_reservation_is_outside_test_queue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            live_queue = Path(directory)
+            trunk_health.gpu_queue.reserve(
+                "water-campaign", "GPU proof window", 60, directory=live_queue)
+            # Simulate the environment inherited from a live campaign, then
+            # enter each fixture exactly as unittest does before a test.
+            with patch.dict(os.environ, {"MANIFOLD_GPU_QUEUE_DIR": directory}):
+                for test_class in (LandingTests, NightlyQueueTests):
+                    fixture = test_class()
+                    try:
+                        fixture.setUp()
+                        self.assertNotEqual(trunk_health.gpu_queue.queue_dir(), live_queue)
+                        self.assertEqual(trunk_health.gpu_queue.reservation(), {})
+                    finally:
+                        fixture.doCleanups()
+            self.assertEqual(
+                trunk_health.gpu_queue.reservation(live_queue)["owner"],
+                "water-campaign")
+
     def test_gpu_legs_yield_between_checks_and_use_nightly_priority(self):
         held = False
         events = []
@@ -1422,6 +1509,75 @@ class CancellationTests(unittest.TestCase):
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_verified_slot_cleanup_detaches_and_never_reports_a_landing_red(self):
+        import watch_land
+
+        for failure in (None, 'release', 'release-error', 'delete', 'detach', 'unlanded'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as d:
+                repo = Path(d).resolve()
+
+                def git(cwd, *args):
+                    return subprocess.run(['git', *args], cwd=cwd, check=True,
+                                          capture_output=True, text=True).stdout.strip()
+
+                git(repo, 'init', '-b', 'main')
+                git(repo, 'config', 'user.name', 'Test')
+                git(repo, 'config', 'user.email', 'test@example.invalid')
+                git(repo, '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'base')
+                git(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+                wt = repo / '.claude/worktrees/slot-0'
+                git(repo, 'worktree', 'add', '-b', 'lane/landed', str(wt))
+                if failure == 'unlanded':
+                    git(wt, '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'unlanded')
+                commands = []
+                real_run = land_branch.run_cmd
+
+                def run(cmd, cwd, timeout, live_log=None):
+                    commands.append(cmd)
+                    if 'release' in cmd:
+                        self.assertEqual(git(wt, 'branch', '--show-current'), '')
+                        if failure == 'release-error':
+                            raise OSError('cleanup command unavailable')
+                        return (1, '', 'worktree pool is busy', 0) if failure == 'release' else (0, '', '', 0)
+                    if cmd[:3] == ['git', 'switch', '--detach'] and failure == 'detach':
+                        return 1, '', 'detach refused', 0
+                    if cmd[:3] == ['git', 'branch', '-d'] and failure == 'delete':
+                        return 1, '', 'cannot delete branch used by worktree', 0
+                    if cmd[0] == 'git' and cmd[1] in ('merge-base', 'switch', 'branch', 'rev-parse'):
+                        return real_run(cmd, cwd, timeout, live_log=live_log)
+                    return 0, '', '', 0
+
+                with patch.object(land_branch, 'MAIN', repo), \
+                        patch.object(land_branch, 'run_cmd', side_effect=run), \
+                        patch.object(land_branch, 'run_landing_gate', return_value=0), \
+                        patch.object(land_branch, 'merge_gated_tree'), \
+                        patch.object(sys, 'argv', ['land_branch.py', 'lane/landed',
+                            '--worktree', str(wt), '--message', 'test']), \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertIsNone(land_branch.main())
+                transcript = output.getvalue()
+                self.assertNotIn('[FAIL]', transcript)
+                self.assertIn('[land] DONE:', transcript)
+                if failure:
+                    self.assertIn('NOTE', transcript)
+                if failure == 'unlanded':
+                    self.assertFalse(any('switch' in cmd or 'release' in cmd or '-d' in cmd
+                                         for cmd in commands))
+                else:
+                    ancestry = commands.index(['git', 'merge-base', '--is-ancestor',
+                                               'lane/landed', 'origin/main'])
+                    detach = commands.index(['git', 'switch', '--detach'])
+                    self.assertLess(ancestry, detach)
+                branches = git(repo, 'branch', '--list', 'lane/landed')
+                self.assertEqual(bool(branches), failure in ('delete', 'detach', 'unlanded'))
+                if failure == 'detach':
+                    self.assertFalse(any('release' in cmd for cmd in commands))
+                outer = repo / 'outer.log'
+                outer.write_text(transcript)
+                with contextlib.redirect_stdout(io.StringIO()) as watched:
+                    code = watch_land.watch(123, outer, kind='land', alive=lambda _: False)
+                self.assertEqual(code, 0, watched.getvalue())
+
     def test_delivery_requests_complete_run_only_for_named_red(self):
         # Ordinary landings retain the cheap-first default. A named red asks
         # for complete coverage; missing reason/coverage still cannot land.
