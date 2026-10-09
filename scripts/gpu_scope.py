@@ -39,7 +39,7 @@ from gate_policy import (
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
     GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, CATALOG_PACKAGE, GPU_CONTRACT_TARGETS,
-    GPU_FILTER_TARGETS, is_inert_plan_path,
+    GPU_FILTER_TARGETS, UI_PROJECTION_PATHS, is_inert_plan_path,
 )
 from gate_workspace import Workspace, module_mounts
 
@@ -108,6 +108,10 @@ _CPU_PLAN_UNSET = object()
 def is_gpu_path(path, workspace=None):
     """Paths that trigger the GPU-proofs leg (mirrors the context-nudge triggers)."""
     if is_inert_plan_path(path):
+        return False
+    if path.endswith('.rs') and any(
+            path == prefix or (prefix.endswith('/') and path.startswith(prefix))
+            for prefix in UI_PROJECTION_PATHS):
         return False
     if workspace:
         owner = workspace.owner(path)

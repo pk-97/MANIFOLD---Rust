@@ -4,11 +4,11 @@ import unittest
 import subprocess
 from pathlib import Path
 import sys
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).parent))
 
 import codex_checks
-import landing_gate
+import cpu_scope
 import run_ui_flows
 import gpu_scope
 from gate_workspace import Workspace
@@ -82,10 +82,48 @@ class PlannerTests(unittest.TestCase):
                 'id': 'fixture', 'name': 'fixture', 'manifest_path': str(repo / 'crates/fixture/Cargo.toml'),
                 'targets': [], 'features': {}, 'dependencies': []}]})
             with patch("codex_regressions.inventory", return_value=[]), \
-                    patch.object(landing_gate, 'Workspace', return_value=workspace), \
-                    patch.object(gpu_scope, 'Workspace', return_value=workspace):
+                    patch.object(codex_checks, 'Workspace', return_value=workspace):
                 plan = codex_checks.build_plan(repo, ["scripts/run_ui_flows.py"])
             self.assertEqual(plan["checks"][0]["argv"], ["python3", "-B", str(repo.resolve() / "scripts/test_codex_checks.py")])
+
+    def _mocked_plan(self, cpu_plan, gpu_plan=None):
+        repo = Path(__file__).resolve().parents[1]
+        if gpu_plan is None:
+            gpu_plan = gpu_scope.Plan()
+        workspace = Mock()
+        workspace.owner.return_value = 'fixture'
+        with patch.object(codex_checks, 'Workspace', return_value=workspace), \
+                patch.object(cpu_scope, 'plan_for_paths', return_value=cpu_plan), \
+                patch.object(gpu_scope, 'plan_for_paths', return_value=gpu_plan), \
+                patch('codex_regressions.inventory', return_value=[]):
+            return codex_checks.build_plan(repo, ['crates/fixture/src/lib.rs'])
+
+    def test_private_folded_selection_is_forwarded_to_nextest(self):
+        filterset = '(package(=fixture) & binary(=catalog) & test(/^private::folded::/))'
+        plan = self._mocked_plan(cpu_scope.Plan(packages={'fixture'}, filters={filterset}))
+        checks = plan['checks']
+        build = next(c for c in checks if c['name'] == 'tests-build/fixture')
+        run = next(c for c in checks if c['name'] == 'tests/fixture')
+        self.assertEqual(build['argv'][-1], filterset)
+        self.assertEqual(run['argv'][-1], filterset)
+        self.assertEqual(run['argv'][:5], ['env', 'CARGO_BUILD_JOBS=4', 'python3',
+                                         str(Path(__file__).resolve().parent / 'gpu_queue.py'), '--'])
+        self.assertEqual(build['argv'][:3], ['env', 'CARGO_BUILD_JOBS=4', 'cargo'])
+        self.assertLess([c['name'] for c in checks].index(build['name']),
+                        [c['name'] for c in checks].index(run['name']))
+
+    def test_gpu_only_selection_is_not_sent_to_nextest(self):
+        cpu_plan = cpu_scope.Plan(gpu_filters={'gpu::smoke::'})
+        gpu_plan = gpu_scope.Plan(paths=['crates/fixture/src/lib.rs'])
+        plan = self._mocked_plan(cpu_plan, gpu_plan)
+        self.assertFalse(any(c['name'].startswith('tests') for c in plan['checks']))
+        self.assertIn('clippy', [c['name'] for c in plan['checks']])
+
+    def test_explicit_whole_selection_warns_instead_of_unfiltered_tests(self):
+        cpu_plan = cpu_scope.Plan(packages={'fixture'}, whole={'fixture'})
+        plan = self._mocked_plan(cpu_plan)
+        self.assertFalse(any(c['name'].startswith('tests') for c in plan['checks']))
+        self.assertTrue(any('focused validation' in warning for warning in plan['warnings']))
 
     def test_real_package_and_tooling_scopes(self):
         repo = Path(__file__).resolve().parents[1]
@@ -94,8 +132,11 @@ class PlannerTests(unittest.TestCase):
                          ["test_codex_usage.py", "test_dev.py"])
         plan = codex_checks.build_plan(repo, ["crates/manifold-ui/src/param_surface.rs"])
         self.assertIn("manifold-ui", plan["packages"])
-        self.assertTrue(all("--manifest-path" in c["argv"] for c in plan["checks"] if c["argv"][0] == "cargo"))
+        self.assertTrue(all("--manifest-path" in c["argv"] for c in plan["checks"] if "cargo" in c["argv"]))
         self.assertTrue(plan["warnings"])
+        plan = codex_checks.build_plan(repo, ["crates/manifold-app/src/ui_bridge/projection/timeline.rs"])
+        self.assertEqual([c['name'] for c in plan['checks']],
+                         ['clippy', 'tests-build/manifold-app', 'tests/manifold-app', 'ui-flows'])
         with self.assertRaises(RuntimeError):
             codex_checks.build_plan(repo, ["scripts/../../outside"])
 
