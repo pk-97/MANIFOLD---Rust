@@ -69,7 +69,26 @@ def gpu_proofs_only(source):
     if not source.is_file():
         return False
     text = source.read_text()
-    return bool(GPU_PROOF_TESTS.search(text)) and '#[cfg(test)]' not in text
+    if not GPU_PROOF_TESTS.search(text):
+        return False
+    from crate_move_replay import code_mask, module_items
+    masked = code_mask(text)
+    gates = [m.start() for m in GPU_PROOF_TESTS.finditer(text)
+             if masked[m.start():].startswith('#[cfg')]
+    gpu_modules, tests = [], []
+    for start, end, head, scope in module_items(text):
+        gated = any(start <= offset < head for offset in gates)
+        declaration = re.match(r'(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*([;{])', masked[head:end])
+        if declaration and gated:
+            gpu_modules.append(scope + (declaration[1],))
+        # External modules and macros may define tests we cannot inspect here.
+        # Ordinary cfg(test) accessors do not create a CPU test selection.
+        if (re.search(r'#\[\s*test\s*\]', masked[start:head])
+                or (declaration and declaration[2] == ';')
+                or re.match(r'[\w:]+\s*!', masked[head:end])):
+            tests.append((scope, gated))
+    return bool(tests) and all(gated or any(scope[:len(module)] == module for module in gpu_modules)
+                               for scope, gated in tests)
 
 
 def test_module_prefixes(source, prefixes):
