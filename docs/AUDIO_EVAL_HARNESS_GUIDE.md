@@ -417,6 +417,21 @@ additional bandwise features remain untested. Ten focused tests pass. All nine
 songs are development material; no untouched validation or live change. See
 `tools/audio_analysis/eval/scoreboard/kick_fusion_2026-10-09.json`.
 
+**Nested calibration and bandwise fusion, 2026-10-09 — neither replaces the
+prototype:** thresholds are selected using inner song exclusions, with the outer
+song absent from every fit and threshold choice. At ±70 ms, calibrated nine-feature
+fusion gives 86/174 matches and 44 unmatched triggers; adding six bandwise
+flux/centroid features improves this to 98/174 and 41. The prototype gives 118/174
+and 52. At ±50 ms the same comparisons are 65/65, 66/73 and 116/54 (matches/extras),
+so the bandwise benefit depends on the accepted timing tolerance. Both calibrated
+variants have zero extras across four reviewed kick-free cores, but lose many
+real kicks. Candidates and evidence horizon are unchanged. Twelve new tests pass;
+the nine-feature fixed-0.5 replay exactly matches all prior event sequences.
+The initial reporting-schema failure was repaired and regression-tested before
+repeating the unchanged experiment. These remain exploratory development results;
+no live change. See
+`tools/audio_analysis/eval/scoreboard/kick_fusion_parallel_2026-10-09.json`.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
