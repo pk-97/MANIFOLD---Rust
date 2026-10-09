@@ -29,6 +29,12 @@ exports successful measurements for review before landing a new heavy proof.
 
 Scoped and explicit runs reuse shared content-addressed passes before building
 or taking the GPU lock. --all and measurement requests always execute.
+Each completed invocation saves its correctness pass and per-test times before
+whole-leg policy checks. Reuse checks those times against current allowances
+and budget, including the landing gate's fully cached path. Timing-table edits
+change policy, not correctness receipts; source, selection, feature, dependency,
+toolchain and execution-environment changes still invalidate affected passes.
+Failures retry only failed invocations; passing siblings retain their receipts.
 
 HANG WATCHDOG: the output is streamed and the one running test is timed. A test
 that starts and does not finish (ok / FAILED / ignored) within its allowance
@@ -600,6 +606,19 @@ def write_times_json(path: Path, timings: list, *, merge=False, learned=False) -
     return "\n".join(lines)
 
 
+def receipt_timings(passed, run):
+    """Restore measurements with the current selection's budget policy."""
+    if 'timings' in passed.record:
+        return [timing_entry(package, target, name, seconds, status, run['budgeted'])
+                for package, target, name, seconds, status, _ in
+                (timing_fields(row) for row in passed.record['timings'])]
+    # Legacy receipts passed policy before publication; raw queue receipts
+    # cannot exceed the slow threshold. Neither contains per-test measurements.
+    target = ','.join(run['targets'] or []) or ('lib' if run['lib'] else 'all')
+    return [timing_entry(run.get('package'), target, 'reused proof set',
+                         passed.record['seconds'], 'ok', run['budgeted'])]
+
+
 def unmeasured_heavy(timings: list) -> list[dict]:
     """Find successful slow tests absent from the reviewed committed table."""
     reviewed = gpu_scope.read_times(gpu_scope.TIMES_PATH)
@@ -608,6 +627,7 @@ def unmeasured_heavy(timings: list) -> list[dict]:
         package, target, name, seconds, status, _budgeted = timing_fields(entry)
         key = timing_key(package, target, name)
         if (status == "ok" and package is not None and target != "unknown"
+                and name != 'reused proof set'
                 and seconds > gpu_scope.SLOW_THRESHOLD_S
                 and key not in reviewed):
             findings.append({"package": package, "target": target, "test": name,
@@ -1042,7 +1062,6 @@ def _main() -> int:
     exit_code, outputs, all_timings, hung = 0, [], [], []
     # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for all
     # cargo runs so another run cannot interleave between test binaries.
-    measured = []
     recorded_timings = []
     with gpu_queue.hold("gpu_proofs_gate") if pending else contextlib.nullcontext():
         if gate_passes.changed_passes(passes):
@@ -1053,10 +1072,7 @@ def _main() -> int:
                 if not passed.reused():
                     print('GPU-PROOFS GATE: FAIL (inputs changed before reuse)')
                     return INPUTS_CHANGED
-                target = ','.join(run['targets'] or []) or ('lib' if run['lib'] else 'all')
-                all_timings.append(timing_entry(run.get('package'), target,
-                                                'reused proof set', passed.record['seconds'],
-                                                'ok', run['budgeted']))
+                all_timings.extend(receipt_timings(passed, run))
                 continue
             run_timings: list = []
             code, output = run_gate(manifest_path, run["filters"], run["skips"], run["targets"],
@@ -1065,12 +1081,10 @@ def _main() -> int:
                                     run["budgeted"], run.get("target_specs"))
             if code == INPUTS_CHANGED:
                 code = 1
-            if (parse_failed_tests(output) or parse_golden_mismatches(output)
+            if (hung or parse_failed_tests(output) or parse_golden_mismatches(output)
                     or any(status == "FAILED" for _, status, _, _ in parse_binaries(output))
                     or any(timing_fields(t)[4] == "FAILED" for t in run_timings)):
                 code = code or 1
-            measured.append((passed, code,
-                             sum(timing_fields(t)[3] for t in run_timings)))
             exit_code = exit_code or code
             outputs.append(output)
             normalized = []
@@ -1079,6 +1093,11 @@ def _main() -> int:
                 normalized.append(timing_entry(run.get("package") or row_package,
                                                run.get("target") or row_target,
                                                name, seconds, status, run["budgeted"]))
+            # Publish each run before another run or whole-leg policy can fail.
+            if passed and passed.save(code, sum(timing_fields(t)[3] for t in normalized),
+                                      timings=normalized) is False:
+                print('GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)')
+                return INPUTS_CHANGED
             all_timings += normalized
             recorded = list(normalized)
             recorded_timings.extend(recorded)
@@ -1094,8 +1113,8 @@ def _main() -> int:
                                  for entry in recorded_timings))
     if args.record_times and functional_ok:
         print(write_times_json(args.record_times, recorded_timings, merge=True))
-    timing_red = [] if args.all_tests or args.record_times else unmeasured_heavy(recorded_timings)
-    unknown_red = unknown_target_timings(recorded_timings)
+    timing_red = [] if args.all_tests or args.record_times else unmeasured_heavy(all_timings)
+    unknown_red = unknown_target_timings(all_timings)
     verdict = print_summary(output, exit_code, all_timings, args.budget, hung, manifest_path,
                             timing_red, unknown_red)
     if args.learn_times:
@@ -1103,13 +1122,6 @@ def _main() -> int:
     if gate_passes.changed_passes([p for p in passes if p]):
         print('GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)')
         return INPUTS_CHANGED
-    for passed, code, seconds in measured:
-        if passed:
-            # Budget warnings do not invalidate functional passes. Real
-            # failures and hangs can never acquire a reusable pass.
-            if passed.save(code or verdict, seconds) is False:
-                print('GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)')
-                return INPUTS_CHANGED
     return verdict
 
 
