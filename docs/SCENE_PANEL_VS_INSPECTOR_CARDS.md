@@ -43,6 +43,13 @@ Set Up Camera Effects when dependencies are missing. It restores supported
 standard wiring as one undoable content command; ambiguous custom graphs are
 left unchanged with a diagnostic.
 
+Scene Setup exposes the existing creation commands directly: Object, Layer
+Plane, Light and Water in the Add row; Environment and Fog on the World page;
+Force under Motion & Physics; and modifiers, material features and Physics on
+the selected object. A missing camera offers Add Camera & Effects. These
+actions create and wire their supported dependencies through undoable content
+commands; users do not need to assemble those graphs themselves.
+
 Scene and object modifiers reuse ParamCardPanel and stable instance IDs through
 reorder, duplicate, rename, undo and save/reopen. Successful insertions select
 the new item only after the content command succeeds.

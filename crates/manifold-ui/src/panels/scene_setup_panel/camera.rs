@@ -38,10 +38,6 @@ impl ScenePanel {
                 cy + ROW_H
             }
             CameraRowVm::None => {
-                // `render_scene`'s `camera` port is REQUIRED (unlike
-                // envmap/atmosphere) — every shipped path (importer,
-                // Scene Starter) always wires one, so there is no "Add
-                // camera" action in v1 (D3).
                 tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "No camera wired", label_style());
                 cy + ROW_H
             }
@@ -54,7 +50,7 @@ impl ScenePanel {
                 inner_w,
                 ROW_H,
                 btn_style(),
-                "Set Up Camera Effects",
+                if matches!(vm.camera, CameraRowVm::None) { "+ Add Camera & Effects" } else { "Set Up Camera Effects" },
                 KEY_CAMERA_SETUP,
             );
             tree.set_name(button, "scene_setup.camera.setup_effects");

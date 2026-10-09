@@ -970,28 +970,38 @@
 
     #[test]
     fn camera_setup_button_dispatches_only_when_needed() {
-        let (mut vm, surface) = world_transform_vm();
-        vm.camera = CameraRowVm::Custom;
-        vm.camera_setup_needed = true;
-        vm.camera_sections = vec!["Camera".into()];
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-        panel.configure_params(Some(surface));
-        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Camera);
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
-        let button = panel.camera_setup_id.expect("camera setup affordance");
-        let (consumed, actions) = panel.handle_event(
-            &UIEvent::Click { node_id: button, pos: Vec2::ZERO, modifiers: Modifiers::default() },
-            &mut tree,
-        );
-        assert!(consumed);
-        assert!(matches!(
-            actions.as_slice(),
-            [PanelAction::Project(ProjectAction::SceneSetupPrepareCamera(layer))]
-                if *layer == LayerId::new("layer-1")
-        ));
+        for (camera, label) in [
+            (CameraRowVm::None, "+ Add Camera & Effects"),
+            (CameraRowVm::Custom, "Set Up Camera Effects"),
+        ] {
+            let (mut vm, surface) = world_transform_vm();
+            vm.camera = camera;
+            vm.camera_setup_needed = true;
+            vm.camera_sections = vec!["Camera".into()];
+            let mut panel = ScenePanel::new();
+            panel.open();
+            panel.configure(SceneSetupState::Live(Box::new(vm.clone())));
+            panel.configure_params(Some(surface));
+            panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Camera);
+            let mut tree = UITree::new();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
+            let button = panel.camera_setup_id.expect("camera setup affordance");
+            assert_eq!(tree.get_node(button).unwrap().text.as_deref(), Some(label));
+            let (consumed, actions) = panel.handle_event(
+                &UIEvent::Click { node_id: button, pos: Vec2::ZERO, modifiers: Modifiers::default() },
+                &mut tree,
+            );
+            assert!(consumed);
+            assert!(matches!(actions.as_slice(),
+                [PanelAction::Project(ProjectAction::SceneSetupPrepareCamera(layer))]
+                    if *layer == LayerId::new("layer-1")
+            ));
+            vm.camera_setup_needed = false;
+            panel.configure(SceneSetupState::Live(Box::new(vm)));
+            tree.clear();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
+            assert!(panel.camera_setup_id.is_none(), "no duplicate setup action for a complete camera");
+        }
     }
 
     #[test]
