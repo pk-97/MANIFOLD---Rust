@@ -1236,10 +1236,7 @@ fn profile_attribution(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gpu
                 None => println!("{name} — fused: no fusable region (renders unfused)\n"),
             }
         } else {
-            // `PresetTypeId::new` wants `&'static str`; leaking a few CLI
-            // names in a profiling bin is fine.
-            let static_name: &'static str = Box::leak(name.to_string().into_boxed_str());
-            match install::fused_view_by_id(&PresetTypeId::new(static_name)) {
+            match install::fused_view_by_id(&PresetTypeId::from_string(name.to_string())) {
                 Some(view) => attribute_def(
                     registry,
                     device,

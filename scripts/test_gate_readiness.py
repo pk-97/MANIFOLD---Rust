@@ -116,6 +116,30 @@ class P1PlannerTests(unittest.TestCase):
         self.assertEqual(cpu_scope.validate_inventory(whole, "fixture", listing),
                          {("smoke", "present::case")})
 
+    def test_self_contained_cli_without_tests_keeps_compile_checks_only(self):
+        path = "crates/manifold-nodes/src/bin/freeze_profile.rs"
+        plan = cpu_scope.plan_for_paths([path], ROOT, self.workspace)
+        self.assertEqual(plan.selections(), {})
+        self.assertIn("freeze-profile has no unit tests: compile/clippy only", plan.describe())
+
+    def test_testless_cli_detection_preserves_possible_test_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "main.rs"
+            for text, testless in [
+                ('fn main() { println!("#[test]"); } // mod tests;\n', True),
+                ('mod helper { fn helper() {} } fn main() {}', True),
+                ('#[test] fn check() {} fn main() {}', False),
+                ('mod tests { #[test] fn check() {} } fn main() {}', False),
+                ('mod helper; fn main() {}', False),
+                ('include!("generated.rs"); fn main() {}', False),
+                ('make_tests!(); fn main() {}', False),
+                ('#[custom_test] struct Case; fn main() {}', False),
+                ('testkit_visible! { testkit { #[test] fn check() {} } production {} }', False),
+            ]:
+                with self.subTest(text=text):
+                    source.write_text(text)
+                    self.assertEqual(cpu_scope.testless_binary_root(source), testless)
+
     def test_testless_path_module_widens_only_its_package(self):
         plan = cpu_scope.plan_for_paths([
             "crates/manifold-app/src/frame_time.rs",
