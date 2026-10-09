@@ -54,7 +54,7 @@ const LAYERS: &[Layer] = &[
         package: "manifold-nodes-water",
         normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu",
                             "manifold-node-engine", "manifold-physics", "manifold-fluids"],
-        dev: &["manifold-node-engine"],
+        dev: &["manifold-node-engine", "manifold-playback"],
     },
     Layer {
         package: "manifold-ui-paint",
