@@ -967,12 +967,27 @@ Waypoints and Know You're There remain untouched.
 Where H18's 119 misses come from: 50 are cutoff transfer (a per-song cutoff
 catches them with no more extras), 64 within-song ranking (Midnight 38, Heavy 17),
 3 refractory, 2 no candidate. Within-song ranking is strong (AUC ≥ 0.97) in seven
-songs; Bad Guy 0.94 and Midnight 0.84. Label-informed per-song cutoffs, a
-diagnostic ceiling and never a setting, give baseline 274+43, H18 289+38 and H22
-271+36: about 71–76% recall at 88% precision. **95/95 is out of reach for these
-representations even with perfect per-song cutoffs.** No label-free song
-statistic predicts the best cutoff (best spread 0.74→0.52 logit), which is why
-H12's median re-centring failed: ~40 candidates/s are mostly non-kicks.
+songs; Bad Guy 0.94 and Midnight 0.84. No label-free song statistic predicts
+the best cutoff (best spread 0.74→0.52 logit), which is why H12's median
+re-centring failed: ~40 candidates/s are mostly non-kicks.
+
+**The limit, proved on the final scores** (`kick_night_oracle_frontier.py`,
+`kick_night_oracle_labels.py`; diagnostic only, thresholds picked per song with
+the labels). An exact search over per-song thresholds finds no setting of
+baseline, H16, H18, H21 or H22 that reaches 95% recall and precision pooled, with
+or without Bad Guy. Best balanced points: baseline 302+80, H16 315+67, H18 311+71,
+H21 308+73, H22 305+74 (about 80% both ways; without Bad Guy H22 296+71 of 366).
+At 95% precision the best is 56–68% recall. The 90%-per-track floor alone sinks
+precision to about 33%: Midnight needs 575–654 extras to catch 80 of 88, Heavy
+47–68. Under H22, the 82 labels that force extras on the way to 90% split into
+41 visible in the mix low band but scored below non-kicks (a feature gap: Bad
+Guy 12, Heavy 13, Midnight 11), 18 masked in the mix (kick-stem attack, mix low
+band rises < 3 dB) and 23 without a kick-stem attack (21 in Midnight: a label
+question). The extras that come in are bass-line onsets (76), backbeat
+claps/snares (20, low-band share below every labelled kick's), kick-stem attacks
+(29, late duplicates or unlabelled) and, from Midnight's forced threshold, 609
+other low-band onsets. In Bad Guy the backbeat claps outscore the kicks, so the
+label-picked best for that song alone is to fire nothing.
 
 What the remaining errors are, from stems only:
 - Bad Guy extras are bass-line fires. At matched kicks the drum stem's 45–140 Hz
@@ -1004,6 +1019,9 @@ the 42.6 ms evidence window sets the earliest emission.
 | H22 H21 gate with linear+glide fallback fitted on low-support candidates / same with H16 / control fitted on all | **256+90** / 250+86 / 229+86 | Inside low support glide points the physical way in every song; main config: zero core fires, ≤1 baseline loss per track, one extra over the count rule. Control fails, so the conditioning matters. |
 | H23 early path: the 15 features over 15 / 20 / 25 ms fire confident kicks early, H18 decides the rest, one shared refractory | 262+89 on all three; 35 ms 47 / 54 / 65 (H18 42) | Safe: 70 ms unchanged, cores clear. Only 3–13% of fires qualify early (~16 ms sooner); fails the declared +20 at 50 ms or −10 ms median bar. Second feature pass costs 0.8% of a core in Python. |
 
+Without Bad Guy (366 labels): baseline 208+44, H18 247+47, H21 240 config
+225+51, H22 main 241+52, H23 247+47.
+
 H22 main versus H18: original 174 135+72 vs 138+68; added 207 121+18 vs
 124+21; D2 28/32+2 with one fire in the Late Night sustained-bass core vs 26/32+0;
 additional 73 47+19 vs 47+16 (song-excluded fires, development passages). Delay
@@ -1017,7 +1035,11 @@ Transferable lessons: separate candidate, score, cutoff and refractory losses
 before changing anything; ask where a learner has training support before
 trusting it, and route rare shapes to evidence that is physical for them; check
 a cue's sign inside each support zone, not pooled; and audit labels against
-isolated stems with a label-free lag before arguing about timing.
+isolated stems with a label-free lag before arguing about timing. Run the
+per-song oracle frontier first, on day one: it separates threshold problems from
+information problems in minutes. For snares and claps, Bad Guy shows the
+confusion runs both ways (its claps are this detector's worst extras), so a joint
+kick/snare/bass decision is the next design question rather than three detectors.
 
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:

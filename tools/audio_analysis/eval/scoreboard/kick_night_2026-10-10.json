@@ -1,7 +1,7 @@
 {
  "status": "development research, no candidate promoted; reserved Waypoints / Know You're There untouched",
  "date": "2026-10-10",
- "source_commit": "021af5b05f69e10e07e09e1f8b2b4ceac7210069",
+ "source_commit": "6a3bb723f381414bc961f89b21166c34770d5c2b",
  "labels": 381,
  "tolerance_primary_ms": 70,
  "reference": {
@@ -20,6 +20,21 @@
    "loses Inhale 5.38/6.62"
   ]
  },
+ "reference_without_bad_guy": {
+  "baseline": [
+   208,
+   44
+  ],
+  "h16": [
+   270,
+   48
+  ],
+  "h18": [
+   247,
+   47
+  ]
+ },
+ "reserved_songs": "no audio for Waypoints or Know You're There exists in fixtures or caches; only reservation names",
  "miss_causes_h18": {
   "cutoff_transfer": 50,
   "ranking": 64,
@@ -38,6 +53,452 @@
   "h18": {
    "matched": 289,
    "extra": 38
+  }
+ },
+ "oracle_frontier": {
+  "baseline": {
+   "extras_for_90_per_track": {
+    "apricots_128bpm": 0,
+    "bad_guy_128bpm": 16,
+    "feel_the_vibration_174bpm": 0,
+    "inhale_exhale_145bpm": 3,
+    "tears_140bpm": 7,
+    "late_night": 17,
+    "midnight_patience": 654,
+    "miracle": 4,
+    "heavy_on_mind": 67
+   },
+   "pooled_with_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 355,
+     "extra": 770,
+     "recall": 0.932,
+     "precision": 0.316
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   },
+   "pooled_no_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 302,
+     "extra": 80,
+     "recall": 0.793,
+     "precision": 0.791
+    },
+    "best_matched_at_95_precision": 213,
+    "best_recall_at_95_precision": 0.559
+   },
+   "pooled_without_bad_guy": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 291,
+     "extra": 74,
+     "recall": 0.795,
+     "precision": 0.797
+    },
+    "best_matched_at_95_precision": 213,
+    "best_recall_at_95_precision": 0.582
+   },
+   "pooled_without_bad_guy_with_track_floor": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 340,
+     "extra": 754,
+     "recall": 0.929,
+     "precision": 0.311
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   }
+  },
+  "h16": {
+   "extras_for_90_per_track": {
+    "apricots_128bpm": 0,
+    "bad_guy_128bpm": 16,
+    "feel_the_vibration_174bpm": 0,
+    "inhale_exhale_145bpm": 10,
+    "tears_140bpm": 2,
+    "late_night": 1,
+    "midnight_patience": 212,
+    "miracle": 2,
+    "heavy_on_mind": 68
+   },
+   "pooled_with_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 352,
+     "extra": 312,
+     "recall": 0.924,
+     "precision": 0.53
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   },
+   "pooled_no_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 315,
+     "extra": 67,
+     "recall": 0.827,
+     "precision": 0.825
+    },
+    "best_matched_at_95_precision": 258,
+    "best_recall_at_95_precision": 0.677
+   },
+   "pooled_without_bad_guy": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 304,
+     "extra": 60,
+     "recall": 0.831,
+     "precision": 0.835
+    },
+    "best_matched_at_95_precision": 256,
+    "best_recall_at_95_precision": 0.699
+   },
+   "pooled_without_bad_guy_with_track_floor": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 338,
+     "extra": 296,
+     "recall": 0.923,
+     "precision": 0.533
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   }
+  },
+  "h18": {
+   "extras_for_90_per_track": {
+    "apricots_128bpm": 0,
+    "bad_guy_128bpm": 16,
+    "feel_the_vibration_174bpm": 0,
+    "inhale_exhale_145bpm": 6,
+    "tears_140bpm": 4,
+    "late_night": 2,
+    "midnight_patience": 575,
+    "miracle": 2,
+    "heavy_on_mind": 61
+   },
+   "pooled_with_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 355,
+     "extra": 669,
+     "recall": 0.932,
+     "precision": 0.347
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   },
+   "pooled_no_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 311,
+     "extra": 71,
+     "recall": 0.816,
+     "precision": 0.814
+    },
+    "best_matched_at_95_precision": 255,
+    "best_recall_at_95_precision": 0.669
+   },
+   "pooled_without_bad_guy": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 300,
+     "extra": 66,
+     "recall": 0.82,
+     "precision": 0.82
+    },
+    "best_matched_at_95_precision": 254,
+    "best_recall_at_95_precision": 0.694
+   },
+   "pooled_without_bad_guy_with_track_floor": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 340,
+     "extra": 653,
+     "recall": 0.929,
+     "precision": 0.342
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   }
+  },
+  "h21_h18_gated_linear": {
+   "extras_for_90_per_track": {
+    "apricots_128bpm": 0,
+    "bad_guy_128bpm": 16,
+    "feel_the_vibration_174bpm": 0,
+    "inhale_exhale_145bpm": 3,
+    "tears_140bpm": 7,
+    "late_night": 4,
+    "midnight_patience": 638,
+    "miracle": 2,
+    "heavy_on_mind": 58
+   },
+   "pooled_with_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 357,
+     "extra": 735,
+     "recall": 0.937,
+     "precision": 0.327
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   },
+   "pooled_no_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 308,
+     "extra": 73,
+     "recall": 0.808,
+     "precision": 0.808
+    },
+    "best_matched_at_95_precision": 230,
+    "best_recall_at_95_precision": 0.604
+   },
+   "pooled_without_bad_guy": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 299,
+     "extra": 67,
+     "recall": 0.817,
+     "precision": 0.817
+    },
+    "best_matched_at_95_precision": 230,
+    "best_recall_at_95_precision": 0.628
+   },
+   "pooled_without_bad_guy_with_track_floor": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 342,
+     "extra": 719,
+     "recall": 0.934,
+     "precision": 0.322
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   }
+  },
+  "h22_main": {
+   "extras_for_90_per_track": {
+    "apricots_128bpm": 0,
+    "bad_guy_128bpm": 16,
+    "feel_the_vibration_174bpm": 0,
+    "inhale_exhale_145bpm": 5,
+    "tears_140bpm": 4,
+    "late_night": 13,
+    "midnight_patience": 646,
+    "miracle": 3,
+    "heavy_on_mind": 47
+   },
+   "pooled_with_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 357,
+     "extra": 741,
+     "recall": 0.937,
+     "precision": 0.325
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   },
+   "pooled_no_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 305,
+     "extra": 74,
+     "recall": 0.801,
+     "precision": 0.805
+    },
+    "best_matched_at_95_precision": 223,
+    "best_recall_at_95_precision": 0.585
+   },
+   "pooled_without_bad_guy": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 296,
+     "extra": 71,
+     "recall": 0.809,
+     "precision": 0.807
+    },
+    "best_matched_at_95_precision": 223,
+    "best_recall_at_95_precision": 0.609
+   },
+   "pooled_without_bad_guy_with_track_floor": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 342,
+     "extra": 725,
+     "recall": 0.934,
+     "precision": 0.321
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   }
+  }
+ },
+ "oracle_blocking_cases_h22": {
+  "costly_label_classes": {
+   "visible_but_ranked_low": 41,
+   "masked_in_mix": 18,
+   "label_without_kick_stem_attack": 23
+  },
+  "extras_at_90_classes": {
+   "non_kick_drum_hit": 20,
+   "other_low_band_onset": 609,
+   "bass_line_onset": 76,
+   "kick_stem_attack_present": 29
+  },
+  "per_track": {
+   "apricots_128bpm": {
+    "oracle": [
+     14,
+     0
+    ],
+    "extras_at_90": 0,
+    "costly": {},
+    "extras": {}
+   },
+   "bad_guy_128bpm": {
+    "oracle": [
+     0,
+     0
+    ],
+    "extras_at_90": 16,
+    "costly": {
+     "visible_but_ranked_low": 12,
+     "masked_in_mix": 1
+    },
+    "extras": {
+     "non_kick_drum_hit": 16
+    }
+   },
+   "feel_the_vibration_174bpm": {
+    "oracle": [
+     15,
+     0
+    ],
+    "extras_at_90": 0,
+    "costly": {},
+    "extras": {}
+   },
+   "inhale_exhale_145bpm": {
+    "oracle": [
+     10,
+     2
+    ],
+    "extras_at_90": 5,
+    "costly": {
+     "visible_but_ranked_low": 1
+    },
+    "extras": {
+     "other_low_band_onset": 3,
+     "non_kick_drum_hit": 1,
+     "bass_line_onset": 1
+    }
+   },
+   "tears_140bpm": {
+    "oracle": [
+     6,
+     1
+    ],
+    "extras_at_90": 4,
+    "costly": {
+     "visible_but_ranked_low": 3,
+     "label_without_kick_stem_attack": 1
+    },
+    "extras": {
+     "non_kick_drum_hit": 3,
+     "other_low_band_onset": 1
+    }
+   },
+   "late_night": {
+    "oracle": [
+     65,
+     2
+    ],
+    "extras_at_90": 13,
+    "costly": {
+     "masked_in_mix": 2,
+     "label_without_kick_stem_attack": 1,
+     "visible_but_ranked_low": 1
+    },
+    "extras": {
+     "bass_line_onset": 9,
+     "other_low_band_onset": 3,
+     "kick_stem_attack_present": 1
+    }
+   },
+   "midnight_patience": {
+    "oracle": [
+     39,
+     7
+    ],
+    "extras_at_90": 646,
+    "costly": {
+     "label_without_kick_stem_attack": 21,
+     "visible_but_ranked_low": 11,
+     "masked_in_mix": 11
+    },
+    "extras": {
+     "other_low_band_onset": 579,
+     "kick_stem_attack_present": 26,
+     "bass_line_onset": 41
+    }
+   },
+   "miracle": {
+    "oracle": [
+     28,
+     1
+    ],
+    "extras_at_90": 3,
+    "costly": {},
+    "extras": {
+     "kick_stem_attack_present": 1,
+     "other_low_band_onset": 2
+    }
+   },
+   "heavy_on_mind": {
+    "oracle": [
+     89,
+     14
+    ],
+    "extras_at_90": 47,
+    "costly": {
+     "visible_but_ranked_low": 13,
+     "masked_in_mix": 4
+    },
+    "extras": {
+     "other_low_band_onset": 21,
+     "bass_line_onset": 25,
+     "kick_stem_attack_present": 1
+    }
+   }
   }
  },
  "hypotheses": {
@@ -59,10 +520,19 @@
     "expected_failure": "glide relation reverses across songs; transferred weight helps Bad Guy/Inhale, hurts Late Night/Feel"
    },
    "rule_sha256": "e2ac936c2ccd623d8e5f1b4bfffd370148391aafe0e9436efeb8920e0d12646a",
+   "configs": 3,
+   "cost": {
+    "cpu": "glide 0.34% of one core",
+    "state": "8 band-pass filter values + one evidence window of band-passed audio"
+   },
    "variants": [
     {
      "name": "baseline_linear15+glide",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      172,
+      54
+     ],
      "tol_ms": {
       "35": [
        68,
@@ -318,6 +788,10 @@
     {
      "name": "h18_.25+glide",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      210,
+      58
+     ],
      "tol_ms": {
       "35": [
        71,
@@ -465,6 +939,10 @@
     {
      "name": "h16_kernel+glide",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      216,
+      65
+     ],
      "tol_ms": {
       "35": [
        63,
@@ -655,10 +1133,19 @@
     "expected_failure": "anchor tracks accompaniment; sags in kick-free cores"
    },
    "rule_sha256": "3e38949d1807ff399e0444bafe8d6b8332386a252ebfaf3def49aaef19894897",
+   "configs": 3,
+   "cost": {
+    "cpu": "no new audio processing",
+    "state": "last 8 s of candidate scores (~320 values)"
+   },
    "variants": [
     {
      "name": "p90",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      143,
+      33
+     ],
      "tol_ms": {
       "35": [
        22,
@@ -1140,6 +1627,10 @@
     {
      "name": "p99",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      78,
+      30
+     ],
      "tol_ms": {
       "35": [
        11,
@@ -1777,6 +2268,10 @@
     {
      "name": "block_max_median",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      174,
+      54
+     ],
      "tol_ms": {
       "35": [
        43,
@@ -2161,10 +2656,19 @@
     "expected_failure": "low-support extras re-admitted by linear fallback"
    },
    "rule_sha256": "21bd48738ff1f44a9703c825cb1ee19b0f6dcc99fa58c4433647f0a6e9424194",
+   "configs": 3,
+   "cost": {
+    "cpu": "one extra weighted sum over kernel values the kernel model already computes",
+    "state": "none new"
+   },
    "variants": [
     {
      "name": "h16_gated_linear",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      224,
+      48
+     ],
      "tol_ms": {
       "35": [
        38,
@@ -2246,6 +2750,10 @@
     {
      "name": "h18_gated_linear",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      225,
+      51
+     ],
      "tol_ms": {
       "35": [
        39,
@@ -2329,6 +2837,10 @@
     {
      "name": "h16_gated_h18",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      243,
+      54
+     ],
      "tol_ms": {
       "35": [
        40,
@@ -2430,10 +2942,19 @@
     "expected_failure": "few low-support training candidates; noisy beta"
    },
    "rule_sha256": "aecd98fd3fb417af0caf6e046f2ead71610dfba9507a9dc295c609a276ce2819",
+   "configs": 3,
+   "cost": {
+    "cpu": "H21 + glide 0.34% of one core",
+    "state": "H19 state + 4 fallback weights"
+   },
    "variants": [
     {
      "name": "h18_gate_glide_lowfit",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      241,
+      52
+     ],
      "tol_ms": {
       "35": [
        40,
@@ -2517,6 +3038,10 @@
     {
      "name": "h16_gate_glide_lowfit",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      235,
+      48
+     ],
      "tol_ms": {
       "35": [
        35,
@@ -2610,6 +3135,10 @@
     {
      "name": "h18_gate_glide_allfit_control",
      "fast_fires": null,
+     "without_bad_guy_70": [
+      214,
+      44
+     ],
      "tol_ms": {
       "35": [
        47,
@@ -2726,6 +3255,11 @@
     "expected_failure": "weak fast scores; few kicks qualify without new extras"
    },
    "rule_sha256": "07cfd988130260a4e46191dfe79938e90d19b009ad97e53ce5c0a36458bd8740",
+   "configs": 3,
+   "cost": {
+    "cpu": "second feature pass 0.8% of one core",
+    "state": "frozen extractor buffers + 16 weights"
+   },
    "variants": [
     {
      "name": "evidence_0.015s",
@@ -2767,6 +3301,10 @@
        170
       ]
      },
+     "without_bad_guy_70": [
+      247,
+      47
+     ],
      "tol_ms": {
       "35": [
        47,
@@ -2873,6 +3411,10 @@
        170
       ]
      },
+     "without_bad_guy_70": [
+      247,
+      47
+     ],
      "tol_ms": {
       "35": [
        54,
@@ -2979,6 +3521,10 @@
        170
       ]
      },
+     "without_bad_guy_70": [
+      247,
+      47
+     ],
      "tol_ms": {
       "35": [
        65,
