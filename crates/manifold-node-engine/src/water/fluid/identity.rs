@@ -2,7 +2,14 @@
 //! Render materials and project appearance are deliberately outside this seam.
 use sha2::{Digest, Sha256};
 
-use crate::scene::source_asset::SourceImplementationIdentity;
+use crate::scene::source_asset::{ENGINE_SOURCE_IDENTITY, SourceImplementationIdentity};
+
+inventory::submit! {
+    SourceImplementationIdentity {
+        name: "water",
+        identity: env!("MANIFOLD_WATER_SOURCE_IDENTITY"),
+    }
+}
 
 pub(in super::super) fn solver_identity() -> [u8; 32] {
     static SOURCES: std::sync::LazyLock<Vec<&'static SourceImplementationIdentity>> = std::sync::LazyLock::new(|| {
@@ -16,7 +23,7 @@ pub(in super::super) fn solver_identity() -> [u8; 32] {
             manifold_fluids::SOURCE_IDENTITY,
             manifold_physics::SOURCE_IDENTITY,
             manifold_core::SOURCE_IDENTITY,
-            env!("MANIFOLD_PHYSICS_INTEGRATION_IDENTITY"),
+            ENGINE_SOURCE_IDENTITY,
         ],
         &SOURCES,
     )

@@ -3,6 +3,10 @@
 
 use crate::{parameters::ParamValue, exec::effect_node::ParamValues};
 
+/// Engine implementation inputs that invalidate recorded simulation results.
+#[cfg(feature = "gpu-proofs")]
+pub const ENGINE_SOURCE_IDENTITY: &str = env!("MANIFOLD_PHYSICS_INTEGRATION_IDENTITY");
+
 /// Family implementation inputs that invalidate recorded simulation results.
 #[cfg(feature = "gpu-proofs")]
 pub struct SourceImplementationIdentity {

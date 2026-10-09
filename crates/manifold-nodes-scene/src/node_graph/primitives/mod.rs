@@ -103,8 +103,14 @@ mod triangulate_grid;
 mod tube_from_path;
 mod twist_mesh;
 mod transform_3d;
-manifold_core::testkit_visible! { mod smooth_surface_mesh; }
-manifold_core::testkit_visible! { mod surface_mesh_normals; }
+#[cfg(any(test, feature = "testkit"))]
+pub mod smooth_surface_mesh;
+#[cfg(not(any(test, feature = "testkit")))]
+mod smooth_surface_mesh;
+#[cfg(any(test, feature = "testkit"))]
+pub mod surface_mesh_normals;
+#[cfg(not(any(test, feature = "testkit")))]
+mod surface_mesh_normals;
 mod transform_shake;
 manifold_core::testkit_visible! { mod scene_object; }
 mod revolve_curve;

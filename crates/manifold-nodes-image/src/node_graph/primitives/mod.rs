@@ -110,7 +110,10 @@ mod heightmap_to_normal;
 mod hue_saturation;
 mod image_folder;
 mod inject_burst;
-manifold_core::testkit_visible! { mod euler_step_particles; }
+#[cfg(any(test, feature = "testkit"))]
+pub mod euler_step_particles;
+#[cfg(not(any(test, feature = "testkit")))]
+mod euler_step_particles;
 manifold_core::testkit_visible! { mod sample_texture_at_particles; }
 manifold_core::testkit_visible! { mod wrap_particles_torus; }
 manifold_core::testkit_visible! { mod wave_field_3d; }

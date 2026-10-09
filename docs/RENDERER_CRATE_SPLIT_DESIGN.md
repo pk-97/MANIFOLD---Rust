@@ -379,6 +379,13 @@ Water-specific test helpers move with water. The direct primitive GPU harness
 so image and scene proofs need no water test dependency. Native field publication
 is tested in water; the engine's scheduling proofs use explicit unequal intervals.
 
+Split recorded-simulation source identity by the same ownership. The engine
+exports its build hash of source-asset vocabulary, transforms and preset context.
+Water registers its adapter/runtime hash through `SourceImplementationIdentity`,
+beside the existing scene animation provider. Preserve the union of previously
+hashed inputs; each final crate's build script reads only its own sources.
+The composed hash changes intentionally, invalidating prior recorded results.
+
 Rejected: one boxed payload per write, because it adds frame allocations;
 `StateStore`, because its node/owner identity and rebuild lifecycle do not model
 resource slots; opaque byte buffers, because they require unsafe layout contracts.
