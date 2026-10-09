@@ -955,6 +955,67 @@ complexity. No rhythm-only predictions, neural models or external datasets were
 used. This is a useful mechanism to test for other detectors, not evidence that
 the same fitted weights classify snares, hats or synths.
 
+**Night research, 2026-10-10 — limit demonstrated, no candidate promoted.**
+Same 381 labels, nine songs, nested whole-song exclusion, 60 ms refractory and
+coarse-plus-refined cutoffs. Frozen H18 component logits for every outer and
+inner fold are exported once (`kick_night_dump.py`); `kick_night_replay.py`
+reproduces baseline 223+89, H16 285+90 and H18 262+89 exactly. Results:
+`tools/audio_analysis/eval/scoreboard/kick_night_2026-10-10.json`; cache
+`~/.cache/manifold/kick-research-2026-10-10-night/` (`NIGHT_STATE.md` indexes it).
+Waypoints and Know You're There remain untouched.
+
+Where H18's 119 misses come from: 50 are cutoff transfer (a per-song cutoff
+catches them with no more extras), 64 within-song ranking (Midnight 38, Heavy 17),
+3 refractory, 2 no candidate. Within-song ranking is strong (AUC ≥ 0.97) in seven
+songs; Bad Guy 0.94 and Midnight 0.84. Label-informed per-song cutoffs, a
+diagnostic ceiling and never a setting, give baseline 274+43, H18 289+38 and H22
+271+36: about 71–76% recall at 88% precision. **95/95 is out of reach for these
+representations even with perfect per-song cutoffs.** No label-free song
+statistic predicts the best cutoff (best spread 0.74→0.52 logit), which is why
+H12's median re-centring failed: ~40 candidates/s are mostly non-kicks.
+
+What the remaining errors are, from stems only:
+- Bad Guy extras are bass-line fires. At matched kicks the drum stem's 45–140 Hz
+  band rises ~60 dB; at extras it rises 0.8 dB while bass/others rise 5–6 dB;
+  bass is the loudest low stem at 29 of 42. Unlabelled drum-stem onsets there are
+  body/high-band hits (claps, snares); the labels hold.
+- Midnight: H18 misses 9 of 47 labels with a fresh kick-stem attack but 30 of 51
+  without one (27 carry a drums-stem low attack, 20 no stem low attack, 4 bass
+  only). The kick stem is loud but not rising there: retriggers over sustain or
+  another layer. **Whether these are kicks needs Peter's listening verdict.**
+- Heavy: 55 of 115 clean kick-stem attacks are missed; masking plus cutoff
+  transfer, not label source.
+
+Label timing: stem-to-master lags are found from whole-song low-band envelope
+correlation without labels (Late Night 8 ms, Midnight 136 ms = the known
+6546-sample prefix, Miracle 3 ms, Heavy −2 ms). Visual midpoints sit within
+~10 ms of kick-stem onsets. At 70 ms every scorer is stable across midpoint,
+physical-onset and perceived-attack labels (baseline 223+89 on all three; H18
+261–263). At 50 ms counts swing ~30; 35 ms is unreachable by construction, since
+the 42.6 ms evidence window sets the earliest emission.
+
+| Hypothesis (three predeclared configs) | 381 at 70 ms | Finding |
+|---|---|---|
+| H19 causal pitch glide (30–250 Hz zero-crossing slope, drop, pre-jump) stacked on linear / H18 / H16 | 187+88 / 225+90 / 231+91, 1–10 core fires | Glide flips sign by production; one transferred weight learns "rising = kick". |
+| H20 past-only upper-anchor cutoff (p90 / p99 / block-max median, 8 s) on H18 | 146+39 / 88+46 / 184+71, 14–20 core fires | Scores alone cannot tell masked kicks from absent kicks. |
+| H21 kernel gated by its own support act/(act+5), fallback linear / linear / H18 | 239+94 / **240+97** / 258+96 | Kernel-lost kicks sit in low support (median activity 0.7 vs 13.8 for recoveries); gating restores retention but re-admits low-support extras. |
+| H22 H21 gate with linear+glide fallback fitted on low-support candidates / same with H16 / control fitted on all | **256+90** / 250+86 / 229+86 | Inside low support glide points the physical way in every song; main config: zero core fires, ≤1 baseline loss per track, one extra over the count rule. Control fails, so the conditioning matters. |
+
+H22 main versus H18: original 174 135+72 vs 138+68; added 207 121+18 vs
+124+21; D2 28/32+2 with one fire in the Late Night sustained-bass core vs 26/32+0;
+additional 73 47+19 vs 47+16 (song-excluded fires, development passages). Delay
+p50/p90 45.2/56.8 ms, with one 183 ms late association. A first H22 run leaked
+an in-place training-mask edit across folds and passed spuriously; it is void
+and archived. Glide costs 0.34% of one core in batch Python; native callback
+cost is unmeasured. Listening: `listening/manifest.json` (F = H22 beside the
+evening's A and E renders).
+
+Transferable lessons: separate candidate, score, cutoff and refractory losses
+before changing anything; ask where a learner has training support before
+trusting it, and route rare shapes to evidence that is physical for them; check
+a cue's sign inside each support zone, not pooled; and audit labels against
+isolated stems with a label-free lag before arguing about timing.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png

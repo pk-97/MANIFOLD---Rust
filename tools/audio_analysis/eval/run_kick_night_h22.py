@@ -43,6 +43,50 @@ RULE = dict(hypothesis='H22', kappa=5.0, low_support_act=5.0, l2=.01,
             acceptance='intermediate target', expected_failure='few low-support training candidates; noisy beta')
 
 
+def load_inputs():
+    with np.load(NIGHT / 'glide.npz') as z:
+        glide = {k: z[k] for k in z.files}
+    with np.load(NIGHT / 'kernel_activity.npz') as z:
+        act = {k: z[k] for k in z.files}
+    return glide, act
+
+
+def make_h22(d, glide, act, expert, low_only):
+    """Return (logit(outer, target), fallback_model(outer, target)) for one configuration."""
+    lin = lambda o, t: d.logits(o, t, 'linear')  # noqa: E731
+    experts = {'h18': lambda o, t: h18_logit(d, o, t), 'h16': lambda o, t: d.logits(o, t, 'kernel')}
+    models = {}
+
+    def fallback_model(o, t):
+        key = (o, frozenset({o, t}))
+        if key not in models:
+            offs, xs, ys, ss = [], [], [], []
+            for u in TRACKS:
+                if u in (o, t):
+                    continue
+                r = d.records[u]
+                # A copy: an in-place mask edit once leaked between folds and configs.
+                m = np.array(r['training_mask'], dtype=bool)
+                if low_only:
+                    m = m & (act[f'{o}|{u}'] < RULE['low_support_act'])
+                offs.append(lin(o, u)[m]); xs.append(glide[u][m])
+                ys.append(np.asarray(r['labels'])[m]); ss.append(np.full(m.sum(), TRACKS.index(u)))
+            models[key] = fit_stack(np.concatenate(offs), np.concatenate(xs), np.concatenate(ys).astype(float),
+                                    np.concatenate(ss), RULE['l2'])
+        return models[key]
+
+    def logit(o, t):
+        a = act[f'{o}|{t}']
+        g = a / (a + RULE['kappa'])
+        f = apply_stack(fallback_model(o, t), lin(o, t), glide[t])
+        return g * experts[expert](o, t) + (1 - g) * f
+    return logit, fallback_model
+
+
+CONFIGS = {'h18_gate_glide_lowfit': ('h18', True), 'h16_gate_glide_lowfit': ('h16', True),
+           'h18_gate_glide_allfit_control': ('h18', False)}
+
+
 def main():
     out = NIGHT / 'h22'
     out.mkdir(exist_ok=True)
@@ -52,48 +96,12 @@ def main():
     if json.loads(rule_path.read_text()) != RULE:
         raise ValueError('predeclared rule differs')
     d = Data()
-    with np.load(NIGHT / 'glide.npz') as z:
-        glide = {k: z[k] for k in z.files}
-    with np.load(NIGHT / 'kernel_activity.npz') as z:
-        act = {k: z[k] for k in z.files}
+    glide, act = load_inputs()
     with open(NIGHT / 'replay.pkl', 'rb') as f:
         replay = pickle.load(f)
-    lin = lambda o, t: d.logits(o, t, 'linear')  # noqa: E731
-    experts = {'h18': lambda o, t: h18_logit(d, o, t), 'h16': lambda o, t: d.logits(o, t, 'kernel')}
-
-    def make(expert, low_only):
-        models = {}
-
-        def fallback_model(o, t):
-            key = (o, frozenset({o, t}))
-            if key not in models:
-                offs, xs, ys, ss = [], [], [], []
-                for u in TRACKS:
-                    if u in (o, t):
-                        continue
-                    r = d.records[u]
-                    # A copy: an in-place mask edit once leaked between folds and configs.
-                    m = np.array(r['training_mask'], dtype=bool)
-                    if low_only:
-                        m = m & (act[f'{o}|{u}'] < RULE['low_support_act'])
-                    offs.append(lin(o, u)[m]); xs.append(glide[u][m])
-                    ys.append(np.asarray(r['labels'])[m]); ss.append(np.full(m.sum(), TRACKS.index(u)))
-                models[key] = fit_stack(np.concatenate(offs), np.concatenate(xs), np.concatenate(ys).astype(float),
-                                        np.concatenate(ss), RULE['l2'])
-            return models[key]
-
-        def logit(o, t):
-            a = act[f'{o}|{t}']
-            g = a / (a + RULE['kappa'])
-            f = apply_stack(fallback_model(o, t), lin(o, t), glide[t])
-            return g * experts[expert](o, t) + (1 - g) * f
-        return logit, fallback_model
-
-    configs = {'h18_gate_glide_lowfit': ('h18', True), 'h16_gate_glide_lowfit': ('h16', True),
-               'h18_gate_glide_allfit_control': ('h18', False)}
     report = dict(rule=RULE, rule_sha256=hashlib.sha256(rule_path.read_bytes()).hexdigest(), variants=[])
     for name in RULE['configurations']:
-        logit, fm = make(*configs[name])
+        logit, fm = make_h22(d, glide, act, *CONFIGS[name])
         s, by_track, fires = evaluate_scorer(d, lambda o, t, lg=logit: expit(lg(o, t)), name=name)
         ret = retention(replay['baseline'][1], by_track)
         ret18 = retention(replay['h18'][1], by_track)
