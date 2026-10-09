@@ -132,7 +132,12 @@ fn trigger_creates_phantom_clip() {
 
     assert!(clip.is_some());
     assert_eq!(mgr.live_slots().len(), 1);
-    assert!(mgr.is_live_slot_clip(&clip.unwrap().id));
+    let clip = clip.unwrap();
+    assert!(mgr.is_live_slot_clip(&clip.id));
+    assert_eq!(clip.layer_id, project.timeline.layers[0].layer_id);
+    let mut refs = Vec::new();
+    mgr.fill_live_slot_refs(&mut refs);
+    assert_eq!(refs[0].layer_id, clip.layer_id);
 }
 
 #[test]
@@ -158,6 +163,10 @@ fn trigger_live_generator_clip() {
     let clip = clip.unwrap();
     assert!(clip.video_clip_id.is_empty());
     assert!(mgr.is_live_slot_clip(&clip.id));
+    assert_eq!(clip.layer_id, project.timeline.layers[0].layer_id);
+    let mut refs = Vec::new();
+    mgr.fill_live_slot_refs(&mut refs);
+    assert_eq!(refs[0].layer_id, clip.layer_id);
 }
 
 #[test]

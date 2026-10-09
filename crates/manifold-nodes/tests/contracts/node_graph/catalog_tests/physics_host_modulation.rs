@@ -290,9 +290,8 @@ fn run<S: AsRef<str>>(
             Seconds(seconds),
             Seconds(1.0 / f64::from(fps)),
             &audio,
+            &manifold_playback::clip_controls::ClipControlFrame::default(),
             &mut Vec::new(),
-            &mut Vec::new(),
-            &[],
             &mut FireMeterCapture::default(),
         );
         let generator = project.timeline.layers[0].gen_params().unwrap();
@@ -366,9 +365,8 @@ fn modifier_card_kick_is_sampled_at_each_tick_inside_one_frame() {
             Seconds(seconds),
             Seconds(1.0 / f64::from(fps)),
             &audio,
+            &manifold_playback::clip_controls::ClipControlFrame::default(),
             &mut Vec::new(),
-            &mut Vec::new(),
-            &[],
             &mut FireMeterCapture::default(),
         );
         let generator = project.timeline.layers[0].gen_params().unwrap();

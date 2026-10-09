@@ -1517,8 +1517,6 @@ mod scene_card_convergence_tests {
                     legacy_param_index: None,
                     action: manifold_core::audio_mod::TriggerAction::Continuous,
                     current_level: 0.0,
-                    was_clip_active: false,
-                    prev_active_elapsed: manifold_core::Beats(-1.0),
                     fire_count: 0,
                     step_value: None,
                     step_dir: 1.0,

@@ -137,11 +137,11 @@ fn drag_active_clip_across_layers_rebinds() {
         "the heal start carries fire_clip_edge=false — a drag is not a trigger"
     );
     assert!(
-        engine.pending_clip_edge_layers().is_empty(),
+        engine.clip_controls().view(&engine.project().unwrap().timeline.layers[1].layer_id).unwrap().starts.is_empty(),
         "heals emit no clip-edge for modulation"
     );
     assert_eq!(
-        engine.last_active_clip_id_for(1).cloned().as_deref(),
+        engine.clip_controls().view(&engine.project().unwrap().timeline.layers[1].layer_id).unwrap().spans.last().map(|span| span.clip_id.as_str()),
         Some(clip_id.as_str()),
         "the destination layer's edge-diff state updates silently"
     );
