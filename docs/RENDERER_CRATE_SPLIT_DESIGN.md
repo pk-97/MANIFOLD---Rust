@@ -290,10 +290,11 @@ pass against the existing project fixture. The preset validator's Shatter
 host now supplies Physics through the existing PhysicsSolids fixture, using
 real imported mesh metadata; all 112 bundled presets now pass validation.
 
-The catalog also owns the retired-parameter load and hidden-whitewater
-registration contracts, which need the linked water family. Their assertions
-are unchanged. The six native water race probes now share that harness with
-the GPU race measurements; only imports change. Native world setup and domain
+The catalog also owns the retired-parameter load, hidden-whitewater
+registration and retired-native-solver reference contracts, which need the
+linked water family. Their assertions are unchanged. The six native water race
+probes now share that harness with the GPU race measurements; only imports
+change. Native world setup and domain
 conversion remain private in production and use the existing testkit visibility
 for those probes. The catalog forwards `fluid-perf-proofs` to scene as well as
 water so the frame probe can read the existing scene timing instrumentation.
