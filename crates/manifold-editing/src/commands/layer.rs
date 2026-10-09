@@ -456,8 +456,8 @@ impl Command for DeleteLayerCommand {
 /// Reorder layers atomically.
 #[derive(Debug)]
 pub struct ReorderLayerCommand {
-    old_order: Vec<Layer>,
-    new_order: Vec<Layer>,
+    old_order: Vec<LayerId>,
+    new_order: Vec<LayerId>,
     old_parent_ids: HashMap<LayerId, Option<LayerId>>,
     new_parent_ids: HashMap<LayerId, Option<LayerId>>,
     applied: bool,
@@ -472,8 +472,8 @@ impl ReorderLayerCommand {
         new_parent_ids: HashMap<LayerId, Option<LayerId>>,
     ) -> Self {
         Self {
-            old_order,
-            new_order,
+            old_order: old_order.into_iter().map(|layer| layer.layer_id).collect(),
+            new_order: new_order.into_iter().map(|layer| layer.layer_id).collect(),
             old_parent_ids,
             new_parent_ids,
             applied: false,
@@ -481,25 +481,9 @@ impl ReorderLayerCommand {
         }
     }
 
-    fn apply_parent_ids(
-        layers: &mut [Layer],
-        parent_ids: &HashMap<LayerId, Option<LayerId>>,
-        authoritative: &[Layer],
-    ) {
-        for layer in layers {
-            if layer.is_trigger() {
-                if let Some(original) = authoritative.iter().find(|original| original.layer_id == layer.layer_id) {
-                    layer.parent_layer_id = original.parent_layer_id.clone();
-                }
-            } else if let Some(parent_id) = parent_ids.get(&layer.layer_id) {
-                layer.parent_layer_id = parent_id.clone();
-            }
-        }
-    }
-
-    fn validate_membership(current_order: &[Layer], new_order: &[Layer]) -> Result<(), &'static str> {
+    fn validate_membership(current_order: &[Layer], new_order: &[LayerId]) -> Result<(), &'static str> {
         let current_ids: HashSet<_> = current_order.iter().map(|layer| &layer.layer_id).collect();
-        let new_ids: HashSet<_> = new_order.iter().map(|layer| &layer.layer_id).collect();
+        let new_ids: HashSet<_> = new_order.iter().collect();
         if current_ids.len() != current_order.len()
             || new_ids.len() != new_order.len()
             || current_ids != new_ids
@@ -520,6 +504,29 @@ impl ReorderLayerCommand {
         }
         Ok(())
     }
+
+    fn resolve_live_order(
+        project: &Project,
+        order: &[LayerId],
+        parent_ids: &HashMap<LayerId, Option<LayerId>>,
+    ) -> Option<Vec<Layer>> {
+        let mut resolved = Vec::with_capacity(order.len());
+        for layer_id in order {
+            let layer = project
+                .timeline
+                .layers
+                .iter()
+                .find(|layer| &layer.layer_id == layer_id)?;
+            let mut live = layer.clone();
+            if !live.is_trigger()
+                && let Some(parent_id) = parent_ids.get(layer_id)
+            {
+                live.parent_layer_id = parent_id.clone();
+            }
+            resolved.push(live);
+        }
+        Some(resolved)
+    }
 }
 
 impl Command for ReorderLayerCommand {
@@ -530,8 +537,10 @@ impl Command for ReorderLayerCommand {
             self.rejection = Some(reason);
             return;
         }
-        let mut new_order = self.new_order.clone();
-        Self::apply_parent_ids(&mut new_order, &self.new_parent_ids, &project.timeline.layers);
+        let Some(new_order) = Self::resolve_live_order(project, &self.new_order, &self.new_parent_ids) else {
+            self.rejection = Some(LAYER_REORDER_MEMBERSHIP);
+            return;
+        };
         if let Err(reason) = Self::validate_changed_parents(&new_order, &project.timeline.layers) {
             self.rejection = Some(reason);
             return;
@@ -544,8 +553,19 @@ impl Command for ReorderLayerCommand {
         if !self.applied {
             return;
         }
-        let mut old_order = self.old_order.clone();
-        Self::apply_parent_ids(&mut old_order, &self.old_parent_ids, &project.timeline.layers);
+        self.rejection = None;
+        if let Err(reason) = Self::validate_membership(&project.timeline.layers, &self.old_order) {
+            self.rejection = Some(reason);
+            return;
+        }
+        let Some(old_order) = Self::resolve_live_order(project, &self.old_order, &self.old_parent_ids) else {
+            self.rejection = Some(LAYER_REORDER_MEMBERSHIP);
+            return;
+        };
+        if let Err(reason) = Self::validate_changed_parents(&old_order, &project.timeline.layers) {
+            self.rejection = Some(reason);
+            return;
+        }
         project.timeline.replace_layer_order(old_order);
         self.applied = false;
     }

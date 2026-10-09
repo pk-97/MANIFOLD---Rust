@@ -1,7 +1,7 @@
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::effect_graph_def::ParamSpecDef;
-use manifold_core::effects::PresetInstance;
+use manifold_core::effects::{ParamEnvelope, PresetInstance};
 use manifold_core::params::{ClipTriggerSource, Param, ParamManifest};
 use manifold_core::session::{ClipSequence, Scene, SessionSlot};
 use manifold_core::types::LayerType;
@@ -486,6 +486,121 @@ fn reorder_preserves_owner_when_candidate_trigger_parent_is_overridden() {
     assert_eq!(project.timeline.find_layer_by_id(&trigger_id).unwrap().1.parent_layer_id, Some(owner_id));
     command.undo(&mut project);
     assert_eq!(layer_ids(&project), old.iter().map(|layer| layer.layer_id.clone()).collect::<Vec<_>>());
+}
+
+#[test]
+fn reorder_resolves_live_layers_without_replaying_stale_runtime_state() {
+    let (mut project, _, _, _, first_id, _, unrelated_id, _) = grouped_project();
+    {
+        let layer = project
+            .timeline
+            .layers
+            .iter_mut()
+            .find(|layer| layer.layer_id == first_id)
+            .unwrap();
+        let effect = layer.effects.as_mut().unwrap().first_mut().unwrap();
+        effect.params.get_mut("force").unwrap().value = 0.25;
+        let envelope = ParamEnvelope::new("force");
+        effect.envelopes_mut().push(envelope);
+        effect.envelopes_mut().first_mut().unwrap().step_value = Some(0.4);
+    }
+    let old = project.timeline.layers.clone();
+    let original_ids = old.iter().map(|layer| layer.layer_id.clone()).collect::<Vec<_>>();
+    let mut new = old.clone();
+    let unrelated = new
+        .iter()
+        .position(|layer| layer.layer_id == unrelated_id)
+        .unwrap();
+    let unrelated_layer = new.remove(unrelated);
+    new.insert(0, unrelated_layer);
+    let parents: std::collections::HashMap<LayerId, Option<LayerId>> = old
+        .iter()
+        .map(|layer| (layer.layer_id.clone(), layer.parent_layer_id.clone()))
+        .collect();
+    let mut command = ReorderLayerCommand::new(old, new, parents.clone(), parents);
+
+    let live = project
+        .timeline
+        .layers
+        .iter_mut()
+        .find(|layer| layer.layer_id == first_id)
+        .unwrap();
+    let effect = live.effects.as_mut().unwrap().first_mut().unwrap();
+    effect.params.get_mut("force").unwrap().value = 0.75;
+    effect.envelopes_mut().first_mut().unwrap().step_value = Some(0.9);
+
+    command.execute(&mut project);
+    assert_eq!(project.timeline.layers[0].layer_id, unrelated_id);
+    {
+        let live = project
+            .timeline
+            .layers
+            .iter_mut()
+            .find(|layer| layer.layer_id == first_id)
+            .unwrap();
+        let effect = live.effects.as_mut().unwrap().first_mut().unwrap();
+        effect.params.get_mut("force").unwrap().base = 0.83;
+        effect.envelopes_mut().first_mut().unwrap().step_value = Some(0.93);
+    }
+    command.undo(&mut project);
+    assert_eq!(layer_ids(&project), original_ids);
+    {
+        let live = project
+            .timeline
+            .layers
+            .iter()
+            .find(|layer| layer.layer_id == first_id)
+            .unwrap();
+        let effect = live.effects.as_ref().unwrap().first().unwrap();
+        assert_eq!(effect.params.get("force").unwrap().base, 0.83);
+        assert_eq!(effect.envelopes.as_ref().unwrap()[0].step_value, Some(0.93));
+    }
+    {
+        let live = project
+            .timeline
+            .layers
+            .iter_mut()
+            .find(|layer| layer.layer_id == first_id)
+            .unwrap();
+        let effect = live.effects.as_mut().unwrap().first_mut().unwrap();
+        effect.params.get_mut("force").unwrap().base = 0.91;
+        effect.envelopes_mut().first_mut().unwrap().step_value = Some(0.97);
+    }
+    command.execute(&mut project);
+    assert_eq!(project.timeline.layers[0].layer_id, unrelated_id);
+    let live = project
+        .timeline
+        .layers
+        .iter()
+        .find(|layer| layer.layer_id == first_id)
+        .unwrap();
+    let effect = live.effects.as_ref().unwrap().first().unwrap();
+    assert_eq!(effect.params.get("force").unwrap().base, 0.91);
+    assert_eq!(effect.envelopes.as_ref().unwrap()[0].step_value, Some(0.97));
+}
+
+#[test]
+fn reorder_undo_rejects_changed_membership_without_dropping_live_layers() {
+    let mut project = Project::default();
+    let first = Layer::new_video("first".into(), 0);
+    let second = Layer::new_video("second".into(), 1);
+    project.timeline.layers.extend([first, second]);
+    let old = project.timeline.layers.clone();
+    let new = vec![old[1].clone(), old[0].clone()];
+    let parents: std::collections::HashMap<LayerId, Option<LayerId>> = old
+        .iter()
+        .map(|layer| (layer.layer_id.clone(), layer.parent_layer_id.clone()))
+        .collect();
+    let mut command = ReorderLayerCommand::new(old, new, parents.clone(), parents);
+    command.execute(&mut project);
+    assert!(command.was_applied());
+
+    project.timeline.layers.push(Layer::new_video("added".into(), 2));
+    let current = layer_ids(&project);
+    command.undo(&mut project);
+    assert!(command.was_applied());
+    assert!(command.rejection_reason().is_some());
+    assert_eq!(layer_ids(&project), current);
 }
 
 #[test]
