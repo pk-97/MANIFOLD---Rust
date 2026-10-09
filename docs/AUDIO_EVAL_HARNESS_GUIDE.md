@@ -358,6 +358,21 @@ latency evidence. See `tools/audio_analysis/eval/scoreboard/kick_heldout_2026-10
 and `tests/fixtures/audio_labels/heldout_passages_2026-10-09.json`. These tracks
 must be treated as development material if this diagnosis informs later changes.
 
+**Background-relative balance, 2026-10-09 — rejected:** at the missed Heavy On
+Mind 200.130 s kick, body rise and combined rise pass, but body/low balance is
+0.221, below the fixed 1/3 threshold. At the caught 201.265 s kick it is 0.427.
+One trial replaces only that balance with positive `fast - slow` power in each
+band, retaining all thresholds, timing and other v5 rules. It recovers the
+examined kick and raises Heavy On Mind from 4/32 to 6/32. Across nine recordings,
+strict 50 ms matches/misses/extras change from 116/58/54 to 119/55/60; wider
+association changes from 118/56/52 to 122/52/57 without losing associated labels.
+Late Night bass-only extras rise 5→6 and Heavy On Mind bass-only extras 0→1.
+Thus background-relative balance exposes a real bottleneck but fails the
+false-fire requirement. No persistence veto was added. Four focused tests pass;
+all nine frozen v5 sequences replay exactly and synthetic controls are unchanged.
+Miracle and Heavy On Mind are now development material, not independent holdouts.
+See `tools/audio_analysis/eval/scoreboard/kick_excess_balance_2026-10-09.json`.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
