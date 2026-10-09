@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 import numpy as np
 
-from eval.run_kick_fusion_trial import fit_without, predict_score, select_fires
+from eval.run_kick_fusion_trial import fit_without, predict_score, select_fires, training_labels
 from eval.kick_fusion_features import _rise_edges, fusion_features
 
 
@@ -13,6 +13,25 @@ def record(name,shift=0):
 
 
 class FusionScoreTests(unittest.TestCase):
+    def test_excluded_onset_cannot_train_from_window_after_exclusion(self):
+        source = dict(group='original_five', truth=[1., 1.2],
+                      regions=[dict(start_s=.9, end_s=1.01)])
+        # First window is fully outside exclusion but within35ms of its onset.
+        mask, labels, ids = training_labels(source, {}, np.array([101, 119, 149]),
+                                            np.array([105, 123, 153]), 1000, 10, 2.)
+        self.assertEqual(mask.tolist(), [False, True, True])
+        self.assertEqual(labels.tolist(), [0, 1, 0])
+        self.assertEqual(ids.tolist(), [-1, 1, -1])
+
+    def test_review_margin_onset_does_not_train_inside_core(self):
+        passage = dict(start_s=1., end_s=2., kick_times_s=[.99, 1.2])
+        source = dict(group='master', passages=[passage])
+        ref = dict(scores=dict(v5=[dict(excluded_regions=[])]))
+        mask, labels, _ = training_labels(source, ref, np.array([99, 119]),
+                                          np.array([103, 123]), 1000, 10, 3.)
+        self.assertEqual(mask.tolist(), [False, True])
+        self.assertEqual(labels.tolist(), [0, 1])
+
     def test_new_body_attack_is_proposed_while_low_stays_active(self):
         base=np.ones((3,3,2));upper=np.ones((3,4,2))
         base[:,0,0]=2; base[1,1,0]=3

@@ -470,6 +470,22 @@ Do not import those labels as acoustic ground truth or apply their show timebase
 to different masters. Inventory and source evidence:
 `tools/audio_analysis/eval/local_corpus_inventory_2026-10-09.json`.
 
+**Failure diagnosis and target correction, 2026-10-09:** all 174 labels have
+temporally available raw candidates; this does not establish their acoustic
+cause. Frozen-model misses primarily come from score rejection, with one
+uncertainty-boundary artifact. Scores shift between songs, and hard false
+triggers can outrank kicks within a song. Rank-2 reconstruction also loses
+discrimination present in the same features. Three candidates associated with
+excluded Midnight labels incorrectly remained positive training targets; they
+are now ignored, not reassigned negative. Cache-only replay gives 103/174 with
+45 extras for linear15, 91/174 with 40 for linear39, and 86/174 with 66 for SVD
+at 70 ms. All four reviewed kick-free cores remain clear. Eight fusion tests
+and two runner integration tests pass. Old results and labels remain recorded;
+the repair and diagnostic provenance are appended to the trajectory scoreboard.
+Twenty additional fixed 12-second cores are prepared, but their 370 source
+proposals contain decay-tail crossings and weak noise excursions. They are
+review material, not additional accepted labels or expanded validation.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png

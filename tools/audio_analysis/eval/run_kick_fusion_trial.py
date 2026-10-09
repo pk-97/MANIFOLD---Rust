@@ -99,6 +99,13 @@ def training_labels(source, ref, candidates, available, sr, hop, duration):
         truth = np.array(p['kick_times_s'])
         if len(truth):
             distances = np.abs(starts[:,None]-truth[None,:])
+            ignored_truth = (truth < p['start_s']) | (truth >= p['end_s'])
+            for region in p['excluded_regions']:
+                ignored_truth |= (truth >= region['start_s']) & (truth <= region['end_s'])
+            # An excluded onset can still have a nearby candidate whose entire
+            # evidence window falls outside the exclusion. Ignore that target;
+            # removing the onset alone would wrongly relabel its kick as noise.
+            selected &= ~np.any(distances[:, ignored_truth] <= .035+1e-12, axis=1)
             closest = np.argmin(distances, axis=1)
             positive = selected & (distances[np.arange(len(starts)), closest] <= .035+1e-12)
             y[positive] = 1
