@@ -248,6 +248,9 @@ class ScopeTests(unittest.TestCase):
                     prefix = "node_graph::catalog_tests::" + module + "::"
                     self.assertIn(prefix, cpu.filterset)
                     self.assertIn(prefix, gpu.filters)
+                if path.startswith(("crates/manifold-compositor/src/",
+                                    "crates/manifold-nodes-scene/src/")):
+                    self.assertNotIn(gpu.workspace.owner(path), gpu.whole_packages)
         gltf = plan(["crates/manifold-nodes-scene/src/node_graph/gltf_import/assembly.rs"])
         self.assertTrue({"render_scene_material_upgrade::", "rt_bug318_import_toggle::",
                          "rt_bug326_fix_gate::", "rt_bugmajv_kernel_toggle::",
@@ -256,6 +259,37 @@ class ScopeTests(unittest.TestCase):
             path = f"crates/{owner}/src/node_graph/primitives/mod.rs"
             cpu = cpu_scope.plan_for_paths([path], Path("/nonexistent"), fixture_workspace(Path("/nonexistent")))
             self.assertIn("binary(=main)", cpu.filterset)
+
+    def test_mapped_sources_keep_local_module_proofs_without_whole_package(self):
+        cases = {
+            "crates/manifold-compositor/src/layer_compositor.rs": "layer_compositor::",
+            "crates/manifold-compositor/src/preset_thumbnail.rs": "preset_thumbnail::",
+            "crates/manifold-compositor/src/generator_renderer.rs": "generator_renderer::",
+            "crates/manifold-nodes-scene/src/node_graph/scene_modifier_legacy_migration/loop_upgrade.rs":
+                "node_graph::scene_modifier_legacy_migration::loop_upgrade::",
+        }
+        for path, local in cases.items():
+            with self.subTest(path=path):
+                result = plan([path])
+                self.assertIn(local, result.filters)
+                self.assertIn("node_graph::catalog_tests::", " ".join(result.filters))
+                self.assertNotIn(result.workspace.owner(path), result.whole_packages)
+
+    def test_mapped_source_and_broad_gpu_change_keep_broad_override(self):
+        result = plan([
+            "crates/manifold-compositor/src/layer_compositor.rs",
+            "crates/manifold-gpu/src/metal/device.rs",
+        ])
+        self.assertIn("layer_compositor::", result.filters)
+        self.assertTrue(set(g.BROAD_FILTERS) <= result.filters)
+        self.assertIn("manifold-gpu", result.whole_packages)
+        self.assertNotIn("manifold-compositor", result.whole_packages)
+
+    def test_unmapped_source_stays_conservative(self):
+        path = "crates/manifold-compositor/src/unmapped_source.rs"
+        result = plan([path])
+        self.assertIn("manifold-compositor", result.whole_packages)
+        self.assertNotIn("unmapped_source::", result.filters)
 
     def test_all_p2_extraction_rows_select_catalog_home(self):
         import cpu_scope
