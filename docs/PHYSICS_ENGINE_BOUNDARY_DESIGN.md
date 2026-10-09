@@ -2,7 +2,7 @@
 
 **Status:** IN PROGRESS · 2026-10-09 · P1 implemented after Tier 1, under validation; later phases pending.
 **Prerequisites:** none for P1 or G1a; later phase entries name their dependencies. Water F1b/F2 shipped.
-**Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. This task authorizes documentation only.
+**Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. P1 implementation is authorized by the post-T1 cleanup campaign; later phases retain their entry conditions.
 
 <!-- index: Engine, graph, and authoring boundaries for physics; Water is the first consumer, with shared insertion, controls, and lifecycle. -->
 
