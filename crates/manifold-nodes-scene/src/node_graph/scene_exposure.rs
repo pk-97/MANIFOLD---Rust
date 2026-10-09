@@ -70,6 +70,12 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.whitewater_step",
 ];
 
+/// Whether Scene Setup automatically exposes this node's detailed controls.
+/// Performance projection uses the same vocabulary to avoid leaking them.
+pub fn is_scene_setup_node(type_id: &str) -> bool {
+    SCENE_VOCABULARY.contains(&type_id)
+}
+
 /// The curated `node.render_scene` auto-stamp subset (see the vocabulary
 /// entry above): the per-scene RT toggle (D14), the MetalFX temporal
 /// quality toggle (P4), the per-scene reflection toggle (section 9 RD9),

@@ -16,8 +16,9 @@ Scene generator cards project the same manifest rows into a fixed order:
 Unavailable controls remain in place, disabled and unmappable. Available rows
 retain their parameter IDs, values, ranges, mappings and modulation. Sliders
 remain usable while an effect is off, allowing settings to be prepared before
-enabling it. Explicitly exposed user controls and authored composite macros
-follow under Scene Controls. Automatic object, material, quality and per-light
+enabling it. Explicitly exposed user controls, authored scene-specific controls
+(such as Ocean's wind and waves), composite macros and curated liquid performance
+controls follow under Scene Controls. Automatic object, material, quality and per-light
 details belong in Scene Setup.
 
 `ui_bridge/projection/scene_performance.rs` selects roles from SceneVm and real

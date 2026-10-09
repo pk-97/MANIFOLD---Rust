@@ -183,7 +183,7 @@ pub(super) fn curate_scene_rows(
         if used_indices.contains(&index) {
             return None;
         }
-        if is_retained_extra(&row, inst, metadata) {
+        if is_retained_extra(&row, inst, def) {
             row.spec.section = Some("Scene Controls".into());
             Some(row)
         } else {
@@ -278,9 +278,7 @@ fn best_candidate(
     params: &[&str],
     used_indices: &HashSet<usize>,
 ) -> Option<usize> {
-    let Some(metadata) = metadata else {
-        return None;
-    };
+    let metadata = metadata?;
     let mut best: Option<(usize, (u8, u8, usize, usize))> = None;
     for (binding_index, binding) in metadata.bindings.iter().enumerate() {
         let BindingTarget::Node { node_id, param } = &binding.target else {
@@ -395,8 +393,9 @@ fn is_user_added(
 fn is_retained_extra(
     row: &ParamRow,
     inst: &PresetInstance,
-    metadata: Option<&manifold_core::effect_graph_def::PresetMetadata>,
+    def: &EffectGraphDef,
 ) -> bool {
+    let metadata = def.preset_metadata.as_ref();
     if is_user_added(row, inst, metadata) {
         return row.value.exposed;
     }
@@ -409,8 +408,18 @@ fn is_retained_extra(
     metadata.is_some_and(|metadata| {
         metadata.bindings.iter().any(|binding| {
             binding.id == row.id.as_ref()
-                && matches!(binding.target, BindingTarget::Composite { .. })
-                && !binding.user_added
+                && match &binding.target {
+                    BindingTarget::Composite { .. } => true,
+                    BindingTarget::Node { node_id, param } => node_type(def, node_id).is_some_and(|ty| {
+                        if manifold_core::liquid_domain::is_liquid_domain(ty) {
+                            manifold_core::scene_exposure::card_visible_for(ty, param)
+                        } else {
+                            !manifold_nodes_scene::node_graph::scene_exposure::is_scene_setup_node(ty)
+                                && ty != "node.coc_from_depth"
+                        }
+                    }),
+                    BindingTarget::SceneModifier { .. } => false,
+                }
         })
     })
 }
@@ -493,8 +502,8 @@ mod tests {
         let mut params = metadata
             .params
             .iter()
-            .cloned()
             .filter(|spec| spec.id != "user_scene_control")
+            .cloned()
             .map(Param::bundled)
             .collect::<Vec<_>>();
         params.push(Param::user_added(user_spec));
@@ -670,6 +679,20 @@ mod tests {
             rows.iter()
                 .any(|row| row.id.as_ref() == "user_scene_control")
         );
+    }
+
+    #[test]
+    fn ocean_keeps_authored_performance_controls_below_standard_rows() {
+        let inst = PresetInstance::new_generator(PresetTypeId::new("Ocean"));
+        let surface = super::super::cards::gen_params_to_surface(
+            &inst, "scene", None, &[], super::super::cards::SurfaceVisibility::CuratedCard,
+            (manifold_core::Bpm(120.0), 0.0),
+        );
+        let extras = &surface.rows[12..];
+        for id in ["wind_speed", "wind_direction", "choppiness", "wave_size", "swell_speed", "foam"] {
+            assert!(extras.iter().any(|row| row.id.as_ref() == id), "missing authored control {id}");
+        }
+        assert!(extras.iter().all(|row| row.spec.section.as_deref() == Some("Scene Controls")));
     }
 
     #[test]
