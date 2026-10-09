@@ -534,6 +534,255 @@ Reproduction and per-track precision, recall, timing, duplicates and coefficient
 `tests/fixtures/audio_labels/hard_negative_review_2026-10-09.json`, and
 `tools/audio_analysis/eval/scoreboard/kick_hard_negative_2026-10-09.json`.
 
+**Bounded nonlinear research, evening 2026-10-09 — no candidate promoted:**
+the unchanged 15-feature linear reference remains **223/381 matches + 89 extras**
+at ±70 ms. The first six hypotheses, three configurations each, used all nine
+development recordings with complete-song exclusion in fitting, normalisation
+and nested threshold selection. Existing 174-label and added 207-label truth
+were unchanged. All labels remain provisional. No neural network, external
+dataset, GPU inference, live integration or landing was involved.
+
+| Hypothesis and declared configurations | Matches + extras at ±70 ms | Finding |
+|---|---|---|
+| H1: 64 boosted trees, depths 1 / 2 / 3 | 218+90 / 230+99 / **274+85** | Conditional boundaries help; additive stumps do not. Depth 3 loses previously caught events and fires in three kick-free cores. |
+| H2: class covariance, diagonal shrinkage .1 / .5 / .9 | 133+88 / 101+82 / 83+84 | Better within-song candidate ordering at stronger shrinkage does not produce transferable cutoffs. |
+| H3: fixed tree-logit blend .25 / .5 / .75 | 239+89 / 263+91 / 276+93 | Restores some original-track recall, but also retains false fires and swaps which real kicks are caught. |
+| H4: paired-stem augmentation mass .1 / .25 / .5 | 268+89 / 269+91 / 262+94 | Sixteen controlled contexts do not improve the unaugmented tree on actual masters. |
+| H5: timely event-window supervision, top 1 / top 2 / soft | 204+92 / 234+91 / 210+91 | Selecting stronger observations during training does not resolve source confusion. |
+| H6: zero inner kick-free fires, linear / tree / .75 blend | 222+88 / 204+46 / **244+62** | Enforcing the actual negative-core target reduces errors but loses real kicks; one held-out Miracle bass transition still fires. |
+
+None passes the complete intermediate target: the aggregate count tradeoff,
+zero fires in all nine reviewed kick-free cores, and at most one *previously
+matched event* lost per song. Net counts can conceal different missed events.
+H2 initially reported net retention; that reporting error was corrected and
+its comparisons and dependent H5 replayed with identical models, cutoffs, scores
+and emissions. Original reports and the correction receipt are preserved.
+
+Depth 3 is the best balanced research candidate, at 71.9% recall and 76.3%
+precision. It recovers 64 baseline misses while losing 13 baseline hits: 2
+Apricots, 4 Inhale, 2 Tears, 3 Late Night, 1 Midnight and 1 Miracle. The three
+kick-free fires occur at Midnight 152.032 s, Miracle 220.57494 s and Heavy
+26.47347 s. A focused native master/kick/bass review corroborates bass continuation
+or transitions at all three; it demonstrates no missing kick or offset error.
+Silent named kick stems alone do not prove the differing masters contain no weak
+coincident kick. Raising the threshold is not a demonstrated general solution.
+
+| Song | Labels | Linear matches / extras | Depth-3 matches / extras |
+|---|---:|---:|---:|
+| Apricots | 14 | 9 / 0 | 7 / 0 |
+| Bad Guy | 15 | 15 / 45 | 15 / 34 |
+| Feel the Vibration | 15 | 15 / 0 | 15 / 1 |
+| Inhale Exhale | 12 | 11 / 6 | 7 / 3 |
+| Tears | 10 | 10 / 11 | 8 / 4 |
+| Late Night | 77 | 53 / 0 | 64 / 10 |
+| Midnight Patience | 88 | 44 / 20 | 48 / 21 |
+| Miracle | 32 | 21 / 0 | 27 / 3 |
+| Heavy on Mind | 118 | 45 / 7 | 83 / 9 |
+
+Heavy accounts for 38 of the 51 net recovered kicks. Equal-song mean recall is
+75.4% for linear and 75.6% for depth 3; pooled recall alone overstates how broadly
+the improvement transfers. On the original 174 labels, linear gives **121+76**
+and depth 3 **135+55**; on the added 207, they give **102+13** and **139+30**.
+The zero-core blend gives 129+49 and 115+13 respectively, with better pooled
+precision but failed retention and negative-core safeguards.
+
+A second timing audit moves all 315 bracketed master labels to their recorded
+starts or ends, leaving the 66 original-five labels unchanged. Starts give
+linear/tree **199+113 / 237+122**; ends give **225+87 / 276+83**. Both cases have
+384 effective labels because three net Midnight labels enter the unchanged
+uncertainty exclusions' scoreable domain. The official 381 midpoint labels stay
+unchanged. The recall advantage survives these two coordinated checks; the small
+reduction in extras does not. Neither check bounds every independent timing
+choice, and neither repairs the three negative-core fires or original-track losses.
+
+Eight additional 12-second master cores were frozen before source review or
+detector inspection. Two Late Night cores remain wholly unscorable: source
+absence does not establish that a master-only attack is bass rather than kick.
+The other six supply 73 provisional visual labels and three opening negative
+cores. All four comparison models and thresholds were frozen before scoring:
+
+| Additional development passages | Linear | Depth 3 | .75 blend | Zero-core blend |
+|---|---:|---:|---:|---:|
+| Matches / 73 | 42 | 48 | 48 | 43 |
+| Extras | 18 | 9 | 13 | 6 |
+| Fires in the three opening negative cores | 6 | 2 | 5 | 1 |
+
+Depth 3 improves each newly reviewed family: Heavy 11→14/20, Midnight
+23→24/43, Miracle 8→10/10, while reducing extras. This is additional development
+evidence, not reserved-song confirmation. Moving every onset to its review
+bracket's start changes linear/tree to 30+30 / 33+24; using every bracket end
+gives 43+17 / 49+8. Neither changes the accepted midpoint labels. These two
+coordinated endpoint checks expose timing sensitivity; they are not exhaustive
+bounds over independent annotation choices. The independent audit verifies all
+matches, exclusions, source identities and family exclusions. Startup emissions
+are counted at sample zero; only explicit ambiguous audio excludes a response.
+
+**Mechanisms and transferable lessons.** Controlled mixtures hold the kick
+waveform fixed, vary accompaniment gain 0/1/2, and use one common headroom scalar
+for paired kick-present/removed signals. Timely candidates remain in all 16
+contexts, but detections emitted after the source anchor and within ±70 ms of
+the reviewed master label fall **16→12→5**. Accompaniment
+raises the slow body-band energy more than the fast response, suppressing the
+relative-rise evidence. Under an approximate additive-power model, a sustained
+background B changes F/S to (F+B)/(S+B), pushing the ratio toward one despite an
+unchanged transient. Actual waveforms also contain phase-dependent cross terms;
+the paired signal comparison, not this approximation, establishes the effect.
+The mixtures diagnose masking; they do not reproduce the finished masters.
+Their fixed-anchor measurements also coincide with saved nearby natural-candidate
+measurements in only 15/16, 9/16 and 7/16 contexts as accompaniment rises. That
+sampling mismatch limits what the failed H4 augmentation says about augmentation
+in general; H7 below tests the corrected sampling scheme.
+
+Exact tree paths show useful conjunctions of body rise, low-band growth and
+low-band rise. Heavy's recovered events have a median +1.018 logit improvement
+despite a +0.200-logit *harder* cutoff, so its gain is not simply a relaxed
+threshold. The same positive conjunction also admits a reviewed bass-only fire.
+Conversely, the same negative partition removes a Tears extra and loses a real
+Tears kick. All 13 tree losses have timely candidates but no passing tree score;
+63 of 64 recoveries have no timely linear score crossing. This isolates score
+discrimination from proposer or refractory failure. Branch contributions explain
+decisions, not physical source identity or independent causal feature effects.
+
+Cold-start, sustained/wobbling bass, hats, renewed bass attacks, rapid kicks and
+changing-material controls expose further limits. The tree rejects all four
+isolated synthetic kicks across all nine frozen models at both 44.1/48 kHz,
+despite timely candidates; linear catches all four. This control is a clickless
+220→55 Hz sweep over 220 ms, still about 167 Hz at 44 ms and reaching 140 Hz
+around 72 ms. Its body/low balance is above the 99.89th weighted percentile of
+positive training windows. It exposes a rare-shape learned rejection, not a
+physical DSP limit. Wobbling bass can satisfy positive rise/growth branches
+without a descending centroid. Synthetic scores never selected a model or cutoff.
+
+For future snare, hat, bass and synth detectors, retain the methodology:
+separate candidate availability, acoustic score, calibration and emitted-event
+timing; verify conditional cues with source-addition/removal pairs; distinguish
+attack from ongoing energy; split whole source families; and retain explicit
+unknown labels. These kick bands and learned constants do not transfer as
+validated settings. More features or a larger classifier do not automatically
+repair shared-source ambiguity, scarce shape support or score shifts between
+songs. Another threshold sweep or repetition of the failed weighting/SVD routes
+has no demonstrated justification from this run.
+
+**Timing and CPU.** A bounded streaming reference replays all nine complete
+recordings (1,082.64 s, 43,585 candidates). It produces identical candidate hops
+and emitted linear/tree events; maximum feature error is 3.38e-14. Observation
+is 42.630–42.667 ms, with no backdating. Associated emitted-event median/p90 is
+45.73/56.33 ms for linear and 44.50/56.85 ms for depth 3. Depth 3 has two broad
+associations later than 70 ms, the latest 183.33 ms; these are not timely matches
+and may represent another sound. At ±35/50 ms it gives 61/191 matches, versus
+36/155 for linear. Possible duplicate counts are 4 versus 3 (zero-core blend 2).
+The broad association rule is −35/+200 ms, not a superset of the ±70 ms rule;
+all matching remains one-to-one.
+
+Feature extraction plus tree decisions costs **3.3–4.1% of one CPU core** in the
+Python reference on this Mac. The retained feature arrays occupy 43.5–44.1 kB
+and tree arrays 36.8–38.6 kB, excluding object overhead; each candidate needs at
+most 192 tree comparisons. Python/SciPy still allocate bounded per-hop temporary
+arrays. Wall-hop p99 reaches about 1.25 ms, but observed outliers reach 74.70 ms in
+the verification loop, which includes both scorers and parity checks. This is a
+throughput/bounded-state proof, **not** a hard audio-callback deadline guarantee
+or a measurement of device/display latency. No native integration was attempted.
+
+Forty-one focused tests cover the six methods, mixture construction, streaming
+and boundary scoring. Independent audits cover Gaussian algebra, event weights,
+nested exclusions, JSON/scalar-tree parity, float32 split boundaries, complete
+streaming replay and additional-passage matching. Current results, hypotheses,
+per-track timing, precision, recall, safeguards and provenance are in
+`tools/audio_analysis/eval/scoreboard/kick_evening_2026-10-09.json`; the nine frozen
+linear/tree models and comparison cutoffs are preserved in
+`tools/audio_analysis/eval/scoreboard/kick_evening_models_2026-10-09.json`.
+They are leave-one-song-out research models, not a globally fitted shipping model.
+Repeated method selection on these development families can make their reported
+performance optimistic; the additional passages do not remove that limitation.
+New labels are in `tests/fixtures/audio_labels/evening_validation_passages_2026-10-09.json`.
+Waypoints and Know You're There remain untouched: no candidate warranted consuming
+the final reserve. The scoreboard records the eventual stop condition and usage.
+
+Local detailed reports, predeclared rules, correction receipts and listening
+pairs are under `~/.cache/manifold/kick-research-2026-10-09-evening/`.
+`listening/manifest.json` indexes nine 8-second A/B pairs: identical original
+stereo mix at 75%, with a short high click at each actual emission. A is linear15;
+B is depth 3. Clicks indicate detector output, not ground truth. The fixed set
+includes regressions as well as gains; no human listening verdict is claimed.
+`preserve_results.py` reproduces the compact artifacts from the retained reports.
+Run the matching `run_kick_{boosted,covariance,anchored,stem_augmented,event_window,zero_core}_trial`
+module for a deliberate repeat, supplying its cached reports/rule paths via
+`--help`. Set `OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 OMP_NUM_THREADS=1`.
+Never substitute the stale slot copy of Bad Guy for the main fixture audio root.
+
+**Continuation under the revised usage budget.** The user removed the time and
+hypothesis-count ceilings and lowered the allowance reserve to 5%. The original
+three-configuration limit, local-only data, whole-family exclusions, causal
+inference, unchanged 381-label comparison and strict retention safeguard remain.
+Failure of these methods does not establish a physical limit.
+
+| Hypothesis and fixed configurations | Matches + extras on 381 | Finding |
+|---|---|---|
+| H7: natural-candidate stem augmentation, mass .1 / .25 / .5 | 268+90 / 272+90 / 272+96 | Correct sampling improves controlled mixture decisions but does not transfer enough to actual masters. |
+| H8: tree39 / base15 + background6 / tree39 + background6 | 269+91 / 253+86 / 273+93 | Prior variability and excess attack power do not prevent source confusion; all fail negative-core and retention safeguards. |
+| H9: smooth pair interactions, L2 .001 / .01 / .1 | 242+96 / 240+89 / 200+95 | All nine negative cores remain clear, but this initial representation loses the tree recall gain. |
+| H10: add 73 reviewed training labels, linear / tree / interaction | 232+89 / 274+84 / **250+87** | Interaction gains ten hits without losing any of its prior hits; seven original-linear hits remain lost. |
+| H11: raw / residual / both spectral shapes | 282+95 / 268+92 / 276+101 | Spectral power shares, concentration and width alter ranking, but introduce false fires and real-kick losses. |
+| H12: past-only logit correction, strength .25 / .5 / 1 | 227+91 / 224+89 / 225+81 | Global score-centering does not solve the within-song overlap or transfer problem. |
+| H13: tree + signed timing / + concordance / + concentration | 274+92 / 272+89 / 268+92 | Compact timing suppresses some bass fires, but also penalises legitimate Apricots and Inhale shapes. |
+| H14: covered interaction/linear blend, interaction weight .25 / .5 / .75 | 238+90 / 249+91 / 253+93 | All nine negative cores remain clear. Blending repairs several old losses, but retains the shared Bad Guy false-trigger problem. |
+| H15: add the next 32 reviewed labels, linear / tree / interaction | 228+89 / 278+93 / 245+88 | More contexts are not a monotonic improvement. The unchanged scorers still fail the full target. |
+
+H9 is a weighted logistic score over the original 15 fold-standardised values
+and 120 bounded pair products. It tests smooth conditional relationships rather
+than class reconstruction. H10 adds passages only to the training families: the
+complete outer and inner test families remain absent. Original 381-label
+calibration and evaluation objects are unchanged. The 73 reused labels are now
+development training evidence, not fresh validation. H10 interaction loses two
+Apricots, three Inhale and two Heavy events caught by original linear15. Its
+original-174 result is 130+69; the added-207 result is 120+18.
+
+The H12 diagnostic preceding calibration tested 102 fixed cutoffs retrospectively
+on each song. Such label-informed, per-song choices give linear 301+79, tree
+293+76 and interaction 306+75. These are diagnostic oracle results, not valid
+detectors or exhaustive bounds. They show that some failures concern threshold
+transfer, while Bad Guy and Midnight still have poor precision at 90% recall.
+H12 instead uses only the preceding eight seconds of candidate logits, a
+training-family reference and a capped offset; it creates no new candidates or
+extra observation delay. An initial missing reporting method was repaired;
+every first-configuration model, cutoff, event and score remains identical, with
+only measured prediction CPU times changed. Independent replay verifies the
+causal history and every family exclusion.
+
+D2 adds eight chronologically selected 12-second cores from the four paired
+source/master families. All 25 raw waveform and spectral sheets were reviewed
+before acceptance. Thirty-four raw core proposals become 32 scored labels under
+the existing uncertainty exclusions; three margin proposals remain available to
+the matcher. Four complete sustained-bass cores are provisionally negative.
+Two Late Night roll discontinuities and two Midnight intervals remain unknown.
+Neither source silence nor a source-energy threshold alone defines these labels.
+
+Frozen original linear/tree models score **19+0 / 27+7** on those 32 new labels;
+frozen H10 linear/tree/interaction score **20+0 / 27+5 / 26+0**. The two tree
+versions each fire twice in the new Late Night sustained-bass core; both smooth
+scorers keep all four new negative cores clear. These are new passages of known
+development families, not reserved recordings. H15 subsequently reuses D2 only
+inside training families and discloses this reuse. Labels and review provenance:
+`tests/fixtures/audio_labels/evening_extension_passages_2026-10-09.json`.
+
+These extensions sharpen the working diagnosis: interaction learning and broader
+examples can help, but neither extra features nor more labels guarantee improved
+transfer. Ratio cues are weakened by sustained accompaniment; static spectral
+shape and timing relations are not exclusive to kicks. A score can reject a bass
+transition by moving an acoustic boundary and simultaneously reject a real kick.
+Compare event identities, negative passages and emitted timing, not just pooled
+matches. The original reference and all rejected candidates remain preserved.
+
+H10 interaction scalar and batch predictions agree across all 43,585 cached
+candidates, reproducing emitted events exactly. Scalar decisions take about
+10.8–11.4 microseconds per candidate; model numeric arrays occupy 1,320 bytes.
+Three 15–16-second sample-zero streaming probes (Bad Guy, Late Night, Heavy)
+reproduce native-hop features and events with maximum feature error below
+3.1e-14. Combined feature and decision CPU costs are 3.06%, 3.16% and 3.26% of
+one core. Retained feature arrays occupy about 44–45 KB. These Python throughput
+probes do not establish an allocation-free native callback or device latency.
+Receipt: `h10/smooth_benchmark.json` under the evening cache root.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
