@@ -1,3 +1,8 @@
+//! Node graph engine for loading, execution and freeze compilation.
+//! Owns graph types, GPU dispatch, shared node helpers, built-ins and water simulation.
+//! Never depends on node families, the catalog, compositor, UI paint,
+//! UI, editing, IO, media or the app.
+
 pub mod clip_trigger;
 pub mod line;
 pub mod platonic;
