@@ -1,33 +1,22 @@
 //! Bundled generator preset registry.
 //!
-//! Mirror of `node_graph::bundled_presets` (effect presets) for the
-//! generator side. Each JSON generator preset is **scanned from disk at
-//! startup** by [`crate::preset_loader`] (stock + optional user dirs),
-//! not embedded into the binary, and exposed here as a lookup by
-//! `PresetTypeId`.
+//! Generator metadata is loaded through the kind-agnostic
+//! [`crate::bundled_presets`] catalog. Each JSON generator preset is **scanned from disk at
+//! startup** by [`manifold_node_engine::load::preset_loader`] (stock + optional user dirs),
+//! not embedded into the binary.
 //!
-//! The [`GeneratorRegistry`](crate::registry::GeneratorRegistry)
-//! consults this table when creating a generator: if an entry matches
-//! the requested type id, the registry constructs a
-//! [`PresetRuntime`](crate::preset_runtime::PresetRuntime) from the JSON;
-//! otherwise it falls back to the `inventory::submit!` Rust factories.
-//!
-//! The raw-JSON / def / type-id lookups live in the kind-agnostic
-//! [`crate::bundled_presets`] (fork #3 — one loader for both
-//! kinds). This module keeps only the generator disk-bucket metadata loader
-//! plus its `PresetSource` submission (the legit disk-source split) and the
-//! generator-sweep tests.
+//! The raw JSON, parsed definitions, type ids, and migration policy all live
+//! in that shared catalog module. This module keeps the generator metadata
+//! inventory submission and generator-sweep tests.
 //!
 //! ## Add a new generator preset
 //!
 //! 1. Drop a JSON file at the stock generator dir `<TypeId>.json` —
 //!    must reference `system.generator_input` + `system.final_output`
-//!    boundary nodes (see [`crate::generators::json_graph_generator`]).
+//!    boundary nodes (see [`manifold_node_engine::scene::boundary_nodes`]).
 //! 2. Relaunch — the loader scans it; no rebuild required.
 
-use manifold_core::effect_graph_def::EffectGraphDef;
-
-use manifold_node_engine::load::preset_loader::GENERATOR_CATALOG;
+use manifold_core::preset_def::PresetKind;
 
 /// Loader function for the core's
 /// [`manifold_core::preset_definition_registry::generator::PresetSource`]
@@ -36,32 +25,12 @@ use manifold_node_engine::load::preset_loader::GENERATOR_CATALOG;
 /// one (v2 schema). Mirrors `loaded_presets_from_bundled` on the
 /// effect side.
 ///
-/// Cached at the `loaded_preset_metadata()` callsite — invoked once per
-/// process. The section 11 generator unification means a JSON preset's
-/// `presetMetadata` block IS the canonical schema for that generator,
-/// and the legacy inventory submission (if any) is overridden.
+/// Called at startup and again during hot reload after the catalog snapshot
+/// has been swapped. The section 11 generator unification means a JSON preset's
+/// `presetMetadata` block is the canonical schema for that generator.
 pub fn loaded_generator_presets_from_bundled()
 -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
-    GENERATOR_CATALOG
-        .load()
-        .entries()
-        .filter_map(|(id, json)| {
-            let mut def: EffectGraphDef = serde_json::from_str(&json)
-                .unwrap_or_else(|e| panic!("bundled generator preset {id}: parse failed: {e}"));
-            if let Err(error) = manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(&mut def) {
-                log::warn!("Scene camera setup for {id}: {error}");
-            }
-            // P1 scene-panel exposure convergence: the preset-definition
-            // registry seeds PresetInstance slots (via `init_defaults`), so it
-            // MUST carry the same stamped scene exposures as the def cache
-            // (`bundled_presets::rebuild_def_cache`). Without this, a bundled
-            // scene preset (Scene, the default scene) shows exposed card
-            // rows whose backing instance slot never exists. Same deterministic
-            // migration, applied on this parallel parse path.
-            manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
-            def.preset_metadata
-        })
-        .collect()
+    crate::bundled_presets::loaded_preset_metadata(PresetKind::Generator)
 }
 
 inventory::submit! {
@@ -71,20 +40,14 @@ inventory::submit! {
     }
 }
 
-// `bundled_generator_preset_json` and `bundled_generator_preset_type_ids`
-// folded into the kind-agnostic `node_graph::bundled_presets`
-// (`bundled_preset_json` / `bundled_preset_type_ids(PresetKind::Generator)`)
-// — fork #3.
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use manifold_node_engine::load::preset_loader::GENERATOR_CATALOG;
 
     /// The Plasma preset must be discoverable through this table: the
-    /// `Plasma` entry binds to `PresetTypeId::PLASMA` (the legacy id) so it
-    /// supersedes the Rust factory of the same id — renaming or removing it
-    /// would silently revert every existing Plasma layer to the Rust path
-    /// and break the editor's cog button on those layers.
+    /// `Plasma` entry keeps the long-lived `PresetTypeId::PLASMA` shipping id.
+    /// Renaming or removing it would break existing Plasma layers and the
+    /// editor's cog button on those layers.
     ///
     /// (TrivialPassthrough used to be asserted here too; it moved to the
     /// test fixtures in PRESET_BROWSER_AUDITION P1, D8 — it is no longer a
@@ -98,7 +61,7 @@ mod tests {
         .collect();
         assert!(
             ids.contains(&"Plasma".to_string()),
-            "Plasma preset must ship under id `Plasma` to supersede the legacy Rust factory — got {ids:?}",
+            "Plasma preset must ship under id `Plasma` — got {ids:?}",
         );
     }
 
