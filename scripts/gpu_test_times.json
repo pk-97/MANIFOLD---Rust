@@ -23,6 +23,7 @@
     "manifold-app/renderer_gpu_proofs/liquid_conformance::gpu_flip_body_reaction_matches_engine_substeps": 92.7,
     "manifold-nodes/main/contracts::node_graph::catalog_tests::gpu_flip_body::gpu_flip_body_step_sparse_matches_all_tiles": 69.6,
     "manifold-nodes/main/contracts::node_graph::catalog_tests::liquid_prepare::liquid_prepare_pipelines_is_idempotent": 68.0,
+    "manifold-app/renderer_contracts/contracts::node_graph::catalog_tests::whitewater_io::whitewater_packed_preset_save_load_matches_fingerprints": 67.6,
     "manifold-nodes/main/contracts::node_graph::catalog_tests::validate::bundled_preset_card_warning_counts": 66.5,
     "manifold-nodes/main/contracts::water::primitives::gpu_flip_scene_tests::gpu_flip_density_projection_settled_column_depth_and_density": 62.6,
     "manifold-app/renderer_gpu_proofs/liquid_conformance::liquid_live_frames_never_wait": 62.1,
