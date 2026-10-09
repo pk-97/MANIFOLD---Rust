@@ -38,6 +38,7 @@ impl PreparedTick<'_> {
     }
 }
 
+manifold_core::testkit_visible! {
 /// A native world with a scene's settings and its initial liquid: the fill
 /// and the initial volume, before roles or coupling.
 pub(super) fn seeded_world(
@@ -79,6 +80,7 @@ pub(super) fn seeded_world(
             .map_err(|e| e.to_string())?;
     }
     Ok(new)
+}
 }
 
 /// Native FLIP and cache ownership stays together on the worker thread.

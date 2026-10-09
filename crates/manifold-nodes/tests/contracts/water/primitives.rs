@@ -13,4 +13,4 @@ mod gpu_flip_tile_tests;
 mod whitewater_golden_tests;
 
 #[cfg(feature = "water-race-probes")]
-mod gpu_flip_race_tests;
+pub(super) mod gpu_flip_race_tests;

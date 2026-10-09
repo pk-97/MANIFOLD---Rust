@@ -17,6 +17,7 @@ impl FluidSettings {
     }
 }
 
+manifold_core::testkit_visible! {
 /// Native solver conversions for the shared scene-space domain layout.
 pub(crate) trait FluidDomainNative {
     #[cfg(feature = "gpu-proofs")]
@@ -40,6 +41,7 @@ pub(crate) trait FluidDomainNative {
     fn admit_flip_grid(self, budget_mcells: f32) -> Result<(), String>;
     #[cfg(feature = "gpu-proofs")]
     fn bounds(self, pose: Transform) -> Bounds;
+}
 }
 
 #[cfg(any(test, feature = "gpu-proofs"))]

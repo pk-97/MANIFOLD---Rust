@@ -13,12 +13,12 @@ use std::time::Instant;
 use manifold_core::Seconds;
 use manifold_fluids::{CaptureError, ParticleRecord, SurfaceOptions, SurfaceVertex, WhitewaterOptions};
 
-use super::native::seeded_world;
-use super::{FluidDomainNative, FluidSettings, Transform};
+use manifold_nodes_water::fluid::{domain::FluidDomainNative, native::seeded_world, FluidSettings};
+use manifold_node_engine::scene::transform::Transform;
 use manifold_node_engine::scene::fluid_domain::FluidDomainLayout;
-use crate::primitives::gpu_flip_race_tests::{Breakup, Motion, Packing, Splash, breakup, motion, packing, print_height, print_lid_layer, print_side_sheet, print_splash, report_breakup, report_motion, report_water, splash};
-use crate::primitives::gpu_flip_still::write_still;
-use crate::primitives::gpu_flip_volume::{VolumeDrift, volume_and_area};
+use super::primitives::gpu_flip_race_tests::{Breakup, Motion, Packing, Splash, breakup, motion, packing, print_height, print_lid_layer, print_side_sheet, print_splash, report_breakup, report_motion, report_water, splash};
+use manifold_nodes_water::primitives::gpu_flip_still::write_still;
+use manifold_nodes_water::primitives::gpu_flip_volume::{VolumeDrift, volume_and_area};
 
 /// `WaterDamBreak.json`'s `node.fluid_surface` params, as that node builds
 /// its settings.
@@ -226,7 +226,7 @@ fn gpu_flip_engine_race_refined() {
 /// fastest particles in the engine's own cells.
 #[test]
 fn gpu_flip_engine_still_pool_round_a_box() {
-    use crate::primitives::gpu_flip_preset::DAM_OBSTACLE;
+    use manifold_nodes_water::primitives::gpu_flip_preset::DAM_OBSTACLE;
     let settings = FluidSettings { initial_volume: None, fill_height: 1.0, ..dam_break(64, false) };
     let domain = settings.domain_layout().expect("pool domain");
     let mut world = seeded_world(settings, domain, false).expect("pool world");
@@ -275,7 +275,7 @@ fn gpu_flip_engine_still_pool_round_a_box() {
 /// Break with its box at 64³, the substeps and fastest particle per frame.
 #[test]
 fn gpu_flip_engine_dam_break_with_box_substeps() {
-    use crate::primitives::gpu_flip_preset::DAM_OBSTACLE;
+    use manifold_nodes_water::primitives::gpu_flip_preset::DAM_OBSTACLE;
     let settings = dam_break(64, false);
     let domain = settings.domain_layout().expect("dam break domain");
     let mut world = seeded_world(settings, domain, false).expect("dam break world");

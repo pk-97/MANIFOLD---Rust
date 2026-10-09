@@ -50,21 +50,18 @@ use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 
 mod coupled;
 #[cfg(any(test, feature = "gpu-proofs"))]
-mod domain;
+manifold_core::testkit_visible! { mod domain; }
 #[cfg(feature = "gpu-proofs")]
 pub mod identity;
 #[cfg(feature = "gpu-proofs")]
 mod impulses;
 #[cfg(feature = "gpu-proofs")]
-mod native;
+manifold_core::testkit_visible! { mod native; }
 #[cfg(feature = "gpu-proofs")]
 pub(crate) mod particle_ring;
 #[cfg(test)]
 #[cfg(feature = "gpu-proofs")]
 mod playback_tests;
-#[cfg(all(test, feature = "water-race-probes"))]
-#[cfg(feature = "gpu-proofs")]
-mod race_probe;
 #[cfg(feature = "gpu-proofs")]
 mod roles;
 #[cfg(feature = "gpu-proofs")]

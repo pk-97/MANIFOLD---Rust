@@ -273,8 +273,9 @@ the catalog. The workspace census also exposed the scene/water viewport proof;
 `docs/crate-moves/t2-viewport-proof` moves it unchanged to the catalog in
 `21a381e10`, with both move verifiers green and no residue.
 
-Both workspace test censuses match: 6,097 default tests and 7,710 with
-gpu-proofs. Comparison removes the old `water::` prefix, maps the seven moved
+Before the later trunk trigger-lane merge, both extraction test censuses
+matched: 6,097 default tests and 7,710 with gpu-proofs. Comparison removes
+the old `water::` prefix, maps the seven moved
 primitive modules from `node_graph::primitives::` to `primitives::`, and adds
 `contracts::` to `particle_pipeline_integration::`. The viewport proof retains
 its binary and module names. Twelve focused CPU contracts pass, including
@@ -288,6 +289,14 @@ The catalog matches, and five migration/LiveSchool serialization contracts
 pass against the existing project fixture. The preset validator's Shatter
 host now supplies Physics through the existing PhysicsSolids fixture, using
 real imported mesh metadata; all 112 bundled presets now pass validation.
+
+The catalog also owns the retired-parameter load and hidden-whitewater
+registration contracts, which need the linked water family. Their assertions
+are unchanged. The six native water race probes now share that harness with
+the GPU race measurements; only imports change. Native world setup and domain
+conversion remain private in production and use the existing testkit visibility
+for those probes. The catalog forwards `fluid-perf-proofs` to scene as well as
+water so the frame probe can read the existing scene timing instrumentation.
 
 #### P5 preparation seam (verified 2026-10-09 at `d5d226167`)
 

@@ -103,7 +103,7 @@ gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-nodes-imag
 # Bounded dynamic-RT timing is opt-in, separate from correctness gates.
 rt-perf-proofs = ["manifold-nodes-scene/rt-perf-proofs", "gpu-proofs"]
 # GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.
-fluid-perf-proofs = ["manifold-nodes-water/fluid-perf-proofs", "gpu-proofs"]
+fluid-perf-proofs = ["manifold-nodes-water/fluid-perf-proofs", "manifold-nodes-scene/fluid-perf-proofs", "gpu-proofs"]
 # GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.
 matter-perf-proofs = ["manifold-nodes-water/matter-perf-proofs", "gpu-proofs"]
 # Water race probes (GPU_FLIP_PRESSURE_SOLVE.md): minutes-long Dam Break

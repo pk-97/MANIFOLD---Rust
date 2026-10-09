@@ -1979,26 +1979,6 @@ mod tests {
     }
 
     #[test]
-    fn retired_params_saved_nondefault_values_load() {
-        let registry = registry();
-        for &(type_id, param) in manifold_core::type_id_migration::RETIRED_PARAMS {
-            let declared = registry.construct(type_id).expect("retired params belong to a live node type");
-            assert!(declared.parameters().iter().all(|p| p.name != param), "{type_id}.{param} is still declared");
-            let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
-                "version": 1, "nodes": [{"id": 1, "nodeId": "n", "typeId": type_id, "handle": "n",
-                    "params": {param: {"type": "Float", "value": 137.0}}}], "wires": []
-            })).unwrap();
-            assert!(has_retired_params(&def));
-            let mut graph = Graph::new();
-            instantiate_def(&mut graph, &def, &registry, HandleScope::Global,
-                BoundaryHandling::Standalone, &crate::scene::mesh_change::PreparedMeshRules::default())
-                .unwrap_or_else(|e| panic!("{type_id}.{param}: saved retired value must load: {e:?}"));
-            let node = graph.get_node(graph.node_id_by_handle("n").unwrap()).unwrap();
-            assert!(node.params.get(param).is_none(), "{type_id}.{param}");
-        }
-    }
-
-    #[test]
     fn retired_params_preserve_stable_identity_that_matches_another_handle() {
         let mut def: EffectGraphDef = serde_json::from_value(serde_json::json!({
             "version": 1, "nodes": [
