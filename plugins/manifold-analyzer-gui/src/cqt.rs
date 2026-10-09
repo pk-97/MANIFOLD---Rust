@@ -59,6 +59,7 @@ pub struct CqtTransform {
     num_bins: usize,
     center_freqs: Vec<f32>,
     bandwidths_hz: Vec<f32>,
+    display_power_gains: Vec<f32>,
 }
 
 impl CqtTransform {
@@ -144,6 +145,7 @@ impl CqtTransform {
         row_ptr.push(0);
         let mut col_idx: Vec<u32> = Vec::new();
         let mut coef: Vec<Complex<f32>> = Vec::new();
+        let mut display_power_gains = Vec::with_capacity(num_bins);
         let mut direct_offsets = vec![0];
         let mut direct_coef = Vec::new();
 
@@ -175,6 +177,13 @@ impl CqtTransform {
             // |CQT[k]| = 1. Derivation: for x[n] = cos(2π f_k n / sr),
             // <x, g_k> ≈ 0.5 · Σ w[n], so we scale by 2/Σw.
             let scale = 2.0 / w_sum;
+            // A coherent tone scale alone makes broadband energy brighter as
+            // windows shorten. Display a fixed 100 Hz equivalent bandwidth:
+            // ENBW = sample_rate * sum(w²) / sum(w)². Keep the transform itself
+            // tone-calibrated for phase estimation and numerical consumers.
+            let sum_sq: f64 = w.iter().map(|&v| (v as f64).powi(2)).sum();
+            let enbw = sample_rate as f64 * sum_sq / (w_sum as f64).powi(2);
+            display_power_gains.push((100.0 / enbw) as f32);
 
             // Time-domain kernel: g_k[n] = w[n] · exp(+i 2π f_k n / sr),
             // **right-aligned** in the n_fft-length FFT buffer. Because
@@ -248,6 +257,7 @@ impl CqtTransform {
             num_bins,
             center_freqs,
             bandwidths_hz,
+            display_power_gains,
         }
     }
 
@@ -256,6 +266,12 @@ impl CqtTransform {
     /// outside the bin's legitimate response region.
     pub fn bandwidths_hz(&self) -> &[f32] {
         &self.bandwidths_hz
+    }
+
+    /// Power multipliers for a 100 Hz equivalent-bandwidth display.
+    /// This is a spectral-density view, not a sinusoid peak-amplitude meter.
+    pub fn display_power_gains(&self) -> &[f32] {
+        &self.display_power_gains
     }
 
     pub fn num_bins(&self) -> usize {

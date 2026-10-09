@@ -195,6 +195,7 @@ struct SpectrumUniforms {
 
 pub struct SpectrumGpuRenderer {
     target: IoSurfaceMtlTexture,
+    history_weighting: Option<(crate::Weighting, f32)>,
     mid_buf: GpuBuffer,
     side_buf: GpuBuffer,
     history_buf: GpuBuffer,
@@ -265,6 +266,7 @@ impl SpectrumGpuRenderer {
 
         Some(Self {
             target,
+            history_weighting: None,
             mid_buf,
             side_buf,
             history_buf,
@@ -281,6 +283,29 @@ impl SpectrumGpuRenderer {
 
     pub fn set_display(&mut self, config: DisplayConfig) {
         self.display = config;
+    }
+
+    /// Reweight retained history only when its display calibration changes.
+    /// Old and new columns must use one colour/readout scale immediately.
+    pub fn set_history_weighting(&mut self, weighting: crate::Weighting, align: f32) {
+        if self.history_weighting == Some((weighting, align)) { return; }
+        if let Some((old_weighting, old_align)) = self.history_weighting {
+            for bin in 0..self.cqt_num_bins {
+                let frequency = CQT_FMIN_HZ * (bin as f32 / CQT_BINS_PER_OCTAVE as f32).exp2();
+                let delta = crate::weighting_db_at(weighting, frequency) + align
+                    - crate::weighting_db_at(old_weighting, frequency) - old_align;
+                for buffer in [&self.history_buf, &self.history_buf2] {
+                    if let Some(ptr) = buffer.mapped_ptr() {
+                        let values = unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32,
+                            self.cqt_num_bins * HISTORY_COLS as usize) };
+                        for column in values.chunks_exact_mut(self.cqt_num_bins) {
+                            column[bin] += delta;
+                        }
+                    }
+                }
+            }
+        }
+        self.history_weighting = Some((weighting, align));
     }
 
     pub fn iosurface(&self) -> *mut c_void {
@@ -372,43 +397,26 @@ impl SpectrumGpuRenderer {
         self.write_col
     }
 
-    /// CPU-side read of the spectrogram's stored raw dB at a given column
-    /// and fractional log-bin index. Mirrors the shader's
-    /// `sample_history_db` / `sample_history2_db` (linear-in-power
-    /// interpolation between adjacent log bins), so the value matches what
-    /// the colourmap reads at the same `(col, log_bin_f)`. `buffer_id`:
-    /// `0` = primary (Mid / Side / Left), `1` = secondary (Right in L+R).
-    /// Returns `None` if the buffer can't be CPU-mapped (shouldn't happen
-    /// for shared-storage buffers, but plays it safe).
+    /// Read the same power interpolation / pixel footprint as the shader.
+    /// Fractional columns are used for beat-sync interpolation.
     pub fn sample_history_db(
-        &self,
-        buffer_id: u32,
-        col: u32,
-        log_bin_f: f32,
+        &self, buffer_id: u32, col: f32, log_bin: f32, bin_span: f32,
     ) -> Option<f32> {
         let buf = match buffer_id {
-            0 => &self.history_buf,
-            1 => &self.history_buf2,
-            _ => return None,
+            0 => &self.history_buf, 1 => &self.history_buf2, _ => return None,
         };
         let ptr = buf.mapped_ptr()? as *const f32;
-        let log_bins = self.cqt_num_bins;
-        if log_bins == 0 {
-            return None;
-        }
-        let col = col.min(HISTORY_COLS - 1) as usize;
-        let lb = log_bin_f.clamp(0.0, (log_bins - 1) as f32);
-        let lo = lb.floor() as usize;
-        let hi = (lo + 1).min(log_bins - 1);
-        let frac = lb - lo as f32;
-        let base = col * log_bins;
-        let db_lo = unsafe { *ptr.add(base + lo) };
-        let db_hi = unsafe { *ptr.add(base + hi) };
-        // Match shader exactly: interpolate in power, return back to dB.
-        let p_lo = 10.0_f32.powf(db_lo * 0.1);
-        let p_hi = 10.0_f32.powf(db_hi * 0.1);
-        let p = p_lo * (1.0 - frac) + p_hi * frac;
-        Some(10.0 * (p + 1e-24).log10())
+        let bins = self.cqt_num_bins;
+        if bins == 0 { return None; }
+        let column = col.clamp(0.0, (HISTORY_COLS - 1) as f32);
+        let lo = column.floor() as usize;
+        let hi = (lo + 1).min(HISTORY_COLS as usize - 1);
+        let power = |c: usize| {
+            let values = unsafe { std::slice::from_raw_parts(ptr.add(c * bins), bins) };
+            history_pixel_power(values, log_bin, bin_span)
+        };
+        let fraction = column - lo as f32;
+        Some(10.0 * (power(lo) * (1.0-fraction) + power(hi)*fraction + 1e-24).log10())
     }
 
     /// Render one frame. `mid_columns` / `side_columns` are pre-smoothed
@@ -528,3 +536,28 @@ impl SpectrumGpuRenderer {
         enc.commit_and_wait_completed();
     }
 }
+
+
+// Exact box integral of the piecewise-linear power reconstruction.
+// Used by hover readout; the shader uses the same footprint.
+fn history_pixel_power(values: &[f32], bin: f32, span: f32) -> f32 {
+    let center = bin.clamp(0.0, (values.len()-1) as f32);
+    let power = |i: i32| 10.0_f32.powf(values[i.clamp(0,values.len() as i32-1) as usize]*0.1);
+    if span <= 1.0 {
+        let lo=center.floor() as i32;let fraction=center-lo as f32;
+        return power(lo)*(1.0-fraction)+power(lo+1)*fraction;
+    }
+    let mut at=center-span*0.5;let end=center+span*0.5;let mut sum=0.0;
+    while at<end {
+        let lo=at.floor() as i32;let stop=end.min((lo+1) as f32);
+        let p0=power(lo);let p1=power(lo+1);
+        let left=p0+(p1-p0)*(at-lo as f32);
+        let right=p0+(p1-p0)*(stop-lo as f32);
+        sum+=(left+right)*0.5*(stop-at);at=stop;
+    }
+    sum/span
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "spectrogram_gpu_tests.rs"]
+mod spectrogram_gpu_tests;

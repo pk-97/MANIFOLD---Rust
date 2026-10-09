@@ -204,19 +204,11 @@ fn biquad_mag_db_48k(freq: f32, b0: f64, b1: f64, b2: f64, a1: f64, a2: f64) -> 
     (10.0 * (num_mag2.max(1e-30) / den_mag2.max(1e-30)).log10()) as f32
 }
 const FILL_ALPHA: f32 = 0.45;
-// Colourmap dB range. Synchrosqueezing concentrates a main-lobe's worth
-// of power into a single log bin, so peaks climb ~+4.5 dB vs raw VQT;
-// with SS on we lift the ceiling to +10 dB so those peaks get headroom
-// instead of saturating early. With SS off the raw VQT tops out near
-// 0 dB — keeping the SS headroom would just dim the display, so we
-// fall back to a 0 dB ceiling.
-// Floor matched to the MS plot's `DB_MIN` so the heatmap's "cold" colour
-// stops where the curves go off-scale. Keeps the visible dB range
-// consistent across both panes — content too quiet for the curves is
-// also too quiet to register on the heatmap.
+// Both modes display weighted spectral density in a 100 Hz equivalent
+// bandwidth. Use the same colour scale so Sharpen cannot change the meaning
+// of a colour. Reassignment may concentrate energy into narrower bands.
 const SPECTROGRAM_DB_MIN: f32 = -60.0;
-const SPECTROGRAM_DB_MAX_SS: f32 = 10.0;
-const SPECTROGRAM_DB_MAX_RAW: f32 = 0.0;
+const SPECTROGRAM_DB_MAX: f32 = 0.0;
 /// Gamma applied to the dB→colour mapping (values only; stored dB is
 /// untouched). `< 1` brightens mids, `> 1` darkens. 0.7 lifts quiet
 /// detail into the visible band without washing out peaks.
@@ -600,7 +592,7 @@ impl SpectrogramSource {
 /// without re-decoding the source file: the pre-computed percentile
 /// envelopes, the source's integrated LUFS for gain-match, and an
 /// optional LAME lowpass cutoff so codec brickwalls don't mislead.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RefSlot {
     /// File name (no path). Empty string → slot is unused.
     pub name: String,
@@ -609,6 +601,26 @@ pub struct RefSlot {
     pub analysis: Option<RefAnalysis>,
     /// GUI visibility toggle. Defaults to `true` on new load.
     pub visible: bool,
+    /// Runtime identity for invalidating the projected envelope cache.
+    #[serde(skip, default = "next_ref_slot_revision")]
+    revision: u64,
+}
+
+static NEXT_REF_SLOT_REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn next_ref_slot_revision() -> u64 {
+    NEXT_REF_SLOT_REVISION.fetch_add(1, Ordering::Relaxed)
+}
+
+impl Default for RefSlot {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            analysis: None,
+            visible: false,
+            revision: next_ref_slot_revision(),
+        }
+    }
 }
 
 impl RefSlot {
@@ -1294,7 +1306,7 @@ struct RefEnvelopeCache {
 }
 
 struct RefCacheEntry {
-    fingerprint: u64,
+    revision: u64,
     key: ProjectionKey,
     smoothed: Vec<[f32; 3]>,
     auto_gain_db: f32,
@@ -1334,7 +1346,11 @@ impl CurveProjection {
     fn project(&mut self, bins: &[f32], out: &mut [f32]) {
         assert_eq!(bins.len(),self.powers.len());
         for ((p,db),gain) in self.powers.iter_mut().zip(bins).zip(&self.gains) {
-            *p = 10.0_f32.powf((*db + *gain) * 0.1);
+            *p = if !db.is_finite() || *db <= MIN_DB {
+                0.0
+            } else {
+                10.0_f32.powf((*db + *gain) * 0.1)
+            };
         }
         self.plan.as_ref().expect("projection prepared").apply_powers(&self.powers, out);
     }
@@ -1343,17 +1359,6 @@ fn curve_mean_db(values: impl Iterator<Item=f32>) -> Option<f32> {
     let mut sum=0.0_f64; let mut count=0usize; let mut peak=MIN_DB;
     for db in values { sum+=10.0_f64.powf(db as f64*0.1);count+=1;peak=peak.max(db); }
     (count>0 && peak>MIN_DB+1.0).then(||(10.0*(sum/count as f64).log10()) as f32)
-}
-/// Fingerprint includes all retained bins so replacing a reference invalidates its cache.
-fn ref_analysis_fingerprint(a: &RefAnalysis) -> u64 {
-    let mut h=0xcbf29ce484222325_u64;
-    let mut mix=|x:u32| { h^=x as u64; h=h.wrapping_mul(0x100000001b3); };
-    mix(a.source_sample_rate.to_bits());mix(a.integrated_lufs.to_bits());
-    for e in &a.mid.per_fft {
-        mix(e.fft_size as u32);
-        for v in e.bin_bounds.iter().chain(&e.bounds).flatten() { mix(v.to_bits()); }
-    }
-    h
 }
 
 /// Apply per-bin weighting to a CQT (log-spaced) column in place. Bin
@@ -1616,7 +1621,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             fill_alpha: FILL_ALPHA,
             spectrum_fraction: top_fraction,
             spectrogram_db_min: SPECTROGRAM_DB_MIN,
-            spectrogram_db_max: if ss_on { SPECTROGRAM_DB_MAX_SS } else { SPECTROGRAM_DB_MAX_RAW },
+            spectrogram_db_max: SPECTROGRAM_DB_MAX,
             spectrogram_gamma: SPECTROGRAM_GAMMA,
             sync_mode: sync_active,
             stacked_mode: stacked,
@@ -1645,16 +1650,8 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             source: spectrogram_source,
         });
 
-        // Drain completed CQT columns from the worker and write them into
-        // the history storage buffer. We pre-tilt each bin's dB value
-        // here using the current weighting so the GPU history holds
-        // already-weighted values — same pattern as the MS scratch path.
-        // Old columns retain whatever weighting was active when they
-        // were emitted; switching weighting therefore takes a few
-        // seconds of new content to propagate through the visible
-        // history. Acceptable trade-off vs the prior shader-side LUT
-        // path (which had its own correctness issues and depended on
-        // the GPU sizes-buffer plumbing).
+        // Retained and incoming columns always use the same weighting.
+        spec.set_history_weighting(weighting, weight_align);
         let cqt_log_scale = (CQT_BINS_PER_OCTAVE as f32).recip();
         let cqt_fmin = CQT_FMIN_HZ;
         worker.drain_columns(|msg| {
@@ -2014,7 +2011,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                     let frac = ((cursor.x - spectrogram_rect.left())
                         / spectrogram_rect.width().max(1.0))
                         .clamp(0.0, 0.9999);
-                    (frac * HISTORY_COLS as f32) as u32
+                    frac * HISTORY_COLS as f32
                 } else {
                     let ppp = ui.ctx().pixels_per_point();
                     let texture_w = spec.width() as i32;
@@ -2022,16 +2019,20 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                     let history_idx = ((texture_w - 1) - px_col).max(0).min(history_cols_i - 1);
                     let mut c = spec.write_col() as i32 - history_idx;
                     c = ((c % history_cols_i) + history_cols_i) % history_cols_i;
-                    c as u32
+                    c as f32
                 };
-                if let Some(raw_db) = spec.sample_history_db(buffer_id, col, log_bin_f) {
+                let physical_height = spectrogram_rect.height() * ui.ctx().pixels_per_point()
+                    / if state.shared.spectrogram_source() == SpectrogramSource::LeftRight { 2.0 } else { 1.0 };
+                let bin_span = CQT_BINS_PER_OCTAVE as f32 * (freq_max/freq_min).log2()
+                    / physical_height.max(1.0);
+                if let Some(raw_db) = spec.sample_history_db(buffer_id, col, log_bin_f, bin_span) {
                     // Floor reads on freshly-cleared columns come back at
                     // the silence sentinel (~-140 dB). Don't bother
                     // showing a "level" for those — display "—" instead
                     // so the user can tell empty cells from real signal.
                     if raw_db > -130.0 {
                         // History already contains the weighting used for its colour.
-                        lines.push(format!("z: {:>6.1} dB", raw_db));
+                        lines.push(format!("z: {:>6.1} dB / 100 Hz", raw_db));
                     } else {
                         lines.push("z:     —".to_string());
                     }
@@ -2117,8 +2118,8 @@ fn draw_ref_bands(
         let Some(envelope)=analysis.mid.for_fft(live_fft_size) else { continue; };
         let key=ProjectionKey { sample_rate:analysis.source_sample_rate,fft_size:envelope.fft_size,
             min:freq_min,max:freq_max,columns:live_columns.len(),smoothing:smoothing_mode,weighting };
-        let fp=ref_analysis_fingerprint(analysis);
-        if cache.entries[slot_idx].as_ref().is_none_or(|e|e.fingerprint!=fp || e.key!=key) {
+        let revision = slot.revision;
+        if cache.entries[slot_idx].as_ref().is_none_or(|e|e.revision!=revision || e.key!=key) {
             let bins=reference_bins(envelope,analysis.source_sample_rate);
             let mut project=CurveProjection::default();project.prepare(key);
             let mut src=vec![MIN_DB;bins.len()];let mut output=vec![MIN_DB;key.columns];
@@ -2128,7 +2129,7 @@ fn draw_ref_bands(
                 project.project(&src,&mut output);
                 for (dst,&db) in smoothed.iter_mut().zip(&output) { dst[channel]=db; }
             }
-            cache.entries[slot_idx]=Some(RefCacheEntry{fingerprint:fp,key,smoothed,auto_gain_db:0.0,auto_gain_warm:false});
+            cache.entries[slot_idx]=Some(RefCacheEntry{revision,key,smoothed,auto_gain_db:0.0,auto_gain_warm:false});
         }
         let cutoff=analysis.lowpass_hz.unwrap_or(analysis.source_sample_rate*0.5).min(analysis.source_sample_rate*0.5);
         let common_columns=(((cutoff.min(freq_max)/freq_min).ln()/(freq_max/freq_min).ln()
@@ -2147,9 +2148,18 @@ fn draw_ref_bands(
             for (i,bin) in entry.smoothed.iter().enumerate() {
                 let t=i as f32/(key.columns-1) as f32;let freq=freq_min*(freq_max/freq_min).powf(t);
                 if freq>cutoff { break; }
-                pts.push(egui::pos2(rect.left()+t*rect.width(),db_to_y(bin[channel]+entry.auto_gain_db,DB_MIN,DB_MAX,rect)));
+                if curve_value_is_drawable(bin[channel]) {
+                    let db = bin[channel]+entry.auto_gain_db;
+                    if db.is_finite() {
+                        pts.push(egui::pos2(rect.left()+t*rect.width(),db_to_y(db,DB_MIN,DB_MAX,rect)));
+                    } else {
+                        draw_curve_segment(painter, &mut pts, if channel==1 {2.25}else{1.0}, color);
+                    }
+                } else {
+                    draw_curve_segment(painter, &mut pts, if channel==1 {2.25}else{1.0}, color);
+                }
             }
-            if pts.len()>=2 {painter.add(egui::Shape::line(pts,egui::Stroke::new(if channel==1 {2.25}else{1.0},color)));}
+            draw_curve_segment(painter, &mut pts, if channel==1 {2.25}else{1.0}, color);
         }
     }
 }
@@ -2229,6 +2239,33 @@ mod precision_tests {
         }
     }
 
+    fn gapped_reference_analysis() -> RefAnalysis {
+        let mut bins = vec![[MIN_DB; 3]; TEST_FFT / 2 + 1];
+        for (index, bin) in bins.iter_mut().enumerate() {
+            let freq = index as f32 * TEST_SR / TEST_FFT as f32;
+            if (100.0..2_000.0).contains(&freq) || (6_000.0..12_000.0).contains(&freq) {
+                bin[1] = -20.0;
+            }
+        }
+        analysis_with_bins(bins)
+    }
+
+    fn rendered_paths(mut draw: impl FnMut(&egui::Painter)) -> Vec<Vec<egui::Pos2>> {
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            draw(&painter);
+        });
+        output
+            .shapes
+            .into_iter()
+            .filter_map(|clipped| match clipped.shape {
+                egui::Shape::Path(path) => Some(path.points),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn weighting_modes_apply_flat_pink_and_lufs_curves() {
         let bins = vec![-24.0; TEST_FFT / 2 + 1];
@@ -2282,16 +2319,175 @@ mod precision_tests {
     }
 
     #[test]
-    fn distinct_retained_bins_change_reference_fingerprint() {
-        let bins = narrow_18khz_bins();
-        let original = analysis_with_bins(
-            bins.iter()
-                .map(|&value| [value, value, value])
-                .collect(),
-        );
-        let mut changed = original.clone();
-        changed.mid.per_fft[0].bin_bounds[18_000usize * TEST_FFT / TEST_SR as usize][1] += 0.01;
-        assert_ne!(ref_analysis_fingerprint(&original), ref_analysis_fingerprint(&changed));
+    fn ref_slot_revision_changes_on_replacement_and_survives_visibility_toggle() {
+        let original = RefSlot::default();
+        let original_revision = original.revision;
+        let mut hidden = original.clone();
+        hidden.visible = !hidden.visible;
+        assert_eq!(hidden.revision, original_revision);
+        assert_ne!(RefSlot::default().revision, original_revision);
+    }
+
+    #[test]
+    fn curve_segments_break_at_silence_and_nonfinite_values() {
+        assert!(!curve_value_is_drawable(MIN_DB));
+        assert!(!curve_value_is_drawable(f32::NAN));
+        assert!(!curve_value_is_drawable(f32::INFINITY));
+        assert!(curve_value_is_drawable(DB_MIN - 1.0));
+    }
+
+    #[test]
+    fn silent_projection_stays_at_floor_after_weighting() {
+        let bins = vec![MIN_DB; TEST_FFT / 2 + 1];
+        for weighting in [Weighting::Flat, Weighting::Pink, Weighting::Lufs] {
+            let output = project(&bins, FreqSmoothing::Erb, weighting);
+            assert!(output.iter().all(|&db| db == MIN_DB), "{weighting:?}");
+        }
+
+        let mut nonfinite = bins;
+        nonfinite[TEST_FFT / 4] = f32::NAN;
+        let output = project(&nonfinite, FreqSmoothing::None, Weighting::Flat);
+        assert!(output.iter().all(|&db| db == MIN_DB));
+    }
+
+    #[test]
+    fn live_median_shapes_skip_silence_without_bridging() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(120.0, 60.0));
+        assert!(rendered_paths(|painter| {
+            draw_live_median(painter, rect, &[MIN_DB; 6]);
+        })
+        .is_empty());
+
+        let paths = rendered_paths(|painter| {
+            draw_live_median(painter, rect, &[-20.0, -20.0, MIN_DB, MIN_DB, -20.0, -20.0]);
+        });
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].last().unwrap().x < paths[1].first().unwrap().x);
+    }
+
+    #[test]
+    fn reference_shapes_skip_silence_without_bridging() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(120.0, 60.0));
+        let mut slots = RefSlots::default();
+        slots.slots[0] = RefSlot {
+            name: "gapped".to_string(),
+            analysis: Some(gapped_reference_analysis()),
+            visible: true,
+            revision: next_ref_slot_revision(),
+        };
+        let mut cache = RefEnvelopeCache::default();
+        let live = vec![-20.0; TEST_COLUMNS];
+        slots.slots[0].analysis = Some(analysis_with_bins(vec![
+            [MIN_DB; 3];
+            TEST_FFT / 2 + 1
+        ]));
+        assert!(rendered_paths(|painter| {
+            draw_ref_bands(
+                painter,
+                rect,
+                TEST_MIN,
+                TEST_MAX,
+                &slots,
+                TEST_FFT,
+                TEST_SR,
+                &live,
+                Weighting::Flat,
+                FreqSmoothing::None,
+                &mut cache,
+                0.1,
+            );
+        })
+        .is_empty());
+
+        slots.slots[0].analysis = Some(gapped_reference_analysis());
+        slots.slots[0].revision = next_ref_slot_revision();
+        let paths = rendered_paths(|painter| {
+            draw_ref_bands(
+                painter,
+                rect,
+                TEST_MIN,
+                TEST_MAX,
+                &slots,
+                TEST_FFT,
+                TEST_SR,
+                &live,
+                Weighting::Flat,
+                FreqSmoothing::None,
+                &mut cache,
+                0.1,
+            );
+        });
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].last().unwrap().x < paths[1].first().unwrap().x);
+    }
+
+    #[test]
+    fn ref_slot_serialization_keeps_revision_runtime_only_and_invalidates_cache() {
+        let source = RefSlot {
+            name: "legacy".to_string(),
+            analysis: Some(gapped_reference_analysis()),
+            visible: true,
+            revision: next_ref_slot_revision(),
+        };
+        let encoded = serde_json::to_string(&source).unwrap();
+        assert!(!encoded.contains("revision"));
+        let first: RefSlot = serde_json::from_str(&encoded).unwrap();
+        let second: RefSlot = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(first.name, "legacy");
+        assert!(first.analysis.is_some());
+        assert_ne!(first.revision, second.revision);
+
+        let old: RefSlot = serde_json::from_str(
+            r#"{"name":"old","analysis":null,"visible":true}"#,
+        )
+        .unwrap();
+        assert_eq!(old.name, "old");
+        assert!(old.analysis.is_none());
+
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(120.0, 60.0));
+        let live = vec![-20.0; TEST_COLUMNS];
+        let mut slots = RefSlots::default();
+        slots.slots[0] = first.clone();
+        let mut cache = RefEnvelopeCache::default();
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            draw_ref_bands(
+                &painter,
+                rect,
+                TEST_MIN,
+                TEST_MAX,
+                &slots,
+                TEST_FFT,
+                TEST_SR,
+                &live,
+                Weighting::Flat,
+                FreqSmoothing::None,
+                &mut cache,
+                0.1,
+            );
+        });
+        assert_eq!(cache.entries[0].as_ref().unwrap().revision, first.revision);
+
+        slots.slots[0] = second.clone();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            draw_ref_bands(
+                &painter,
+                rect,
+                TEST_MIN,
+                TEST_MAX,
+                &slots,
+                TEST_FFT,
+                TEST_SR,
+                &live,
+                Weighting::Flat,
+                FreqSmoothing::None,
+                &mut cache,
+                0.1,
+            );
+        });
+        assert_eq!(cache.entries[0].as_ref().unwrap().revision, second.revision);
     }
 }
 
@@ -2299,9 +2495,38 @@ mod precision_tests {
 /// advances with analysis frames, independently of editor refresh frequency.
 fn draw_live_median(painter: &egui::Painter, rect: egui::Rect, columns: &[f32]) {
     if columns.len()<2 { return; }
-    let pts: Vec<_> = columns.iter().enumerate().map(|(i,&db)| egui::pos2(
-        rect.left()+i as f32/(columns.len()-1) as f32*rect.width(), db_to_y(db,DB_MIN,DB_MAX,rect))).collect();
-    painter.add(egui::Shape::line(pts,egui::Stroke::new(2.5,egui::Color32::WHITE)));
+    let mut pts=Vec::with_capacity(columns.len());
+    for (i,&db) in columns.iter().enumerate() {
+        if curve_value_is_drawable(db) {
+            pts.push(egui::pos2(
+                rect.left()+i as f32/(columns.len()-1) as f32*rect.width(),
+                db_to_y(db,DB_MIN,DB_MAX,rect),
+            ));
+        } else {
+            draw_curve_segment(painter, &mut pts, 2.5, egui::Color32::WHITE);
+        }
+    }
+    draw_curve_segment(painter, &mut pts, 2.5, egui::Color32::WHITE);
+}
+
+fn curve_value_is_drawable(db: f32) -> bool {
+    db.is_finite() && db > MIN_DB
+}
+
+fn draw_curve_segment(
+    painter: &egui::Painter,
+    points: &mut Vec<egui::Pos2>,
+    width: f32,
+    color: egui::Color32,
+) {
+    if points.len() >= 2 {
+        painter.add(egui::Shape::line(
+            std::mem::take(points),
+            egui::Stroke::new(width, color),
+        ));
+    } else {
+        points.clear();
+    }
 }
 
 fn draw_spectrogram_chrome(
@@ -4093,6 +4318,7 @@ fn launch_ref_picker(
                     name,
                     analysis: Some(analysis),
                     visible: true,
+                    revision: next_ref_slot_revision(),
                 };
             }
             Err(e) => {

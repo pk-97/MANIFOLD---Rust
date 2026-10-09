@@ -248,7 +248,9 @@ struct ChannelState {
     have_prev_cqt: bool,
     have_prev2_cqt: bool,
     cqt_out: Vec<f32>,
-    column_peak: Vec<f32>,
+    column_average: Vec<f32>,
+    column_power_sum: Vec<f32>,
+    column_hops: usize,
     prev_cqt_out: Vec<f32>,
     have_prev_cqt_out: bool,
 }
@@ -265,7 +267,9 @@ impl ChannelState {
             have_prev_cqt: false,
             have_prev2_cqt: false,
             cqt_out: vec![WORKER_FLOOR_DB; cqt_num_bins],
-            column_peak: vec![WORKER_FLOOR_DB; cqt_num_bins],
+            column_average: vec![WORKER_FLOOR_DB; cqt_num_bins],
+            column_power_sum: vec![0.0; cqt_num_bins],
+            column_hops: 0,
             prev_cqt_out: vec![WORKER_FLOOR_DB; cqt_num_bins],
             have_prev_cqt_out: false,
         }
@@ -277,11 +281,13 @@ impl ChannelState {
         self.have_prev_cqt = false;
         self.have_prev2_cqt = false;
         self.have_prev_cqt_out = false;
-        self.column_peak.fill(WORKER_FLOOR_DB);
+        self.reset_column_average();
     }
 
-    fn reset_column_peak(&mut self) {
-        self.column_peak.fill(WORKER_FLOOR_DB);
+    fn reset_column_average(&mut self) {
+        self.column_average.fill(WORKER_FLOOR_DB);
+        self.column_power_sum.fill(0.0);
+        self.column_hops = 0;
     }
 
     /// Invalidate phase and interpolation state after skipped analysis hops
@@ -290,12 +296,20 @@ impl ChannelState {
         self.have_prev_cqt = false;
         self.have_prev2_cqt = false;
         self.have_prev_cqt_out = false;
-        self.reset_column_peak();
+        self.reset_column_average();
     }
 
-    fn reduce_column_peak(&mut self) {
-        for (peak, &value) in self.column_peak.iter_mut().zip(&self.cqt_out) {
-            *peak = peak.max(value);
+    fn accumulate_column(&mut self) {
+        for (sum, &value) in self.column_power_sum.iter_mut().zip(&self.cqt_out) {
+            *sum += 10.0_f32.powf(value * 0.1);
+        }
+        self.column_hops += 1;
+    }
+
+    fn finish_column(&mut self) {
+        let count = self.column_hops.max(1) as f32;
+        for (db, &power) in self.column_average.iter_mut().zip(&self.column_power_sum) {
+            *db = (10.0 * (power / count).max(1e-14).log10()).max(WORKER_FLOOR_DB);
         }
     }
 }
@@ -500,8 +514,8 @@ impl WorkerState {
                     self.emit_column(cfg, anchor, ring, two_channels);
                     self.analyzed_since_column = false;
                 } else {
-                    self.primary.reset_column_peak();
-                    self.secondary.reset_column_peak();
+                    self.primary.reset_column_average();
+                    self.secondary.reset_column_average();
                 }
                 self.internal_beat_pos += beats_per_column;
             }
@@ -517,7 +531,7 @@ impl WorkerState {
             self.sample_rate,
             &mut self.synchro_power_scratch,
         );
-        self.primary.reduce_column_peak();
+        self.primary.accumulate_column();
         if two_channels {
             Self::run_channel_cqt(
                 &mut self.cqt,
@@ -527,7 +541,7 @@ impl WorkerState {
                 self.sample_rate,
                 &mut self.synchro_power_scratch,
             );
-            self.secondary.reduce_column_peak();
+            self.secondary.accumulate_column();
         }
     }
 
@@ -551,6 +565,7 @@ impl WorkerState {
             synchrosqueeze_into(
                 cqt.center_freqs(),
                 cqt.bandwidths_hz(),
+                cqt.display_power_gains(),
                 &ch.cqt_complex,
                 &ch.prev_cqt_complex,
                 &ch.prev2_cqt_complex,
@@ -563,8 +578,8 @@ impl WorkerState {
                 &mut ch.cqt_out,
             );
         } else {
-            for (dst, c) in ch.cqt_out.iter_mut().zip(ch.cqt_complex.iter()) {
-                let p = c.norm_sqr();
+            for ((dst, c), &gain) in ch.cqt_out.iter_mut().zip(&ch.cqt_complex).zip(cqt.display_power_gains()) {
+                let p = c.norm_sqr() * gain;
                 *dst = if p > 1e-20 {
                     10.0 * p.log10()
                 } else {
@@ -599,6 +614,8 @@ impl WorkerState {
         // when sync was first enabled. Falls back to the internal clock
         // only if the host hasn't reported transport yet (early frames
         // before any process buffer arrived).
+        self.primary.finish_column();
+        if two_channels { self.secondary.finish_column(); }
         let prev_col = self.write_col;
         let beat_at_hop = if cfg.sync_enabled {
             match anchor {
@@ -660,13 +677,13 @@ impl WorkerState {
             msg.clear_history_before = clear_first && i == 0;
             let t = (i + 1) as f32 / fill_count as f32;
             if fill_count > 1 && self.primary.have_prev_cqt_out {
-                lerp_power_db(&self.primary.prev_cqt_out, &self.primary.column_peak, t, &mut msg.data);
-            } else { msg.data.copy_from_slice(&self.primary.column_peak); }
+                lerp_power_db(&self.primary.prev_cqt_out, &self.primary.column_average, t, &mut msg.data);
+            } else { msg.data.copy_from_slice(&self.primary.column_average); }
             if let Some(data) = msg.data2.as_mut() {
                 if two_channels {
                     if fill_count > 1 && self.secondary.have_prev_cqt_out {
-                        lerp_power_db(&self.secondary.prev_cqt_out, &self.secondary.column_peak, t, data);
-                    } else { data.copy_from_slice(&self.secondary.column_peak); }
+                        lerp_power_db(&self.secondary.prev_cqt_out, &self.secondary.column_average, t, data);
+                    } else { data.copy_from_slice(&self.secondary.column_average); }
                 }
             }
             if let Some(mut evicted) = ring.force_push(msg) {
@@ -678,16 +695,16 @@ impl WorkerState {
 
         self.primary
             .prev_cqt_out
-            .copy_from_slice(&self.primary.column_peak);
+            .copy_from_slice(&self.primary.column_average);
         self.primary.have_prev_cqt_out = true;
         if two_channels {
             self.secondary
                 .prev_cqt_out
-                .copy_from_slice(&self.secondary.column_peak);
+                .copy_from_slice(&self.secondary.column_average);
             self.secondary.have_prev_cqt_out = true;
         }
-        self.primary.reset_column_peak();
-        self.secondary.reset_column_peak();
+        self.primary.reset_column_average();
+        self.secondary.reset_column_average();
     }
 }
 
@@ -702,6 +719,7 @@ fn lerp_power_db(prev: &[f32], cur: &[f32], t: f32, out: &mut [f32]) {
 fn synchrosqueeze_into(
     center_freqs: &[f32],
     bandwidths: &[f32],
+    display_power_gains: &[f32],
     cqt_complex: &[CqtComplex<f32>],
     prev_cqt_complex: &[CqtComplex<f32>],
     prev2_cqt_complex: &[CqtComplex<f32>],
@@ -775,10 +793,14 @@ fn synchrosqueeze_into(
             continue;
         }
         let frac = log_bin_f - lo as f32;
-        scratch[lo] += power * (1.0 - frac);
+        // Reassign density with the source/destination logarithmic-bin
+        // bandwidth ratio. Summing overlapping tone-normalized magnitudes
+        // without this correction creates frequency-dependent brightness.
+        let density = power * display_power_gains[k];
+        scratch[lo] += density * (f_k / center_freqs[lo]) * (1.0 - frac);
         let hi = lo + 1;
         if hi < num_bins {
-            scratch[hi] += power * frac;
+            scratch[hi] += density * (f_k / center_freqs[hi]) * frac;
         }
     }
 
@@ -915,7 +937,7 @@ mod tests {
                 columns+=1;pool.push(col).ok();
             }
             assert_eq!(columns,2);
-            assert!(peak > -27.0, "burst offset {offset} lost: {peak} dB");
+            assert!(peak > -46.0, "burst offset {offset} lost: {peak} dB");
             weakest=weakest.min(peak);
         }
         eprintln!("weakest 16-sample 18kHz burst: {weakest} dB");
@@ -938,7 +960,7 @@ mod tests {
                 cqt.process_complex(&audio,out);
             }
             let mut scratch=vec![0.0;bins];let mut output=vec![0.0;bins];
-            synchrosqueeze_into(cqt.center_freqs(),cqt.bandwidths_hz(),
+            synchrosqueeze_into(cqt.center_freqs(),cqt.bandwidths_hz(),cqt.display_power_gains(),
                 &frames[2],&frames[1],&frames[0],true,&cfg,params.hop_samples,
                 rate,bins,&mut scratch,&mut output);
             assert!(output.iter().all(|v|v.is_finite()));
@@ -950,3 +972,7 @@ mod tests {
     }
 
 }
+
+#[cfg(test)]
+#[path = "spectrogram_tests.rs"]
+pub(crate) mod spectrogram_tests;
