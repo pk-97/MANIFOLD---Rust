@@ -474,7 +474,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     let mut add = AddSceneFluidCommand::new(target_graph.clone(), render_id,
         manifold_nodes::testkit::reference_fixtures::cpu_flip_metadata(), metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"),
-        manifold_editing::commands::graph::flip_scene_fluid_template(), baseline.clone())
+        manifold_editing::commands::graph::flip_scene_fluid_template(), baseline.as_ref().clone())
         .with_world_metadata(metadata_for_node_type("node.physics_world"));
     add.execute(&mut project);
     assert!(add.was_applied(), "{:?}", add.rejection_reason());
@@ -486,7 +486,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     let build = |def| PresetRuntime::from_json_str_with_device(
         &serde_json::to_string(def).unwrap(), &registry, Arc::clone(&harness.device),
         WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
-    let mut base_runtime = build(baseline);
+    let mut base_runtime = build(baseline.as_ref());
     let mut fluid_runtime = build(graph);
     let target = RenderTarget::new(&harness.device, WIDTH, HEIGHT,
         GpuTextureFormat::Rgba16Float, "added-fluid-proof");
@@ -679,12 +679,12 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let mut add_fluid = AddSceneFluidCommand::new(target_graph.clone(), render_id,
         manifold_nodes::testkit::reference_fixtures::cpu_flip_metadata(), metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"),
-        manifold_editing::commands::graph::flip_scene_fluid_template(), baseline.clone())
+        manifold_editing::commands::graph::flip_scene_fluid_template(), baseline.as_ref().clone())
         .with_world_metadata(metadata_for_node_type("node.physics_world"));
     add_fluid.execute(&mut project);
     assert!(add_fluid.was_applied());
     let mut add_object = AddSceneObjectCommand::new(target_graph.clone(), vec![], render_id, 0,
-        (0.0, 0.0), vec![], vec![], vec![], baseline.clone());
+        (0.0, 0.0), vec![], vec![], vec![], baseline.as_ref().clone());
     add_object.execute(&mut project);
     assert!(add_object.was_applied());
     let def = project.graph_for_target(&target_graph, None).unwrap();
@@ -700,7 +700,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let fluid = fluid_group.group.as_ref().unwrap().nodes.iter().find(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID).unwrap();
     let domain = SceneNodeRef { scope: vec![fluid_group.node_id.clone()], node: fluid.node_id.clone() };
     let mut assign = AssignSceneFluidRoleCommand::new(target_graph.clone(), render_id, object_index,
-        domain, 0, vec![], baseline.clone());
+        domain, 0, vec![], baseline.as_ref().clone());
     assign.execute(&mut project);
     assert!(assign.was_applied(), "{:?}", assign.rejection_reason());
     let mut def = project.graph_for_target(&target_graph, None).unwrap().clone();

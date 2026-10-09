@@ -27,8 +27,8 @@ mod tests {
             .expect("ColorGrade canonical view");
 
         // Canonical content key fuses and is stable across calls (cache hit).
-        let canon_a = fused_view_for(&base.canonical_def, base);
-        let canon_b = fused_view_for(&base.canonical_def, base);
+        let canon_a = fused_view_for(&base.canonical_def, &base);
+        let canon_b = fused_view_for(&base.canonical_def, &base);
         assert!(canon_a.is_some(), "canonical ColorGrade must fuse");
         assert!(
             Arc::ptr_eq(canon_a.as_ref().unwrap(), canon_b.as_ref().unwrap()),
@@ -46,8 +46,8 @@ mod tests {
             def_content_key(&edited),
             "a structural edit must change the content key",
         );
-        let _ = fused_view_for(&edited, base);
-        let canon_c = fused_view_for(&base.canonical_def, base);
+        let _ = fused_view_for(&edited, &base);
+        let canon_c = fused_view_for(&base.canonical_def, &base);
         assert!(
             Arc::ptr_eq(canon_a.as_ref().unwrap(), canon_c.as_ref().unwrap()),
             "an edited def's entry must not clobber the canonical entry",
@@ -72,7 +72,7 @@ mod tests {
             "unfused view must carry an empty retarget map",
         );
 
-        let fused = fused_view_for(&base.canonical_def, base).expect("ColorGrade fuses");
+        let fused = fused_view_for(&base.canonical_def, &base).expect("ColorGrade fuses");
         // Same routing the standalone `fuse_canonical_def` retarget asserts —
         // proving the map survived onto the cached view rather than being
         // dropped after the static-binding rewrite.
@@ -329,7 +329,7 @@ mod tests {
     fn fused_effect_view_for_compiles_inline_in_tests() {
         let base = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
             .expect("ColorGrade canonical view");
-        match fused_effect_view_for(&base.canonical_def, base) {
+        match fused_effect_view_for(&base.canonical_def, &base) {
             FusedEffectLookup::Ready(view) => {
                 assert!(
                     !view.fused_retarget.is_empty(),
@@ -341,7 +341,7 @@ mod tests {
         }
         // Second lookup is a cache hit on the same content key.
         assert!(matches!(
-            fused_effect_view_for(&base.canonical_def, base),
+            fused_effect_view_for(&base.canonical_def, &base),
             FusedEffectLookup::Ready(_)
         ));
     }

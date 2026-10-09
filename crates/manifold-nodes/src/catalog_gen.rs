@@ -558,7 +558,8 @@ fn collect_presets() -> Vec<PresetRow> {
         bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect).collect();
     effect_ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     for id in &effect_ids {
-        if let Some(meta) = bundled_preset_def(id).and_then(|d| d.preset_metadata.as_ref()) {
+        if let Some(def) = bundled_preset_def(id)
+            && let Some(meta) = def.preset_metadata.as_ref() {
             rows.push(preset_row_from_meta(meta, "effect"));
         }
     }

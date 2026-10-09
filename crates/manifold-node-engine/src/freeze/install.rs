@@ -33,13 +33,13 @@
 //!    uniform struct, so drivers / Ableton / LFOs keep writing them every frame
 //!    (DD-A4: `var<uniform>`, never std430).
 //!
-//! The fused [`LoadedPresetView`] is cached `&'static` (built once per effect
-//! type, exactly like [`crate::node_graph::loaded_preset_view_by_id`]), so the
+//! The fused [`LoadedPresetView`] is cached behind `Arc` (built once per effect
+//! type, exactly like [`crate::load::loaded_preset_view::loaded_preset_view_by_id`]), so the
 //! per-frame chain rebuilds on resize don't leak.
 //!
 //! ## What it deliberately does NOT touch (DD-A6)
 //!
-//! - The **unfused** canonical view ([`crate::node_graph::loaded_preset_view_by_id`])
+//! - The **unfused** canonical view ([`crate::load::loaded_preset_view::loaded_preset_view_by_id`])
 //!   stays the authoring + fallback surface. The graph editor reads it, so
 //!   drilling into a fused effect still shows the original atoms. Only the chain
 //!   *render* path swaps in the fused view, and only for the un-edited canonical
@@ -119,7 +119,7 @@ pub fn should_render_fused(is_watched: bool) -> bool {
 /// entries; the live gate fills edited entries on demand.
 pub fn fused_view_by_id(id: &PresetTypeId) -> Option<Arc<LoadedPresetView>> {
     let base = crate::load::loaded_preset_view::loaded_preset_view_by_id(id)?;
-    fused_view_for(&base.canonical_def, base)
+    fused_view_for(base.canonical_def.as_ref(), base.as_ref())
 }
 
 /// Fuse an arbitrary `canonical_def` (shipped, edited, or created) carrying the
@@ -474,7 +474,8 @@ pub fn select_card_fused_view(
     // just the effective def to fuse. The fused view keeps the same outer-card
     // params + bindings, so the chain build's splice / outer_param_index /
     // bindings lines are shape-identical either way.
-    let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(&base_view.canonical_def);
+    let effective_def: &EffectGraphDef =
+        fx.graph.as_ref().unwrap_or(base_view.canonical_def.as_ref());
     // D8/P7: relight fuses — augment with DEFAULT knob values before fusion so
     // the cache key (and generated WGSL) is knob-invariant; live values write
     // per-frame via `EffectSlot::relight_writes`. `height_from` changes
@@ -708,7 +709,7 @@ pub fn chain_fusion_enabled() -> bool {
 /// Segment identity: positional hash of the member cards' def content keys.
 /// Equivalent discriminative power to hashing the concatenated def (the
 /// namespacing is positional), without building the concat on every lookup.
-pub fn segment_key(cards: &[(&EffectGraphDef, &'static LoadedPresetView)]) -> u64 {
+pub fn segment_key(cards: &[(&EffectGraphDef, &LoadedPresetView)]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
     MESH_RULE_SCHEMA.hash(&mut h);
@@ -768,7 +769,7 @@ struct SegmentJob {
     key: u64,
     /// Owned def clones — the live defs can mutate under editing while the
     /// worker runs.
-    cards: Vec<(EffectGraphDef, &'static LoadedPresetView)>,
+    cards: Vec<(EffectGraphDef, Arc<LoadedPresetView>)>,
 }
 
 /// Per-card fused-view compile job (BUG-j8gy). Owned clones of everything
@@ -887,8 +888,8 @@ fn segment_worker() -> &'static SegmentWorker {
                 while let Ok(job) = rx_job.recv() {
                     let result = match job {
                         FusionJob::Segment(job) => {
-                            let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
-                                job.cards.iter().map(|(d, v)| (d, *v)).collect();
+                            let card_refs: Vec<(&EffectGraphDef, &LoadedPresetView)> =
+                                job.cards.iter().map(|(d, v)| (d, v.as_ref())).collect();
                             let view = compile_segment_view_panic_safe(&card_refs, &registry);
                             if let Some(v) = &view {
                                 prewarm_fused_pipelines(&v.def);
@@ -998,10 +999,10 @@ fn expire_stale_segment_pending(now: std::time::Instant) {
 /// members can be augmented before fusion while keeping the view references
 /// for bindings.
 pub fn fused_segment_view_for(
-    cards: &[(EffectGraphDef, &'static LoadedPresetView)],
+    cards: &[(EffectGraphDef, Arc<LoadedPresetView>)],
 ) -> SegmentLookup {
-    let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
-        cards.iter().map(|(d, v)| (d, *v)).collect();
+    let card_refs: Vec<(&EffectGraphDef, &LoadedPresetView)> =
+        cards.iter().map(|(d, v)| (d, v.as_ref())).collect();
     let key = segment_key(&card_refs);
     if let Some(cached) = SEGMENT_CACHE.with(|c| c.borrow_mut().get(key)) {
         return match cached {
@@ -1028,7 +1029,7 @@ pub fn fused_segment_view_for(
         if newly_queued {
             let job = SegmentJob {
                 key,
-                cards: cards.iter().map(|(d, v)| (d.clone(), *v)).collect(),
+                cards: cards.iter().map(|(d, v)| (d.clone(), Arc::clone(v))).collect(),
             };
             if segment_worker().tx.send(FusionJob::Segment(job)).is_err() {
                 // Worker died (startup panic) — refuse rather than wedge Pending.
@@ -1068,7 +1069,7 @@ pub(crate) fn arm_segment_compile_panic_hook_for_test(armed: bool) {
 /// `pump_segment_results` handles that case.
 #[cfg(any(test, not(feature = "testkit")))]
 fn compile_segment_view_panic_safe(
-    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+    cards: &[(&EffectGraphDef, &LoadedPresetView)],
     registry: &PrimitiveRegistry,
 ) -> Option<Arc<SegmentView>> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1088,7 +1089,7 @@ fn compile_segment_view_panic_safe(
 /// the codegen worker in production and synchronously in tests.
 #[cfg(any(test, not(feature = "testkit"), feature = "gpu-proofs"))]
 pub(crate) fn compile_segment_view(
-    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+    cards: &[(&EffectGraphDef, &LoadedPresetView)],
     registry: &PrimitiveRegistry,
 ) -> Option<Arc<SegmentView>> {
     #[cfg(test)]
@@ -1178,7 +1179,7 @@ pub(crate) fn compile_segment_view(
 /// the worker's asynchrony.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub fn seed_segment_cache_for_test(
-    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+    cards: &[(&EffectGraphDef, &LoadedPresetView)],
     registry: &PrimitiveRegistry,
 ) -> Option<Arc<SegmentView>> {
     let view = compile_segment_view(cards, registry);
@@ -3049,7 +3050,7 @@ mod tests {
         use crate::param_binding::ParamId;
         let mk = |node: &str, param: &'static str| ParamBinding {
             id: ParamId::from("m"),
-            label: "Mode",
+            label: "Mode".into(),
             default_value: 0.0,
             target: ParamTarget::Node { node_id: NodeId::new(node), param: std::borrow::Cow::Borrowed(param) },
             convert: ParamConvert::EnumRound,

@@ -149,7 +149,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
         metadata_for_node_type("node.pbr_material"),
         metadata_for_node_type("node.scene_object"),
         manifold_editing::commands::graph::flip_scene_fluid_template(),
-        baseline.clone(),
+        baseline.as_ref().clone(),
     )
     .with_role_metadata(metadata_for_node_type("node.fluid_role_source"))
     .with_world_metadata(metadata_for_node_type("node.physics_world"));
@@ -164,7 +164,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
         metadata_for_node_type("node.pbr_material"),
         metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.scene_object"),
-        baseline.clone(),
+        baseline.as_ref().clone(),
     );
     object.execute(&mut project);
     assert!(object.was_applied());
@@ -211,7 +211,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
     set(
         &mut project,
         &target,
-        baseline,
+        baseline.as_ref(),
         vec![group_id],
         mesh,
         "size",
@@ -220,7 +220,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
     set(
         &mut project,
         &target,
-        baseline,
+        baseline.as_ref(),
         vec![group_id],
         transform,
         "pos_y",
@@ -231,7 +231,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
         scene,
         row.index as u32,
         metadata_for_node_type("node.rigid_body"),
-        baseline.clone(),
+        baseline.as_ref().clone(),
     )
     .with_world_metadata(metadata_for_node_type("node.physics_world"));
     enable.execute(&mut project);
@@ -258,7 +258,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
         .unwrap()
         .node_id
         .clone();
-    (project, target, baseline.clone(), body_id)
+    (project, target, baseline.as_ref().clone(), body_id)
 }
 
 #[test]

@@ -12,6 +12,7 @@ use crate::bundled_presets::bundled_preset_def;
 pub fn stock_recipe(name: &str) -> EffectGraphDef {
     bundled_preset_def(&PresetTypeId::from_string(name.to_string()))
         .unwrap_or_else(|| panic!("bundled scene-modifier recipe {name} is unavailable"))
+        .as_ref()
         .clone()
 }
 
