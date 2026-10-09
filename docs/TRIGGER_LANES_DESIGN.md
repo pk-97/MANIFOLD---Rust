@@ -5,8 +5,10 @@
 **Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence, undoable assignment,
 trigger lane/clip kinds, media exclusion, ownership deletion/duplication, shared
 arrangement/live/session timing and source-timed delivery are implemented.
-Ownership validation, routing, source mute, authoring UI and full runtime
-acceptance remain pending.
+Authoring commands now validate ownership and routing, create-and-assign in one
+undo step, and preserve trigger ownership when grouping or reordering. Source
+mute and renderer-free live launches are implemented. Authoring UI and full
+runtime acceptance remain pending; these foundations are not yet all landed.
 **Tracking:** `BUG-tqtel` (feature).
 **Prerequisites:** crate refactor landed; reverify the audited seams against subsequent cleanup.
 **Execution contract:** read `DESIGN_DOC_STANDARD.md` sections 5–6 before briefing
@@ -107,6 +109,9 @@ children and remaps copied parameter references inside that subtree. References
 outside it remain unchanged. Copied clip response arms keep their authored
 settings with fresh runtime state; external audio bindings are dropped under
 the existing duplication policy, so a combined audio/clip arm becomes clip-only.
+Reordering preserves a trigger lane's owner; moving or grouping that owner keeps
+its trigger children attached. Grouping a selection containing both an owner and
+its trigger children groups the owner. A trigger-only selection cannot form a group.
 
 **D4 — Recommended routing scope.** A regular owner's trigger children may target
 that owner's compatible parameters. A group's trigger children may target the
@@ -276,6 +281,22 @@ note falls between syncs or begins at the previous sync boundary. NoteOff uses
 the accepted raw event beat; recording quantization remains separate. Focused
 CPU checks cover interval boundaries, repeated sync, existing MIDI guards and
 seek cancellation.
+
+Trigger live launches use the same `trigger_live_content_clip` path as generator
+launches, with the containing layer deciding the clip constructor. MIDI from-layer
+and audio one-shot classification admit trigger lanes without requiring media.
+
+`Project::clip_trigger_source_options` supplies the authoring eligibility rule:
+local children and children of ancestor groups, in timeline order.
+`SetParamClipTriggerSourceCommand::for_assignment` validates it on execution;
+the existing raw constructor still supports restoring unresolved saved references.
+`EditingService::create_trigger_lane` composes insertion and optional assignment
+through `CompositeCommand`, so rejection rolls back insertion. Both UI entry
+points must use these same content-thread commands.
+
+Trigger lane/clip mute removes spans and pending starts without changing scheduler
+membership. Parent and group mute do not participate. CPU checks establish
+phase-preserving unmute and no replay of muted starts.
 
 Full acceptance below remains open: Back to Arrangement phase
 coverage, external-clock discontinuities, audio clip-Step/Random multiplicity,

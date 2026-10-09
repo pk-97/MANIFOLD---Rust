@@ -1418,6 +1418,41 @@ impl EditingService {
         (commands, new_region)
     }
 
+    /// Prepare one undoable insertion, optionally assigning the new source to
+    /// a parameter. Assignment rejection rolls the insertion back as well.
+    pub fn create_trigger_lane(
+        project: &Project,
+        owner_id: &LayerId,
+        assignment: Option<(manifold_core::GraphTarget, manifold_core::effects::ParamId)>,
+    ) -> Option<Box<dyn Command>> {
+        let (index, owner) = project.timeline.find_layer_by_id(owner_id)?;
+        if owner.is_trigger() {
+            return None;
+        }
+        let mut number = 1;
+        let name = loop {
+            let candidate = format!("Trigger {number}");
+            if !project.timeline.layers.iter().any(|layer| {
+                layer.parent_layer_id.as_ref() == Some(owner_id) && layer.name == candidate
+            }) {
+                break candidate;
+            }
+            number += 1;
+        };
+        let layer = Layer::new_trigger(name, owner_id.clone(), (index + 1) as i32);
+        let source = manifold_core::params::ClipTriggerSource::Lane { layer_id: layer.layer_id.clone() };
+        let add = Box::new(crate::commands::layer::AddLayerCommand::from_layer(layer, index + 1));
+        if let Some((target, param_id)) = assignment {
+            Some(Box::new(CompositeCommand::new(vec![add, Box::new(
+                crate::commands::trigger_source::SetParamClipTriggerSourceCommand::for_assignment(
+                    target, param_id, source,
+                ),
+            )], "Add Trigger Lane".into())))
+        } else {
+            Some(add)
+        }
+    }
+
     /// Duplicate one or more layers (Ableton-style: deep copy inserted below the last selected).
     /// Groups are expanded to include all descendants; parent_layer_id refs are remapped.
     pub fn duplicate_layers(project: &Project, layer_ids: &[LayerId]) -> Option<Box<dyn Command>> {

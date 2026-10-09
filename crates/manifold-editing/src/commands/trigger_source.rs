@@ -17,6 +17,8 @@ pub struct SetParamClipTriggerSourceCommand {
     new_source: ClipTriggerSource,
     old_source: Option<ClipTriggerSource>,
     applied: bool,
+    validate_scope: bool,
+    rejection: Option<String>,
 }
 
 impl SetParamClipTriggerSourceCommand {
@@ -31,7 +33,21 @@ impl SetParamClipTriggerSourceCommand {
             new_source,
             old_source: None,
             applied: false,
+            validate_scope: false,
+            rejection: None,
         }
+    }
+
+    /// User assignments are checked against the authoritative project when
+    /// executed. `new` also supports restoring persisted missing references.
+    pub fn for_assignment(
+        target: GraphTarget,
+        param_id: impl Into<ParamId>,
+        source: ClipTriggerSource,
+    ) -> Self {
+        let mut command = Self::new(target, param_id, source);
+        command.validate_scope = true;
+        command
     }
 
     fn set_source(&mut self, project: &mut Project, source: &ClipTriggerSource) {
@@ -51,6 +67,13 @@ impl SetParamClipTriggerSourceCommand {
 impl Command for SetParamClipTriggerSourceCommand {
     fn execute(&mut self, project: &mut Project) {
         self.applied = false;
+        self.rejection = None;
+        if self.validate_scope && !project.can_assign_clip_trigger_source(
+            &self.target, self.param_id.as_ref(), &self.new_source,
+        ) {
+            self.rejection = Some("The trigger source is unavailable for this parameter".into());
+            return;
+        }
         let Some(owner) = project.graph_target_owner_mut(&self.target) else {
             return;
         };
@@ -81,6 +104,10 @@ impl Command for SetParamClipTriggerSourceCommand {
 
     fn was_applied(&self) -> bool {
         self.applied
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection.as_deref()
     }
 }
 

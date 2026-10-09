@@ -3,7 +3,7 @@ use manifold_core::clip::TimelineClip;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
 use manifold_core::recording::RecordedClipProvenance;
-use manifold_core::types::{QuantizeMode, TempoPointSource};
+use manifold_core::types::{LayerType, QuantizeMode, TempoPointSource};
 use manifold_core::{Beats, Bpm, ClipId, Seconds};
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::AddClipCommand;
@@ -44,23 +44,28 @@ const NOTE_OFF_TIMING_GUARD: f64 = 0.005;
 /// sentinel keeps them out of the note-keyed MIDI tracking maps.
 const AUDIO_TRIGGER_NOTE: i32 = -1;
 
-/// What a layer plays when triggered live: a generator, a video clip from its
-/// folder, or nothing. Resolved from the layer's authoring state and shared by
+/// What a layer plays when triggered live: a trigger, generator, video clip
+/// from its folder, or nothing. Resolved from the layer's authoring state and shared by
 /// the MIDI from-layer path and the audio one-shot path so the "what does this
 /// layer fire" rule lives in exactly one place.
 pub(crate) enum LayerLiveContent {
+    Trigger,
     Generator(PresetTypeId),
     /// The layer's `source_clip_ids` (non-empty), newest-folder order.
     Video(Vec<String>),
     Empty,
 }
 
-/// Classify what `layer_index` fires when triggered live. A generator layer
-/// fires its generator; otherwise its video folder; otherwise nothing.
+/// Classify what `layer_index` fires when triggered live. Trigger layers fire a
+/// non-media clip; generator layers fire their generator; otherwise use the
+/// video folder or nothing.
 pub(crate) fn resolve_layer_live_content(project: &Project, layer_index: i32) -> LayerLiveContent {
     let Some(layer) = project.timeline.layers.get(layer_index as usize) else {
         return LayerLiveContent::Empty;
     };
+    if layer.layer_type == LayerType::Trigger {
+        return LayerLiveContent::Trigger;
+    }
     let generator = layer.generator_type().clone();
     if generator != PresetTypeId::NONE {
         return LayerLiveContent::Generator(generator);
@@ -468,13 +473,12 @@ impl LiveClipManager {
         Some(clip)
     }
 
-    /// Trigger a live generator clip (NoteOn).
+    /// Trigger live generator or trigger content (NoteOn).
     #[allow(clippy::too_many_arguments)]
-    pub fn trigger_live_generator_clip(
+    pub fn trigger_live_content_clip(
         &mut self,
         project: &mut Project,
         host: &dyn LiveClipHost,
-        _generator_type: PresetTypeId,
         layer_index: i32,
         duration_seconds: f32,
         beat_stamp: Option<f32>,
@@ -506,7 +510,13 @@ impl LiveClipManager {
             project.settings.time_signature_numerator,
         );
 
-        let mut clip = TimelineClip::new_generator(snap_beat, duration_beats);
+        let mut clip = if project.timeline.layers[layer_index as usize].layer_type
+            == LayerType::Trigger
+        {
+            TimelineClip::new_trigger(snap_beat, duration_beats)
+        } else {
+            TimelineClip::new_generator(snap_beat, duration_beats)
+        };
         clip.layer_id = project.timeline.layers[layer_index as usize].layer_id.clone();
         clip.recorded_bpm = host.get_bpm_at_beat(snap_beat);
 
@@ -536,7 +546,7 @@ impl LiveClipManager {
     ///
     /// Resolves the layer's content ([`resolve_layer_live_content`]) and reuses
     /// the MIDI trigger primitives ([`Self::trigger_live_clip`] /
-    /// [`Self::trigger_live_generator_clip`]) — no duplicated clip creation. The
+    /// [`Self::trigger_live_content_clip`]) — no duplicated clip creation. The
     /// fire snaps to the project quantize grid exactly as a MIDI launch does
     /// (`event_absolute_tick` = the host's current tick, no `beat_stamp`), so
     /// there is no audio-specific timing math. Records the slot's end beat so
@@ -565,18 +575,18 @@ impl LiveClipManager {
         let tick = -1;
 
         let clip = match resolve_layer_live_content(project, layer_index) {
-            LayerLiveContent::Generator(generator) => self.trigger_live_generator_clip(
-                project,
-                host,
-                generator,
-                layer_index,
-                duration_seconds,
-                beat_stamp,
-                tick,
-                false, // audio trigger — never launch-quantized (trap 1)
-                realtime_now,
-                AUDIO_TRIGGER_NOTE,
-            )?,
+            LayerLiveContent::Trigger | LayerLiveContent::Generator(_) => self
+                .trigger_live_content_clip(
+                    project,
+                    host,
+                    layer_index,
+                    duration_seconds,
+                    beat_stamp,
+                    tick,
+                    false, // audio trigger — never launch-quantized (trap 1)
+                    realtime_now,
+                    AUDIO_TRIGGER_NOTE,
+                )?,
             LayerLiveContent::Video(ids) => {
                 let video_clip_id = ids.into_iter().next()?;
                 // Cap the one-shot to the source clip's own length when known so
@@ -659,7 +669,7 @@ impl LiveClipManager {
     /// launch *position* to the grid, F2) from an audio-transient one-shot
     /// (fire immediately at the playhead — the music's own timing; quantizing
     /// it would fire a kick beats late). Both `trigger_live_clip` and
-    /// `trigger_live_generator_clip` are shared by the MIDI NoteOn path
+    /// `trigger_live_content_clip` is shared by the MIDI NoteOn path
     /// (`clip_launcher.rs`) and the audio one-shot path (`fire_layer_oneshot`
     /// below), so this can't be decided from which of the two functions
     /// called in — it must be threaded down from the actual caller.
@@ -1070,7 +1080,6 @@ impl Default for LiveClipManager {
 mod tests {
     use super::*;
     use manifold_core::layer::Layer;
-    use manifold_core::PresetTypeId;
     use manifold_core::types::LayerType;
     use manifold_editing::command::Command;
 
@@ -1142,8 +1151,8 @@ mod tests {
         let mut manager = LiveClipManager::new();
         project.settings.quantize_mode = QuantizeMode::Beat;
         let clip = manager
-            .trigger_live_generator_clip(
-                &mut project, &host, PresetTypeId::PLASMA, 0, 4.0, None, -1, false, 1.0, 60,
+            .trigger_live_content_clip(
+                &mut project, &host, 0, 4.0, None, -1, false, 1.0, 60,
             )
             .unwrap();
         manager.commit_live_clip(&mut project, &mut host, 0, Some(&clip.id), None, 30, 1.1, 60);
@@ -1154,8 +1163,8 @@ mod tests {
         refs.clear();
 
         let clip = manager
-            .trigger_live_generator_clip(
-                &mut project, &host, PresetTypeId::PLASMA, 0, 4.0, None, -1, false, 2.0, 60,
+            .trigger_live_content_clip(
+                &mut project, &host, 0, 4.0, None, -1, false, 2.0, 60,
             )
             .unwrap();
         manager.commit_live_clip(&mut project, &mut host, 0, Some(&clip.id), None, -1, 2.001, 60);
@@ -1169,14 +1178,14 @@ mod tests {
         let mut host = TestHost::new();
         let mut manager = LiveClipManager::new();
         let first = manager
-            .trigger_live_generator_clip(
-                &mut project, &host, PresetTypeId::PLASMA, 0, 4.0, None, -1, false, 1.0, 60,
+            .trigger_live_content_clip(
+                &mut project, &host, 0, 4.0, None, -1, false, 1.0, 60,
             )
             .unwrap();
         host.beat = Beats(0.25);
         manager
-            .trigger_live_generator_clip(
-                &mut project, &host, PresetTypeId::PLASMA, 0, 4.0, None, -1, false, 1.1, 60,
+            .trigger_live_content_clip(
+                &mut project, &host, 0, 4.0, None, -1, false, 1.1, 60,
             )
             .unwrap();
         let mut refs = Vec::new();
@@ -1199,8 +1208,8 @@ mod tests {
         host.beat = Beats(2.0);
         let mut manager = LiveClipManager::new();
         let future = manager
-            .trigger_live_generator_clip(
-                &mut project, &host, PresetTypeId::PLASMA, 0, 4.0, None, -1, false, 3.0, 60,
+            .trigger_live_content_clip(
+                &mut project, &host, 0, 4.0, None, -1, false, 3.0, 60,
             )
             .unwrap();
         manager.commit_live_clip(&mut project, &mut host, 0, Some(&future.id), None, 0, 3.1, 60);
@@ -1218,5 +1227,43 @@ mod tests {
         manager.clear_on_seek(2.0, &mut |_| {});
         manager.drain_completed_controls(&mut refs);
         assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn trigger_one_shot_expiry_retains_completed_history() {
+        let mut project = project();
+        let owner_id = project.timeline.layers[0].layer_id.clone();
+        let trigger = Layer::new_trigger("Trigger".into(), owner_id, 1);
+        project.timeline.insert_layer(1, trigger);
+        let trigger_index = project
+            .timeline
+            .layers
+            .iter()
+            .position(|layer| layer.layer_type == LayerType::Trigger)
+            .expect("trigger layer");
+        let mut host = TestHost::new();
+        host.beat = Beats(1.5);
+        let mut manager = LiveClipManager::new();
+
+        let clip = manager
+            .fire_layer_oneshot(
+                &mut project,
+                &host,
+                trigger_index as i32,
+                Beats(1.0),
+                0.0,
+            )
+            .expect("trigger one-shot");
+        assert_eq!(
+            manager.expire_due_oneshots(2.5),
+            vec![(trigger_index as i32, clip.id.clone())]
+        );
+
+        let mut refs = Vec::new();
+        manager.drain_completed_controls(&mut refs);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].clip_id, clip.id);
+        assert_eq!(refs[0].layer_id, clip.layer_id);
+        assert_eq!(refs[0].duration_beats, Beats(1.0));
     }
 }

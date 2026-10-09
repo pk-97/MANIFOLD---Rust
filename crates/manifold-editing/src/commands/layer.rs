@@ -6,7 +6,42 @@ use manifold_core::layer::Layer;
 use manifold_core::project::{EmbeddedPreset, Project};
 use manifold_core::session::SessionSlot;
 use manifold_core::types::LayerType;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+const TRIGGER_PARENT_REQUIRED: &str = "trigger layers require a parent";
+const LAYER_PARENT_MISSING: &str = "layer parent does not exist";
+const LAYER_PARENT_INCOMPATIBLE: &str = "layer parent cannot own this child type";
+const LAYER_PARENT_SELF: &str = "layer cannot parent itself";
+const LAYER_ID_DUPLICATE: &str = "layer id already exists";
+const LAYER_REORDER_MEMBERSHIP: &str = "layer reorder changes layer membership";
+const LAYER_PARENT_CYCLE: &str = "layer parent hierarchy contains a cycle";
+const GROUP_SELECTION_EMPTY: &str = "group selection has no non-trigger roots";
+const GROUP_SELECTION_MISSING: &str = "group selection contains a missing layer";
+
+fn validate_parent_in_layers(layers: &[Layer], layer: &Layer) -> Result<(), &'static str> {
+    let Some(parent_id) = layer.parent_layer_id.as_ref() else {
+        return if layer.is_trigger() { Err(TRIGGER_PARENT_REQUIRED) } else { Ok(()) };
+    };
+    if parent_id == &layer.layer_id {
+        return Err(LAYER_PARENT_SELF);
+    }
+    let Some(parent) = layers.iter().find(|candidate| &candidate.layer_id == parent_id) else {
+        return Err(LAYER_PARENT_MISSING);
+    };
+    if !parent.layer_type.accepts_child(layer.layer_type) {
+        return Err(LAYER_PARENT_INCOMPATIBLE);
+    }
+    let mut ancestor = Some(parent_id);
+    for _ in 0..layers.len() {
+        let Some(id) = ancestor else { return Ok(()); };
+        if id == &layer.layer_id {
+            return Err(LAYER_PARENT_CYCLE);
+        }
+        ancestor = layers.iter().find(|candidate| &candidate.layer_id == id)
+            .and_then(|candidate| candidate.parent_layer_id.as_ref());
+    }
+    if ancestor.is_some() { Err(LAYER_PARENT_CYCLE) } else { Ok(()) }
+}
 
 /// Add a new layer to the timeline.
 #[derive(Debug)]
@@ -17,6 +52,8 @@ pub struct AddLayerCommand {
     gen_type: PresetTypeId,
     insert_index: usize,
     parent_group_id: Option<LayerId>,
+    applied: bool,
+    rejection: Option<&'static str>,
 }
 
 impl AddLayerCommand {
@@ -34,14 +71,47 @@ impl AddLayerCommand {
             gen_type,
             insert_index,
             parent_group_id,
+            applied: false,
+            rejection: None,
         }
+    }
+
+    /// Prepare insertion of an existing layer while preserving its stable ID,
+    /// parent and generator instance for command/redo composition.
+    pub fn from_layer(layer: Layer, insert_index: usize) -> Self {
+        Self {
+            name: layer.name.clone(),
+            layer_type: layer.layer_type,
+            gen_type: layer.generator_type().clone(),
+            parent_group_id: layer.parent_layer_id.clone(),
+            layer: Some(layer),
+            insert_index,
+            applied: false,
+            rejection: None,
+        }
+    }
+
+    fn validate_candidate(project: &Project, layer: &Layer) -> Result<(), &'static str> {
+        if project
+            .timeline
+            .layers
+            .iter()
+            .any(|existing| existing.layer_id == layer.layer_id)
+        {
+            return Err(LAYER_ID_DUPLICATE);
+        }
+
+        validate_parent_in_layers(&project.timeline.layers, layer)
     }
 }
 
 impl Command for AddLayerCommand {
     fn execute(&mut self, project: &mut Project) {
-        let layer = if let Some(existing) = self.layer.take() {
-            existing
+        self.applied = false;
+        self.rejection = None;
+
+        let layer = if let Some(existing) = &self.layer {
+            existing.clone()
         } else {
             let mut new_layer = if self.layer_type == LayerType::Generator {
                 Layer::new_generator(self.name.clone(), self.gen_type.clone(), 0)
@@ -69,10 +139,18 @@ impl Command for AddLayerCommand {
             new_layer
         };
         self.layer = Some(layer.clone());
+        if let Err(reason) = Self::validate_candidate(project, &layer) {
+            self.rejection = Some(reason);
+            return;
+        }
         project.timeline.insert_layer(self.insert_index, layer);
+        self.applied = true;
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if !self.applied {
+            return;
+        }
         // Find the layer we inserted by ID
         if let Some(layer) = &self.layer
             && let Some(idx) = project
@@ -83,10 +161,19 @@ impl Command for AddLayerCommand {
         {
             project.timeline.remove_layer(idx);
         }
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
         "Add Layer"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
     }
 }
 
@@ -373,6 +460,8 @@ pub struct ReorderLayerCommand {
     new_order: Vec<Layer>,
     old_parent_ids: HashMap<LayerId, Option<LayerId>>,
     new_parent_ids: HashMap<LayerId, Option<LayerId>>,
+    applied: bool,
+    rejection: Option<&'static str>,
 }
 
 impl ReorderLayerCommand {
@@ -387,33 +476,90 @@ impl ReorderLayerCommand {
             new_order,
             old_parent_ids,
             new_parent_ids,
+            applied: false,
+            rejection: None,
         }
     }
 
-    fn apply_parent_ids(layers: &mut [Layer], parent_ids: &HashMap<LayerId, Option<LayerId>>) {
+    fn apply_parent_ids(
+        layers: &mut [Layer],
+        parent_ids: &HashMap<LayerId, Option<LayerId>>,
+        authoritative: &[Layer],
+    ) {
         for layer in layers {
-            if let Some(parent_id) = parent_ids.get(&layer.layer_id) {
+            if layer.is_trigger() {
+                if let Some(original) = authoritative.iter().find(|original| original.layer_id == layer.layer_id) {
+                    layer.parent_layer_id = original.parent_layer_id.clone();
+                }
+            } else if let Some(parent_id) = parent_ids.get(&layer.layer_id) {
                 layer.parent_layer_id = parent_id.clone();
             }
         }
+    }
+
+    fn validate_membership(current_order: &[Layer], new_order: &[Layer]) -> Result<(), &'static str> {
+        let current_ids: HashSet<_> = current_order.iter().map(|layer| &layer.layer_id).collect();
+        let new_ids: HashSet<_> = new_order.iter().map(|layer| &layer.layer_id).collect();
+        if current_ids.len() != current_order.len()
+            || new_ids.len() != new_order.len()
+            || current_ids != new_ids
+        {
+            return Err(LAYER_REORDER_MEMBERSHIP);
+        }
+        Ok(())
+    }
+
+    fn validate_changed_parents(layers: &[Layer], original: &[Layer]) -> Result<(), &'static str> {
+        for layer in layers.iter().filter(|layer| !layer.is_trigger()) {
+            let old_parent = original.iter().find(|old| old.layer_id == layer.layer_id)
+                .and_then(|old| old.parent_layer_id.as_ref());
+            if old_parent == layer.parent_layer_id.as_ref() {
+                continue;
+            }
+            validate_parent_in_layers(layers, layer)?;
+        }
+        Ok(())
     }
 }
 
 impl Command for ReorderLayerCommand {
     fn execute(&mut self, project: &mut Project) {
+        self.applied = false;
+        self.rejection = None;
+        if let Err(reason) = Self::validate_membership(&project.timeline.layers, &self.new_order) {
+            self.rejection = Some(reason);
+            return;
+        }
         let mut new_order = self.new_order.clone();
-        Self::apply_parent_ids(&mut new_order, &self.new_parent_ids);
+        Self::apply_parent_ids(&mut new_order, &self.new_parent_ids, &project.timeline.layers);
+        if let Err(reason) = Self::validate_changed_parents(&new_order, &project.timeline.layers) {
+            self.rejection = Some(reason);
+            return;
+        }
         project.timeline.replace_layer_order(new_order);
+        self.applied = true;
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if !self.applied {
+            return;
+        }
         let mut old_order = self.old_order.clone();
-        Self::apply_parent_ids(&mut old_order, &self.old_parent_ids);
+        Self::apply_parent_ids(&mut old_order, &self.old_parent_ids, &project.timeline.layers);
         project.timeline.replace_layer_order(old_order);
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
         "Reorder Layers"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
     }
 }
 
@@ -426,6 +572,8 @@ pub struct GroupLayersCommand {
     /// which `execute` creates). `undo` restores it verbatim so sibling order
     /// survives the round-trip.
     original_order: Vec<Layer>,
+    applied: bool,
+    rejection: Option<&'static str>,
 }
 
 impl GroupLayersCommand {
@@ -434,12 +582,56 @@ impl GroupLayersCommand {
             selected_layer_ids,
             group_layer: None,
             original_order,
+            applied: false,
+            rejection: None,
         }
     }
 }
 
 impl Command for GroupLayersCommand {
     fn execute(&mut self, project: &mut Project) {
+        self.applied = false;
+        self.rejection = None;
+        if self.selected_layer_ids.is_empty()
+            || self.selected_layer_ids.iter().any(|id| {
+                !project.timeline.layers.iter().any(|layer| &layer.layer_id == id)
+            })
+        {
+            self.rejection = Some(if self.selected_layer_ids.is_empty() {
+                GROUP_SELECTION_EMPTY
+            } else {
+                GROUP_SELECTION_MISSING
+            });
+            return;
+        }
+        let selected: HashSet<_> = self.selected_layer_ids.iter().cloned().collect();
+        let roots: Vec<LayerId> = project
+            .timeline
+            .layers
+            .iter()
+            .filter(|layer| selected.contains(&layer.layer_id) && !layer.is_trigger())
+            .filter(|layer| {
+                let mut parent = layer.parent_layer_id.as_ref();
+                for _ in 0..project.timeline.layers.len() {
+                    let Some(parent_id) = parent else { break; };
+                    if selected.contains(parent_id) {
+                        return false;
+                    }
+                    parent = project
+                        .timeline
+                        .layers
+                        .iter()
+                        .find(|candidate| &candidate.layer_id == parent_id)
+                        .and_then(|candidate| candidate.parent_layer_id.as_ref());
+                }
+                true
+            })
+            .map(|layer| layer.layer_id.clone())
+            .collect();
+        if roots.is_empty() {
+            self.rejection = Some(GROUP_SELECTION_EMPTY);
+            return;
+        }
         // Create group layer on first execute
         let group = if let Some(existing) = &self.group_layer {
             existing.clone()
@@ -456,7 +648,7 @@ impl Command for GroupLayersCommand {
             .timeline
             .layers
             .iter()
-            .position(|l| self.selected_layer_ids.contains(&l.layer_id))
+            .position(|l| roots.contains(&l.layer_id))
             .unwrap_or(0);
 
         // Insert group layer
@@ -464,24 +656,37 @@ impl Command for GroupLayersCommand {
 
         // Reparent selected layers
         for layer in &mut project.timeline.layers {
-            if self.selected_layer_ids.contains(&layer.layer_id) {
+            if roots.contains(&layer.layer_id) {
                 layer.parent_layer_id = Some(group_id.clone());
             }
         }
         project.timeline.enforce_tree_order();
+        self.applied = true;
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if !self.applied {
+            return;
+        }
         // Restore the pre-group snapshot verbatim: the group layer is gone
         // (it isn't in `original_order`), parents are back, and sibling order
         // is reproduced exactly — same restore path as `UngroupLayersCommand`.
         project
             .timeline
             .replace_layer_order(self.original_order.clone());
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
         "Group Layers"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
     }
 }
 

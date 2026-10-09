@@ -159,6 +159,17 @@ impl LayerType {
         self.clip_kind().is_some() && self.clip_kind() == from.clip_kind()
     }
 
+    /// Whether a layer of this type may own a child of `child`.
+    /// Trigger lanes are leaves owned by any non-trigger layer; ordinary
+    /// layers may be parented only under groups.
+    pub fn accepts_child(self, child: LayerType) -> bool {
+        if child == LayerType::Trigger {
+            self != LayerType::Trigger
+        } else {
+            self == LayerType::Group
+        }
+    }
+
     /// Whether this layer kind can play timeline clip content.
     pub fn supports_clip_playback(self) -> bool {
         !matches!(self, LayerType::Group | LayerType::Trigger)

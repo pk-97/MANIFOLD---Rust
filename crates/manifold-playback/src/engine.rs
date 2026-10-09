@@ -1662,9 +1662,6 @@ impl PlaybackEngine {
         );
 
         self.clip_controls.clear_spans();
-        if let Some(project) = &self.project {
-            self.clip_controls.retain_sources(|id| project.timeline.layer_index_for_id(id).is_some());
-        }
         self.scheduler.record_controls(
             &sync_result,
             &self.timeline_control_scratch,
@@ -1672,6 +1669,26 @@ impl PlaybackEngine {
             current_beat,
             &mut self.clip_controls,
         );
+        if let Some(project) = &self.project {
+            self.clip_controls.retain_sources(|id| project.timeline.layer_index_for_id(id).is_some());
+            // Trigger output has its own mute policy. Parent visibility and
+            // legacy main-clip edge responses do not participate in it.
+            for layer in project.timeline.layers.iter().filter(|layer| layer.is_trigger()) {
+                if layer.is_muted {
+                    self.clip_controls.suppress_source(&layer.layer_id);
+                }
+            }
+            for entry in sync_result.should_be_active.iter()
+                .chain(&self.timeline_control_scratch)
+                .filter(|entry| entry.is_muted)
+            {
+                if project.timeline.layer_index_for_id(&entry.layer_id)
+                    .is_some_and(|index| project.timeline.layers[index].is_trigger())
+                {
+                    self.clip_controls.suppress_clip(&entry.layer_id, &entry.clip_id);
+                }
+            }
+        }
         self.clip_control_cursor = Some(current_beat);
 
         for clip_id in &sync_result.to_stop {
@@ -3283,6 +3300,65 @@ mod tests {
     use manifold_core::preset_definition_registry::create_default;
     use manifold_core::project::Project;
     use manifold_core::{Beats, PresetTypeId};
+
+    fn trigger_source_engine(owner_type: manifold_core::types::LayerType) -> (PlaybackEngine, LayerId) {
+        let mut project = Project::default();
+        let mut group = Layer::new("Group".into(), manifold_core::types::LayerType::Group, 0);
+        group.is_muted = true;
+        let mut owner = Layer::new("Owner".into(), owner_type, 1);
+        owner.parent_layer_id = Some(group.layer_id.clone());
+        owner.is_muted = true;
+        let mut source = Layer::new_trigger("Pattern".into(), owner.layer_id.clone(), 2);
+        let source_id = source.layer_id.clone();
+        source.clips.push(TimelineClip::new_trigger(Beats::ZERO, Beats(4.0)));
+        source.clips.push(TimelineClip::new_trigger(Beats(4.0), Beats(4.0)));
+        project.timeline.layers = vec![group, owner, source];
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+        engine.set_state(PlaybackState::Playing);
+        engine.current_beat = 1.0;
+        (engine, source_id)
+    }
+
+    #[test]
+    fn trigger_source_ignores_parent_and_group_mute_for_every_owner_kind() {
+        use manifold_core::types::LayerType;
+        for owner_type in [LayerType::Video, LayerType::Generator, LayerType::Audio, LayerType::Dmx, LayerType::Group] {
+            let (mut engine, source) = trigger_source_engine(owner_type);
+            engine.sync_clips_to_time();
+            let view = engine.clip_controls().view(&source).unwrap();
+            assert_eq!(view.spans.len(), 1, "owner {owner_type:?}");
+            assert_eq!(view.starts.len(), 1, "owner {owner_type:?}");
+            assert_eq!(view.spans[0].start_beat, Beats::ZERO);
+            assert!(engine.active_clip_ids.is_empty(), "trigger acquired a renderer");
+        }
+    }
+
+    #[test]
+    fn trigger_source_mute_cancels_pending_output_and_unmute_resumes_without_replay() {
+        use manifold_core::params::ClipTriggerSource;
+        for mute_clip in [false, true] {
+            let (mut engine, source) = trigger_source_engine(manifold_core::types::LayerType::Generator);
+            engine.sync_clips_to_time();
+            let layer = &mut engine.project_mut().unwrap().timeline.layers[2];
+            if mute_clip { layer.clips[0].is_muted = true; } else { layer.is_muted = true; }
+            engine.sync_clips_to_time();
+            let view = engine.clip_controls().view(&source).unwrap();
+            assert!(view.starts.is_empty());
+            assert!(view.spans.is_empty());
+
+            let layer = &mut engine.project_mut().unwrap().timeline.layers[2];
+            layer.clips[0].is_muted = false;
+            layer.is_muted = false;
+            engine.current_beat = 2.0;
+            engine.sync_clips_to_time();
+            assert!(engine.clip_controls().view(&source).unwrap().starts.is_empty());
+            assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&source), Beats(2.0)), Some(Beats(2.0)));
+            engine.current_beat = 4.0;
+            engine.sync_clips_to_time();
+            assert_eq!(engine.clip_controls().view(&source).unwrap().starts.len(), 1);
+        }
+    }
 
     #[test]
     fn completed_live_note_survives_between_engine_syncs() {

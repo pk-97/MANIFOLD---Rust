@@ -10,6 +10,81 @@ use manifold_editing::commands::clip::MoveClipCommand;
 use manifold_editing::service::EditingService;
 use std::collections::HashSet;
 
+fn trigger_assignment_project() -> (Project, manifold_core::GraphTarget, LayerId) {
+    let mut project = Project::default();
+    let mut owner = Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::PLASMA, 0);
+    let owner_id = owner.layer_id.clone();
+    owner.gen_params_mut().unwrap().params = manifold_core::params::ParamManifest::from_params(vec![
+        manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+            id: "force".into(), ..Default::default()
+        }),
+    ]);
+    project.timeline.layers.push(owner);
+    (project, manifold_core::GraphTarget::Generator(owner_id.clone()), owner_id)
+}
+
+#[test]
+fn create_trigger_lane_and_assignment_are_one_undoable_edit() {
+    use manifold_core::params::ClipTriggerSource;
+    let (mut project, target, owner_id) = trigger_assignment_project();
+    project.graph_target_owner_mut(&target).unwrap().params.get_mut("force").unwrap()
+        .clip_trigger_source = ClipTriggerSource::Lane { layer_id: LayerId::new("missing") };
+    let before = serde_json::to_value(&project).unwrap();
+    let command = EditingService::create_trigger_lane(&project, &owner_id, Some((target.clone(), "force".into()))).unwrap();
+    let mut editing = EditingService::new();
+    editing.execute(command, &mut project);
+    assert!(editing.take_rejection().is_none());
+    assert_eq!(project.timeline.layers.len(), 2);
+    let lane = &project.timeline.layers[1];
+    assert!(lane.is_trigger());
+    assert_eq!(lane.parent_layer_id.as_ref(), Some(&owner_id));
+    assert!(lane.clips.is_empty());
+    assert_eq!(project.graph_target_owner(&target).unwrap().params.get("force").unwrap().clip_trigger_source,
+        ClipTriggerSource::Lane { layer_id: lane.layer_id.clone() });
+    let after = serde_json::to_value(&project).unwrap();
+    assert!(editing.undo(&mut project));
+    assert_eq!(serde_json::to_value(&project).unwrap(), before);
+    assert!(!editing.can_undo());
+    assert!(editing.redo(&mut project));
+    assert_eq!(serde_json::to_value(&project).unwrap(), after);
+}
+
+#[test]
+fn rejected_trigger_assignment_rolls_back_creation_and_preserves_history() {
+    let (mut project, target, owner_id) = trigger_assignment_project();
+    let before = serde_json::to_value(&project).unwrap();
+    let command = EditingService::create_trigger_lane(&project, &owner_id, Some((target, "missing-param".into()))).unwrap();
+    let mut editing = EditingService::new();
+    editing.execute(command, &mut project);
+    assert!(editing.take_rejection().is_some());
+    assert!(!editing.can_undo());
+    assert_eq!(serde_json::to_value(&project).unwrap(), before);
+
+    let command = EditingService::create_trigger_lane(&project, &owner_id, None).unwrap();
+    project.timeline.remove_layer(0);
+    editing.execute(command, &mut project);
+    assert!(editing.take_rejection().is_some());
+    assert!(project.timeline.layers.is_empty());
+    assert!(!editing.can_undo());
+}
+
+#[test]
+fn authoring_assignment_rejects_an_unrelated_source_on_execution() {
+    use manifold_core::params::ClipTriggerSource;
+    use manifold_editing::commands::trigger_source::SetParamClipTriggerSourceCommand;
+    let (mut project, target, _) = trigger_assignment_project();
+    let other = Layer::new_video("Other".into(), 1);
+    let lane = Layer::new_trigger("Other pattern".into(), other.layer_id.clone(), 2);
+    let source = ClipTriggerSource::Lane { layer_id: lane.layer_id.clone() };
+    project.timeline.layers.extend([other, lane]);
+    let mut editing = EditingService::new();
+    editing.execute(Box::new(SetParamClipTriggerSourceCommand::for_assignment(target.clone(), "force", source)), &mut project);
+    assert!(editing.take_rejection().is_some());
+    assert!(!editing.can_undo());
+    assert_eq!(project.graph_target_owner(&target).unwrap().params.get("force").unwrap().clip_trigger_source,
+        ClipTriggerSource::OwnLayer);
+}
+
 #[test]
 fn duplicate_owner_remaps_trigger_sources_across_instances_and_undo_redo() {
     use manifold_core::effects::PresetInstance;

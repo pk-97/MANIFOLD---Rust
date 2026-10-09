@@ -72,6 +72,23 @@ impl ClipControlFrame {
         self.by_source.retain(|id, _| exists(id));
     }
 
+    /// Suppress a source without discarding its reusable storage or changing
+    /// the scheduler's membership. Unmute can resume phase without a new edge.
+    pub(crate) fn suppress_source(&mut self, source: &LayerId) {
+        if let Some(source) = self.by_source.get_mut(source) {
+            source.spans.clear();
+            source.starts.clear();
+        }
+    }
+
+    /// A muted trigger clip also cancels starts queued before the mute edit.
+    pub(crate) fn suppress_clip(&mut self, source: &LayerId, clip: &ClipId) {
+        if let Some(source) = self.by_source.get_mut(source) {
+            source.spans.retain(|span| &span.clip_id != clip);
+            source.starts.retain(|start| &start.clip_id != clip);
+        }
+    }
+
     /// Drop all source keys and retained storage when replacing a project.
     pub(crate) fn reset(&mut self) {
         self.by_source.clear();

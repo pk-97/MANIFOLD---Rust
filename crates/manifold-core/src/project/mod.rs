@@ -20,6 +20,7 @@ pub use validate::{LoadReport, PurgeResult};
 mod queries;
 mod presets;
 mod load_migration;
+mod trigger_sources;
 
 /// A project-scoped preset (a "fork"): a complete, self-contained preset
 /// (graph + exposed params + ranges, carried in [`EffectGraphDef`]) that lives
