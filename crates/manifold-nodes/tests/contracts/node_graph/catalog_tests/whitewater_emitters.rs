@@ -1,5 +1,5 @@
 use manifold_node_engine::water::primitives::testkit as water_nodes;
-use manifold_node_engine::testkit::liquid_surface::{Harness, params};
+use manifold_node_engine::testkit::array_harness::{Harness, params};
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 use manifold_node_engine::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::generate_fused};
 use manifold_node_engine::testkit::water_codegen::{member, fused, run};

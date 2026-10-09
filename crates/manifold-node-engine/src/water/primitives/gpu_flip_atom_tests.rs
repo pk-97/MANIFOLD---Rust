@@ -1,5 +1,5 @@
 use crate::testkit::atom::*;
-use crate::testkit::liquid_surface::params;
+use crate::testkit::array_harness::params;
 use super::dot_products::DotProducts;
 #[test]
 fn gpu_flip_dot_products_match_cpu() {

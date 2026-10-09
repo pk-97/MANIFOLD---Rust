@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use manifold_node_engine::water::primitives::energy_potential::{MAX_ENERGY, MIN_ENERGY};
 use manifold_node_engine::water::primitives::gpu_flip_preset::WaterScene;
-use manifold_node_engine::testkit::liquid_surface::{Harness, read};
+use manifold_node_engine::testkit::array_harness::{Harness, read};
 use manifold_node_engine::testkit::whitewater_scene::{whitewater_render_def, with_tick_probe};
 use manifold_node_engine::water::primitives::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;

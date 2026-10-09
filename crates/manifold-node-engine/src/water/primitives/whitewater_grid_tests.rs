@@ -7,7 +7,7 @@ use super::crossing_distance::CrossingDistance;
 use super::extend_lattice::ExtendLattice;
 use super::lattice_curvature::LatticeCurvature;
 use super::liquid_cells::LiquidCells;
-use crate::testkit::liquid_surface::{Harness, params, read};
+use crate::testkit::array_harness::{Harness, params, read};
 use super::nearest_crossing::NearestCrossing;
 use super::surface_crossings::SurfaceCrossings;
 use {crate::water::primitives::whitewater_cpu as cpu, super::whitewater_cpu::Grid, super::whitewater_cpu::Rng};

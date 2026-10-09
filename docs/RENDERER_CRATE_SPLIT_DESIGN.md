@@ -361,6 +361,24 @@ Register `RigidBody`, `FluidRole` and `FieldValue` in water. The image family's
 it in the water move and remove the image crate's native physics dependency.
 This narrows D1's image owner; it does not relocate native field algorithms.
 
+The same closure includes the image family's `euler_step_particles`,
+`euler_step_particles_3d`, `apply_radial_burst_to_particles` and
+`apply_radial_burst_3d_to_particles`: their evaluation and freeze uniforms use
+water's native particle-duration policy and diagnostics. Move these primitives
+and their shaders with water, preserving their IDs and bodies. Their mixed
+image/water particle-pipeline integration test belongs in the catalog.
+
+Move `smooth_surface_mesh` and `surface_mesh_normals` from scene with their
+extent modules and shader. They use water's volume-surface passes, edge ownership
+and brick layout. General mesh vocabulary remains in the engine; general mesh
+rendering remains in scene. These ownership changes avoid family-to-family
+dependencies without adding callbacks or duplicating native policy.
+
+Water-specific test helpers move with water. The direct primitive GPU harness
+(`testkit::array_harness`) and generic array/substep fixtures stay in the engine,
+so image and scene proofs need no water test dependency. Native field publication
+is tested in water; the engine's scheduling proofs use explicit unequal intervals.
+
 Rejected: one boxed payload per write, because it adds frame allocations;
 `StateStore`, because its node/owner identity and rebuild lifecycle do not model
 resource slots; opaque byte buffers, because they require unsafe layout contracts.

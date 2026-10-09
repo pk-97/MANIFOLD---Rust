@@ -14,7 +14,7 @@ use manifold_node_engine::water::primitives::gpu_flip_step::{
     ring_max, set_all_tiles, set_poison, tile_counts, tile_total,
 };
 use manifold_node_engine::water::primitives::liquid_stats::with_stats_layout;
-use manifold_node_engine::testkit::liquid_surface::read;
+use manifold_node_engine::testkit::array_harness::read;
 use manifold_node_engine::particles::{FluidParticle};
 use manifold_node_engine::water::fluid_particles::{CellRange};
 use manifold_node_engine::water::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE};

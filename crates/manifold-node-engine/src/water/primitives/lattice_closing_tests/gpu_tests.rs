@@ -1,4 +1,4 @@
-use crate::testkit::liquid_surface::{Harness, params, read};
+use crate::testkit::array_harness::{Harness, params, read};
 use super::super::offset_lattice::OffsetLattice;
 use super::super::redistance_lattice::RedistanceLattice;
 use super::*;

@@ -14,7 +14,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer};
 use crate::testkit::atom::{FACE_FLOATS, assert_close, face_grid_len, random_values};
 use super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass, tile_total};
 use super::liquid_fill::LiquidFill;
-use crate::testkit::liquid_surface::{Harness, params, read};
+use crate::testkit::array_harness::{Harness, params, read};
 use super::liquid_stats::with_stats_layout;
 use crate::particles::{FluidParticle};
 use crate::water::fluid_particles::{CellRange, FaceSample};

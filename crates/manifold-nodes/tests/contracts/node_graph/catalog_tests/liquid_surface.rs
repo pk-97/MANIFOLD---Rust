@@ -11,6 +11,7 @@ use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 
 use manifold_node_engine::testkit::liquid_surface::*;
+use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 
 
 

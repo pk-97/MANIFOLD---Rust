@@ -862,7 +862,7 @@ mod emitter_oracle {
 
     use manifold_node_engine::water::primitives::emission_count::EmissionCount;
     use manifold_node_engine::water::primitives::jitter_particles::JitterParticles;
-    use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
+    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
     use manifold_node_engine::water::primitives::sample_faces_at_particles::SampleFacesAtParticles;
     use manifold_node_engine::water::primitives::spawn_whitewater::SpawnWhitewater;
     use manifold_node_engine::water::primitives::gpu_flip_preset::REST_PER_CELL;

@@ -5,7 +5,7 @@
 //! face positions (`liquid::grid::face_position`).
 
 use crate::water::primitives::face_sample_component::FaceSampleComponent;
-use crate::testkit::liquid_surface::{Harness, params, read};
+use crate::testkit::array_harness::{Harness, params, read};
 use crate::water::primitives::matter_face_component::MatterFaceComponent;
 use crate::exec::effect_node::ParamValues;
 use crate::water::fluid_particles::FaceSample;

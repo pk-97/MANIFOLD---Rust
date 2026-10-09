@@ -32,6 +32,9 @@ pub mod mesh_revision;
 #[cfg(feature = "gpu-proofs")]
 #[cfg(any(test, feature = "testkit"))]
 pub mod liquid_surface;
+#[cfg(feature = "gpu-proofs")]
+#[cfg(any(test, feature = "testkit"))]
+pub mod array_harness;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod shader_source;

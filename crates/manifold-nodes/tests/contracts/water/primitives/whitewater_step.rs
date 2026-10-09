@@ -99,7 +99,7 @@ use manifold_node_engine::water::liquid::fields::FieldBinding;
 use manifold_node_engine::water::whitewater::WhitewaterParticle;
 use manifold_node_engine::water::primitives::whitewater_step::*;
 use manifold_node_engine::water::primitives::whitewater_step::fused_tests::gpu::*;
-use manifold_node_engine::testkit::liquid_surface::read;
+use manifold_node_engine::testkit::array_harness::read;
 use manifold_node_engine::testkit::whitewater_scene::{Show, whitewater_render_def, with_tick_probe};
 use manifold_node_engine::water::primitives::gpu_flip_preset::{WaterScene, with_whitewater_axes};
 use manifold_node_engine::water::liquid::grid::face_len;

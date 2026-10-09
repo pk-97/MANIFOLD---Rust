@@ -1,5 +1,5 @@
 //! BUG-g75v.7: engine value and fusion proofs, 8³ CPU-proven extents only.
-use crate::testkit::liquid_surface::{params, read, Harness};
+use crate::testkit::array_harness::{params, read, Harness};
 use crate::testkit::water_codegen::{fused, member};
 use crate::testkit::water_codegen::run;
 use super::{

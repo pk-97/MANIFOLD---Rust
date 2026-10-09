@@ -3472,16 +3472,16 @@ mod tests {
                     {"id": 1, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
                     {"id": 2, "nodeId": "first", "typeId": TYPE_ID, "params": lattice_params([first_x, 8.0, 8.0])},
                     {"id": 3, "nodeId": "second", "typeId": TYPE_ID, "params": lattice_params([8.0; 3])},
-                    {"id": 4, "nodeId": "sink", "typeId": "test.face_sink"},
+                    {"id": 4, "nodeId": "sink", "typeId": "test.particle_sink"},
                     {"id": 5, "nodeId": "output", "typeId": "system.final_output"},
-                    {"id": 6, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}}
+                    {"id": 6, "nodeId": "open", "typeId": "test.particle_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}}
                 ],
                 "wires": [
                     {"fromNode": 6, "fromPort": "out", "toNode": 2, "toPort": "faces"},
                     {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "water"},
                     {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "faces"},
                     {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "water"},
-                    {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "values"},
+                    {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "particles"},
                     {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in"}
                 ]
             }))

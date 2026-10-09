@@ -161,7 +161,7 @@ fn whitewater_half_integer_fixture_has_saturated_energy() {
 #[cfg(feature = "gpu-proofs")]
 pub mod gpu {
     use super::*;
-    use crate::testkit::liquid_surface::read;
+    use crate::testkit::array_harness::read;
     use super::super::empty_slot;
 
 

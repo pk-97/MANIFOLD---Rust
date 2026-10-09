@@ -6,7 +6,7 @@
 //! surface of amplitude 2 cells and wavelength 16.
 
 use super::crossing_distance::CrossingDistance;
-use crate::testkit::liquid_surface::{Harness, params};
+use crate::testkit::array_harness::{Harness, params};
 use super::nearest_crossing::NearestCrossing;
 use super::surface_crossings::SurfaceCrossings;
 use super::whitewater_cpu::Grid;

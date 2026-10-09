@@ -18,7 +18,7 @@ fn harness_node(_: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// output capacity probe)); the walk sizes what they read and write.
 fn rules(frozen: bool) -> Vec<ExtentRule> {
         let mut rules = EXTENT_RULES.to_vec();
-        for type_id in ["test.value_source", "test.face_source", "test.value_sink", "test.liquid_sink", "test.mesh_sink"] {
+        for type_id in ["test.value_source", "test.value_sink", "test.liquid_sink", "test.mesh_sink"] {
             rules.push(ExtentRule { type_id, check: harness_node });
         }
         if frozen {

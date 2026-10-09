@@ -96,7 +96,7 @@ mod tests {
 mod gpu_tests {
     use super::*;
     use manifold_node_engine::mesh::MeshVertex;
-    use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
+    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
     use crate::node_graph::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
     use manifold_node_engine::water::primitives::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
     use glam::DVec3;

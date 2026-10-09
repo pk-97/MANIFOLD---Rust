@@ -16,7 +16,7 @@ use manifold_node_engine::testkit::atom::{FACE_FLOATS, assert_close, face_grid_l
 use manifold_node_engine::water::primitives::gpu_flip_bodies::{BodyPasses, Bodies};
 use manifold_node_engine::water::primitives::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
 use manifold_node_engine::water::primitives::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison};
-use manifold_node_engine::testkit::liquid_surface::read;
+use manifold_node_engine::testkit::array_harness::read;
 use manifold_node_engine::water::liquid::bodies::LiquidBody;
 use manifold_node_engine::water::liquid::coupling::coupled_start;
 use manifold_node_engine::water::primitives::liquid_stats::SOLVER_WORDS;

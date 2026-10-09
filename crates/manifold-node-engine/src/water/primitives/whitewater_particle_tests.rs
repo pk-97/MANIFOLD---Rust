@@ -6,7 +6,7 @@
 use super::emission_count::EmissionCount;
 use super::energy_potential::EnergyPotential;
 use super::jitter_particles::JitterParticles;
-use crate::testkit::liquid_surface::{Harness, params, read};
+use crate::testkit::array_harness::{Harness, params, read};
 use super::whitewater_cpu::Rng;
 use super::sample_faces_at_particles::SampleFacesAtParticles;
 use super::spawn_whitewater::SpawnWhitewater;

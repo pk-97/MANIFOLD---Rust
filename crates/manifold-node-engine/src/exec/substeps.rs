@@ -440,7 +440,7 @@ where
 mod tests {
     //! Compile-level tests of the region contract: membership, contraction,
     //! held resources, the rejected shapes and truncation. Synthetic graphs
-    //! only — no GPU, no executor.
+    //! and executor proofs over MockBackend; no GPU.
 
     use super::*;
     use crate::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
@@ -1430,6 +1430,14 @@ mod tests {
         }
     }
 
+    // Unequal intervals expose stale clock outputs. Native speed history and
+    // its graph outputs are covered by water's matter sim-rate tests.
+    const CLOCK_INTERVALS: &[(Seconds, Seconds)] = &[
+        (Seconds(0.0), Seconds(0.75)),
+        (Seconds(0.75), Seconds(1.75)),
+        (Seconds(1.75), Seconds(2.75)),
+    ];
+
     /// A clock owner that asks for a host sync before every iteration it is
     /// asked about and logs each host step.
     struct EagerClock {
@@ -1437,7 +1445,7 @@ mod tests {
         outputs: Vec<NodeOutput>,
         log: Log,
         fail_at: Option<u32>,
-        intervals: Option<manifold_physics::clock::ClockFrame>,
+        intervals: Option<&'static [(Seconds, Seconds)]>,
         /// After its host step before `iteration`, publish 1000 + iteration
         /// on `out` for that iteration.
         refresh_after_step: bool,
@@ -1471,10 +1479,10 @@ mod tests {
             true
         }
         fn substep_clock_interval(&self, iteration: u32) -> Option<SubstepClockOutput<'_>> {
-            let frame = self.intervals.as_ref()?;
-            frame.interval(u64::from(iteration)).map(|interval| {
+            let intervals = self.intervals?;
+            intervals.get(iteration as usize).map(|&(start, end)| {
                 let mut output = SubstepClockOutput::single(
-                    "out", interval.start, interval.end, iteration, frame.ticks,
+                    "out", start, end, iteration, intervals.len() as u32,
                 );
                 if self.stepped_for == Some(iteration) {
                     output.scalars = &self.stepped;
@@ -1517,13 +1525,13 @@ mod tests {
         clock_fixture_with_intervals(opted, fail_at, None)
     }
 
-    fn clock_fixture_with_intervals(opted: bool, fail_at: Option<u32>, intervals: Option<manifold_physics::clock::ClockFrame>) -> SimFixture {
+    fn clock_fixture_with_intervals(opted: bool, fail_at: Option<u32>, intervals: Option<&'static [(Seconds, Seconds)]>) -> SimFixture {
         clock_fixture_refreshing(opted, fail_at, intervals, false)
     }
 
     /// `refresh`: the clock re-publishes after its host step and the
     /// boundary replaces its scalars after the sync.
-    fn clock_fixture_refreshing(opted: bool, fail_at: Option<u32>, intervals: Option<manifold_physics::clock::ClockFrame>, refresh: bool) -> SimFixture {
+    fn clock_fixture_refreshing(opted: bool, fail_at: Option<u32>, intervals: Option<&'static [(Seconds, Seconds)]>, refresh: bool) -> SimFixture {
         let sample_intervals = intervals.is_some();
         let log: Log = Arc::default();
         let count = Arc::new(Mutex::new(3));
@@ -1756,8 +1764,7 @@ mod tests {
     }
 
     #[test]
-    fn substeps_host_sync_runs_offline_between_iterations() {
-        let _export = crate::water::physics::PhysicsStepScope::for_render(true);
+    fn substeps_host_sync_runs_between_iterations() {
         let mut fx = clock_fixture(true);
         let mut exec = Executor::with_mock();
         let log = run_frame(&mut fx, &mut exec, 3);
@@ -1774,17 +1781,13 @@ mod tests {
                 "capture 5.5",
             ]
         );
+        assert_eq!(log.last().unwrap(), "consumer a=5.5 b=0 c=none");
         assert_eq!(exec.substep_host_syncs(), 2);
     }
 
     #[test]
-    fn substeps_clock_history_sets_each_interval_before_boundary_and_body() {
-        use manifold_physics::clock::SimulationClock;
-        let mut clock = SimulationClock::default();
-        clock.advance(0.0, 0.5, 1.0, 0.0, false, true);
-        clock.observe_speed(0.25, 2.0);
-        let intervals = clock.advance(1.5, 0.5, 2.0, 0.0, false, true);
-        let mut fx = clock_fixture_with_intervals(true, None, Some(intervals));
+    fn substeps_clock_sets_each_interval_before_boundary_and_body() {
+        let mut fx = clock_fixture_with_intervals(true, None, Some(CLOCK_INTERVALS));
         let mut exec = Executor::with_mock();
         let log = run_frame(&mut fx, &mut exec, 3);
         assert_eq!(log.last().unwrap(), "consumer a=9.5 b=0 c=none");
@@ -1800,13 +1803,7 @@ mod tests {
     /// scalars both reach that iteration's body. Iteration 0 is untouched.
     #[test]
     fn substeps_host_sync_refreshes_the_next_iterations_inputs() {
-        use manifold_physics::clock::SimulationClock;
-        let _live = crate::water::physics::PhysicsStepScope::for_render(false);
-        let mut clock = SimulationClock::default();
-        clock.advance(0.0, 0.5, 1.0, 0.0, false, true);
-        clock.observe_speed(0.25, 2.0);
-        let intervals = clock.advance(1.5, 0.5, 2.0, 0.0, false, true);
-        let mut fx = clock_fixture_refreshing(true, None, Some(intervals), true);
+        let mut fx = clock_fixture_refreshing(true, None, Some(CLOCK_INTERVALS), true);
         let mut exec = Executor::with_mock();
         let log = run_frame(&mut fx, &mut exec, 3);
         let events: Vec<&str> = log
@@ -1821,30 +1818,10 @@ mod tests {
         ]);
     }
 
-    /// Live coupling uses the same ordered exchanges as export.
-    #[test]
-    fn substeps_host_sync_runs_live_between_iterations() {
-        let _live = crate::water::physics::PhysicsStepScope::for_render(false);
-        let mut fx = clock_fixture(true);
-        let mut exec = Executor::with_mock();
-        let log = run_frame(&mut fx, &mut exec, 3);
-        assert_eq!(
-            region_events(&log),
-            vec![
-                "add_index a=1.5 b=0 c=0", "capture 1.5", "host 1",
-                "add_index a=2 b=1 c=0", "capture 3", "host 2",
-                "add_index a=3.5 b=2 c=0", "capture 5.5",
-            ]
-        );
-        assert_eq!(log.last().unwrap(), "consumer a=5.5 b=0 c=none");
-        assert_eq!(exec.substep_host_syncs(), 2);
-    }
-
     /// A boundary that has not opted in never commits or waits mid-region,
-    /// even during export and with an eager clock node wired to it.
+    /// even with an eager clock node wired to it.
     #[test]
-    fn substeps_host_sync_off_by_default_in_export() {
-        let _export = crate::water::physics::PhysicsStepScope::for_render(true);
+    fn substeps_host_sync_off_by_default() {
         let mut fx = clock_fixture(false);
         let mut exec = Executor::with_mock();
         let log = run_frame(&mut fx, &mut exec, 3);
@@ -1855,7 +1832,6 @@ mod tests {
 
     #[test]
     fn substeps_host_sync_failure_stops_before_reusing_tick_state() {
-        let _live = crate::water::physics::PhysicsStepScope::for_render(false);
         let mut fx = clock_fixture_with_failure(true, Some(1));
         let mut exec = Executor::with_mock();
         let log = run_frame(&mut fx, &mut exec, 3);

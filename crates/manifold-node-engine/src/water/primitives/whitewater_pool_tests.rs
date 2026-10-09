@@ -8,7 +8,7 @@ use super::age_whitewater::AgeWhitewater;
 use super::preserve_foam::PreserveFoam;
 use super::sort_particles_into_cells::SortParticlesIntoCells;
 use super::retype_whitewater::RetypeWhitewater;
-use crate::testkit::liquid_surface::{Harness, params, read};
+use crate::testkit::array_harness::{Harness, params, read};
 use super::whitewater_cpu::Rng;
 use crate::testkit::water_codegen::run;
 use super::whitewater_pool_cpu::fixture::{FACE_CELLS, NODES, faces, grid, pool, tank};

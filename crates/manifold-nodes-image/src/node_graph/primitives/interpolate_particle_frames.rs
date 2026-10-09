@@ -296,7 +296,7 @@ mod tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
+    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
     use super::*;
     use manifold_node_engine::bindings::Slot;
 

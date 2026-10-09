@@ -2,7 +2,7 @@
 //! against FLIP's own sheeter) on the same level set and ordered markers.
 use super::gpu_flip_sheeting_cpu_tests::bucket_fixture;
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs};
-use crate::testkit::liquid_surface::read;
+use crate::testkit::array_harness::read;
 use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels};
 use super::prefix_scan::ScanLabels;
 use super::whitewater_engine_gpu_tests::marker_phi;

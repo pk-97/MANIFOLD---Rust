@@ -43,6 +43,94 @@ mod tests {
 
     use crate::{exec::backend::Backend, exec::backend::MockBackend, exec::cpu_values::CpuWireWrites, bindings::NodeInputs, bindings::NodeOutputs, ports::PortType, exec::execution_plan::ResourceId};
 
+    use crate::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, FrameTime};
+    use crate::exec::execution::Executor;
+    use crate::exec::execution_plan::compile;
+    use crate::graph::Graph;
+    use crate::parameters::ParamDef;
+    use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind};
+
+    struct ExternalFieldNode {
+        type_id: EffectNodeType,
+        outputs: Vec<NodeOutput>,
+    }
+
+    impl ExternalFieldNode {
+        fn new() -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.external_field"),
+                outputs: vec![NodePort {
+                    name: std::borrow::Cow::Borrowed("field"),
+                    ty: PortType::VectorField,
+                    kind: PortKind::Output,
+                    required: false,
+                }],
+            }
+        }
+    }
+
+    impl EffectNode for ExternalFieldNode {
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
+
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            ctx.outputs.set_cpu_value(
+                "field",
+                manifold_physics::FieldValue::uniform([1.0, -2.0, 3.0]).expect("finite uniform field"),
+            );
+        }
+    }
+
+    #[test]
+    fn external_field_output_survives_cpu_execute_frame() {
+        use manifold_physics::VectorField;
+        let mut graph = Graph::new();
+        let image = graph.add_node(Box::new(crate::scene::boundary_nodes::Source::new()));
+        let out = graph.add_node(Box::new(crate::scene::boundary_nodes::FinalOutput::new()));
+        graph.connect((image, "out"), (out, "in")).unwrap();
+        let source = graph.add_node(Box::new(ExternalFieldNode::new()));
+        assert!(compile(&graph).unwrap().steps().iter().all(|step| step.node != source));
+        graph.add_external_output(source, "field").unwrap();
+        let plan = compile(&graph).unwrap();
+        let resource = plan.steps().iter().find(|step| step.node == source).unwrap().outputs[0].1;
+
+        let mut executor = Executor::with_mock();
+        executor.execute_frame(&mut graph, &plan, FrameTime {
+            beats: manifold_core::Beats(0.0),
+            seconds: manifold_core::Seconds(0.0),
+            delta: manifold_core::Seconds(1.0 / 60.0),
+            frame_count: 0,
+        });
+
+        let slot = executor
+            .backend()
+            .slot_for(resource)
+            .expect("external output slot remains bound after frame");
+        let field = executor
+            .backend()
+            .cpu_values()
+            .get::<manifold_physics::FieldValue>(slot)
+            .expect("external field was published by execute_frame");
+        assert_eq!(field.sample([0.0, 0.0, 0.0]), [1.0, -2.0, 3.0]);
+    }
+
     fn field() -> FieldValue {
         FieldValue::uniform([1.0, -2.0, 3.0]).expect("finite uniform field")
     }

@@ -910,4 +910,4 @@ use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
     }
 }
 
-use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
+use manifold_node_engine::testkit::array_harness::{Harness, params, read};

@@ -1,6 +1,6 @@
 //! Small value proofs for the reference emitters. Run only through gpu_queue.
 //! The turbulence reference is independently checked against the vendored C++ engine.
-use crate::testkit::liquid_surface::{Harness, params, read};
+use crate::testkit::array_harness::{Harness, params, read};
 use crate::testkit::water_codegen::run;
 use {crate::water::primitives::whitewater_particle_cpu as cpu, super::whitewater_particle_cpu::Box3};
 use super::{

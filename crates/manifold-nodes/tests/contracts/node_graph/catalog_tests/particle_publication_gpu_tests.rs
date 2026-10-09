@@ -1,7 +1,7 @@
 //! Device proofs against the pass-1 publication contract, and byte for byte
 //! against the transcribed 1-bit publisher (`particle_publication::reference`).
 use manifold_node_engine::water::primitives::liquid_stats::LIQUID_STATS_WORDS;
-use manifold_node_engine::testkit::liquid_surface::read;
+use manifold_node_engine::testkit::array_harness::read;
 use crate::contracts::node_graph::catalog_tests::particle_frame_blend_tests::publication_contract::publish as reference;
 use manifold_node_engine::water::primitives::particle_identity::{BirthReservation, ParticleIdentity};
 use manifold_node_engine::water::primitives::particle_publication::reference::{live as live_radius, publish as oracle};

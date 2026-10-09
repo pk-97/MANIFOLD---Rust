@@ -877,7 +877,7 @@ mod gpu_tests {
     use super::tests::flip_vertex_interp;
     use super::VolumeSurfaceMesh;
     use crate::mesh::MeshVertex;
-    use crate::testkit::liquid_surface::{params, read, Harness};
+    use crate::testkit::array_harness::{params, read, Harness};
     use crate::parameters::ParamValue;
 
     #[test]
