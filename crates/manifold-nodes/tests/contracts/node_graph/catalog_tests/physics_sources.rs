@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 
-use manifold_node_engine::runtime::testkit::prepare_sources as prepare;
+use manifold_node_engine::water::runtime::testkit::prepare_sources as prepare;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
 mod paths;

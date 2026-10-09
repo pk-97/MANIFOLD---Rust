@@ -517,10 +517,7 @@ bindings; the existing runtime entry observes source assets before calling it.
 Water owns the existing after-frame setup observation and reset bookkeeping. Do not change
 sampling, delivery, carry eligibility or reset order.
 
-This is an intermediate ownership step: `PresetRuntime::water` still has a
-concrete family type. The final runtime lifecycle interface must replace that
-field and the remaining inherent water methods before the crate moves. Under
-`gpu-proofs`, water also owns one `PhysicsSourceState` per effect slot, in the
+Under `gpu-proofs`, water also owns one `PhysicsSourceState` per effect slot, in the
 same immutable construction order. `EffectSlot` retains only generic metadata;
 source refresh borrows its node map and card prefix. Construction allocates the
 source vector once, with the exact slot count. Frame execution refreshes the
@@ -528,6 +525,27 @@ matching source before binding writes and observes instance controls afterward,
 as before. No node maps or prefixes are copied. Existing source isolation and
 rebuild contracts cover membership and provenance. This step does not authorize
 exposing all runtime fields or adding an untyped event dispatch API.
+
+The runtime boundary uses inventory-backed `RuntimeRegistration`, in stable
+name order, to validate before compilation and create owned `RuntimeExtension`
+state once per graph. Under `gpu-proofs`, preparation captures the unfused
+source definition before fusion and installs its result at the existing point
+after construction. The engine invokes typed callbacks at the existing frame,
+reset, binding, modifier admission and rebuild boundaries. Math View recursion
+for tempo, host controls and carry remains engine-owned, in its existing order.
+
+`RuntimeContext` borrows graph, plan and executor plus read-only slot scopes and
+the existing identity, dimensions and plan-epoch guards. Slot scopes borrow maps
+and bindings; they do not clone them or expose the runtime's caches and UI state.
+Water implements these callbacks and exposes `WaterRuntimeExt::water()` and
+`water_ref()` for native host operations. Their stack-only views borrow the
+registered state; there is no per-frame trait-object construction or new shared
+state. Read-only impulse preparation and fluid inspection remain read-only.
+Water test observations move with this API. `runtime/` must have no water or
+native physics references, and water must not define inherent methods on the
+foreign `PresetRuntime` type. Compiler checks and existing history, identity,
+carry and impulse contracts validate the seam; the extraction still requires
+the full P5 parity and trace gates.
 
 Phasing-completeness check: every D1 crate appears in exactly one phase's deliverables (ui-paint P1a, graph P1, image/scene/compositor P2, nodes P3, water P5); D5 P0; D6 P3; D7 P1/P2; D8 P4; D10 P0; D11 P0; D12 P1a; INV-5's script P0; measurement P4.
 

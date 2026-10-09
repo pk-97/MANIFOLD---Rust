@@ -26,6 +26,7 @@ use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
 use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_nodes_scene::node_graph::viewport_overlay::ViewportOverlayConfig, manifold_nodes_scene::node_graph::viewport_session::ViewportSession};
 use manifold_node_engine::water::fluid::{FluidDomainSnapshot, FluidDomainState, FluidSettings};
 use manifold_node_engine::runtime::preset_context::PresetContext;
+use manifold_node_engine::water::runtime::WaterRuntimeExt;
 
 
 /// Bounds and handles must redraw over the cached scene while a setup drag
@@ -201,7 +202,7 @@ fn shared_scene_viewport_navigates_without_advancing_fluid_or_changing_show() {
     };
     let snapshot = |runtime: &PresetRuntime| {
         let mut domains = Vec::new();
-        runtime.write_fluid_domains_watched(&mut domains);
+        runtime.water_ref().write_fluid_domains_watched(&mut domains);
         domains.into_iter().find(|(id, _)| id.as_str() == "water").unwrap().1
     };
     let scalar = |runtime: &PresetRuntime, name: &str| {
@@ -296,7 +297,7 @@ fn shared_scene_viewport_does_not_activate_a_hidden_fluid_branch() {
         320, 200, GpuTextureFormat::Rgba16Float, None,
     ).unwrap();
     let mut before = Vec::new();
-    runtime.write_fluid_domains_watched(&mut before);
+    runtime.water_ref().write_fluid_domains_watched(&mut before);
     assert_eq!(before.len(), 1);
     runtime.set_scene_viewport_watched(&NodeId::new("scene"), SceneViewportConfig {
         camera: Default::default(), width: 320, height: 200,
@@ -317,7 +318,7 @@ fn shared_scene_viewport_does_not_activate_a_hidden_fluid_branch() {
     }
     enc.commit_and_wait_completed();
     let mut after = Vec::new();
-    runtime.write_fluid_domains_watched(&mut after);
+    runtime.water_ref().write_fluid_domains_watched(&mut after);
     assert_eq!(before, after, "viewport must not initialize hidden physics");
     assert!(runtime.scene_viewport_texture().is_none());
     assert_eq!(runtime.scene_viewport_status(), Some(FrameRenderStatus::PendingGeometry));

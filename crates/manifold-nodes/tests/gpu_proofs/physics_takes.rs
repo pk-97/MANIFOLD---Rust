@@ -20,6 +20,7 @@ use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, Por
 use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef, persistence::PrimitiveRegistry};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::{ChainBuildInputs, PresetRuntime};
+use manifold_node_engine::water::runtime::WaterRuntimeExt;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
 
@@ -200,7 +201,7 @@ fn run(
 
 fn snapshot(runtime: &PresetRuntime, effect_id: &EffectId) -> FluidDomainSnapshot {
     let mut domains = Vec::new();
-    runtime.write_fluid_domains(effect_id, &mut domains);
+    runtime.water_ref().write_fluid_domains(effect_id, &mut domains);
     assert_eq!(
         domains.len(),
         1,

@@ -8,7 +8,8 @@ use manifold_core::{NodeId, Seconds};
 use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::{FieldValue, TickStamp};
 
-use crate::{exec::effect_node::FrameTime, runtime::PresetRuntime};
+use super::{WaterRuntime, WaterRuntimeRef};
+use crate::exec::effect_node::FrameTime;
 use crate::scene::impulse::ImpulseTarget;
 use crate::water::physics_events::ResolvedNodeImpulse;
 use crate::water::node;
@@ -100,7 +101,7 @@ impl CapturedSceneImpulse {
     }
 }
 
-impl PresetRuntime {
+impl WaterRuntime<'_> {
     /// Capture a live source observation using each recipient's accepted
     /// simulation clock. Apply the source's resolved controls before calling.
     /// Scene setup and GPU-derived geometry must already have been evaluated
@@ -155,6 +156,9 @@ impl PresetRuntime {
         Ok(())
     }
 
+}
+
+impl WaterRuntimeRef<'_> {
     /// `owner` is the canonical graph used to install this runtime. Scoped
     /// scene refs are validated there; physical leaves retain globally unique
     /// document IDs through flattening. The field source is a compiled leaf
@@ -281,6 +285,9 @@ impl PresetRuntime {
         })
     }
 
+}
+
+impl WaterRuntime<'_> {
     /// Call at the input producer boundary, after applying that observation's
     /// resolved controls. This samples current external values, not historical
     /// audio. `map_time` must map the source time into each recipient's native
@@ -348,9 +355,9 @@ impl PresetRuntime {
             }
         }
         super::physics_sampling::execute_physics_sample_frame(
-            &mut self.executor,
-            &mut self.graph,
-            &self.plan,
+            self.executor,
+            self.graph,
+            self.plan,
             source,
             &binding.steps,
             &binding.params,

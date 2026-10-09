@@ -1,3 +1,4 @@
+use crate::water::runtime::WaterRuntimeExt;
 use crate::parameters::ParamValue;
 use crate::persistence::PrimitiveRegistry;
 use crate::runtime::FrameContextInputs;
@@ -112,8 +113,7 @@ fn frame(runtime: &mut PresetRuntime, seconds: f64, value: f32, triggers: f32) -
     let time = FrameTime {
         seconds: Seconds(seconds),
         beats: runtime
-            .water
-            .project_tempo
+            .water_ref().water.project_tempo
             .as_ref()
             .map_or(Beats(seconds * 2.0), |tempo| {
                 TempoMapConverter::seconds_to_beat_immut(
@@ -124,8 +124,7 @@ fn frame(runtime: &mut PresetRuntime, seconds: f64, value: f32, triggers: f32) -
             }),
         delta: Seconds(
             runtime
-                .water
-                .last_frame_time
+                .water_ref().water.last_frame_time
                 .map_or(0.0, |previous| seconds - previous.seconds.0),
         ),
         frame_count: 0,
@@ -287,7 +286,7 @@ fn compatible_rebuild_keeps_held_tempo_and_synthetic_context_can_clear_it() {
     assert_tempo_samples(&samples[..samples.len() - 1], &old);
     assert!((samples.last().unwrap().time.beats.0 - 0.15).abs() < 1e-12);
     rebuilt.set_project_tempo(None);
-    assert!(rebuilt.water.project_tempo.is_none());
+    assert!(rebuilt.water_ref().water.project_tempo.is_none());
     frame(&mut rebuilt, 0.1, 9.0, 3.0);
     let synthetic = frame(&mut rebuilt, 0.2, 9.0, 3.0);
     for sample in synthetic {
@@ -311,7 +310,7 @@ fn source_observation_uses_project_tempo_and_closes_history_once() {
         delta: Seconds(0.02),
         frame_count: 1,
     };
-    runtime.observe_physics_at_source(source).unwrap();
+    runtime.water().observe_physics_at_source(source).unwrap();
     let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
     assert_tempo_samples(&samples, &tempo);
     assert_eq!(samples.last().unwrap().time.seconds, source.seconds);
@@ -351,7 +350,7 @@ fn unchanged_tempo_preserves_external_beat_authority_at_the_closing_observation(
         runtime.set_project_tempo(Some(&tempo));
         frame(&mut runtime, seconds.0 - 1.0 / 30.0, 1.0, 0.0);
         runtime.set_project_tempo(Some(current_tempo));
-        runtime.observe_physics_at_source(source).unwrap();
+        runtime.water().observe_physics_at_source(source).unwrap();
         let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
         let closing = &samples[samples.len() - 2];
         assert_eq!(closing.time.seconds, source.seconds);

@@ -1,5 +1,6 @@
 use manifold_node_engine::runtime::generator_provider::{GeneratorProvider, generator_provider};
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::water::runtime::WaterRuntimeExt;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::runtime::preset_context::{PresetContext, ProjectTempo};
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -370,7 +371,7 @@ impl GeneratorRenderer {
         if let Some(context) = self.scene_viewport_modifier.as_deref() {
             state.generator.write_modifier_fluid_domains(context, output);
         } else {
-            state.generator.write_fluid_domains_watched(output);
+            state.generator.water_ref().write_fluid_domains_watched(output);
         }
     }
 
@@ -991,7 +992,7 @@ impl GeneratorRenderer {
                     .generator
                     .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
                 layer_state.generator.set_project_tempo(project_tempo);
-                layer_state.generator.set_physics_source_instance(layer.gen_params());
+                layer_state.generator.set_source_instance(layer.gen_params());
                 let new_progress = layer_state.generator.render(
                     gpu,
                     &active.render_target.texture,
@@ -1002,13 +1003,13 @@ impl GeneratorRenderer {
                 // Acknowledge native tick-start receipts every rendered frame;
                 // otherwise completed clicks would fill the bounded event queue.
                 let diagnostics = &mut self.scene_impulse_diagnostics;
-                layer_state.generator.drain_scene_impulses(|_, event| {
+                layer_state.generator.water().drain_scene_impulses(|_, event| {
                     diagnostics.started = diagnostics.started.saturating_add(1);
                     if event.lateness.0 > 0.0 {
                         diagnostics.late = diagnostics.late.saturating_add(1);
                     }
                 });
-                layer_state.generator.drain_discarded_scene_impulses(|_, _| {
+                layer_state.generator.water().drain_discarded_scene_impulses(|_, _| {
                     diagnostics.discarded = diagnostics.discarded.saturating_add(1);
                 });
             }
@@ -1367,7 +1368,7 @@ impl GeneratorRenderer {
         t.ready = false;
         t.runtime.set_string_params(string_params);
         t.runtime.set_project_tempo(None);
-        t.runtime.set_physics_source_instance(Some(gp));
+        t.runtime.set_source_instance(Some(gp));
         gpu.clear_texture(&t.rt.texture, 0.0, 0.0, 0.0, 0.0);
         for _ in 0..frames {
             let frame_count = t.frame_count;
@@ -1667,7 +1668,7 @@ impl ClipRenderer for GeneratorRenderer {
                     ls.generator.set_relight_params(&relight_params);
                     ls.generator.set_rt_quality(self.rt_quality);
                     ls.generator.set_project_tempo(None);
-                    ls.generator.set_physics_source_instance(layer.gen_params());
+                    ls.generator.set_source_instance(layer.gen_params());
                     let ctx = PresetContext {
                         time: frame as f64 * DT,
                         beat: 0.0,

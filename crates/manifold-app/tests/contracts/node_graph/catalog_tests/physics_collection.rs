@@ -39,7 +39,7 @@ fn published_identity(runtime: &PresetRuntime) -> Option<Result<[u8; 32], String
         .graph
         .instance_by_node_id(&NodeId::new("fluid"))
         .expect("fluid node");
-    manifold_node_engine::runtime::testkit::published_identity(runtime, fluid)
+    manifold_node_engine::water::runtime::testkit::published_identity(runtime, fluid)
 }
 
 fn settle_source_at(runtime: &mut PresetRuntime, seconds: f64) -> [u8; 32] {

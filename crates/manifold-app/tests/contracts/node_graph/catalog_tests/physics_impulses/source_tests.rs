@@ -14,18 +14,20 @@ fn scene_impulse_source_requires_rebuild_after_output_roots_change() {
     runtime.graph.add_external_output(field, "out").unwrap();
     assert!(
         runtime
+            .water()
             .capture_scene_impulse_at_source(&mut binding, &mut hit, time(0.1), 0,)
             .unwrap_err()
             .contains("outputs changed")
     );
     assert_eq!(
-        manifold_node_engine::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
+        manifold_node_engine::water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
         Seconds::ZERO
     );
     runtime.execute_frame(time(0.1));
     assert!(runtime.awaiting_forced_outputs_rebuild());
     assert!(
         runtime
+            .water_ref()
             .prepare_scene_impulse(
                 &def,
                 &reference("scene"),
@@ -69,23 +71,25 @@ fn scene_impulse_source_captures_fluid_clock_and_waits_for_changed_setup() {
     edit(&mut runtime, "world", "speed", 2.0);
     edit(&mut runtime, "fluid", "speed", 2.0);
     runtime
+        .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(2.05), 0)
         .unwrap();
     assert!((hit.test_stamp(0).time.0 - 0.05).abs() < 1e-12);
-    runtime.deliver_scene_impulse(&mut hit).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     runtime
+        .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(2.10), 1)
         .unwrap();
     assert!((hit.test_stamp(0).time.0 - 0.15).abs() < 1e-12);
     let epoch = hit.test_stamp(0).epoch;
-    runtime.deliver_scene_impulse(&mut hit).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     let mut receipts = 0;
-    runtime.drain_scene_impulses(|_, _| receipts += 1);
+    runtime.water().drain_scene_impulses(|_, _| receipts += 1);
     assert_eq!(receipts, 0, "capturing cannot run the native fluid worker");
     runtime.execute_frame(time(2.10));
     let mut receipts = Vec::new();
-    runtime.drain_scene_impulses(|_, receipt| receipts.push(receipt));
+    runtime.water().drain_scene_impulses(|_, receipt| receipts.push(receipt));
     assert_eq!(
         receipts.len(),
         1,
@@ -96,6 +100,7 @@ fn scene_impulse_source_captures_fluid_clock_and_waits_for_changed_setup() {
     edit(&mut runtime, "fluid", "fill_height", 0.1);
     assert!(
         runtime
+            .water()
             .capture_scene_impulse_at_source(&mut binding, &mut hit, time(2.10), 2,)
             .is_err(),
         "setup changes require a full scene evaluation"
@@ -106,6 +111,7 @@ fn scene_impulse_source_captures_fluid_clock_and_waits_for_changed_setup() {
     edit(&mut runtime, "fluid", "domain_size", 3.0);
     runtime.execute_frame(time(2.10));
     runtime
+        .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(2.10), 2)
         .unwrap();
     assert_ne!(hit.test_stamp(0).epoch, epoch);
@@ -120,6 +126,7 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
     let mut hit = binding.new_capture();
     assert!(
         runtime
+            .water()
             .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.0), 0,)
             .unwrap_err()
             .contains("render the scene")
@@ -127,6 +134,7 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
     runtime.execute_frame(time(10.0));
     edit(&mut runtime, "world", "speed", 2.0);
     runtime
+        .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.125), 0)
         .unwrap();
     assert_eq!(
@@ -134,22 +142,25 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
         Seconds(0.125),
         "close old speed before applying edit"
     );
-    runtime.deliver_scene_impulse(&mut hit).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     runtime
+        .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.25), 1)
         .unwrap();
     assert_eq!(hit.test_stamp(0).time, Seconds(0.375));
-    runtime.deliver_scene_impulse(&mut hit).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     edit(&mut runtime, "world", "speed", 0.0);
     runtime
+        .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.25), 2)
         .unwrap();
     assert_eq!(hit.test_stamp(0).time, Seconds(0.375));
-    runtime.deliver_scene_impulse(&mut hit).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     runtime
+        .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.5), 3)
         .unwrap();
     assert_eq!(hit.test_stamp(0).time, Seconds(0.375));
@@ -158,18 +169,19 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
         [0.0, 5.0],
         "source capture never runs a native tick"
     );
-    runtime.deliver_scene_impulse(&mut hit).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     // Resume at the same transport time: a subsequent frame must drain each
     // old interval once, retaining all four discrete hits.
     edit(&mut runtime, "world", "speed", 1.0);
     runtime
+        .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.5), 4)
         .unwrap();
     hit.clear();
     runtime.execute_frame(time(10.6));
     let mut receipts = Vec::new();
-    runtime.drain_scene_impulses(|_, receipt| receipts.push(receipt));
+    runtime.water().drain_scene_impulses(|_, receipt| receipts.push(receipt));
     assert_eq!(receipts.len(), 4);
     // Project-frame identities: Speed scales duration, not the number of ticks.
     assert_eq!(
@@ -196,31 +208,35 @@ fn scene_impulse_source_rejects_old_or_pending_capture_without_moving_anchor() {
     let mut binding = prepare(&runtime, &def, &["part_a"]);
     let mut hit = binding.new_capture();
     runtime
+        .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(1.1), 0)
         .unwrap();
     assert!(
         runtime
+            .water()
             .capture_scene_impulse_at_source(&mut binding, &mut hit, time(1.2), 1,)
             .unwrap_err()
             .contains("acknowledge")
     );
     assert_eq!(
-        manifold_node_engine::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
+        manifold_node_engine::water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
         Seconds(1.1)
     );
     hit.clear();
     assert!(
         runtime
+            .water()
             .capture_scene_impulse_at_source(&mut binding, &mut hit, time(1.05), 1,)
             .unwrap_err()
             .contains("precedes")
     );
     assert_eq!(
-        manifold_node_engine::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
+        manifold_node_engine::water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
         Seconds(1.1)
     );
     assert!(
         runtime
+            .water()
             .capture_scene_impulse_at_source(&mut binding, &mut hit, time(f64::NAN), 1,)
             .unwrap_err()
             .contains("finite")
@@ -228,6 +244,7 @@ fn scene_impulse_source_rejects_old_or_pending_capture_without_moving_anchor() {
     edit(&mut runtime, "world", "reset", 1.0);
     assert!(
         runtime
+            .water()
             .capture_scene_impulse_at_source(&mut binding, &mut hit, time(1.1), 1,)
             .is_err(),
         "a withheld reset must not admit an event into the old epoch"
@@ -235,6 +252,7 @@ fn scene_impulse_source_rejects_old_or_pending_capture_without_moving_anchor() {
     assert!(hit.source_time().is_none());
     runtime.execute_frame(time(1.1));
     runtime
+        .water()
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(1.1), 1)
         .unwrap();
     assert_eq!(hit.test_stamp(0).time, Seconds::ZERO);
@@ -279,6 +297,7 @@ fn scene_impulse_source_ticks_match_across_frame_rates_and_display_stall() {
             if event {
                 edit(&mut runtime, "field", "x", 3.0 + sequence as f32);
                 runtime
+                    .water()
                     .capture_scene_impulse_at_source(
                         &mut binding,
                         &mut hit,
@@ -287,7 +306,7 @@ fn scene_impulse_source_ticks_match_across_frame_rates_and_display_stall() {
                     )
                     .unwrap();
                 stamps.push(hit.test_stamp(0));
-                runtime.deliver_scene_impulse(&mut hit).unwrap();
+                runtime.water().deliver_scene_impulse(&mut hit).unwrap();
                 hit.clear();
                 sequence += 1;
             } else {
@@ -295,7 +314,7 @@ fn scene_impulse_source_ticks_match_across_frame_rates_and_display_stall() {
             }
         }
         let mut receipts = Vec::new();
-        runtime.drain_scene_impulses(|_, event| receipts.push(event));
+        runtime.water().drain_scene_impulses(|_, event| receipts.push(event));
         assert_eq!(receipts.len(), 2);
         (stamps, receipts, POSITIONS.get())
     };

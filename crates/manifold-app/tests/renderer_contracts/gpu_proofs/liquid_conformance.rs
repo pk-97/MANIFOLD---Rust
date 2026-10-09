@@ -31,6 +31,7 @@ use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, Por
 use {manifold_node_engine::ports::ArrayType, manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::exec::effect_node::EffectNodeContext, manifold_node_engine::exec::effect_node::EffectNodeType, manifold_node_engine::exec::effect_node::NodeErrorTap, manifold_node_engine::parameters::ParamDef, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes::bundled_presets::bundled_preset_type_ids};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::water::runtime::WaterRuntimeExt;
 use manifold_compositor::preset_thumbnail::{THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, render_preset_thumbnail};
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::json;
@@ -1852,19 +1853,19 @@ impl LiquidRun {
             delta: manifold_core::Seconds::ZERO,
             frame_count: i64::from(self.frame),
         };
-        let fired = self.runtime.fire_scene_impulse(param, source, sequence);
+        let fired = self.runtime.water().fire_scene_impulse(param, source, sequence);
         assert_eq!(fired, Ok(true), "{}: the impulse was not accepted", self.domain_type);
     }
 
     fn applied_receipts(&mut self) -> usize {
         let mut count = 0;
-        self.runtime.drain_scene_impulses(|_, _| count += 1);
+        self.runtime.water().drain_scene_impulses(|_, _| count += 1);
         count
     }
 
     fn discarded_receipts(&mut self) -> usize {
         let mut count = 0;
-        self.runtime.drain_discarded_scene_impulses(|_, _| count += 1);
+        self.runtime.water().drain_discarded_scene_impulses(|_, _| count += 1);
         count
     }
 }

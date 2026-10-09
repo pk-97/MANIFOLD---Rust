@@ -1,20 +1,12 @@
 //! Exact observations and setup for runtime contract tests.
 use crate::runtime::PresetRuntime;
-use crate::exec::effect_node::{FrameTime, NodeInstanceId};
+use crate::exec::effect_node::NodeInstanceId;
 use manifold_core::NodeId;
 
 #[cfg(feature = "gpu-proofs")]
 pub fn slot_count(runtime: &PresetRuntime) -> usize { runtime.effect_nodes.len() }
 #[cfg(feature = "gpu-proofs")]
 pub fn pending_segments(runtime: &PresetRuntime) -> bool { runtime.pending_segments }
-pub fn sampling_mask(runtime: &PresetRuntime) -> Option<&[bool]> { runtime.water.sample_steps.as_deref() }
-pub fn last_physics_frame_time(runtime: &PresetRuntime) -> Option<FrameTime> { runtime.water.last_frame_time }
-#[cfg(feature = "gpu-proofs")]
-pub fn set_last_physics_frame_time(runtime: &mut PresetRuntime, value: Option<FrameTime>) { runtime.water.last_frame_time = value; }
-#[cfg(feature = "gpu-proofs")]
-pub fn published_identity(runtime: &PresetRuntime, fluid: NodeInstanceId) -> Option<Result<[u8; 32], String>> {
-    runtime.water.sources.first().expect("effect source state").published_identity(fluid).map(|result| result.map_err(str::to_owned))
-}
 pub fn group_preview(runtime: &PresetRuntime, group: &NodeId) -> Option<(NodeId, String)> {
     runtime.effect_nodes.first().expect("generator has one segment").group_preview_map.iter()
         .find(|(id, _, _)| id == group).map(|(_, producer, port)| (producer.clone(), port.clone()))
@@ -24,9 +16,6 @@ pub fn insert_state<T: crate::state_store::NodeState>(runtime: &mut PresetRuntim
 }
 pub fn has_state<T: crate::state_store::NodeState>(runtime: &mut PresetRuntime, node: NodeInstanceId, key: crate::state_store::OwnerKey) -> bool {
     runtime.state_store.get::<T>(node, key).is_some()
-}
-pub fn reset_impulse_routes(runtime: &mut PresetRuntime) {
-    runtime.water.reset();
 }
 pub fn math_view_count(runtime: &PresetRuntime) -> usize { runtime.math_views.len() }
 pub fn math_variant_count(runtime: &PresetRuntime, view: usize) -> usize { runtime.math_views[view].variants.len() }
@@ -85,8 +74,6 @@ use crate::persistence::PrimitiveRegistry;
 use crate::load::loaded_preset_view::LoadedPresetView;
 use crate::load::expand::{PreparedModifierEvents, LegacyMathViewScope};
 use super::JsonGeneratorLoadError;
-#[cfg(feature = "gpu-proofs")]
-use crate::load::expand::SceneModifierImpulseRoute;
 
 pub fn render_view(def: EffectGraphDef, registry: &PrimitiveRegistry, params: Option<&ParamManifest>, fused: bool, view: Option<(&NodeId, Option<LegacyMathViewScope>)>) -> Result<PresetRuntime, JsonGeneratorLoadError> {
     PresetRuntime::from_def_for_render_view(def, registry, params, fused, view)
@@ -102,21 +89,6 @@ pub fn prepare_surface(def: &mut EffectGraphDef) {
 #[cfg(feature = "gpu-proofs")]
 pub fn build_segment_cards(indices: &[usize], effects: &[(usize, &manifold_core::effects::PresetInstance)], registry: &PrimitiveRegistry) -> Vec<(EffectGraphDef, std::sync::Arc<LoadedPresetView>)> { super::segments::build_segment_cards(indices, effects, registry) }
 
-#[cfg(feature = "gpu-proofs")]
-pub struct SourceObservation {
-    pub fluid: NodeId,
-    pub digest: [u8; 32],
-    pub control_ids: Vec<String>,
-    pub string_targets: Vec<(NodeId, String)>,
-    pub asset_nodes: Vec<NodeId>,
-}
-#[cfg(feature = "gpu-proofs")]
-pub fn prepare_sources(expanded: &EffectGraphDef, canonical: &EffectGraphDef, routes: &[SceneModifierImpulseRoute], registry: &PrimitiveRegistry) -> Result<Vec<SourceObservation>, String> {
-    crate::water::runtime::physics_sources::prepare(expanded, canonical, routes, registry).map(|sources| sources.into_iter().map(|source| SourceObservation {
-        fluid: source.fluid, digest: source.digest, control_ids: source.control_ids,
-        string_targets: source.string_targets, asset_nodes: source.asset_nodes,
-    }).collect())
-}
 #[cfg(feature = "gpu-proofs")]
 pub fn metal_backend(runtime: &mut PresetRuntime) -> &mut crate::exec::metal_backend::MetalBackend {
     runtime.executor.backend_mut().as_any_mut().and_then(|value| value.downcast_mut::<crate::exec::metal_backend::MetalBackend>()).expect("production path constructs a MetalBackend")

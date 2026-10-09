@@ -302,7 +302,7 @@ fn run<S: AsRef<str>>(
             &mut FireMeterCapture::default(),
         );
         let generator = project.timeline.layers[0].gen_params().unwrap();
-        runtime.set_physics_source_instance(Some(generator));
+        runtime.set_source_instance(Some(generator));
         runtime.apply_param_values(&generator.params);
         runtime.execute_frame(FrameTime {
             seconds: Seconds(seconds),
@@ -378,7 +378,7 @@ fn modifier_card_kick_is_sampled_at_each_tick_inside_one_frame() {
         );
         let generator = project.timeline.layers[0].gen_params().unwrap();
         hops.extend_from_slice(&generator.audio_mods.as_deref().unwrap()[0].hop_timeline.values);
-        runtime.set_physics_source_instance(Some(generator));
+        runtime.set_source_instance(Some(generator));
         runtime.apply_param_values(&generator.params);
         runtime.execute_frame(FrameTime {
             seconds: Seconds(seconds),

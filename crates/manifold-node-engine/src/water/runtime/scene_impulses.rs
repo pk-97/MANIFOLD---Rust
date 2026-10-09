@@ -3,7 +3,12 @@ use ahash::{AHashMap, AHashSet};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 
-use crate::{water::runtime::physics_impulses::CapturedSceneImpulse, exec::effect_node::FrameTime, water::runtime::physics_impulses::PreparedSceneImpulse, runtime::PresetRuntime};
+use super::{WaterRuntime, WaterRuntimeRef};
+use crate::{
+    exec::effect_node::FrameTime,
+    water::runtime::physics_impulses::CapturedSceneImpulse,
+    water::runtime::physics_impulses::PreparedSceneImpulse,
+};
 use crate::load::expand::{SceneModifierExpandError, SceneModifierImpulseRoute};
 use crate::{exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues, persistence::PrimitiveRegistry};
 
@@ -37,7 +42,7 @@ fn invalid(id: &NodeId, detail: String) -> SceneModifierExpandError {
     }
 }
 
-impl PresetRuntime {
+impl WaterRuntime<'_> {
     pub(crate) fn prepare_modifier_impulses(
         &mut self,
         owner: &EffectGraphDef,
@@ -61,6 +66,7 @@ impl PresetRuntime {
                 None
             } else {
                 let prepared = self
+                    .as_ref()
                     .prepare_scene_impulse(
                         owner,
                         &modifier.scene,
@@ -125,10 +131,15 @@ impl PresetRuntime {
         Ok(())
     }
 
+}
+
+impl WaterRuntimeRef<'_> {
     pub fn is_scene_impulse_param(&self, param: &str) -> bool {
         self.water.scene_impulses.aliases.contains_key(param)
     }
+}
 
+impl WaterRuntime<'_> {
     /// Capture one accepted manual event. Host aliases may fan out to multiple
     /// fields. Capture every field before native admission; a failed admission
     /// retains the payload and stops further Fire requests until an explicit reset.
@@ -138,7 +149,7 @@ impl PresetRuntime {
         source: FrameTime,
         next_sequence: &mut u64,
     ) -> Result<bool, String> {
-        if !self.is_scene_impulse_param(param) {
+        if !self.as_ref().is_scene_impulse_param(param) {
             return Ok(false);
         }
         let mut state = std::mem::take(&mut self.water.scene_impulses);

@@ -42,6 +42,7 @@ use crate::node_graph::viewport_render::{OVERRIDE_CAMERA_NODE_ID, ViewportRender
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, parameters::ParamValue};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::water::runtime::WaterRuntimeExt;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
 /// Content-hash of an [`EffectGraphDef`] — used to detect "the authored
@@ -343,7 +344,7 @@ impl ViewportSession {
         &self,
         output: &mut Vec<(NodeId, manifold_node_engine::water::fluid::FluidDomainSnapshot)>,
     ) {
-        self.runtime.write_fluid_domains_watched(output);
+        self.runtime.water_ref().write_fluid_domains_watched(output);
     }
 
     /// Draw editor overlays without evaluating the graph again. This lets the

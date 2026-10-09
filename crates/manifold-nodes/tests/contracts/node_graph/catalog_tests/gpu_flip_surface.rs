@@ -159,7 +159,7 @@ use manifold_node_engine::runtime::testkit::prepare_surface as prepare;
         group.wires.push(EffectGraphWire { from_node: source.id, from_port: "interior".into(), to_node: volume_id, to_port: "interior".into() });
         group.nodes.push(source);
         let volume_node = group.nodes.iter_mut().find(|n| n.id == volume_id).unwrap();
-        for &name in &PresetRuntime::test_surface_inputs()[4..] {
+        for &name in &manifold_node_engine::water::runtime::testkit::surface_inputs()[4..] {
             volume_node.params.insert(name.into(), SerializedParamValue::Float { value: 3.25 });
         }
         volume_node.params.insert("resolution_scale".into(), SerializedParamValue::Int { value: 2 });
@@ -177,7 +177,7 @@ use manifold_node_engine::runtime::testkit::prepare_surface as prepare;
         let brick = brick(group);
         assert_ne!(brick.node_id.as_str(), "liquid_volume_sparse_bricks");
         assert_eq!(brick.params, volume(group).params);
-        for &port in PresetRuntime::test_surface_inputs() {
+        for &port in manifold_node_engine::water::runtime::testkit::surface_inputs() {
             let endpoint = |id| group.wires.iter().filter(|w| w.to_node == id && w.to_port == port)
                 .map(|w| (w.from_node, w.from_port.as_str())).collect::<Vec<_>>();
             assert_eq!(endpoint(brick.id), endpoint(volume_id), "{port}");

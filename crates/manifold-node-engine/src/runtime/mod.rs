@@ -67,6 +67,7 @@ mod convert_heal;
 mod math_view;
 mod math_view_events;
 mod lifecycle;
+pub mod extensions;
 
 manifold_core::testkit_visible! {
 pub(crate) mod core;

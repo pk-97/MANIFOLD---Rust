@@ -581,7 +581,7 @@ manifold_core::testkit_visible! {
                 }
             }
         }
-        crate::water::runtime::physics_sampling::retain_physics_setup_outputs(&mut graph)?;
+        super::extensions::before_compile(&mut graph)?;
         let plan = compile(&graph)?;
         // Walk the plan for the FinalOutput step, pull its `in` input resource —
         // that's what the host pre-binds the target texture to.
@@ -644,17 +644,16 @@ manifold_core::testkit_visible! {
         };
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
-        let water = crate::water::runtime::WaterRuntimeState::new(
+        let extensions = super::extensions::create(
             &graph,
             &plan,
-            #[cfg(feature = "gpu-proofs")]
             1,
         )
             .map_err(JsonGeneratorLoadError::PhysicsSamplingUnsupported)?;
         let mut g = Self {
             graph,
             plan,
-            water,
+            extensions,
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::with_mock(),

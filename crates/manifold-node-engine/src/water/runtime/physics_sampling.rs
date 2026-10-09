@@ -6,7 +6,6 @@ use crate::graph::Graph;
 use crate::param_binding::ResolvedBinding;
 use crate::param_binding::ResolvedTarget;
 use crate::parameters::ParamValue;
-use crate::runtime::PresetRuntime;
 use crate::validation::GraphError;
 use manifold_core::Beats;
 use manifold_core::Seconds;
@@ -324,36 +323,33 @@ pub(crate) fn physics_sample_steps(
     ))
 }
 
-impl PresetRuntime {
+impl super::WaterRuntimeState {
     /// Install the host's immutable project tempo before a frame or source
     /// observation. This is the existing project map, not a new clock. Held
     /// input intervals retain their prior snapshot until the next observation.
     /// Synthetic warmup and standalone graphs explicitly supply `None`.
-    pub fn set_project_tempo(&mut self, tempo: Option<&ProjectTempo>) {
-        let unchanged = match (self.water.project_tempo.as_ref(), tempo) {
+    pub fn set_project_tempo(&mut self, graph: &mut Graph, tempo: Option<&ProjectTempo>) {
+        let unchanged = match (self.project_tempo.as_ref(), tempo) {
             (Some(current), Some(next)) => current.shares_mapping(next),
             (None, None) => true,
             _ => false,
         };
         if !unchanged {
-            self.water.project_tempo = tempo.cloned();
+            self.project_tempo = tempo.cloned();
         }
         // Newly rebuilt native nodes need the snapshot even when the host's
         // map did not change. The node dirty-checks its retained source.
-        if self.water.sample_steps.is_some() {
-            for instance in self.graph.nodes_mut() {
+        if self.sample_steps.is_some() {
+            for instance in graph.nodes_mut() {
                 if let Some(native) = node::get_mut(instance.node.as_mut()) {
                     native.set_physics_project_tempo(tempo);
                 }
             }
         }
-        for view in &mut self.math_views {
-            for variant in &mut view.variants {
-                variant.set_project_tempo(tempo);
-            }
-        }
     }
+}
 
+impl super::WaterRuntime<'_> {
     /// Observe controls at an event producer boundary without running native
     /// ticks or rendering. Close the held-input interval first, then record
     /// the current inputs at the same timestamp. Moving the observation anchor
@@ -386,9 +382,9 @@ impl PresetRuntime {
         };
         inputs.set_sample_time(source);
         execute_physics_sample_frame(
-            &mut self.executor,
-            &mut self.graph,
-            &self.plan,
+            self.executor,
+            self.graph,
+            self.plan,
             source,
             steps,
             &inputs.values,
@@ -403,9 +399,9 @@ impl PresetRuntime {
         let bindings = self
             .effect_nodes
             .first()
-            .map_or(&[][..], |slot| slot.bound.bindings.as_slice());
+            .map_or(&[][..], |slot| slot.bindings);
         self.water.sample_physics_history(
-            &mut self.graph, &self.plan, &mut self.executor, bindings, current,
+            self.graph, self.plan, self.executor, bindings, current,
         );
     }
 }

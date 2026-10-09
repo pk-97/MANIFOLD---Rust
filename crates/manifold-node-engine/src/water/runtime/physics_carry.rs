@@ -1,4 +1,5 @@
 //! Preserve native physics through compatible generator presentation rebuilds.
+#[cfg(test)]
 use crate::runtime::*;
 use crate::ports::PortType;
 use crate::water::physics::RigidBody;
@@ -8,13 +9,8 @@ use manifold_physics::FieldValue;
 #[cfg(test)]
 mod tests;
 
-impl PresetRuntime {
-    pub fn carry_generator_state_from(&mut self, prior: &mut Self) {
-        self.carry_physics_state_from(prior);
-        self.carry_modifier_control_state_from(prior);
-    }
-
-    fn carry_physics_state_from(&mut self, prior: &mut Self) {
+impl super::WaterRuntime<'_> {
+    pub(super) fn carry_physics_state_from(&mut self, prior: &mut super::WaterRuntime<'_>) {
         let (Some(slot), Some(old_slot)) = (self.effect_nodes.first(), prior.effect_nodes.first())
         else {
             return;

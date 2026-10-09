@@ -74,7 +74,7 @@ fn output_resource(
 pub struct PresetRuntime {
     pub graph: Graph,
     pub plan: ExecutionPlan,
-    pub(crate) water: crate::water::runtime::WaterRuntimeState,
+    pub(crate) extensions: Vec<Box<dyn super::extensions::RuntimeExtension>>,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
     /// `rt_enabled`/`temporal_upscale`), the compiled plan's
@@ -1216,7 +1216,7 @@ impl PresetRuntime {
         }
 
         // Compile and find the resources we need to pin / read.
-        let plan = match crate::water::runtime::physics_sampling::retain_physics_setup_outputs(&mut graph)
+        let plan = match super::extensions::before_compile(&mut graph)
             .and_then(|()| compile(&graph)) {
             Ok(p) => p,
             Err(e) => {
@@ -1339,10 +1339,9 @@ impl PresetRuntime {
         let topology_hash = compute_topology_hash(effects, groups, 0, 0, preview_effect);
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
-        let water = match crate::water::runtime::WaterRuntimeState::new(
+        let extensions = match super::extensions::create(
             &graph,
             &plan,
-            #[cfg(feature = "gpu-proofs")]
             effect_nodes.len(),
         ) {
             Ok(state) => state,
@@ -1354,7 +1353,7 @@ impl PresetRuntime {
         let mut runtime = Self {
             graph,
             plan,
-            water,
+            extensions,
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::new(Box::new(backend)),
@@ -1393,12 +1392,12 @@ impl PresetRuntime {
         // no effect in the chain declares any).
         runtime.apply_string_defaults();
         #[cfg(feature = "gpu-proofs")]
-        runtime.initialize_chain_physics_sources(effects, primitives);
+        runtime.for_each_extension(|extension, context| extension.initialize_chain(context, effects, primitives));
         if let Some(prior) = prior {
             runtime.harvest_state_from(prior);
         }
         #[cfg(feature = "gpu-proofs")]
-        runtime.install_physics_source_identities();
+        runtime.for_each_extension(|extension, context| extension.install_sources(context));
         Some(runtime)
     }
 
@@ -1528,9 +1527,9 @@ impl PresetRuntime {
             // inner-node values change.
             if fx.graph_version != slot.applied_graph_version {
                 #[cfg(feature = "gpu-proofs")]
-                self.water.sources[_slot_index].refresh_chain(
-                    &mut self.graph, &slot.node_map, &slot.card_prefix, fx, None,
-                );
+                for extension in &mut self.extensions {
+                    extension.refresh_slot(&mut self.graph, _slot_index, slot.extension_scope(), fx);
+                }
                 // `slot.card_prefix` translates `fx.graph`'s (unprefixed,
                 // per-card) node ids into the segment's `c{i}.`-prefixed
                 // `node_map`/`fused_retarget` namespace for a segment member
@@ -1593,7 +1592,9 @@ impl PresetRuntime {
             }
             slot.bound.apply(&mut self.graph, &fx.params);
             #[cfg(feature = "gpu-proofs")]
-            self.water.sources[_slot_index].set_instance(&mut self.graph, Some(fx));
+            for extension in &mut self.extensions {
+                extension.after_slot_bindings(&mut self.graph, _slot_index, fx);
+            }
             // Push the "3D Shading" D3 relight knobs into the spliced graph
             // every frame. Float-knob edits are no longer structural (D8/P7),
             // so the chain doesn't rebuild on a drag; these writes keep the
@@ -1700,7 +1701,7 @@ impl PresetRuntime {
         // The `with_gpu` variant passes `state: None, owner_key: 0`,
         // which makes those primitives panic.
         self.refresh_plan_if_forced_outputs_changed();
-        self.sample_physics_history(frame_time);
+        self.for_each_extension(|extension, context| extension.before_frame(context, frame_time));
         self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,
@@ -1709,7 +1710,7 @@ impl PresetRuntime {
             &mut self.state_store,
             ctx.owner_key,
         );
-        self.water.after_frame(&self.graph, frame_time);
+        self.for_each_extension(|extension, context| extension.after_frame(context.graph, frame_time));
 
         self.output_texture()
     }
@@ -1797,7 +1798,7 @@ impl PresetRuntime {
                 .apply_inner_overrides(&mut self.graph, &seg.node_map, Some(def));
         }
         #[cfg(feature = "gpu-proofs")]
-        self.refresh_physics_source_graphs(def);
+        self.for_each_extension(|extension, context| extension.refresh_generator(context, def));
     }
 
     /// Re-bake every binding's reshape from the live manifest — the in-place
@@ -1894,10 +1895,10 @@ impl PresetRuntime {
             return;
         }
         self.refresh_plan_if_forced_outputs_changed();
-        self.sample_physics_history(time);
+        self.for_each_extension(|extension, context| extension.before_frame(context, time));
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
-        self.water.after_frame(&self.graph, time);
+        self.for_each_extension(|extension, context| extension.after_frame(context.graph, time));
         self.consume_trigger_markers();
     }
 
@@ -1976,7 +1977,7 @@ impl PresetRuntime {
         self.executor
             .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
         self.refresh_plan_if_forced_outputs_changed();
-        self.sample_physics_history(frame_time);
+        self.for_each_extension(|extension, context| extension.before_frame(context, frame_time));
         self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,
@@ -1988,7 +1989,7 @@ impl PresetRuntime {
             // dead — found by the R2 accumulation gate, D-62).
             ctx.owner_key,
         );
-        self.water.after_frame(&self.graph, frame_time);
+        self.for_each_extension(|extension, context| extension.after_frame(context.graph, frame_time));
 
         // A held terminal leaves the host's target holding the last frame it
         // wrote, overlays included; drawing them again would stack.
@@ -2005,7 +2006,7 @@ impl PresetRuntime {
     /// Reset all generator state (per-primitive `extra_fields` + the runtime
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
-        self.water.reset();
+        self.for_each_extension(|extension, _| extension.reset());
         for view in &mut self.math_views {
             view.events.clear();
             for variant in &mut view.variants {

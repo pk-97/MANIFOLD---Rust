@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::exec::{effect_node::FrameTime, execution_plan::ExecutionPlan};
 use crate::graph::Graph;
+use crate::runtime::extensions::{RuntimeContext, RuntimeExtension, RuntimeRegistration};
 use crate::runtime::preset_context::ProjectTempo;
 
 use super::physics_sampling::{PhysicsInputSnapshot, physics_sample_steps};
@@ -19,6 +20,122 @@ pub(crate) struct WaterRuntimeState {
     pub(crate) input_snapshot: Option<PhysicsInputSnapshot>,
     pub(crate) last_frame_time: Option<FrameTime>,
     pub(crate) project_tempo: Option<ProjectTempo>,
+}
+
+impl RuntimeExtension for WaterRuntimeState {
+    fn before_frame(&mut self, runtime: &mut RuntimeContext<'_>, time: FrameTime) {
+        super::WaterRuntime::borrow(self, runtime).sample_physics_history(time);
+    }
+
+    fn after_frame(&mut self, graph: &Graph, time: FrameTime) {
+        Self::after_frame(self, graph, time);
+    }
+    fn reset(&mut self) {
+        Self::reset(self);
+    }
+    fn set_project_tempo(&mut self, graph: &mut Graph, tempo: Option<&ProjectTempo>) {
+        Self::set_project_tempo(self, graph, tempo);
+    }
+    fn set_source_instance(
+        &mut self,
+        graph: &mut Graph,
+        instance: Option<&manifold_core::effects::PresetInstance>,
+    ) {
+        Self::set_source_instance(self, graph, instance);
+    }
+
+    fn prepare_modifiers(
+        &mut self,
+        runtime: &mut RuntimeContext<'_>,
+        owner: &manifold_core::effect_graph_def::EffectGraphDef,
+        routes: &[crate::load::expand::SceneModifierImpulseRoute],
+        registry: &crate::persistence::PrimitiveRegistry,
+    ) -> Result<(), crate::load::expand::SceneModifierExpandError> {
+        super::WaterRuntime::borrow(self, runtime)
+            .prepare_modifier_impulses(owner, routes, registry)
+    }
+
+    fn carry_from(
+        &mut self,
+        runtime: &mut RuntimeContext<'_>,
+        prior: &mut dyn RuntimeExtension,
+        previous: &mut RuntimeContext<'_>,
+    ) {
+        let prior = prior
+            .as_any_mut()
+            .downcast_mut::<Self>()
+            .expect("matching registered runtime extension");
+        super::WaterRuntime::borrow(self, runtime)
+            .carry_physics_state_from(&mut super::WaterRuntime::borrow(prior, previous));
+    }
+
+    #[cfg(feature = "gpu-proofs")]
+    fn initialize_chain(
+        &mut self,
+        runtime: &mut RuntimeContext<'_>,
+        instances: &[manifold_core::effects::PresetInstance],
+        registry: &crate::persistence::PrimitiveRegistry,
+    ) {
+        super::WaterRuntime::borrow(self, runtime)
+            .initialize_chain_physics_sources(instances, registry);
+    }
+    #[cfg(feature = "gpu-proofs")]
+    fn install_sources(&mut self, runtime: &mut RuntimeContext<'_>) {
+        super::WaterRuntime::borrow(self, runtime).install_physics_source_identities();
+    }
+    #[cfg(feature = "gpu-proofs")]
+    fn refresh_slot(
+        &mut self,
+        graph: &mut Graph,
+        index: usize,
+        slot: crate::runtime::extensions::RuntimeSlot<'_>,
+        instance: &manifold_core::effects::PresetInstance,
+    ) {
+        self.sources[index].refresh_chain(graph, slot.node_map, slot.card_prefix, instance, None);
+    }
+    #[cfg(feature = "gpu-proofs")]
+    fn after_slot_bindings(
+        &mut self,
+        graph: &mut Graph,
+        index: usize,
+        instance: &manifold_core::effects::PresetInstance,
+    ) {
+        self.sources[index].set_instance(graph, Some(instance));
+    }
+    #[cfg(feature = "gpu-proofs")]
+    fn refresh_generator(
+        &mut self,
+        runtime: &mut RuntimeContext<'_>,
+        owner: &manifold_core::effect_graph_def::EffectGraphDef,
+    ) {
+        super::WaterRuntime::borrow(self, runtime).refresh_physics_source_graphs(owner);
+    }
+    #[cfg(feature = "gpu-proofs")]
+    fn observe_strings(&mut self, graph: &mut Graph) {
+        if let Some(source) = self.sources.first_mut() {
+            source.observe_strings(graph);
+        }
+    }
+}
+
+inventory::submit! {
+    RuntimeRegistration {
+        name: "water",
+        before_compile: super::physics_sampling::retain_physics_setup_outputs,
+        create: |graph, plan, _slots| Ok(Box::new(WaterRuntimeState::new(
+            graph, plan,
+            #[cfg(feature = "gpu-proofs")]
+            _slots,
+        )?)),
+        #[cfg(feature = "gpu-proofs")]
+        prepare: |render, owner, routes, registry| {
+            let sources = super::physics_sources::prepare(render, owner, routes, registry);
+            Box::new(move |runtime| {
+                use super::WaterRuntimeExt;
+                runtime.water().apply_physics_source_graphs(sources);
+            })
+        },
+    }
 }
 
 impl WaterRuntimeState {

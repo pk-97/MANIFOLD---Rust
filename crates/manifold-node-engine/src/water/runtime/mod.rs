@@ -16,4 +16,10 @@ mod physics_source_state_tests;
 pub(crate) mod physics_sources;
 pub mod scene_impulses;
 mod state;
+mod access;
+mod inspection;
+pub use access::{WaterRuntime, WaterRuntimeRef, WaterRuntimeExt};
 pub(crate) use state::WaterRuntimeState;
+
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit;

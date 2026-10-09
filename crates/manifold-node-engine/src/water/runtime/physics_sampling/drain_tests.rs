@@ -1,4 +1,5 @@
 //! Native FLIP history catch-up through the ordinary CPU graph path.
+use crate::water::runtime::WaterRuntimeExt;
 use crate::exec::effect_node::FrameTime;
 use crate::parameters::ParamValue;
 use crate::persistence::PrimitiveRegistry;
@@ -33,7 +34,7 @@ fn offline_history_drain_crosses_fluid_history_capacity_without_reset() {
     runtime.execute_frame(time(0.0));
     assert_eq!(observed_fluid_time(), Some(0.0));
     set_observed_fluid_time(None);
-    runtime.sample_physics_history(time(36.0));
+    runtime.water().sample_physics_history(time(36.0));
     assert_eq!(
         observed_fluid_time(),
         None,
@@ -187,7 +188,7 @@ fn fluid_graph_cache_ignores_appearance_but_rejects_authored_force_edits() {
     playback.execute_frame(time(0.1));
     assert_eq!(state(&playback), FluidDomainState::Ready);
     let mut rebuilt = PresetRuntime::from_def(original.clone(), &registry, None).unwrap();
-    rebuilt.apply_physics_source_graphs(Err("unresolved source after rebuild".into()));
+    rebuilt.water().apply_physics_source_graphs(Err("unresolved source after rebuild".into()));
     rebuilt.carry_generator_state_from(&mut playback);
     rebuilt.execute_frame(time(0.1));
     assert_eq!(state(&rebuilt), FluidDomainState::Failed);
@@ -257,12 +258,12 @@ fn fluid_graph_cache_validates_host_controls_without_treating_effectives_as_edit
             .expect("accepted fluid domain")
     };
     let apply = |runtime: &mut PresetRuntime, instance: &PresetInstance| {
-        runtime.set_physics_source_instance(Some(instance));
+        runtime.set_source_instance(Some(instance));
         runtime.apply_param_values(&instance.params);
         runtime.execute_frame(time(0.1));
     };
     let mut recorded = runtime_from_definition(def.clone());
-    recorded.set_physics_source_instance(Some(&instance));
+    recorded.set_source_instance(Some(&instance));
     recorded.apply_param_values(&instance.params);
     recorded.execute_frame(time(0.0));
     recorded.execute_frame(time(0.1));
@@ -327,7 +328,7 @@ fn fluid_graph_cache_validates_host_controls_without_treating_effectives_as_edit
         epoch,
         "compatible rebuild must carry host provenance"
     );
-    rebuilt.apply_physics_source_graphs(Err("temporarily unresolved graph".into()));
+    rebuilt.water().apply_physics_source_graphs(Err("temporarily unresolved graph".into()));
     rebuilt.apply_inner_param_overrides(&def);
     rebuilt.execute_frame(time(0.1));
     assert_eq!(

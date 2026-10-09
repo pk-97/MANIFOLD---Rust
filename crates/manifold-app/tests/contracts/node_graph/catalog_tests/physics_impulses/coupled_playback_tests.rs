@@ -361,15 +361,16 @@ fn coupled_graph_merges_shared_impulses_and_preserves_single_material_selections
         assert_eq!(binding.test_recipient_target(0), target);
         let mut captured = binding.new_capture();
         runtime
+            .water()
             .capture_scene_impulse_at_source(&mut binding, &mut captured, time(0.0), sequence)
             .unwrap();
-        runtime.deliver_scene_impulse(&mut captured).unwrap();
-        runtime.deliver_scene_impulse(&mut captured).unwrap();
+        runtime.water().deliver_scene_impulse(&mut captured).unwrap();
+        runtime.water().deliver_scene_impulse(&mut captured).unwrap();
         assert_eq!(captured.scheduled_ticks().count(), 1);
     }
     runtime.execute_frame(time(DT));
     let mut receipts = Vec::new();
-    runtime.drain_scene_impulses(|id, event| {
+    runtime.water().drain_scene_impulses(|id, event| {
         assert_eq!(id.as_str(), "fluid");
         assert_eq!(event.applied.tick, 0);
         receipts.push((event.source.sequence, event.value.target));

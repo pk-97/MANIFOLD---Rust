@@ -1,5 +1,4 @@
 //! Bind each effect card's physics provenance within its existing node scope.
-use crate::runtime::PresetRuntime;
 use crate::exec::effect_node::NodeInstanceId;
 use super::physics_source_state::PhysicsSourceState;
 use crate::{graph::Graph, persistence::PrimitiveRegistry, load::loaded_preset_view::loaded_preset_view_by_id};
@@ -59,7 +58,7 @@ impl PhysicsSourceState {
     }
 }
 
-impl PresetRuntime {
+impl super::WaterRuntime<'_> {
     pub(crate) fn initialize_chain_physics_sources(
         &mut self,
         instances: &[PresetInstance],
@@ -68,9 +67,9 @@ impl PresetRuntime {
         for (slot, source) in self.effect_nodes.iter().zip(&mut self.water.sources) {
             if let Some(instance) = instances.get(slot.legacy_index) {
                 source.refresh_chain(
-                    &mut self.graph, &slot.node_map, &slot.card_prefix, instance, Some(registry),
+                    self.graph, slot.node_map, slot.card_prefix, instance, Some(registry),
                 );
-                source.set_instance(&mut self.graph, Some(instance));
+                source.set_instance(self.graph, Some(instance));
             }
         }
     }

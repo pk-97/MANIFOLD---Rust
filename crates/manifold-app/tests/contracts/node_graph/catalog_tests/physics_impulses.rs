@@ -5,6 +5,7 @@ use manifold_physics::input::EventStamp;
 use manifold_physics::FieldValue;
 
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_node_engine::water::runtime::WaterRuntimeExt;
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_node_engine::water::node;
 use manifold_node_engine::scene::impulse::ImpulseTarget;
@@ -162,6 +163,7 @@ fn reference(id: &str) -> SceneNodeRef {
 }
 fn prepare(runtime: &PresetRuntime, def: &EffectGraphDef, ids: &[&str]) -> PreparedSceneImpulse {
     runtime
+        .water_ref()
         .prepare_scene_impulse(
             def,
             &reference("scene"),
@@ -191,6 +193,7 @@ fn capture(
     sequence: u64,
 ) {
     runtime
+        .water()
         .capture_scene_impulse(binding, target, time(0.0), sequence, |_, source| Ok(source))
         .unwrap();
 }
@@ -220,9 +223,9 @@ fn scene_impulse_captures_fields_and_targets_before_edits_and_applies_once() {
         [0.0, 5.0],
         "capture cannot step native worlds"
     );
-    runtime.deliver_scene_impulse(&mut hit_a).unwrap();
-    runtime.deliver_scene_impulse(&mut hit_a).unwrap();
-    runtime.deliver_scene_impulse(&mut hit_b).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit_a).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit_a).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit_b).unwrap();
     assert!(hit_a.is_scheduled() && hit_b.is_scheduled());
     runtime.execute_frame(time(DT));
     let positions = POSITIONS.get();
@@ -235,7 +238,7 @@ fn scene_impulse_captures_fields_and_targets_before_edits_and_applies_once() {
         "{positions:?}"
     );
     let mut receipts = Vec::new();
-    runtime.drain_scene_impulses(|id, event| {
+    runtime.water().drain_scene_impulses(|id, event| {
         assert_eq!(id.as_str(), "world");
         receipts.push(event);
     });
@@ -252,7 +255,7 @@ fn scene_impulse_captures_fields_and_targets_before_edits_and_applies_once() {
             [if index == 0 { 2.0 } else { 7.0 }, 0.0, 0.0]
         );
     }
-    runtime.drain_scene_impulses(|_, _| panic!("receipts must drain once"));
+    runtime.water().drain_scene_impulses(|_, _| panic!("receipts must drain once"));
 }
 
 #[test]
@@ -263,6 +266,7 @@ fn scene_impulse_requires_initialized_recipients_and_explicit_clock_mapping() {
     let mut hit = binding.new_capture();
     assert!(
         runtime
+            .water()
             .capture_scene_impulse(&mut binding, &mut hit, time(0.0), 0, |_, t| Ok(t))
             .unwrap_err()
             .contains("not initialized")
@@ -270,6 +274,7 @@ fn scene_impulse_requires_initialized_recipients_and_explicit_clock_mapping() {
     runtime.execute_frame(time(0.0));
     assert!(
         runtime
+            .water()
             .capture_scene_impulse(&mut binding, &mut hit, time(12.0), 0, |_, _| Err(
                 "clock unavailable".into()
             ))
@@ -278,12 +283,13 @@ fn scene_impulse_requires_initialized_recipients_and_explicit_clock_mapping() {
     );
     assert!(hit.test_field().is_none());
     runtime
+        .water()
         .capture_scene_impulse(&mut binding, &mut hit, time(12.0), 0, |_, t| {
             Ok(Seconds(t.0 - 12.0))
         })
         .unwrap();
     assert_eq!(hit.source_time().unwrap().seconds, Seconds(12.0));
-    runtime.deliver_scene_impulse(&mut hit).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     assert_eq!(hit.scheduled_ticks().next().unwrap().1.unwrap().tick, 0);
 }
 
@@ -299,6 +305,7 @@ fn scene_impulse_does_not_overwrite_pending_capture_or_reallocate_recipient_stor
     edit(&mut runtime, "field", "x", 9.0);
     assert!(
         runtime
+            .water()
             .capture_scene_impulse(&mut binding, &mut hit, time(1.0), 1, |_, t| Ok(t))
             .is_err()
     );
@@ -332,6 +339,7 @@ fn scene_impulse_rejects_reset_and_replacement_worlds() {
     replacement.execute_frame(time(0.0));
     assert!(
         replacement
+            .water()
             .deliver_scene_impulse(&mut hit)
             .unwrap_err()
             .contains("rebuilt")
@@ -340,6 +348,7 @@ fn scene_impulse_rejects_reset_and_replacement_worlds() {
     first_runtime.execute_frame(time(0.0));
     assert!(
         first_runtime
+            .water()
             .deliver_scene_impulse(&mut hit)
             .unwrap_err()
             .contains("reset")
@@ -365,11 +374,12 @@ fn scene_impulse_invalid_field_never_reuses_previous_value() {
         .set_param_unchecked(field, "x", ParamValue::Float(f32::NAN));
     assert!(
         runtime
+            .water()
             .capture_scene_impulse(&mut binding, &mut hit, time(0.0), 1, |_, t| Ok(t))
             .is_err()
     );
     assert!(hit.test_field().is_none());
-    assert!(runtime.deliver_scene_impulse(&mut hit).is_err());
+    assert!(runtime.water().deliver_scene_impulse(&mut hit).is_err());
     edit(&mut runtime, "field", "x", 3.0);
     capture(&mut runtime, &mut binding, &mut hit, 1);
     assert_eq!(
@@ -393,6 +403,7 @@ fn scene_impulse_samples_clock_at_capture_without_rewriting_graph_controls() {
     let mut binding = prepare(&runtime, &def, &["part_a"]);
     let mut hit = binding.new_capture();
     runtime
+        .water()
         .capture_scene_impulse(&mut binding, &mut hit, time(0.125), 0, |_, _| {
             Ok(Seconds::ZERO)
         })
@@ -443,6 +454,7 @@ fn scene_impulse_rejects_stateful_ancestry_and_inactive_selections() {
     let runtime = runtime(&def);
     assert!(
         runtime
+            .water_ref()
             .prepare_scene_impulse(
                 &def,
                 &reference("scene"),
@@ -515,7 +527,7 @@ fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
     let mut binding = prepare(&runtime, &def, &["part_a", "part_b"]);
     let mut hit = binding.new_capture();
     capture(&mut runtime, &mut binding, &mut hit, 1000);
-    assert!(runtime.deliver_scene_impulse(&mut hit).is_err());
+    assert!(runtime.water().deliver_scene_impulse(&mut hit).is_err());
     assert_eq!(
         hit.scheduled_ticks()
             .filter(|(_, tick)| tick.is_some())
@@ -523,11 +535,11 @@ fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
         1
     );
     assert!(!hit.is_scheduled());
-    assert!(runtime.deliver_scene_impulse(&mut hit).is_err());
+    assert!(runtime.water().deliver_scene_impulse(&mut hit).is_err());
     runtime.execute_frame(time(DT));
     assert!((POSITIONS.get()[0] - baseline - (2.0 * DT) as f32).abs() < 1e-5);
     let mut receipts = 0;
-    runtime.drain_scene_impulses(|id, event| {
+    runtime.water().drain_scene_impulses(|id, event| {
         assert_eq!(id.as_str(), "world");
         assert_eq!(event.source.sequence, 1000);
         receipts += 1;
