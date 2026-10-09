@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import numpy as np  # noqa: E402
 
 from tools.audio_analysis.eval.kick_goal_eval import (  # noqa: E402
-    GOAL, NEW_SONGS, TRACKS, Goal, add_whole_song_truth, choose, score, summarise)
+    GOAL, NEW_SONGS, TRACKS, TRUTH, Goal, add_whole_song_truth, choose, score, summarise)
 from tools.audio_analysis.eval.kick_goal_featsets import lowbank_cache, profile_cache  # noqa: E402
 from tools.audio_analysis.eval.kick_goal_selfsim import relative_levels, self_features  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_data import ALL, line  # noqa: E402
@@ -46,7 +46,7 @@ CONFIGS = (('Q1_rel15', SELF20 + REL20), ('Q2_fast4', SELF20 + REL20 + SELF4), (
 def main():
     base = sys.argv[1]
     configs = [c for c in CONFIGS if c[0] in sys.argv[2:]] or CONFIGS[:3]
-    g = Goal(mode='strict')
+    g = Goal(mode=TRUTH)
     add_whole_song_truth(g)
     nested = np.load(GOAL / f'nested_{base}.npz')
     shape = {t: np.hstack([profile_cache(g, t), lowbank_cache(g, t)]) for t in g.records}

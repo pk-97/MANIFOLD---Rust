@@ -3,7 +3,7 @@
 features: the 15 frozen features. f21: + tail (3) + template (3). f30/f15n/f31:
 song-normalised variants (kick_goal_songnorm). f53: f21 + rise profile (32).
 f47: features + profile. f68: f53 + normalised 15. f69: f53 + low filter bank (16).
-f85: f69 + sidechain fall profile (16).
+f85: f69 + sidechain fall profile (16). f31b: the 15 + low filter bank (16), the small detector.
 """
 from __future__ import annotations
 
@@ -53,8 +53,11 @@ def build(g, feats):
             r['f53'] = np.hstack([r['f21'], prof])
             r['f47'] = np.hstack([r['features'], prof])
             r['f68'] = np.hstack([r['f53'], r['f15n']])
-        if feats in ('f69', 'f85'):
+        if feats in ('f69', 'f85', 'f31b'):
             r['low16'] = lowbank_cache(g, t)
-            r['f69'] = np.hstack([r['f53'], r['low16']])
+            if 'f53' in r:
+                r['f69'] = np.hstack([r['f53'], r['low16']])
         if feats == 'f85':
             r['f85'] = np.hstack([r['f69'], fall_cache(g, t)])
+        if feats == 'f31b':
+            r['f31b'] = np.hstack([r['features'], r['low16']])

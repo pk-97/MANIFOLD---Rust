@@ -20,6 +20,7 @@ Protocol, fixed before any scoring:
 from __future__ import annotations
 
 import copy
+import os
 import json
 from pathlib import Path
 
@@ -29,11 +30,23 @@ from scipy.special import expit, logit
 from tools.audio_analysis.eval.kick_attack_rejection import read_audio
 from tools.audio_analysis.eval.kick_fusion_bandwise import fusion_features
 from tools.audio_analysis.eval.kick_goal_labels import DEV_STEMS, GOAL, NEW, fresh_onsets, kick_env_db, load
+from tools.audio_analysis.eval.kick_goal_rolls import kick_notes
 from tools.audio_analysis.eval.kick_night_common import NIGHT, TRACKS, Data
 from tools.audio_analysis.eval.run_kick_dsp_experiments import evaluate
 from tools.audio_analysis.eval.run_kick_fusion_trial import training_labels
 
+def stem_notes(track, kick_path, sr):
+    """Kick notes (stem time, s) of a kick stem, rolls included; cached per track."""
+    path = GOAL / f'notes_{track}.npy'
+    if not path.exists():
+        x = load(kick_path, sr)
+        np.save(path, kick_notes(x, sr, kick_env_db(x, sr)))
+    return np.load(path)
+
+
 REFRACTORY = .060
+TRUTH = os.environ.get('KICK_GOAL_TRUTH', 'strict')
+SUFFIX = '' if TRUTH == 'strict' else f'_{TRUTH}'
 NEW_SONGS = ('pattern', 'back_to_you', 'burn_stems', 'cold_remix')
 CORE_IDS = ('late_night_bass_heavy', 'midnight_patience_bass_heavy', 'expanded_midnight_patience_s2',
             'expanded_midnight_patience_s4', 'expanded_miracle_s1', 'miracle_bass', 'expanded_miracle_s4',
@@ -56,8 +69,12 @@ class Goal:
     """Dev and new-song records on truth v2, with kick-stem tail references."""
 
     def __init__(self, with_new=True, mode='strict'):
-        """mode 'strict': Peter's rule, kick rolls over a ringing tail are non-kicks.
-        mode 'loose': those rolls count as kicks (pending Peter's ruling)."""
+        """mode 'v3' (primary since Peter's 2026-10-10 ruling, every new kick note
+        triggers): on songs with a kick stem, truth is the stem's kick notes,
+        rolls over a ringing tail included (kick_goal_rolls), plus reviewed
+        drum-bus kicks; songs without a stem keep their reviewed labels.
+        mode 'strict': rolls over a ringing tail are non-kicks (superseded).
+        mode 'loose': the reviewed rolls restored (superseded by v3)."""
         self.labels = json.loads((GOAL / 'labels_v2.json').read_text())
         self.mode = mode
         d = Data()
@@ -69,7 +86,15 @@ class Goal:
             src = copy.deepcopy(r['source'])
             row = self.labels['dev'][t]
             removed = {round(x['t'], 4) for x in row['removed'] if mode == 'strict' or x['cls'] != 'kick_tail'}
-            if src['group'] != 'original_five':
+            if src['group'] != 'original_five' and mode == 'v3' and t in DEV_STEMS:
+                removed = set()
+                notes = stem_notes(t, DEV_STEMS[t]['kick'], r['sample_rate']) + lags[t]['song_lag_ms'] / 1000
+                bus = [x['t'] for x in row['kept'] if x['cls'] == 'drums_bus_kick']
+                for p in src['passages']:
+                    inside = [float(x) for x in notes if p['start_s'] <= x < p['end_s']]
+                    extra = [x for x in bus if p['start_s'] <= x < p['end_s'] and not any(abs(x - y) <= .07 for y in inside)]
+                    p['kick_times_s'] = sorted(inside + extra)
+            elif src['group'] != 'original_five':
                 for p in src['passages']:
                     p['kick_times_s'] = [x for x in p['kick_times_s'] if round(x, 4) not in removed]
             else:
@@ -100,9 +125,15 @@ class Goal:
             feats, dur = feats[:, :15], len(mix) / sr
             np.savez(cache, candidates=cand, available=avail, features=feats, hop=hop, duration=dur)
         shift = info['kick_lag_ms'] / 1000
-        stem_kicks = fresh_onsets(kick_env_db(load(NEW[name]['kick'], sr), sr)) + shift
+        if self.mode == 'v3':
+            stem_kicks = stem_notes(name, NEW[name]['kick'], sr) + shift
+            labels = sorted([float(x) for x in stem_kicks if 1.0 <= x <= dur - 1.0] +
+                            [x for x in info['labels'] if not np.any(np.abs(stem_kicks - x) <= .07)])
+        else:
+            stem_kicks = fresh_onsets(kick_env_db(load(NEW[name]['kick'], sr), sr)) + shift
+            labels = info['labels']
         regions = [(0.0, 1.2), (dur - 1.0, dur + 1.0)]
-        for t in info['labels']:
+        for t in labels:
             if not np.any(np.abs(stem_kicks - t) <= .07):
                 regions.append((t - .07, t + .2))
         regions.sort()
@@ -112,10 +143,10 @@ class Goal:
                 merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
             else:
                 merged.append((a, b))
-        truth = [t for t in info['labels'] if not any(a <= t <= b for a, b in merged)]
+        truth = [t for t in labels if not any(a <= t <= b for a, b in merged)]
         src = dict(track=name, group='original_five', truth=truth,
                    regions=[dict(start_s=a, end_s=b, reason='uncertain') for a, b in merged])
-        rec = dict(track=name, source=src, ref=None, sample_rate=sr, hop=hop, candidates=cand, available=avail, all_labels=info['labels'],
+        rec = dict(track=name, source=src, ref=None, sample_rate=sr, hop=hop, candidates=cand, available=avail, all_labels=labels,
                    features=feats, duration=dur, removed=[], lag=shift)
         self._finish(rec, NEW[name]['kick'])
         return rec
@@ -129,7 +160,7 @@ class Goal:
         rec['emit_s'] = (rec['available'] + 1) * hop / sr
         if kick_path is not None:
             e = kick_env_db(load(kick_path, sr), sr)
-            rec['stem_kicks'] = fresh_onsets(e) + rec['lag']
+            rec['stem_kicks'] = (stem_notes(rec['track'], kick_path, sr) if self.mode == 'v3' else fresh_onsets(e)) + rec['lag']
             peak = np.percentile(e, 99.9)
             idx = np.clip(((rec['onset_s'] - rec['lag']) / .001).astype(int), 0, len(e) - 1)
             rec['ringing'] = e[idx] >= peak - 30

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Saves every nested prediction for a feature set, so cutoff rules and second stages run exactly nested without refits.
 
-Usage: run_kick_goal_preds.py FEATS
+Usage: run_kick_goal_preds.py FEATS   (KICK_GOAL_TRUTH=v3 for truth v3; output gets a _v3 suffix)
 
 nested_{FEATS}.npz keys: 'o' = song o scored by the model fitted without o;
 'o|u' = song u scored by the model fitted without o and u (the inner models).
@@ -16,14 +16,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import numpy as np  # noqa: E402
 
-from tools.audio_analysis.eval.kick_goal_eval import GOAL, Goal, add_whole_song_truth  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_eval import GOAL, SUFFIX, TRUTH, Goal, add_whole_song_truth  # noqa: E402
 from tools.audio_analysis.eval.kick_goal_featsets import build  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_data import ALL, gbt  # noqa: E402
 
 
 def main():
     feats = sys.argv[1]
-    g = Goal(mode='strict')
+    g = Goal(mode=TRUTH)
     add_whole_song_truth(g)
     build(g, feats)
     fit, pred = gbt(g, True, feats)
@@ -35,7 +35,7 @@ def main():
                 m = fit([v for v in ALL if v not in (o, u)])
                 out[f'{o}|{u}'], out[f'{u}|{o}'] = pred(m, u), pred(m, o)
         print('outer', o, flush=True)
-    np.savez(GOAL / f'nested_{feats}.npz', **out)
+    np.savez(GOAL / f'nested_{feats}{SUFFIX}.npz', **out)
 
 
 if __name__ == '__main__':
