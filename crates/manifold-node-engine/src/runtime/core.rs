@@ -226,8 +226,6 @@ pub(super) enum PresetIo {
 
 manifold_core::testkit_visible! {
 pub(crate) struct EffectSlot {
-    #[cfg(feature = "gpu-proofs")]
-    pub(crate) physics_sources: crate::water::runtime::physics_source_state::PhysicsSourceState,
     pub(super) effect_id: EffectId,
     pub(super) effect_type: PresetTypeId,
     /// Index into the chain's `effects` slice at the time this slot
@@ -797,8 +795,6 @@ impl PresetRuntime {
                             &prefix,
                         );
                         effect_nodes.push(EffectSlot {
-                            #[cfg(feature = "gpu-proofs")]
-                            physics_sources: Default::default(),
                             effect_id: fx.id.clone(),
                             effect_type: fx.effect_type().clone(),
                             legacy_index: *legacy_index,
@@ -1169,8 +1165,6 @@ impl PresetRuntime {
                 "",
             );
             effect_nodes.push(EffectSlot {
-                #[cfg(feature = "gpu-proofs")]
-                physics_sources: Default::default(),
                 effect_id: fx.id.clone(),
                 effect_type: fx.effect_type().clone(),
                 legacy_index: *legacy_index,
@@ -1345,7 +1339,12 @@ impl PresetRuntime {
         let topology_hash = compute_topology_hash(effects, groups, 0, 0, preview_effect);
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
-        let water = match crate::water::runtime::WaterRuntimeState::new(&graph, &plan) {
+        let water = match crate::water::runtime::WaterRuntimeState::new(
+            &graph,
+            &plan,
+            #[cfg(feature = "gpu-proofs")]
+            effect_nodes.len(),
+        ) {
             Ok(state) => state,
             Err(reason) => {
                 log::error!("[chain-error] {reason}");
@@ -1511,7 +1510,7 @@ impl PresetRuntime {
         // slot is at rest, and the outer reclaims control as soon as
         // it moves. Effects are looked up by their captured
         // `legacy_index` (stable across a topology-stable lifetime).
-        for slot in &mut self.effect_nodes {
+        for (_slot_index, slot) in self.effect_nodes.iter_mut().enumerate() {
             let Some(fx) = effects.get(slot.legacy_index) else {
                 // Index drifted (caller mutated `effects` without
                 // letting the topology hash catch it). Tolerate
@@ -1529,7 +1528,9 @@ impl PresetRuntime {
             // inner-node values change.
             if fx.graph_version != slot.applied_graph_version {
                 #[cfg(feature = "gpu-proofs")]
-                slot.refresh_chain_physics_source(&mut self.graph, fx, None);
+                self.water.sources[_slot_index].refresh_chain(
+                    &mut self.graph, &slot.node_map, &slot.card_prefix, fx, None,
+                );
                 // `slot.card_prefix` translates `fx.graph`'s (unprefixed,
                 // per-card) node ids into the segment's `c{i}.`-prefixed
                 // `node_map`/`fused_retarget` namespace for a segment member
@@ -1592,7 +1593,7 @@ impl PresetRuntime {
             }
             slot.bound.apply(&mut self.graph, &fx.params);
             #[cfg(feature = "gpu-proofs")]
-            slot.physics_sources.set_instance(&mut self.graph, Some(fx));
+            self.water.sources[_slot_index].set_instance(&mut self.graph, Some(fx));
             // Push the "3D Shading" D3 relight knobs into the spliced graph
             // every frame. Float-knob edits are no longer structural (D8/P7),
             // so the chain doesn't rebuild on a drag; these writes keep the

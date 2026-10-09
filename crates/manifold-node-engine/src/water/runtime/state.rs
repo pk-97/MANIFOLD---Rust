@@ -10,6 +10,9 @@ use super::physics_sampling::{PhysicsInputSnapshot, physics_sample_steps};
 use super::scene_impulses::SceneImpulses;
 
 pub(crate) struct WaterRuntimeState {
+    /// One source state per immutable effect slot, in construction order.
+    #[cfg(feature = "gpu-proofs")]
+    pub(crate) sources: Vec<super::physics_source_state::PhysicsSourceState>,
     pub(crate) impulse_identity: Arc<()>,
     pub(crate) scene_impulses: SceneImpulses,
     pub(crate) sample_steps: Option<Vec<bool>>,
@@ -19,12 +22,18 @@ pub(crate) struct WaterRuntimeState {
 }
 
 impl WaterRuntimeState {
-    pub(crate) fn new(graph: &Graph, plan: &ExecutionPlan) -> Result<Self, String> {
+    pub(crate) fn new(
+        graph: &Graph,
+        plan: &ExecutionPlan,
+        #[cfg(feature = "gpu-proofs")] slot_count: usize,
+    ) -> Result<Self, String> {
         let sample_steps = physics_sample_steps(graph, plan)?;
         let input_snapshot = sample_steps
             .as_ref()
             .map(|steps| PhysicsInputSnapshot::prepare(graph, plan, steps));
         Ok(Self {
+            #[cfg(feature = "gpu-proofs")]
+            sources: (0..slot_count).map(|_| Default::default()).collect(),
             impulse_identity: Arc::new(()),
             scene_impulses: SceneImpulses::default(),
             sample_steps,

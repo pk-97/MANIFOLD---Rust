@@ -623,8 +623,6 @@ manifold_core::testkit_visible! {
         // rehydrate — its host rebuilds on structure change); the live ones are
         // `bound`, `node_map`, `generator_input_node`, and the preview maps.
         let segment = EffectSlot {
-            #[cfg(feature = "gpu-proofs")]
-            physics_sources: Default::default(),
             effect_id: EffectId::default(),
             effect_type: type_id.clone(),
             legacy_index: 0,
@@ -646,7 +644,12 @@ manifold_core::testkit_visible! {
         };
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
-        let water = crate::water::runtime::WaterRuntimeState::new(&graph, &plan)
+        let water = crate::water::runtime::WaterRuntimeState::new(
+            &graph,
+            &plan,
+            #[cfg(feature = "gpu-proofs")]
+            1,
+        )
             .map_err(JsonGeneratorLoadError::PhysicsSamplingUnsupported)?;
         let mut g = Self {
             graph,

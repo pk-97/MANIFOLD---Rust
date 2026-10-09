@@ -13,7 +13,7 @@ pub fn last_physics_frame_time(runtime: &PresetRuntime) -> Option<FrameTime> { r
 pub fn set_last_physics_frame_time(runtime: &mut PresetRuntime, value: Option<FrameTime>) { runtime.water.last_frame_time = value; }
 #[cfg(feature = "gpu-proofs")]
 pub fn published_identity(runtime: &PresetRuntime, fluid: NodeInstanceId) -> Option<Result<[u8; 32], String>> {
-    runtime.effect_nodes.first().expect("effect slot").physics_sources.published_identity(fluid).map(|result| result.map_err(str::to_owned))
+    runtime.water.sources.first().expect("effect source state").published_identity(fluid).map(|result| result.map_err(str::to_owned))
 }
 pub fn group_preview(runtime: &PresetRuntime, group: &NodeId) -> Option<(NodeId, String)> {
     runtime.effect_nodes.first().expect("generator has one segment").group_preview_map.iter()

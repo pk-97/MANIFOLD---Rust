@@ -12,8 +12,10 @@ impl PresetRuntime {
         &mut self,
         sources: Result<Vec<physics_sources::PhysicsSourceGraph>, String>,
     ) {
-        if let Some(slot) = self.effect_nodes.first_mut() {
-            slot.physics_sources.apply_prepared(
+        if let (Some(slot), Some(source)) =
+            (self.effect_nodes.first(), self.water.sources.first_mut())
+        {
+            source.apply_prepared(
                 &mut self.graph,
                 &slot.node_map,
                 &slot.card_prefix,
@@ -25,23 +27,22 @@ impl PresetRuntime {
     /// Install every slot's current identity on only its scoped fluid nodes.
     #[cfg(feature = "gpu-proofs")]
     pub(crate) fn install_physics_source_identities(&mut self) {
-        for slot in &mut self.effect_nodes {
-            slot.physics_sources
-                .install(&mut self.graph, &slot.node_map, &slot.card_prefix);
+        for (slot, source) in self.effect_nodes.iter().zip(&mut self.water.sources) {
+            source.install(&mut self.graph, &slot.node_map, &slot.card_prefix);
         }
     }
 
     #[cfg(feature = "gpu-proofs")]
     pub(crate) fn observe_physics_source_strings(&mut self) {
-        if let Some(slot) = self.effect_nodes.first_mut() {
-            slot.physics_sources.observe_strings(&mut self.graph);
+        if let Some(source) = self.water.sources.first_mut() {
+            source.observe_strings(&mut self.graph);
         }
     }
 
     #[cfg(feature = "gpu-proofs")]
     pub(super) fn observe_physics_source_assets(&mut self) {
-        for slot in &mut self.effect_nodes {
-            slot.physics_sources.observe_assets(&mut self.graph);
+        for source in &mut self.water.sources {
+            source.observe_assets(&mut self.graph);
         }
     }
 
@@ -50,8 +51,8 @@ impl PresetRuntime {
     /// without allocating a per-frame JSON buffer or cloning runtime state.
     pub fn set_physics_source_instance(&mut self, instance: Option<&PresetInstance>) {
         #[cfg(feature = "gpu-proofs")]
-        if let Some(slot) = self.effect_nodes.first_mut() {
-            slot.physics_sources.set_instance(&mut self.graph, instance);
+        if let Some(source) = self.water.sources.first_mut() {
+            source.set_instance(&mut self.graph, instance);
         }
         if let Some(inputs) = self.water.input_snapshot.as_mut() {
             inputs.set_hops(instance);
@@ -65,11 +66,10 @@ impl PresetRuntime {
 
     #[cfg(feature = "gpu-proofs")]
     pub(super) fn carry_physics_source_controls_from(&mut self, prior: &Self) {
-        if let (Some(slot), Some(old_slot)) =
-            (self.effect_nodes.first_mut(), prior.effect_nodes.first())
+        if let (Some(source), Some(old_source)) =
+            (self.water.sources.first_mut(), prior.water.sources.first())
         {
-            slot.physics_sources
-                .carry_controls_from(&old_slot.physics_sources);
+            source.carry_controls_from(old_source);
         }
     }
 
@@ -86,8 +86,10 @@ impl PresetRuntime {
             return;
         }
         let registry = PrimitiveRegistry::with_cpu_flip_reference();
-        if let Some(slot) = self.effect_nodes.first_mut() {
-            slot.physics_sources.refresh(
+        if let (Some(slot), Some(source)) =
+            (self.effect_nodes.first(), self.water.sources.first_mut())
+        {
+            source.refresh(
                 &mut self.graph,
                 &slot.node_map,
                 &slot.card_prefix,

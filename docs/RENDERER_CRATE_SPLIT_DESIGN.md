@@ -519,10 +519,15 @@ sampling, delivery, carry eligibility or reset order.
 
 This is an intermediate ownership step: `PresetRuntime::water` still has a
 concrete family type. The final runtime lifecycle interface must replace that
-field and the remaining inherent water methods before the crate moves. The
-GPU-proof source state on each effect slot also remains to be separated. This
-step does not authorize exposing all runtime fields or adding an untyped event
-dispatch API.
+field and the remaining inherent water methods before the crate moves. Under
+`gpu-proofs`, water also owns one `PhysicsSourceState` per effect slot, in the
+same immutable construction order. `EffectSlot` retains only generic metadata;
+source refresh borrows its node map and card prefix. Construction allocates the
+source vector once, with the exact slot count. Frame execution refreshes the
+matching source before binding writes and observes instance controls afterward,
+as before. No node maps or prefixes are copied. Existing source isolation and
+rebuild contracts cover membership and provenance. This step does not authorize
+exposing all runtime fields or adding an untyped event dispatch API.
 
 Phasing-completeness check: every D1 crate appears in exactly one phase's deliverables (ui-paint P1a, graph P1, image/scene/compositor P2, nodes P3, water P5); D5 P0; D6 P3; D7 P1/P2; D8 P4; D10 P0; D11 P0; D12 P1a; INV-5's script P0; measurement P4.
 
