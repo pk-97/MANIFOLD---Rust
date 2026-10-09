@@ -373,6 +373,23 @@ all nine frozen v5 sequences replay exactly and synthetic controls are unchanged
 Miracle and Heavy On Mind are now development material, not independent holdouts.
 See `tools/audio_analysis/eval/scoreboard/kick_excess_balance_2026-10-09.json`.
 
+**Two-component spectral mixture, 2026-10-09 — rejected:** exact nonnegative
+least-squares fits a fixed kick spectrum plus a prior-only 80 ms background
+spectrum. Additional explained power drives a fixed 3/80 ms onset follower;
+there is no v5 candidate gate. Each foreign reference averages other songs'
+isolated-stem templates, excluding the evaluated song. Heavy On Mind reaches
+32/32 within 50 ms, but has 4 extra fires in its kick core and 113 in its
+12 s bass-only core. Across nine recordings, strict matches/misses/extras are
+160/14/794 versus v5's 116/58/54. The privileged same-song diagnostic is also
+poor: 19/32 within 50 ms, 31 extras in the kick core and 126 in the bass core.
+High recall at these firing rates does not establish discrimination. Cold-start
+controls leave silence quiet but double-fire on isolated kicks and repeatedly
+fire on stationary bass even after the initial 250 ms. Kick references are
+precomputed, not learned from incoming music; only the background adapts.
+Six numerical/causality tests pass. Offline CPU processing takes 0.16–0.18% of
+audio duration; native callback latency remains untested. No tuning or live
+change. See `tools/audio_analysis/eval/scoreboard/kick_mixture_2026-10-09.json`.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
