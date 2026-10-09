@@ -24,6 +24,7 @@ bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 inventory = "0.3"
 manifold-compositor = { path = "../manifold-compositor" }
 manifold-nodes-scene = { path = "../manifold-nodes-scene" }
+manifold-nodes-water = { path = "../manifold-nodes-water" }
 manifold-nodes-image = { path = "../manifold-nodes-image" }
 manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-core = { path = "../manifold-core" }
@@ -119,6 +120,7 @@ manifold-compositor = { path = "../manifold-compositor", features = ["testkit"] 
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
 manifold-nodes-image = { path = "../manifold-nodes-image", features = ["testkit"] }
 manifold-nodes-scene = { path = "../manifold-nodes-scene", features = ["testkit"] }
+manifold-nodes-water = { path = "../manifold-nodes-water", features = ["testkit"] }
 sha2 = "0.10"
 
 [lints]

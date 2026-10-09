@@ -7,11 +7,11 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_physics::sdf::signed_distance_lattice;
 use manifold_node_engine::scene::fluid_domain::{domain_layout};
-use manifold_node_engine::water::fluid::{TICK};
-use manifold_node_engine::water::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
-use manifold_node_engine::water::liquid::fields::FieldLattice;
-use manifold_node_engine::water::liquid::lattice::LiquidLattice;
-use manifold_node_engine::water::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, momentum_unit};
+use manifold_nodes_water::fluid::TICK;
+use manifold_nodes_water::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
+use manifold_nodes_water::liquid::fields::FieldLattice;
+use manifold_nodes_water::liquid::lattice::LiquidLattice;
+use manifold_nodes_water::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, momentum_unit};
 use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
 use manifold_node_engine::scene::transform::Transform;

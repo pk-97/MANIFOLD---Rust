@@ -9,7 +9,7 @@ use manifold_editing::command::Command;
 use manifold_editing::commands::graph::{InsertSceneModifierCommand, SetGraphNodeParamCommand};
 use manifold_node_engine::scene::impulse::ImpulseTarget;
 use manifold_node_engine::exec::effect_node::FrameTime;
-use manifold_node_engine::water::runtime::WaterRuntimeExt;
+use manifold_nodes_water::runtime::WaterRuntimeExt;
 
 fn set_param(
     project: &mut Project,

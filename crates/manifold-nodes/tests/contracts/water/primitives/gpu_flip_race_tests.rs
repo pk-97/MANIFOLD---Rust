@@ -7,10 +7,10 @@
 //! `gpu_flip_scenes_cover_every_dispatch` proves every array these graphs
 //! allocate before any of them runs here.
 
-use manifold_node_engine::water::primitives::gpu_flip_preset::{PRESSURE_ITERATIONS, WaterScene};
+use manifold_nodes_water::primitives::gpu_flip_preset::{PRESSURE_ITERATIONS, WaterScene};
 use crate::contracts::water::primitives::gpu_flip_scene_tests::{Run, divergence, particle_stats};
-use manifold_node_engine::water::primitives::gpu_flip_still::write_still;
-use manifold_node_engine::water::primitives::gpu_flip_volume::VolumeDrift;
+use manifold_nodes_water::primitives::gpu_flip_still::write_still;
+use manifold_nodes_water::primitives::gpu_flip_volume::VolumeDrift;
 use manifold_node_engine::particles::FluidParticle;
 
 /// How the live particles move: mean, 99th-percentile and top speed (m/s),
@@ -290,7 +290,7 @@ pub(crate) fn packing(positions: impl Iterator<Item = [f32; 4]>, origin: [f64; 3
         per_cell[index(c)] += 1;
         live += 1;
     }
-    let rest = manifold_node_engine::water::primitives::gpu_flip_preset::REST_PER_CELL as u32;
+    let rest = manifold_nodes_water::primitives::gpu_flip_preset::REST_PER_CELL as u32;
     let crowded: usize = per_cell.iter().map(|&c| c.saturating_sub(rest) as usize).sum();
     let mut hollow = 0usize;
     for z in 1..cells[2].saturating_sub(1) {

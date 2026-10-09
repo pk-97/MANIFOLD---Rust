@@ -1,16 +1,16 @@
-use manifold_node_engine::water::primitives::testkit as water_nodes;
+use manifold_nodes_water::primitives::testkit as water_nodes;
 use std::borrow::Cow;
 
 
-use manifold_node_engine::water::primitives::particle_volume::ParticleVolume;
+use manifold_nodes_water::primitives::particle_volume::ParticleVolume;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::particles::{FluidParticle};
-use manifold_node_engine::water::fluid_particles::{CellRange, FluidBlob};
+use manifold_nodes_water::fluid_particles::{CellRange, FluidBlob};
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 
-use manifold_node_engine::testkit::liquid_surface::*;
+use manifold_nodes_water::testkit::liquid_surface::*;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 
 
@@ -20,7 +20,7 @@ use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 pub(crate) fn blob_bounds(harness: &mut Harness, blobs: Slot) -> Slot {
     let (bounds, _) = harness.array::<f32>(&[], 2);
     // The executor prepares the reduction before its first run; so does this.
-    let mut node = manifold_node_engine::water::primitives::blob_bounds::BlobBounds::new();
+    let mut node = manifold_nodes_water::primitives::blob_bounds::BlobBounds::new();
     node.prepare_pipelines(&harness.device);
     let (_, errors) = harness.run(
         &mut node,
@@ -48,7 +48,7 @@ fn fluid_fill_pits_expanded_band_matches_all_blobs() {
 /// liquid into solid padding before the final clamp.
 #[test]
 fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
-    use manifold_node_engine::water::liquid::lattice::{LiquidLattice, PADDING_NODES};
+    use manifold_nodes_water::liquid::lattice::{LiquidLattice, PADDING_NODES};
 
     const OPEN_TOP: u32 = 63 & !(1 << 3);
     let mut harness = Harness::new();
@@ -166,7 +166,7 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
 #[test]
 fn fluid_mesh_grid_native_particle_field_matches_reference() {
     let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
-    let mesh = manifold_node_engine::water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+    let mesh = manifold_nodes_water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
     // Odd cell count, even node count and native half-cell origin, including
     // sparse blob bounds and the expanded closing band at subdivision two.
     for band in [0.0, 0.5] {
@@ -259,10 +259,10 @@ fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
     ))
     .expect("Dam Break bundled");
     let mut preset: Value = serde_json::from_str(&json).expect("Dam Break parses");
-    let surface = manifold_node_engine::water::liquid::conformance::json_node_mut(&mut preset, "surface")
+    let surface = manifold_nodes_water::liquid::conformance::json_node_mut(&mut preset, "surface")
         .expect("the Liquid Surface group");
     let group = &mut surface["group"];
-    let last = manifold_node_engine::water::liquid::conformance::json_node_mut(group, "liquid_normals")
+    let last = manifold_nodes_water::liquid::conformance::json_node_mut(group, "liquid_normals")
         .expect("surface normals")["id"].clone();
     let out = group["nodes"].as_array().expect("group nodes").iter()
         .find(|node| node["typeId"] == "system.group_output")
@@ -409,7 +409,7 @@ fn volume_distance_on_lattice(band_extra: f32, lattice: Lattice, solid_nodes: [u
     }
     let levelset: Vec<f32> = read(&levelset_buf, total);
     if band_extra > 0.0 {
-        use manifold_node_engine::water::primitives::lattice_bricks::{LatticeBricks, brick_layout};
+        use manifold_nodes_water::primitives::lattice_bricks::{LatticeBricks, brick_layout};
         let layout = brick_layout(solid_nodes, scale).unwrap();
         let (bricks, _) = harness.array::<u32>(&[], layout.words as usize);
         let (_, errors) = harness.run(

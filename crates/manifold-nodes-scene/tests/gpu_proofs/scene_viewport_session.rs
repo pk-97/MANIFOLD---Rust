@@ -25,7 +25,7 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
 use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_nodes_scene::node_graph::viewport_overlay::ViewportOverlayConfig, manifold_nodes_scene::node_graph::viewport_session::ViewportSession};
 use manifold_node_engine::scene::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
-use manifold_node_engine::water::fluid::{FluidSettings};
+use manifold_nodes_water::fluid::FluidSettings;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 
 
@@ -157,7 +157,7 @@ fn shared_scene_viewport_navigates_without_advancing_fluid_or_changing_show() {
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_srgb_rgba8};
     use manifold_node_engine::scene::viewport_camera::ViewportCamera;
-    use manifold_node_engine::water::physics::PhysicsStepScope;
+    use manifold_nodes_water::physics::PhysicsStepScope;
     use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportError};
     use manifold_node_engine::runtime::PresetRuntime;
     use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -210,7 +210,7 @@ fn shared_scene_viewport_navigates_without_advancing_fluid_or_changing_show() {
             .find(|(port, _)| port == name).unwrap().1
     };
     render(&mut runtime, &frame_ctx);
-    frame_ctx.time = manifold_node_engine::water::fluid::TICK;
+    frame_ctx.time = manifold_nodes_water::fluid::TICK;
     frame_ctx.beat = frame_ctx.time;
     frame_ctx.frame_count = 1;
     let show = render(&mut runtime, &frame_ctx);
@@ -419,7 +419,7 @@ fn shared_scene_viewport_preserves_rt_and_temporal_show_history() {
 /// 320×200 proof.
 #[test]
 fn viewport_session_refreshes_effective_controls_and_fluid_bounds() {
-    use manifold_node_engine::water::physics::PhysicsStepScope;
+    use manifold_nodes_water::physics::PhysicsStepScope;
 
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
@@ -478,7 +478,7 @@ fn viewport_session_refreshes_effective_controls_and_fluid_bounds() {
     assert_eq!(reset_snapshot.epoch, initial_snapshot.epoch + 2);
     // Initialization accepts an empty tick-zero mesh. A navigation refresh
     // one physical tick later produces the surface used for pixel assertions.
-    frame_ctx.time = manifold_node_engine::water::fluid::TICK;
+    frame_ctx.time = manifold_nodes_water::fluid::TICK;
     frame_ctx.beat = frame_ctx.time;
     frame_ctx.frame_count = 1;
     session.orbit(1.0, 0.0, 0.005);
@@ -532,7 +532,7 @@ fn viewport_session_refreshes_effective_controls_and_fluid_bounds() {
     assert!(edited_snapshot.epoch > recolored_snapshot.epoch);
     assert_eq!(edited_snapshot.state, FluidDomainState::Ready);
     assert_eq!(edited_snapshot.accepted_layout, Some(expected));
-    frame_ctx.time += manifold_node_engine::water::fluid::TICK;
+    frame_ctx.time += manifold_nodes_water::fluid::TICK;
     frame_ctx.beat = frame_ctx.time;
     frame_ctx.frame_count += 1;
     session.orbit(1.0, 0.0, 0.005);

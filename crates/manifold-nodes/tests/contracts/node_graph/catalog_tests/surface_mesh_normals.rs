@@ -2,7 +2,7 @@ use manifold_node_engine::parameters::ParamValue;
 
 #[test]
 fn surface_stage_defaults_and_manifest_bindings() {
-    use manifold_nodes_scene::node_graph::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
+    use manifold_nodes_water::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
     use manifold_node_engine::primitive::PrimitiveSpec;
     let iterations = SmoothSurfaceMesh::PARAMS
         .iter()
@@ -14,8 +14,8 @@ fn surface_stage_defaults_and_manifest_bindings() {
         "editable display span only"
     );
     assert_eq!(iterations.default, ParamValue::Float(2.0));
-    let def = manifold_node_engine::water::primitives::gpu_flip_preset::render_def(
-        manifold_node_engine::water::primitives::gpu_flip_preset::WaterScene::dam_break(64),
+    let def = manifold_nodes_water::primitives::gpu_flip_preset::render_def(
+        manifold_nodes_water::primitives::gpu_flip_preset::WaterScene::dam_break(64),
     );
     let metadata = def.preset_metadata.as_ref().unwrap();
     let scene = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();

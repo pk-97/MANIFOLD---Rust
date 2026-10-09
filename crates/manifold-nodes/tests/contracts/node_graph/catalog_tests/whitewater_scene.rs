@@ -8,7 +8,7 @@
 //! captures; `whitewater_side_by_side` renders it beside the FLIP engine's
 //! own whitewater with the cost table, when `WHITEWATER_DEMO_DIR` names where.
 
-use manifold_node_engine::testkit::whitewater_scene::Frame;
+use manifold_nodes_water::testkit::whitewater_scene::Frame;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -17,8 +17,8 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use serde_json::{Value, json};
 
-use manifold_node_engine::water::primitives::gpu_flip_preset::{WaterScene, render_def};
-use manifold_node_engine::water::primitives::gpu_flip_step::face_bytes;
+use manifold_nodes_water::primitives::gpu_flip_preset::{WaterScene, render_def};
+use manifold_nodes_water::primitives::gpu_flip_step::face_bytes;
 use manifold_node_engine::testkit::gpu::encode_rgba8_png;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
@@ -246,7 +246,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         live_in(frame.node.provided_array_output("particles_b").expect("published frame B"), show.provided_bytes("fill", "particles"))
     };
     show.restart();
-    let step = manifold_node_engine::water::primitives::gpu_flip_preset::STEP_NODE;
+    let step = manifold_nodes_water::primitives::gpu_flip_preset::STEP_NODE;
     for n in [64u32, 32, 100] {
         let mut card = Param::bundled(spec.clone());
         card.value = n as f32;
@@ -339,7 +339,7 @@ fn gpu_flip_whitewater_emits() {
 #[test]
 fn whitewater_live_scene_updates_on_the_lifecycle_thread() {
     let scene = WaterScene::dam_break(64);
-    let _live = manifold_node_engine::water::physics::PhysicsStepScope::for_render(false);
+    let _live = manifold_nodes_water::physics::PhysicsStepScope::for_render(false);
     let mut show = Show::new(vendored_render_def(scene), (320, 180), true, &[]);
     show.restart();
     let (mut content, mut worker) = (Vec::new(), Vec::new());
@@ -646,7 +646,7 @@ fn whitewater_side_by_side() {
 
     let (flip_on_ms, flip_off_ms) = (flip_simulation_ms(true), flip_simulation_ms(false));
     // Live, as the show runs.
-    let live = manifold_node_engine::water::physics::PhysicsStepScope::for_render(false);
+    let live = manifold_nodes_water::physics::PhysicsStepScope::for_render(false);
     let mut gpu_flip = gpu_flip_show();
     let gpu_flip_frames: Vec<Frame> = (0..DEMO_FRAMES).map(|_| gpu_flip.frame(true)).collect();
     let labels = gpu_flip.labels().to_vec();
@@ -852,28 +852,28 @@ fn whitewater_step_against_vendored_lifecycle_150() {
 /// O2 (section 3.7): the GPU emitter against FLIP's own on the same inputs.
 #[cfg(feature = "whitewater-oracle")]
 mod emitter_oracle {
-    use manifold_node_engine::water::liquid::conformance::json_node_mut;
-    use manifold_node_engine::water::primitives::testkit as water_nodes;
+    use manifold_nodes_water::liquid::conformance::json_node_mut;
+    use manifold_nodes_water::primitives::testkit as water_nodes;
     use manifold_fluids::{
         WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle, WhitewaterParticle, WhitewaterSpawn,
         whitewater_oracle,
     };
     use manifold_gpu::GpuBuffer;
 
-    use manifold_node_engine::water::primitives::emission_count::EmissionCount;
-    use manifold_node_engine::water::primitives::jitter_particles::JitterParticles;
+    use manifold_nodes_water::primitives::emission_count::EmissionCount;
+    use manifold_nodes_water::primitives::jitter_particles::JitterParticles;
     use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-    use manifold_node_engine::water::primitives::sample_faces_at_particles::SampleFacesAtParticles;
-    use manifold_node_engine::water::primitives::spawn_whitewater::SpawnWhitewater;
-    use manifold_node_engine::water::primitives::gpu_flip_preset::REST_PER_CELL;
-    use manifold_node_engine::water::primitives::wavecrest_potential::WavecrestPotential;
-    use manifold_node_engine::water::primitives::whitewater_type::WhitewaterType;
+    use manifold_nodes_water::primitives::sample_faces_at_particles::SampleFacesAtParticles;
+    use manifold_nodes_water::primitives::spawn_whitewater::SpawnWhitewater;
+    use manifold_nodes_water::primitives::gpu_flip_preset::REST_PER_CELL;
+    use manifold_nodes_water::primitives::wavecrest_potential::WavecrestPotential;
+    use manifold_nodes_water::primitives::whitewater_type::WhitewaterType;
     use crate::contracts::node_graph::catalog_tests::whitewater_scene::*;
     use manifold_node_engine::bindings::Slot;
     use manifold_node_engine::particles::FluidParticle;
-    use manifold_node_engine::water::liquid::grid::face_len;
+    use manifold_nodes_water::liquid::grid::face_len;
     use manifold_node_engine::primitive::Primitive;
-    use manifold_node_engine::water::whitewater::KnownValue;
+    use manifold_nodes_water::whitewater::KnownValue;
 
     /// The whitewater grid: the surface's solid lattice, its cells and box, and
     /// the face grid centred in it.
@@ -891,7 +891,7 @@ mod emitter_oracle {
         /// grid.
         fn of(scene: WaterScene) -> Self {
             let n = scene.pressure.n;
-            let lattice = manifold_node_engine::water::liquid::lattice::LiquidLattice::from_layout(&scene.layout()).surface();
+            let lattice = manifold_nodes_water::liquid::lattice::LiquidLattice::from_layout(&scene.layout()).surface();
             let bounds = lattice.bounds();
             let nodes = lattice.nodes();
             assert!(nodes.iter().all(|&v| v == nodes[0]), "a cubic lattice: {nodes:?}");
@@ -1665,7 +1665,7 @@ fn liquid_frame_live_held_frame_matches_offline() {
             offline.readback(),
         ));
     }
-    let _live = manifold_node_engine::water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let _live = manifold_nodes_water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
     // Live runs exact: the cursor presents behind the request by design.
     let mut live = Show::new(authored_cursor_history_def(0.0), (96, 54), false, &[]);
     live.restart();
@@ -1694,7 +1694,7 @@ fn liquid_frame_live_held_frame_matches_offline() {
 /// found by B's time, and at least one frame shows a B older than the state.
 #[test]
 fn liquid_frame_whitewater_reads_the_selected_slot() {
-    let _live = manifold_node_engine::water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let _live = manifold_nodes_water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
     let mut show = Show::new(history_def(), (96, 54), false, &[]);
     show.restart();
     // Per frame: simulation time and the four classes the state then held.
@@ -1733,7 +1733,7 @@ fn liquid_frame_whitewater_reads_the_selected_slot() {
 /// scalars together, and names the error.
 #[test]
 fn liquid_frame_encode_failure_publishes_the_selected_outputs() {
-    let _live = manifold_node_engine::water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let _live = manifold_nodes_water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
     let [mut clean, mut failing] = [(), ()].map(|()| {
         let mut show = Show::new(history_def(), (96, 54), false, &[]);
         show.restart();
@@ -1743,12 +1743,12 @@ fn liquid_frame_encode_failure_publishes_the_selected_outputs() {
         // Armed from frame 5 until a publication consumes it.
         let armed = frame >= 5;
         clean.frame(false);
-        manifold_node_engine::water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(armed);
+        manifold_nodes_water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(armed);
         failing.expect_node_error(armed);
         failing.frame(false);
         failing.expect_node_error(false);
-        let inject = armed && !manifold_node_engine::water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.get();
-        manifold_node_engine::water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(false);
+        let inject = armed && !manifold_nodes_water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.get();
+        manifold_nodes_water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(false);
         if inject {
             assert!(failing.last_status().starts_with("Failed"), "frame {frame}: the failure is reported: {}", failing.last_status());
             assert_eq!(failing.probes(HISTORY_PROBES)[PAIR], clean.probes(HISTORY_PROBES)[PAIR], "frame {frame}: scalars follow the selection");
@@ -1792,6 +1792,6 @@ fn liquid_frame_solid_shrink_keeps_mix_capacity() {
     }
 }
 
-use manifold_node_engine::testkit::whitewater_scene::*;
+use manifold_nodes_water::testkit::whitewater_scene::*;
 
 const WHITEWATER_KINDS: [&str; 4] = ["foam", "bubble", "spray", "dust"];

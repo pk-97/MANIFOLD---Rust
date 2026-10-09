@@ -9,7 +9,6 @@ mod terminal_vocabulary;
 mod audio_waveform;
 mod affine_transform;
 mod anti_clump_particles;
-mod apply_radial_burst_to_particles;
 mod array_connect_nearest;
 mod array_diffuse_particles;
 mod array_filter_detections;
@@ -77,7 +76,6 @@ mod envelope_decay;
 mod envelope_beats;
 mod envelope_follower_ar;
 mod field_combine;
-mod vector_fields;
 mod film_grain;
 pub mod filter;
 mod flash;
@@ -91,10 +89,8 @@ mod sample_texture_3d_at_particles;
 mod simplex_noise_force_3d_at_particles;
 mod diffuse_force_3d_at_particles;
 mod container_repel_force_3d;
-mod euler_step_particles_3d;
 manifold_core::testkit_visible! { mod container_bounds_3d; }
 mod flatten_to_camera_plane;
-mod apply_radial_burst_3d_to_particles;
 mod scatter_particles_camera;
 pub mod gaussian_blur_variable_width;
 mod ellipse_mask;
@@ -110,10 +106,6 @@ mod heightmap_to_normal;
 mod hue_saturation;
 mod image_folder;
 mod inject_burst;
-#[cfg(any(test, feature = "testkit"))]
-pub mod euler_step_particles;
-#[cfg(not(any(test, feature = "testkit")))]
-mod euler_step_particles;
 manifold_core::testkit_visible! { mod sample_texture_at_particles; }
 manifold_core::testkit_visible! { mod wrap_particles_torus; }
 manifold_core::testkit_visible! { mod wave_field_3d; }

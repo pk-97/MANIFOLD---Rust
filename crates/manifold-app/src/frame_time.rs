@@ -38,9 +38,9 @@ use std::time::{Duration, Instant};
 
 use manifold_gpu::{GpuFrameProfile, GpuWorkKind, ProfileGranularity};
 use manifold_node_engine::exec::execution::StepProfile;
-use manifold_node_engine::water::physics_metrics::ClockMetrics;
+use manifold_nodes_water::physics_metrics::ClockMetrics;
 #[cfg(test)]
-use manifold_node_engine::water::physics_metrics::{ClockRecord, MAX_CLOCK_RECORDS};
+use manifold_nodes_water::physics_metrics::{ClockRecord, MAX_CLOCK_RECORDS};
 
 use crate::content_command::ContentCommand;
 use crate::perf_soak::{prepare_project_edited, PreparedProject};

@@ -36,7 +36,7 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::{GpuDevice, GpuTextureFormat, GpuTimestampSampler};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::{persistence::PrimitiveRegistry, water::physics::PhysicsStepScope};
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_water::physics::PhysicsStepScope};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;

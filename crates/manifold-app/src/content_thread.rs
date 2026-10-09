@@ -90,7 +90,7 @@ pub struct ContentThread {
     /// Physics metrics from the most recently completed live content render.
     /// Owned by the content thread so snapshot construction can read it after
     /// `tick_frame` finishes rendering.
-    pub physics_metrics: manifold_node_engine::water::physics_metrics::PhysicsMetrics,
+    pub physics_metrics: manifold_nodes_water::physics_metrics::PhysicsMetrics,
 
     // ── Sync infrastructure ──
     /// Authority gatekeeper — only the active ClockAuthority can issue transport commands.
@@ -784,7 +784,7 @@ impl ContentThread {
         // Physics metrics are scoped to the live content render. Warmup runs
         // outside this boundary, and nested parked-thumbnail work suspends the
         // accumulator so the HUD reflects live render cost only.
-        manifold_node_engine::water::physics_metrics::begin_frame();
+        manifold_nodes_water::physics_metrics::begin_frame();
         let render_work_start = std::time::Instant::now();
         self.content_pipeline.render_content(
             &self.gpu,
@@ -796,7 +796,7 @@ impl ContentThread {
             self.editing_service.data_version(),
             Some(self.audio_mod_runtime.visuals()),
         );
-        self.physics_metrics = manifold_node_engine::water::physics_metrics::take_frame();
+        self.physics_metrics = manifold_nodes_water::physics_metrics::take_frame();
         let render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
         self.content_pipeline.set_last_render_work_ms(render_work_ms);
 

@@ -20,7 +20,7 @@ fn scene_impulse_source_requires_rebuild_after_output_roots_change() {
             .contains("outputs changed")
     );
     assert_eq!(
-        manifold_node_engine::water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
+        manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
         Seconds::ZERO
     );
     runtime.execute_frame(time(0.1));
@@ -219,7 +219,7 @@ fn scene_impulse_source_rejects_old_or_pending_capture_without_moving_anchor() {
             .contains("acknowledge")
     );
     assert_eq!(
-        manifold_node_engine::water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
+        manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
         Seconds(1.1)
     );
     hit.clear();
@@ -231,7 +231,7 @@ fn scene_impulse_source_rejects_old_or_pending_capture_without_moving_anchor() {
             .contains("precedes")
     );
     assert_eq!(
-        manifold_node_engine::water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
+        manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
         Seconds(1.1)
     );
     assert!(

@@ -1,7 +1,7 @@
 //! P3 cross-atom proofs. CPU tests exercise the real preset partitioner;
 //! device tests compare generated fused and standalone presentation paths.
 
-use {manifold_nodes_image::node_graph::primitives::interpolate_particle_frames::InterpolateParticleFrames, manifold_nodes_scene::node_graph::primitives::particles_to_copies::ParticlesToCopies, manifold_node_engine::water::primitives::push_out_of_solid::PushOutOfSolid};
+use {manifold_nodes_image::node_graph::primitives::interpolate_particle_frames::InterpolateParticleFrames, manifold_nodes_scene::node_graph::primitives::particles_to_copies::ParticlesToCopies, manifold_nodes_water::primitives::push_out_of_solid::PushOutOfSolid};
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 use manifold_node_engine::freeze::classify::CapacityExpr;
 use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};

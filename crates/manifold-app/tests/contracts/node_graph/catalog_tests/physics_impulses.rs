@@ -5,14 +5,14 @@ use manifold_physics::input::EventStamp;
 use manifold_physics::FieldValue;
 
 use manifold_node_engine::runtime::PresetRuntime;
-use manifold_node_engine::water::runtime::WaterRuntimeExt;
+use manifold_nodes_water::runtime::WaterRuntimeExt;
 use manifold_node_engine::exec::effect_node::FrameTime;
-use manifold_node_engine::water::node;
+use manifold_nodes_water::node;
 use manifold_node_engine::scene::impulse::ImpulseTarget;
-use manifold_node_engine::water::physics_events::ResolvedNodeImpulse;
+use manifold_nodes_water::physics_events::ResolvedNodeImpulse;
 use manifold_node_engine::{parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry};
 
-use manifold_node_engine::water::runtime::physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
+use manifold_nodes_water::runtime::physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind};
 use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef};
 use manifold_core::Beats;

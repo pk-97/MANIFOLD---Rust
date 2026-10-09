@@ -17,7 +17,6 @@ manifold-foundation = { path = "../manifold-foundation" }
 manifold-gpu = { path = "../manifold-gpu" }
 manifold-native = { path = "../manifold-native" }
 manifold-node-engine = { path = "../manifold-node-engine" }
-manifold-physics = { path = "../manifold-physics" }
 naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 tiff = "0.9"

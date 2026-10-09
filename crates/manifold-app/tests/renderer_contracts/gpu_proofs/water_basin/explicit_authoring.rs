@@ -11,7 +11,7 @@ use manifold_editing::commands::graph::{
     SetGraphNodeParamCommand,
 };
 use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-use manifold_node_engine::water::physics::RigidBody;
+use manifold_nodes_water::physics::RigidBody;
 use {manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type};
 
 #[derive(Clone, Copy, Debug, Default)]

@@ -9,7 +9,7 @@ use bytemuck::Zeroable;
 use manifold_foundation::{Beats, Bpm};
 use manifold_physics::{BodyConfig, BodyKind, PhysicsWorld, Seconds};
 use manifold_node_engine::mesh::MeshVertex;
-use manifold_node_engine::water::physics_mesh::prepare_colliders;
+use manifold_nodes_water::physics_mesh::prepare_colliders;
 use serde_json::{Value, json};
 
 use manifold_node_engine::scene::mesh_partition as fracture;
