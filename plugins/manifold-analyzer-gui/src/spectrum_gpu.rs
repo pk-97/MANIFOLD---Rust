@@ -302,7 +302,7 @@ impl SpectrumGpuRenderer {
                 );
             }
         }
-        if let Some(data2) = msg.data2.as_ref() {
+        if let Some(data2) = msg.data2.as_ref().filter(|_| msg.secondary_active) {
             debug_assert_eq!(data2.len(), self.cqt_num_bins);
             if let Some(ptr) = self.history_buf2.mapped_ptr() {
                 unsafe {

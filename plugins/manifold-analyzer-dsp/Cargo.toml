@@ -18,10 +18,10 @@ realfft = "3"
 # via an optional `Arc<ArrayQueue<f32>>` sink — CLI and tests skip it.
 crossbeam-queue = "0.3"
 
-# Offline reference-track decode: WAV/MP3/FLAC/AAC/M4A. Only used by the
+# Offline reference-track decode: WAV/MP3/FLAC/AAC/M4A/OGG/AIFF. Only used by the
 # `reference` module; the real-time path never touches symphonia.
 symphonia = { version = "0.5", default-features = false, features = [
-    "wav", "pcm", "flac", "mp3", "aac", "isomp4",
+    "wav", "pcm", "flac", "mp3", "aac", "isomp4", "ogg", "vorbis", "aiff",
 ] }
 
 # Persist/serialize ref-track envelopes alongside the plugin state.

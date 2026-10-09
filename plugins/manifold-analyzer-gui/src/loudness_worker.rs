@@ -64,43 +64,63 @@ impl Drop for LoudnessWorker {
 }
 
 fn worker_loop(shared: Arc<AnalyzerGuiShared>, shutdown: Arc<AtomicBool>) {
-    let mut block_msq: Vec<f32> = Vec::with_capacity(PRESIZE_BINS);
-    let mut scratch = IntegratedScratch::default();
-    let mut last_reset_epoch = shared.loudness_reset_epoch();
-
+    let mut history = LoudnessHistory::new(shared.loudness_reset_epoch());
     while !shutdown.load(Ordering::Acquire) {
-        // Observe resets: audio thread bumps the epoch, meter.reset()
-        // fires, and we match by wiping our history so the next
-        // integrated/LRA recompute starts fresh.
-        let epoch = shared.loudness_reset_epoch();
-        if epoch != last_reset_epoch {
-            block_msq.clear();
-            shared.set_integrated_lufs(DSP_MIN_LUFS);
-            shared.set_lra_lu(0.0);
-            last_reset_epoch = epoch;
+        history.set_epoch(shared.loudness_reset_epoch());
+        let mut drained = false;
+        while let Some(block) = shared.loudness_block_queue.pop() {
+            history.set_epoch(shared.loudness_reset_epoch());
+            drained |= history.push(block);
         }
-
-        let mut drained = 0;
-        while let Some(z) = shared.loudness_block_queue.pop() {
-            block_msq.push(z);
-            drained += 1;
-        }
-
-        if drained == 0 {
-            thread::sleep(IDLE_SLEEP);
-            continue;
-        }
-
-        let (integrated, lra) = compute_integrated_and_lra(&block_msq, &mut scratch);
-        if let Some(v) = integrated {
-            shared.set_integrated_lufs(v);
-        }
-        if let Some(v) = lra {
-            shared.set_lra_lu(v);
-        }
+        if !drained { thread::sleep(IDLE_SLEEP); continue; }
+        let (integrated, lra) = history.compute();
+        shared.publish_slow_loudness(history.epoch, integrated, lra);
     }
 }
 
-/// Mirror of the meter's `MIN_LUFS` so the worker can publish "unknown"
-/// without pulling in the dsp module's private constants.
-const DSP_MIN_LUFS: f32 = -120.0;
+struct LoudnessHistory {
+    epoch: u32,
+    blocks: Vec<f32>,
+    scratch: IntegratedScratch,
+}
+impl LoudnessHistory {
+    fn new(epoch: u32) -> Self {
+        Self { epoch, blocks: Vec::with_capacity(PRESIZE_BINS), scratch: IntegratedScratch::default() }
+    }
+    fn set_epoch(&mut self, epoch: u32) {
+        if self.epoch != epoch { self.epoch = epoch; self.blocks.clear(); }
+    }
+    fn push(&mut self, block: manifold_analyzer_dsp::LoudnessBlock) -> bool {
+        if block.generation != self.epoch { return false; }
+        self.blocks.push(block.mean_square);
+        true
+    }
+    fn compute(&mut self) -> (f32, f32) {
+        let (integrated, lra) = compute_integrated_and_lra(&self.blocks, &mut self.scratch);
+        (integrated.unwrap_or(-120.0), lra.unwrap_or(0.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_analyzer_dsp::LoudnessBlock;
+    #[test]
+    fn reset_rejects_pending_old_blocks_and_old_results() {
+        let shared = AnalyzerGuiShared::new(48000.0, 4096);
+        let mut history = LoudnessHistory::new(0);
+        for _ in 0..10 { history.push(LoudnessBlock { generation: 0, mean_square: 1.0 }); }
+        let old = history.compute();
+        shared.request_loudness_reset();
+        history.set_epoch(shared.loudness_reset_epoch());
+        assert!(!history.push(LoudnessBlock { generation: 0, mean_square: 1.0 }));
+        shared.publish_slow_loudness(0, old.0, old.1);
+        assert_eq!(shared.integrated_lufs(), -120.0);
+        assert_eq!(shared.loudness().lra_lu, 0.0);
+        for _ in 0..10 { history.push(LoudnessBlock { generation: 1, mean_square: 0.01 }); }
+        let fresh = history.compute();
+        shared.publish_slow_loudness(1, fresh.0, fresh.1);
+        assert!((shared.integrated_lufs() + 20.691).abs() < 0.001);
+        assert_eq!(history.blocks.len(), 10);
+    }
+}

@@ -38,6 +38,7 @@ use manifold_gpu::GpuDevice;
 use nih_plug::prelude::*;
 use nih_plug_egui::{EguiState, create_egui_editor, egui};
 use sample_ring::SampleRing;
+pub use sample_ring::StereoSample;
 use serde::{Deserialize, Serialize};
 use spectrum_gpu::{
     CQT_BINS_PER_OCTAVE, CQT_FMIN_HZ, DisplayConfig, HISTORY_COLS, SpectrumGpuRenderer,
@@ -248,7 +249,7 @@ const SPECTROGRAM_GAMMA: f32 = 0.7;
 /// they can't drift out of sync.
 const SS_GATE_DB_MIN: f32 = -100.0;
 const SS_GATE_DB_MAX: f32 = -10.0;
-/// Sample-ring capacity in mono samples. Sized to tolerate ~1.3 s of
+/// Sample-ring capacity in paired stereo frames. Sized to tolerate ~1.3 s of
 /// GUI stall at 48 kHz before the audio thread starts dropping — well
 /// beyond anything we'd see in normal operation.
 const SAMPLE_RING_CAPACITY: usize = 65_536;
@@ -750,9 +751,7 @@ pub struct AnalyzerParams {
     #[id = "freq-smooth"]
     pub freq_smoothing: EnumParam<FreqSmoothing>,
 
-    /// FFT size for the audio-thread stereo analyser. Change rebuilds
-    /// the FFT plan + resizes the shared mailboxes on the audio thread
-    /// (brief glitch on change, stable otherwise).
+    /// FFT size selects an analyzer prepared during initialization.
     #[id = "fft-size"]
     pub fft_size: EnumParam<FftSize>,
 }
@@ -805,8 +804,7 @@ pub struct AnalyzerGuiShared {
     /// Averaged Left / Right spectra for the L/R comparison column.
     /// Same mailbox pattern as mid/side; audio thread publishes when it
     /// finishes a frame, GUI thread reads each repaint.
-    left_db: Mutex<Vec<f32>>,
-    right_db: Mutex<Vec<f32>>,
+    median_db: Mutex<Vec<f32>>,
     /// Symmetrically-smoothed L / R magnitudes for the balance line.
     /// Peak-hold values from `left_db` / `right_db` make the balance
     /// stick at whichever channel peaked most recently; these track
@@ -816,14 +814,9 @@ pub struct AnalyzerGuiShared {
     /// Per-bin stereo correlation in [-1, 1]. Same mailbox pattern as
     /// the spectra. Drives the colour strip in the L/R cell.
     correlation_bins: Mutex<Vec<f32>>,
-    /// Raw L/R audio samples for the CQT spectrogram. Audio thread pushes
-    /// every sample to both rings; the worker drains them and derives
-    /// Mid/Side on demand based on the current `SpectrogramSource`. Two
-    /// rings instead of pre-mixing to Mid lets the user switch between
-    /// Mid / Side / L+R modes without re-running the audio thread or
-    /// allocating per-channel buffers there.
-    pub left_sample_ring: SampleRing,
-    pub right_sample_ring: SampleRing,
+    /// Paired samples, stamped before crossing the audio/worker boundary.
+    pub sample_ring: SampleRing,
+    audio_generation: AtomicU32,
     /// Spectrogram source mode. Drives both the worker (which channel(s)
     /// to CQT) and the renderer (single full-height vs L+R stacked
     /// split). Stored as `u8` so we can use a single relaxed atomic load
@@ -834,7 +827,7 @@ pub struct AnalyzerGuiShared {
     /// consumed by the off-thread loudness worker which runs the
     /// O(N) BS.1770 integrated / LRA gating. Capacity: 256 bins ≈
     /// 25.6 s of buffer — overflow drops oldest (audio never blocks).
-    pub loudness_block_queue: Arc<ArrayQueue<f32>>,
+    pub loudness_block_queue: Arc<ArrayQueue<manifold_analyzer_dsp::LoudnessBlock>>,
     /// Host transport snapshot, published from the audio thread each
     /// process block. `NaN` means "host did not provide this value" — we
     /// can only honour Sync mode when both `bpm_bits` and
@@ -861,8 +854,8 @@ pub struct AnalyzerGuiShared {
     /// "not yet computed / silence".
     momentary_lufs_bits: AtomicU32,
     short_term_lufs_bits: AtomicU32,
-    integrated_lufs_bits: AtomicU32,
-    lra_lu_bits: AtomicU32,
+    integrated_lufs_bits: AtomicU64,
+    lra_lu_bits: AtomicU64,
     dr_lu_bits: AtomicU32,
     plr_lu_bits: AtomicU32,
     momentary_max_lufs_bits: AtomicU32,
@@ -905,18 +898,20 @@ fn publish_if_size_matches(mailbox: &Mutex<Vec<f32>>, src: &[f32]) -> bool {
     let Some(mut guard) = mailbox.try_lock() else {
         return false;
     };
-    if guard.len() != src.len() {
+    if guard.capacity() < src.len() {
         return false;
     }
+    guard.resize(src.len(), 0.0);
     guard.copy_from_slice(src);
     true
 }
 
-fn read_if_size_matches(mailbox: &Mutex<Vec<f32>>, dst: &mut [f32]) -> bool {
+fn read_if_size_matches(mailbox: &Mutex<Vec<f32>>, dst: &mut [f32], empty: f32) -> bool {
     let Some(guard) = mailbox.try_lock() else {
         return false;
     };
     if guard.len() != dst.len() {
+        dst.fill(empty);
         return false;
     }
     dst.copy_from_slice(&guard);
@@ -927,19 +922,18 @@ impl AnalyzerGuiShared {
     pub fn new(sample_rate: f32, fft_size: usize) -> Self {
         // +1 for Nyquist — must match `StereoAnalyzer::num_bins()` so the
         // size-matched mailbox publish doesn't silently drop every frame.
-        let num_bins = fft_size / 2 + 1;
+        let num_bins = 32768 / 2 + 1;
         Self {
             sample_rate_bits: AtomicU32::new(sample_rate.to_bits()),
             fft_size: AtomicUsize::new(fft_size),
             mid_db: Mutex::new(vec![MIN_DB; num_bins]),
             side_db: Mutex::new(vec![MIN_DB; num_bins]),
-            left_db: Mutex::new(vec![MIN_DB; num_bins]),
-            right_db: Mutex::new(vec![MIN_DB; num_bins]),
+            median_db: Mutex::new(vec![MIN_DB; num_bins]),
             left_balance_db: Mutex::new(vec![MIN_DB; num_bins]),
             right_balance_db: Mutex::new(vec![MIN_DB; num_bins]),
             correlation_bins: Mutex::new(vec![0.0; num_bins]),
-            left_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
-            right_sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
+            sample_ring: SampleRing::new(SAMPLE_RING_CAPACITY),
+            audio_generation: AtomicU32::new(0),
             spectrogram_source_bits: AtomicU8::new(SpectrogramSource::Mid as u8),
             loudness_block_queue: Arc::new(ArrayQueue::new(256)),
             bpm_bits: AtomicU64::new(f64::NAN.to_bits()),
@@ -949,8 +943,8 @@ impl AnalyzerGuiShared {
             playing: AtomicBool::new(false),
             momentary_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
             short_term_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
-            integrated_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
-            lra_lu_bits: AtomicU32::new(0.0_f32.to_bits()),
+            integrated_lufs_bits: AtomicU64::new(MIN_DB.to_bits() as u64),
+            lra_lu_bits: AtomicU64::new(0),
             dr_lu_bits: AtomicU32::new(0.0_f32.to_bits()),
             plr_lu_bits: AtomicU32::new(0.0_f32.to_bits()),
             momentary_max_lufs_bits: AtomicU32::new(MIN_DB.to_bits()),
@@ -1108,30 +1102,17 @@ impl AnalyzerGuiShared {
         }
     }
 
-    /// Resize all stereo mailboxes to match a new FFT size. Called by
-    /// the audio thread after it rebuilds `StereoAnalyzer` on a
-    /// user-driven FFT-size change. Updates `fft_size` only after the
-    /// mailboxes are grown so GUI readers never observe a size > what
-    /// the mailboxes can hold.
+    /// Mailboxes have maximum capacity from construction. Switching resolution
+    /// only changes the active prefix; it never allocates or waits on the GUI.
     pub fn resize_stereo_mailboxes(&self, fft_size: usize) {
-        // +1 for Nyquist — must match `StereoAnalyzer::num_bins()`.
-        let num_bins = fft_size / 2 + 1;
-        for mailbox in [
-            &self.mid_db,
-            &self.side_db,
-            &self.left_db,
-            &self.right_db,
-            &self.left_balance_db,
-            &self.right_balance_db,
-        ] {
-            let mut guard = mailbox.lock();
-            guard.resize(num_bins, MIN_DB);
-        }
-        {
-            let mut guard = self.correlation_bins.lock();
-            guard.resize(num_bins, 0.0);
-        }
         self.fft_size.store(fft_size, Ordering::Release);
+    }
+
+    pub fn advance_audio_generation(&self) {
+        self.audio_generation.fetch_add(1, Ordering::AcqRel);
+    }
+    pub fn audio_generation(&self) -> u32 {
+        self.audio_generation.load(Ordering::Acquire)
     }
 
     /// Audio-thread mailbox write. Returns `false` when the GUI holds
@@ -1150,27 +1131,18 @@ impl AnalyzerGuiShared {
     /// size mismatch (audio thread mid-rebuild). Callers keep their
     /// previous frame's values on miss.
     pub fn try_read_mid_db(&self, dst: &mut [f32]) -> bool {
-        read_if_size_matches(&self.mid_db, dst)
+        read_if_size_matches(&self.mid_db, dst, MIN_DB)
     }
 
     pub fn try_read_side_db(&self, dst: &mut [f32]) -> bool {
-        read_if_size_matches(&self.side_db, dst)
+        read_if_size_matches(&self.side_db, dst, MIN_DB)
     }
 
-    pub fn try_publish_left_db(&self, src: &[f32]) -> bool {
-        publish_if_size_matches(&self.left_db, src)
+    pub fn try_publish_median_db(&self, src: &[f32]) -> bool {
+        publish_if_size_matches(&self.median_db, src)
     }
-
-    pub fn try_publish_right_db(&self, src: &[f32]) -> bool {
-        publish_if_size_matches(&self.right_db, src)
-    }
-
-    pub fn try_read_left_db(&self, dst: &mut [f32]) -> bool {
-        read_if_size_matches(&self.left_db, dst)
-    }
-
-    pub fn try_read_right_db(&self, dst: &mut [f32]) -> bool {
-        read_if_size_matches(&self.right_db, dst)
+    pub fn try_read_median_db(&self, dst: &mut [f32]) -> bool {
+        read_if_size_matches(&self.median_db, dst, MIN_DB)
     }
 
     pub fn try_publish_left_balance_db(&self, src: &[f32]) -> bool {
@@ -1182,11 +1154,11 @@ impl AnalyzerGuiShared {
     }
 
     pub fn try_read_left_balance_db(&self, dst: &mut [f32]) -> bool {
-        read_if_size_matches(&self.left_balance_db, dst)
+        read_if_size_matches(&self.left_balance_db, dst, MIN_DB)
     }
 
     pub fn try_read_right_balance_db(&self, dst: &mut [f32]) -> bool {
-        read_if_size_matches(&self.right_balance_db, dst)
+        read_if_size_matches(&self.right_balance_db, dst, MIN_DB)
     }
 
     pub fn try_publish_correlation(&self, src: &[f32]) -> bool {
@@ -1194,21 +1166,18 @@ impl AnalyzerGuiShared {
     }
 
     pub fn try_read_correlation(&self, dst: &mut [f32]) -> bool {
-        read_if_size_matches(&self.correlation_bins, dst)
+        read_if_size_matches(&self.correlation_bins, dst, 0.0)
     }
 
     /// Full-snapshot publish — only used by the CLI / tests path where
     /// the meter computes integrated + LRA in-line. The plugin runtime
-    /// uses `set_fast_loudness` (audio thread) + `set_integrated_lufs`
-    /// / `set_lra_lu` (worker thread) to avoid clobbering.
+    /// uses `set_fast_loudness` and generation-tagged worker results.
     pub fn set_loudness(&self, s: LoudnessSnapshot) {
         self.momentary_lufs_bits
             .store(s.momentary_lufs.to_bits(), Ordering::Relaxed);
         self.short_term_lufs_bits
             .store(s.short_term_lufs.to_bits(), Ordering::Relaxed);
-        self.integrated_lufs_bits
-            .store(s.integrated_lufs.to_bits(), Ordering::Relaxed);
-        self.lra_lu_bits.store(s.lra_lu.to_bits(), Ordering::Relaxed);
+        self.publish_slow_loudness(self.loudness_reset_epoch(), s.integrated_lufs, s.lra_lu);
         self.dr_lu_bits.store(s.dr_lu.to_bits(), Ordering::Relaxed);
         self.plr_lu_bits.store(s.plr_lu.to_bits(), Ordering::Relaxed);
         self.momentary_max_lufs_bits
@@ -1260,22 +1229,21 @@ impl AnalyzerGuiShared {
             .store(s.elapsed_secs.to_bits(), Ordering::Relaxed);
     }
 
-    /// Worker-thread publish for integrated LUFS. Audio-thread DR / PLR
-    /// readouts pick up the new value on their next update.
-    pub fn set_integrated_lufs(&self, lufs: f32) {
-        self.integrated_lufs_bits
-            .store(lufs.to_bits(), Ordering::Relaxed);
+    /// Results carry their measurement epoch atomically. An old in-flight
+    /// computation cannot become visible after a reset, even if it finishes late.
+    pub fn publish_slow_loudness(&self, epoch: u32, integrated: f32, lra: f32) {
+        let pack = |v: f32| ((epoch as u64) << 32) | v.to_bits() as u64;
+        self.integrated_lufs_bits.store(pack(integrated), Ordering::Release);
+        self.lra_lu_bits.store(pack(lra), Ordering::Release);
     }
-
-    /// Worker-thread publish for Loudness Range.
-    pub fn set_lra_lu(&self, lra: f32) {
-        self.lra_lu_bits.store(lra.to_bits(), Ordering::Relaxed);
+    fn read_slow(&self, value: &AtomicU64, empty: f32) -> f32 {
+        let bits = value.load(Ordering::Acquire);
+        if (bits >> 32) as u32 == self.loudness_reset_epoch() {
+            f32::from_bits(bits as u32)
+        } else { empty }
     }
-
-    /// Audio-thread read of the current integrated LUFS (for DR / PLR
-    /// derivation in the meter's fast-path snapshot).
     pub fn integrated_lufs(&self) -> f32 {
-        f32::from_bits(self.integrated_lufs_bits.load(Ordering::Relaxed))
+        self.read_slow(&self.integrated_lufs_bits, MIN_DB)
     }
 
     pub fn loudness(&self) -> LoudnessSnapshot {
@@ -1283,8 +1251,8 @@ impl AnalyzerGuiShared {
         LoudnessSnapshot {
             momentary_lufs: load(&self.momentary_lufs_bits),
             short_term_lufs: load(&self.short_term_lufs_bits),
-            integrated_lufs: load(&self.integrated_lufs_bits),
-            lra_lu: load(&self.lra_lu_bits),
+            integrated_lufs: self.integrated_lufs(),
+            lra_lu: self.read_slow(&self.lra_lu_bits, 0.0),
             dr_lu: load(&self.dr_lu_bits),
             plr_lu: load(&self.plr_lu_bits),
             momentary_max_lufs: load(&self.momentary_max_lufs_bits),
@@ -1303,13 +1271,13 @@ impl AnalyzerGuiShared {
     /// integrated / LRA on the audio thread. Momentary and
     /// short-term keep flowing.
     pub fn request_loudness_reset(&self) {
-        self.reset_epoch.fetch_add(1, Ordering::Relaxed);
+        self.reset_epoch.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Audio-side: read current reset-request counter; process code
     /// compares against its last-seen value to detect an edge.
     pub fn loudness_reset_epoch(&self) -> u32 {
-        self.reset_epoch.load(Ordering::Relaxed)
+        self.reset_epoch.load(Ordering::Acquire)
     }
 }
 
@@ -1353,17 +1321,9 @@ struct EditorState {
     /// first `phys_w` entries are read.
     mid_smoothed_columns: Vec<f32>,
     side_smoothed_columns: Vec<f32>,
-    /// Per-FFT-bin EMA of raw Mid dB. dB-domain averaging approximates
-    /// the geometric mean of power, which equals the median for the
-    /// lognormal-ish per-bin distributions typical music produces — same
-    /// 50th-percentile interpretation the ref envelope uses, just
-    /// computed as a streaming statistic on the live signal. Rendered
-    /// as a thick white line on top of the MS curves.
+    /// Streaming per-bin median estimates produced at audio-analysis hops.
     live_mid_median_db: Vec<f32>,
-    /// First-valid-sample latch: snap the EMA to current values on the
-    /// first frame after init / FFT-size change so the line appears
-    /// immediately rather than fading in from MIN_DB over the EMA window.
-    live_median_warm: bool,
+    last_paint: std::time::Instant,
     /// Cache of Gaussian-smoothed reference envelopes, keyed by
     /// (analysis fingerprint, smoothing mode). Rebuilt only when a slot
     /// gets a new analysis or the user switches smoothing mode — the raw
@@ -1507,7 +1467,7 @@ pub fn create_editor(
         mid_smoothed_columns: vec![MIN_DB; MAX_SPECTRUM_W as usize],
         side_smoothed_columns: vec![MIN_DB; MAX_SPECTRUM_W as usize],
         live_mid_median_db: vec![MIN_DB; num_bins],
-        live_median_warm: false,
+        last_paint: std::time::Instant::now(),
         ref_envelope_cache: RefEnvelopeCache::default(),
     };
     create_egui_editor(
@@ -1581,6 +1541,9 @@ pub fn create_editor(
 }
 
 fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
+    let now = std::time::Instant::now();
+    let frame_dt = now.duration_since(state.last_paint).as_secs_f32();
+    state.last_paint = now;
     let sr = state.shared.sample_rate();
     let fft_size = state.shared.fft_size();
     // +1 for Nyquist — must match `StereoAnalyzer::num_bins()` and the
@@ -1612,6 +1575,15 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     if state.device.is_none() {
         state.device = Some(Arc::new(GpuDevice::new()));
     }
+    if state.worker.as_ref().is_some_and(|worker| worker.sample_rate() != sr) {
+        state.worker = None;
+        state.spectrum = None;
+        let mut painter = state.quad.lock();
+        *painter = match std::mem::replace(&mut *painter, PainterState::NotYet) {
+            PainterState::Ready(qp) => PainterState::PendingDestroy(qp),
+            other => other,
+        };
+    }
     // Spawn the CQT worker the first time we know the sample rate. The
     // worker owns the ~500 ms kernel construction + GPU FFT plan setup;
     // subsequent redraws just drain its output ring.
@@ -1622,6 +1594,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                 sr,
                 state.shared.clone(),
                 device.clone(),
+                state.params.editor_state.clone(),
                 build,
             ));
         }
@@ -1689,36 +1662,8 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             (fmin, fmax)
         };
 
-        // Live-median estimator. dB-domain EMA on raw per-bin Mid values
-        // — the same 50th-percentile interpretation the ref envelope
-        // uses, computed online instead of from a known-finite track.
-        // Long τ (12 s) so the line settles to a stable "where the
-        // spectrum has been sitting" curve rather than tracking the
-        // current frame. First valid frame snaps the EMA to current
-        // values so the line is positioned correctly from frame 1.
-        if state.live_mid_median_db.len() != state.mid_scratch.len() {
-            state
-                .live_mid_median_db
-                .resize(state.mid_scratch.len(), MIN_DB);
-            state.live_median_warm = false;
-        }
-        if !state.live_median_warm {
-            state
-                .live_mid_median_db
-                .copy_from_slice(&state.mid_scratch);
-            state.live_median_warm = true;
-        } else {
-            let alpha = 1.0 / (60.0 * LIVE_MEDIAN_TAU_SECS);
-            for (med, &cur) in state
-                .live_mid_median_db
-                .iter_mut()
-                .zip(state.mid_scratch.iter())
-            {
-                if cur > MIN_DB + 1.0 {
-                    *med = (1.0 - alpha) * *med + alpha * cur;
-                }
-            }
-        }
+        state.live_mid_median_db.resize(num_bins, MIN_DB);
+        state.shared.try_read_median_db(&mut state.live_mid_median_db);
 
         // Apply the user's frequency weighting (Pink / Tilted / LUFS / etc.)
         // to the per-bin Mid + Side scratch CPU-side, then upload the
@@ -1807,12 +1752,12 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         // the GPU sizes-buffer plumbing).
         let cqt_log_scale = (CQT_BINS_PER_OCTAVE as f32).recip();
         let cqt_fmin = CQT_FMIN_HZ;
-        worker.drain_columns(|mut msg| {
+        worker.drain_columns(|msg| {
             tilt_cqt_column(&mut msg.data, weighting, weight_align, cqt_fmin, cqt_log_scale);
-            if let Some(d2) = msg.data2.as_mut() {
+            if let Some(d2) = msg.data2.as_mut().filter(|_| msg.secondary_active) {
                 tilt_cqt_column(d2, weighting, weight_align, cqt_fmin, cqt_log_scale);
             }
-            spec.apply_column(&msg);
+            spec.apply_column(msg);
         });
 
         let nyquist = sr * 0.5;
@@ -2029,6 +1974,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         state.params.weighting.value(),
         state.params.freq_smoothing.value(),
         &mut state.ref_envelope_cache,
+        frame_dt,
     );
 
     // 2c. Live median (50th percentile) line — same statistic the ref
@@ -2264,14 +2210,8 @@ fn draw_reference_curve(
     ));
 }
 
-/// Time constant (seconds) for both the auto-gain-match shift on the
-/// ref overlay and the live-median estimator. They describe the same
-/// long-term view of the signal — kept locked together so neither
-/// settles ahead of the other. 1 s is responsive enough that loudness
-/// changes (mix moves, fade-ins) track in near real time while still
-/// absorbing per-frame jitter from transients.
+/// Time constant for reference shape alignment, applied using elapsed time.
 const REF_AUTO_GAIN_TAU_SECS: f32 = 1.0;
-const LIVE_MEDIAN_TAU_SECS: f32 = 1.0;
 
 /// Number of log-spaced sample points we use to compute the live ↔ ref
 /// power-mean difference. 64 is dense enough that no narrow peak
@@ -2384,6 +2324,7 @@ fn draw_ref_bands(
     weighting: Weighting,
     smoothing_mode: FreqSmoothing,
     cache: &mut RefEnvelopeCache,
+    frame_dt: f32,
 ) {
     if rect.width() <= 0.0 || rect.height() <= 0.0 {
         return;
@@ -2407,9 +2348,9 @@ fn draw_ref_bands(
     let live_pow_mean_db =
         power_mean_db_from_scratch(live_mid_scratch, live_sample_rate, live_fft_size,
                                    freq_min, freq_max);
-    // EMA alpha for ~1 s time constant at 60 Hz redraw. Slow enough to
+    // EMA alpha for a 1 s time constant at any redraw rate. Slow enough to
     // ignore single-frame jitter, fast enough to track real moves.
-    let alpha = 1.0 / (60.0 * REF_AUTO_GAIN_TAU_SECS);
+    let alpha = 1.0 - (-frame_dt / REF_AUTO_GAIN_TAU_SECS).exp();
 
     for (slot_idx, slot) in slots.slots.iter().enumerate() {
         if !slot.visible {
@@ -2656,13 +2597,8 @@ fn sample_bh_smoothed_db(
     10.0 * (p_sum / w_sum).max(1e-30).log10()
 }
 
-/// Bold solid white line representing the live signal's per-bin median
-/// (50th percentile), the same statistic the ref envelope's bold line
-/// shows for the loaded track. Computed online via `live_mid_median_db`
-/// (a dB-domain EMA, which approximates the median for the lognormal-ish
-/// per-bin distributions music produces). Smoothing matches the live MS
-/// curves so the median sits visually inside them rather than reading
-/// as a different rendering style.
+/// Draw the streaming median estimate published by the analyzer. The estimate
+/// advances with analysis frames, independently of editor refresh frequency.
 fn draw_live_median(
     painter: &egui::Painter,
     rect: egui::Rect,

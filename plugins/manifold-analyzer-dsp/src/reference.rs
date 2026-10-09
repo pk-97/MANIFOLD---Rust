@@ -1,12 +1,13 @@
 //! Offline reference-track analysis for the MS plot overlay.
 //!
-//! One-shot path: decode an audio file (WAV / MP3 / FLAC / AAC / M4A) via
+//! Streaming path: decode an audio file (WAV / MP3 / FLAC / AAC / M4A /
+//! OGG / AIFF) via
 //! symphonia, run it through the same BH-windowed FFT the real-time
 //! plugin uses (one pass per FFT size in the live plugin's dropdown so
 //! the per-bin distribution overlays the live MS without binwidth
-//! offset), collect per-bin dB samples over the whole track, then reduce
-//! to low/mid/high percentile envelopes at a fixed log-spaced frequency
-//! grid. Integrated LUFS is computed via the same BS.1770 meter so the
+//! offset), maintain bounded per-bin quantile histograms, then reduce
+//! to low/mid/high approximate percentile envelopes at a fixed log-spaced
+//! frequency grid. Integrated LUFS is computed via the same BS.1770 meter so the
 //! GUI can gain-match the ref to the live mix.
 //!
 //! Nothing here runs on the audio thread; the analysis is kicked off from
@@ -24,7 +25,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Analyzer, LoudnessMeter, LoudnessSnapshot, MIN_DB};
+use crate::median::QuantizedHistogram;
+use crate::{Analyzer, LoudnessMeter, MIN_DB};
 
 /// Number of log-spaced points stored per envelope. Chosen to cover the
 /// pixel density of a typical analyzer window (~1 K wide) without eating
@@ -38,14 +40,12 @@ pub const REF_FREQ_MIN: f32 = 10.0;
 /// lower-rate sources we just clip above their Nyquist at draw time.
 pub const REF_FREQ_MAX: f32 = 48_000.0;
 
-/// Overlap used for offline analysis. 50 % keeps memory bounded for long
-/// tracks (e.g. a 4 min song is ~2 K frames at 48 k) while still giving
-/// plenty of samples per bin for a stable percentile.
-pub const REF_OVERLAP_RATIO: f32 = 0.5;
+/// Overlap used for offline analysis. This matches the live analyzer's
+/// 90-percent overlap and keeps reference frame timing comparable to live.
+pub const REF_OVERLAP_RATIO: f32 = 0.9;
 
-/// EWMA averaging time constant for the offline `Analyzer`. Matches the
-/// plugin's 200 ms value so the offline per-frame dB values are drawn
-/// from the same distribution as what the live curve ever shows.
+/// EWMA release time constant for the offline `Analyzer`. Rise is instant,
+/// matching the live peak-style analyzer; decay is 200 ms.
 pub const REF_AVG_MS: f32 = 200.0;
 
 /// Percentile bounds for the band. 10 / 50 / 90 is the mastering-tool
@@ -64,8 +64,8 @@ pub const REF_PERCENTILE_HIGH: f32 = 0.90;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RefEnvelopeAtFft {
     pub fft_size: usize,
-    /// Triples of `[low_db, mid_db, high_db]` (10 / 50 / 90 percentile)
-    /// at each of `REF_POINTS` log-spaced frequencies spanning
+    /// Triples of approximate `[low_db, mid_db, high_db]` (10 / 50 / 90
+    /// percentile estimates) at each of `REF_POINTS` log-spaced frequencies spanning
     /// `[REF_FREQ_MIN, REF_FREQ_MAX]`.
     pub bounds: Vec<[f32; 3]>,
 }
@@ -82,7 +82,9 @@ pub struct RefEnvelope {
 
 impl RefEnvelope {
     pub fn empty() -> Self {
-        Self { per_fft: Vec::new() }
+        Self {
+            per_fft: Vec::new(),
+        }
     }
 
     /// Pick the envelope whose FFT size matches `fft_size` exactly, or
@@ -176,31 +178,93 @@ impl std::error::Error for RefError {}
 /// each so the GUI can pick the matching envelope at draw time and the
 /// ref overlays the live MS with no binwidth fudge. Blocks the calling
 /// thread; intended to run on a worker.
-pub fn analyze_ref_file(
-    path: &Path,
-    fft_sizes: &[usize],
-) -> Result<RefAnalysis, RefError> {
+pub fn analyze_ref_file(path: &Path, fft_sizes: &[usize]) -> Result<RefAnalysis, RefError> {
     let lowpass_hz = read_lame_lowpass(path);
-    let (samples_l, samples_r, source_sr) = decode_file(path)?;
-    let duration_secs = samples_l.len() as f32 / source_sr.max(1.0);
+    let mut passes: Option<Vec<ReferenceFftPass>> = None;
+    let mut meter: Option<LoudnessMeter> = None;
+    let mut source_sr = 0.0;
+    let mut decoded_frames = 0usize;
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    let mut mid = Vec::new();
+    let mut side = Vec::new();
+    let mut analysis_error = None;
 
-    if samples_l.len() < (source_sr * 0.5) as usize {
+    decode_file(path, |interleaved, channels, sr| {
+        source_sr = sr;
+        if passes.is_none() {
+            passes = Some(
+                fft_sizes
+                    .iter()
+                    .map(|&n_fft| ReferenceFftPass::new(sr, n_fft))
+                    .collect(),
+            );
+            let mut loudness = LoudnessMeter::new(sr);
+            loudness.set_deferred_aggregation(true);
+            meter = Some(loudness);
+        }
+
+        let frame_count = interleaved.len() / channels.max(1);
+        left.resize(frame_count, 0.0);
+        right.resize(frame_count, 0.0);
+        mid.resize(frame_count, 0.0);
+        side.resize(frame_count, 0.0);
+        for frame in 0..frame_count {
+            let base = frame * channels;
+            let l = interleaved[base];
+            let r = if channels >= 2 {
+                interleaved[base + 1]
+            } else {
+                l
+            };
+            left[frame] = l;
+            right[frame] = r;
+            mid[frame] = 0.5 * (l + r);
+            side[frame] = 0.5 * (l - r);
+        }
+        meter
+            .as_mut()
+            .expect("meter initialized with reference passes")
+            .process(&left, &right);
+        for pass in passes
+            .as_mut()
+            .expect("reference passes initialized on first packet")
+        {
+            if let Err(err) = pass.process(&mid, &side) {
+                analysis_error = Some(err);
+                break;
+            }
+        }
+        decoded_frames = decoded_frames.saturating_add(frame_count);
+    })?;
+    if let Some(err) = analysis_error {
+        return Err(err);
+    }
+
+    let source_sr = source_sr.max(1.0);
+    let duration_secs = decoded_frames as f32 / source_sr;
+    if decoded_frames < (source_sr * 0.5) as usize {
         return Err(RefError::TooShort);
     }
-
-    // Run FFT stats once per requested size. Order is preserved so the
-    // GUI's `for_fft` lookup is deterministic.
-    let mut mid_per_fft = Vec::with_capacity(fft_sizes.len());
-    let mut side_per_fft = Vec::with_capacity(fft_sizes.len());
-    for &n_fft in fft_sizes {
-        let (mid_at, side_at) = run_fft_stats(&samples_l, &samples_r, source_sr, n_fft);
-        mid_per_fft.push(mid_at);
-        side_per_fft.push(side_at);
+    let passes = passes.unwrap_or_default();
+    let mut mid_per_fft = Vec::with_capacity(passes.len());
+    let mut side_per_fft = Vec::with_capacity(passes.len());
+    for pass in passes {
+        mid_per_fft.push(pass.mid.finish(source_sr));
+        side_per_fft.push(pass.side.finish(source_sr));
     }
-    let mid_env = RefEnvelope { per_fft: mid_per_fft };
-    let side_env = RefEnvelope { per_fft: side_per_fft };
+    let mid_env = RefEnvelope {
+        per_fft: mid_per_fft,
+    };
+    let side_env = RefEnvelope {
+        per_fft: side_per_fft,
+    };
 
-    let loudness = run_loudness_aggregates(&samples_l, &samples_r, source_sr);
+    let loudness = meter
+        .as_mut()
+        .expect("meter initialized when audio was decoded");
+    loudness.finalize_aggregation();
+    let loudness = loudness.snapshot();
 
     Ok(RefAnalysis {
         mid: mid_env,
@@ -217,58 +281,85 @@ pub fn analyze_ref_file(
     })
 }
 
-fn run_fft_stats(
-    l: &[f32],
-    r: &[f32],
-    sr: f32,
-    n_fft: usize,
-) -> (RefEnvelopeAtFft, RefEnvelopeAtFft) {
-    let mut mid_a = Analyzer::new(sr, n_fft);
-    mid_a.set_overlap_ratio(REF_OVERLAP_RATIO);
-    mid_a.set_averaging_ms(REF_AVG_MS);
-    let mut side_a = Analyzer::new(sr, n_fft);
-    side_a.set_overlap_ratio(REF_OVERLAP_RATIO);
-    side_a.set_averaging_ms(REF_AVG_MS);
-
-    // Match the live `Analyzer`'s positive-half bin count (includes Nyquist).
-    let num_bins = n_fft / 2 + 1;
-    let mut mid_samples: Vec<Vec<f32>> = (0..num_bins).map(|_| Vec::new()).collect();
-    let mut side_samples: Vec<Vec<f32>> = (0..num_bins).map(|_| Vec::new()).collect();
-
-    let chunk = 4096;
-    let mut mid_buf = vec![0.0f32; chunk];
-    let mut side_buf = vec![0.0f32; chunk];
-    let mut i = 0;
-    while i < l.len() {
-        let end = (i + chunk).min(l.len());
-        let n = end - i;
-        for k in 0..n {
-            let lk = l[i + k];
-            let rk = r[i + k];
-            mid_buf[k] = 0.5 * (lk + rk);
-            side_buf[k] = 0.5 * (lk - rk);
-        }
-        mid_a.process_mono(&mid_buf[..n], |avg| {
-            for (bin, v) in avg.iter().enumerate() {
-                mid_samples[bin].push(*v);
-            }
-        });
-        side_a.process_mono(&side_buf[..n], |avg| {
-            for (bin, v) in avg.iter().enumerate() {
-                side_samples[bin].push(*v);
-            }
-        });
-        i = end;
-    }
-
-    let mid_env = collapse_to_log_grid(&mut mid_samples, sr, n_fft);
-    let side_env = collapse_to_log_grid(&mut side_samples, sr, n_fft);
-    (mid_env, side_env)
+struct ReferenceFftPass {
+    mid: SpectrumPass,
+    side: SpectrumPass,
 }
 
-/// Reduce per-FFT-bin sample vectors to a `REF_POINTS` log-spaced grid.
+impl ReferenceFftPass {
+    fn new(sr: f32, n_fft: usize) -> Self {
+        Self {
+            mid: SpectrumPass::new(sr, n_fft),
+            side: SpectrumPass::new(sr, n_fft),
+        }
+    }
+
+    fn process(&mut self, mid: &[f32], side: &[f32]) -> Result<(), RefError> {
+        self.mid.process(mid)?;
+        self.side.process(side)
+    }
+}
+
+struct SpectrumPass {
+    analyzer: Analyzer,
+    histograms: Vec<QuantizedHistogram>,
+    sampled_bins: Vec<usize>,
+    fft_size: usize,
+}
+
+impl SpectrumPass {
+    fn new(sr: f32, n_fft: usize) -> Self {
+        let mut analyzer = Analyzer::new(sr, n_fft);
+        analyzer.set_overlap_ratio(REF_OVERLAP_RATIO);
+        analyzer.set_attack_release_ms(0.0, REF_AVG_MS);
+        // Only the two neighbours of each persisted log-grid point can
+        // contribute to the envelope. Do not retain distributions for unused bins.
+        let mut sampled_bins = Vec::with_capacity(REF_POINTS * 2);
+        let log_min = REF_FREQ_MIN.ln();
+        let log_max = REF_FREQ_MAX.ln();
+        for p in 0..REF_POINTS {
+            let t = p as f32 / (REF_POINTS - 1) as f32;
+            let freq = (log_min + t * (log_max - log_min)).exp();
+            let bin = (freq / (sr / n_fft as f32)).floor() as usize;
+            for neighbour in [bin, bin + 1] {
+                if neighbour <= n_fft / 2 { sampled_bins.push(neighbour); }
+            }
+        }
+        sampled_bins.sort_unstable();
+        sampled_bins.dedup();
+        Self {
+            analyzer,
+            sampled_bins,
+            histograms: vec![QuantizedHistogram::default(); n_fft / 2 + 1],
+            fft_size: n_fft,
+        }
+    }
+
+    fn process(&mut self, samples: &[f32]) -> Result<(), RefError> {
+        let histograms = &mut self.histograms;
+        let sampled_bins = &self.sampled_bins;
+        let mut error = None;
+        self.analyzer.process_mono(samples, |average| {
+            for &bin in sampled_bins {
+                if let Err(err) = histograms[bin].add(average[bin]) {
+                    error = Some(RefError::Decode(format!("reference spectrum: {err}")));
+                    break;
+                }
+            }
+        });
+        error.map_or(Ok(()), Err)
+    }
+
+    fn finish(self, sr: f32) -> RefEnvelopeAtFft {
+        collapse_to_log_grid(&self.histograms, sr, self.fft_size)
+    }
+}
+
+/// Reduce per-FFT-bin approximate quantile estimates to a `REF_POINTS`
+/// log-spaced grid.
 ///
-/// Each FFT bin is reduced once to its [low, high] percentile pair, then
+/// Each FFT bin is reduced once to its approximate [low, mid, high] percentile
+/// triple, then
 /// every log-spaced display point linearly interpolates between the two
 /// FFT bins straddling its frequency. This eliminates the visible
 /// "staircase" at low frequency where one 2.7 Hz bin spans many log
@@ -282,36 +373,16 @@ fn run_fft_stats(
 /// envelope display the linear blend is the right trade-off: it removes
 /// the bin-aligned discontinuities that read as "broken" without
 /// introducing a smoothing kernel that would distort actual content.
-fn collapse_to_log_grid(
-    samples: &mut [Vec<f32>],
-    sr: f32,
-    n_fft: usize,
-) -> RefEnvelopeAtFft {
+fn collapse_to_log_grid(samples: &[QuantizedHistogram], sr: f32, n_fft: usize) -> RefEnvelopeAtFft {
     let bin_hz = sr / n_fft as f32;
     let log_min = REF_FREQ_MIN.ln();
     let log_max = REF_FREQ_MAX.ln();
     let denom = (REF_POINTS - 1) as f32;
 
-    // Pass 1: 3-percentile cache per bin. `None` = bin was empty / above
-    // source Nyquist. Storage is freed as we go since long tracks stash
-    // ~70 MB in `samples` at 3 min.
-    let mut bin_percentiles: Vec<Option<[f32; 3]>> = Vec::with_capacity(samples.len());
-    for bin_samples in samples.iter_mut() {
-        if bin_samples.is_empty() {
-            bin_percentiles.push(None);
-            continue;
-        }
-        bin_samples.sort_by(|a, b| a.total_cmp(b));
-        let lo = percentile_from_sorted(bin_samples, REF_PERCENTILE_LOW);
-        let mid = percentile_from_sorted(bin_samples, REF_PERCENTILE_MID);
-        let hi = percentile_from_sorted(bin_samples, REF_PERCENTILE_HIGH);
-        // Keep ordering invariant for any rounding / equal-values cases.
-        let mut sorted = [lo, mid, hi];
-        sorted.sort_by(|a, b| a.total_cmp(b));
-        bin_percentiles.push(Some(sorted));
-        bin_samples.clear();
-        bin_samples.shrink_to_fit();
-    }
+    // `None` = bin was empty / above source Nyquist. Each estimate is
+    // produced by a bounded sparse histogram, so no frame history is kept.
+    let bin_percentiles: Vec<Option<[f32; 3]>> =
+        samples.iter().map(QuantizedHistogram::estimates).collect();
 
     // Pass 2: linear interpolation between the two FFT bins straddling
     // each log slot's frequency. When one neighbor sits at the silence
@@ -352,42 +423,22 @@ fn collapse_to_log_grid(
         };
         bounds.push(triple);
     }
-    RefEnvelopeAtFft { fft_size: n_fft, bounds }
-}
-
-fn percentile_from_sorted(sorted: &[f32], p: f32) -> f32 {
-    if sorted.is_empty() {
-        return MIN_DB;
+    RefEnvelopeAtFft {
+        fft_size: n_fft,
+        bounds,
     }
-    let idx = (p * (sorted.len() - 1) as f32).round() as usize;
-    sorted[idx.min(sorted.len() - 1)]
-}
-
-/// Offline loudness pass: feed the whole file through the same
-/// `LoudnessMeter` the runtime uses, then pull every single-number
-/// aggregate out of its final snapshot. Without a block sink attached
-/// the meter runs integrated + LRA gating in-line, so LRA and the
-/// max-hold readouts all settle to their true full-file values by
-/// the last sample.
-fn run_loudness_aggregates(l: &[f32], r: &[f32], sr: f32) -> LoudnessSnapshot {
-    let mut meter = LoudnessMeter::new(sr);
-    let chunk = 8192;
-    let mut i = 0;
-    while i < l.len() {
-        let end = (i + chunk).min(l.len());
-        meter.process(&l[i..end], &r[i..end]);
-        i = end;
-    }
-    meter.snapshot()
 }
 
 // ---------------------------------------------------------------------
 // symphonia decode
 // ---------------------------------------------------------------------
 
-fn decode_file(path: &Path) -> Result<(Vec<f32>, Vec<f32>, f32), RefError> {
+fn decode_file<F>(path: &Path, mut on_frames: F) -> Result<(f32, usize), RefError>
+where
+    F: FnMut(&[f32], usize, f32),
+{
     use symphonia::core::audio::SampleBuffer;
-    use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
+    use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
     use symphonia::core::errors::Error as SymError;
     use symphonia::core::formats::FormatOptions;
     use symphonia::core::io::MediaSourceStream;
@@ -420,18 +471,13 @@ fn decode_file(path: &Path) -> Result<(Vec<f32>, Vec<f32>, f32), RefError> {
     let sample_rate = codec_params
         .sample_rate
         .ok_or_else(|| RefError::Decode("no sample rate".into()))? as f32;
-    let channels = codec_params
-        .channels
-        .ok_or_else(|| RefError::Decode("no channels".into()))?;
-    let n_channels = channels.count().max(1);
-
     let mut decoder = symphonia::default::get_codecs()
         .make(&codec_params, &DecoderOptions::default())
         .map_err(|e| RefError::Decode(format!("make decoder: {e}")))?;
 
-    let mut samples_l: Vec<f32> = Vec::new();
-    let mut samples_r: Vec<f32> = Vec::new();
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
+    let mut sample_spec = None;
+    let mut decoded_frames = 0usize;
 
     loop {
         let packet = match format.next_packet() {
@@ -449,23 +495,28 @@ fn decode_file(path: &Path) -> Result<(Vec<f32>, Vec<f32>, f32), RefError> {
             Err(e) => return Err(RefError::Decode(format!("decode: {e}"))),
         };
         let spec = *decoded.spec();
-        if sample_buf.is_none() {
+        let decoded_rate = spec.rate as f32;
+        if (decoded_rate - sample_rate).abs() > f32::EPSILON {
+            return Err(RefError::Decode(format!(
+                "sample rate changed from {sample_rate} Hz to {decoded_rate} Hz"
+            )));
+        }
+        if sample_buf.as_ref().is_none_or(|buf| {
+            buf.capacity() < decoded.capacity() * spec.channels.count() || sample_spec != Some(spec)
+        }) {
             sample_buf = Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
+            sample_spec = Some(spec);
         }
         let buf = sample_buf.as_mut().expect("sample_buf just set");
         buf.copy_interleaved_ref(decoded);
         let frames = buf.samples();
-        let n_frames = frames.len() / n_channels;
-        for f in 0..n_frames {
-            let base = f * n_channels;
-            let left = frames[base];
-            let right = if n_channels >= 2 { frames[base + 1] } else { left };
-            samples_l.push(left);
-            samples_r.push(right);
-        }
+        let frame_channels = spec.channels.count().max(1);
+        let n_frames = frames.len() / frame_channels;
+        on_frames(frames, frame_channels, sample_rate);
+        decoded_frames = decoded_frames.saturating_add(n_frames);
     }
 
-    Ok((samples_l, samples_r, sample_rate))
+    Ok((sample_rate, decoded_frames))
 }
 
 // ---------------------------------------------------------------------
@@ -542,21 +593,29 @@ fn find_lame_magic(buf: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use super::*;
+
+    #[test]
+    fn retaining_only_displayed_bins_preserves_the_reference_envelope() {
+        let mut sparse = SpectrumPass::new(48000.0, 32768);
+        let mut dense = SpectrumPass::new(48000.0, 32768);
+        dense.sampled_bins = (0..=16384).collect();
+        assert!(sparse.sampled_bins.len() < 2048);
+        let signal: Vec<f32> = (0..48000).map(|i| {
+            (std::f32::consts::TAU * 997.0 * i as f32 / 48000.0).sin() * 0.25
+        }).collect();
+        sparse.process(&signal).unwrap();
+        dense.process(&signal).unwrap();
+        assert_eq!(sparse.finish(48000.0).bounds, dense.finish(48000.0).bounds);
+    }
 
     #[test]
     fn empty_envelope_has_no_data() {
         let e = RefEnvelope::empty();
         assert!(e.per_fft.is_empty());
         assert!(e.for_fft(4096).is_none());
-    }
-
-    #[test]
-    fn percentile_from_sorted_is_monotone() {
-        let xs: Vec<f32> = (0..100).map(|n| n as f32).collect();
-        assert!(percentile_from_sorted(&xs, 0.10) < percentile_from_sorted(&xs, 0.90));
-        assert_eq!(percentile_from_sorted(&xs, 0.00), 0.0);
-        assert_eq!(percentile_from_sorted(&xs, 1.00), 99.0);
     }
 
     #[test]
@@ -572,5 +631,113 @@ mod tests {
         buf2.extend_from_slice(&[0u8; 20]);
         let idx = find_lame_magic(&buf2).expect("should find LAME");
         assert_eq!(&buf2[idx..idx + 4], b"LAME");
+    }
+
+    fn fixture_path(extension: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "manifold-reference-{}-{}.{}",
+            std::process::id(),
+            extension,
+            extension
+        ))
+    }
+
+    fn pcm_samples(sample_rate: u32, frames: usize) -> Vec<i16> {
+        (0..frames)
+            .map(|frame| {
+                let phase = frame as f32 * 440.0 * std::f32::consts::TAU / sample_rate as f32;
+                (phase.sin() * 8_000.0) as i16
+            })
+            .collect()
+    }
+
+    fn write_wav(path: &Path) {
+        let sample_rate = 8_000u32;
+        let samples = pcm_samples(sample_rate, sample_rate as usize);
+        let mut pcm = Vec::with_capacity(samples.len() * 4);
+        for sample in samples {
+            pcm.extend_from_slice(&sample.to_le_bytes());
+            pcm.extend_from_slice(&sample.to_le_bytes());
+        }
+        let mut bytes = Vec::with_capacity(44 + pcm.len());
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36u32 + pcm.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * 4).to_le_bytes());
+        bytes.extend_from_slice(&4u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&pcm);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn write_aiff(path: &Path) {
+        let sample_rate = 8_000u32;
+        let samples = pcm_samples(sample_rate, sample_rate as usize);
+        let mut pcm = Vec::with_capacity(samples.len() * 4);
+        for sample in samples {
+            pcm.extend_from_slice(&sample.to_be_bytes());
+            pcm.extend_from_slice(&sample.to_be_bytes());
+        }
+        let mut bytes = Vec::with_capacity(54 + pcm.len());
+        bytes.extend_from_slice(b"FORM");
+        bytes.extend_from_slice(&(46u32 + pcm.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(b"AIFF");
+        bytes.extend_from_slice(b"COMM");
+        bytes.extend_from_slice(&18u32.to_be_bytes());
+        bytes.extend_from_slice(&2u16.to_be_bytes());
+        bytes.extend_from_slice(&(sample_rate).to_be_bytes());
+        bytes.extend_from_slice(&16u16.to_be_bytes());
+        // 80-bit IEEE extended 8000 Hz: exponent 13, mantissa 8000/2^13.
+        bytes.extend_from_slice(&0x400cu16.to_be_bytes());
+        bytes.extend_from_slice(&(u64::from(sample_rate) << 50).to_be_bytes());
+        bytes.extend_from_slice(b"SSND");
+        bytes.extend_from_slice(&(8u32 + pcm.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&pcm);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn assert_decoded_fixture(path: &Path) {
+        let analysis = analyze_ref_file(path, &[64]).unwrap();
+        assert_eq!(analysis.source_sample_rate, 8_000.0);
+        assert!((analysis.duration_secs - 1.0).abs() < 0.01);
+        assert_eq!(analysis.mid.per_fft.len(), 1);
+        assert_eq!(analysis.mid.per_fft[0].bounds.len(), REF_POINTS);
+        assert!(analysis.mid.per_fft[0]
+            .bounds
+            .iter()
+            .any(|bound| bound[1] > MIN_DB));
+    }
+
+    #[test]
+    fn synthetic_wav_reference_decodes_and_analyzes() {
+        let path = fixture_path("wav");
+        write_wav(&path);
+        assert_decoded_fixture(&path);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn synthetic_aiff_reference_decodes_and_analyzes() {
+        let path = fixture_path("aiff");
+        write_aiff(&path);
+        assert_decoded_fixture(&path);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn vorbis_codec_is_registered_when_feature_enabled() {
+        use symphonia::core::codecs::CODEC_TYPE_VORBIS;
+
+        assert!(symphonia::default::get_codecs()
+            .get_codec(CODEC_TYPE_VORBIS)
+            .is_some());
     }
 }
