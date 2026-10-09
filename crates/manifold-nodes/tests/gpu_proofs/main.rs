@@ -20,6 +20,7 @@
 
 use manifold_nodes as _;
 mod scene_modifier_legacy;
+mod scene_viewport_session;
 mod glb_conformance;
 
 mod alpha_contract;

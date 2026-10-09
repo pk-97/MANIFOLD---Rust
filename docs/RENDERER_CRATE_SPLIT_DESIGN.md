@@ -264,7 +264,17 @@ dispatch helper. Test-only access exposes the existing document registration
 and a dimension setter; executor observations reuse existing runtime access.
 Macro imports and relative includes are corrected separately from the move.
 The empty image integration harness is removed after its three tests move to
-the catalog. Both test censuses, behavioral gates and landing remain required.
+the catalog. The workspace census also exposed the scene/water viewport proof;
+`docs/crate-moves/t2-viewport-proof` moves it unchanged to the catalog in
+`21a381e10`, with both move verifiers green and no residue.
+
+Both workspace test censuses match: 6,097 default tests and 7,710 with
+gpu-proofs. Comparison removes the old `water::` prefix, maps the seven moved
+primitive modules from `node_graph::primitives::` to `primitives::`, and adds
+`contracts::` to `particle_pipeline_integration::`. The viewport proof retains
+its binary and module names. Twelve focused CPU contracts pass, including
+layering, runtime history/resize guards and unchanged fused WGSL. Behavioral
+GPU gates, path-policy updates and landing remain required.
 
 #### P5 preparation seam (verified 2026-10-09 at `d5d226167`)
 
