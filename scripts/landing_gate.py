@@ -549,6 +549,8 @@ def _main(stack):
     cpu_plan = readiness['cpu'] or cpu_scope.Plan()
     plan = readiness['gpu'] or gpu_scope.Plan()
     touches_gpu = bool(plan and plan.active)
+    nested_analyzer_paths = set(gate_readiness.analyzer_paths(paths))
+    root_gpu_paths = [path for path in paths if path not in nested_analyzer_paths]
     scope_reason = "docs/comment-only diff" if not paths else "no touched packages"
     results = []
     readiness_cmd = [str(repo / 'scripts/landing_gate.py'), '--repo', str(repo),
@@ -582,7 +584,9 @@ def _main(stack):
     # Execute the tooling selection already validated by readiness.
     tooling = readiness['tooling']
     for check in tooling:
-        exit_, out, err, duration = run_check(check["name"], check["argv"], cwd=repo, timeout=120)
+        exit_, out, err, duration = run_check(
+            check["name"], check["argv"], cwd=repo,
+            timeout=check.get("timeout", 120))
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
         results.append((status, check["name"], duration, tail))
@@ -756,7 +760,7 @@ def _main(stack):
             if args.fail_fast:
                 return finish(repo, base_sha, results)
     if run_gpu:
-        gpu_args = [arg for path in paths for arg in ("--path", path)]
+        gpu_args = [arg for path in root_gpu_paths for arg in ("--path", path)]
         if args.base != "origin/main":
             gpu_args += ["--base", base_sha]
         if proof_cached:

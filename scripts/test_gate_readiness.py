@@ -224,6 +224,52 @@ class P1PlannerTests(unittest.TestCase):
                 problems = gate_readiness.executable_problems(repo, ['src/changed.rs'])
         self.assertIn('scripts/tool.py: shebang entrypoint is not executable', problems)
 
+    def test_analyzer_paths_select_nested_checks_with_long_build_timeout(self):
+        paths = ['plugins/manifold-analyzer-gui/shaders/spectrum_line.wgsl']
+        checks = gate_readiness.analyzer_tooling(ROOT, paths)
+        self.assertEqual(len(checks), 10)
+        self.assertTrue(all(check['timeout'] == 600 for check in checks))
+        self.assertTrue(any(
+            check['argv'][:2] == ['cargo', 'check']
+            and '--manifest-path' in check['argv']
+            and check['argv'][check['argv'].index('--manifest-path') + 1].endswith(
+                'plugins/Cargo.toml')
+            and check['argv'][-2:] == ['--features', 'gpu-proofs']
+            for check in checks))
+        filters = {check['argv'][-1] for check in checks if check['argv'][1] == 'test'}
+        self.assertEqual(filters, {
+            'reference::tests::', 'median::tests::',
+            'precision_tests::', 'spectrum_worker::',
+        })
+        proof = next(check for check in checks if check['name'] == 'analyzer-gpu-proof')
+        self.assertEqual(proof['argv'][-3:], [
+            'spectrum_gpu::spectrogram_gpu_tests::', '--budget', '120'])
+
+    def test_analyzer_paths_are_removed_only_from_root_gpu_planning(self):
+        workspace = SimpleNamespace(
+            packages={}, roots={}, owner=lambda path: None,
+            reverse_dependencies=lambda packages: [],
+            targets=lambda package, kind=None: [],
+            validate_nextest=lambda: None,
+        )
+        cpu = cpu_scope.Plan()
+        gpu = gpu_scope.Plan(unmapped=[
+            ('crates/unknown/shader.wgsl', 'no GPU test mapping rule for this file type')])
+        paths = [
+            'plugins/manifold-analyzer-gui/shaders/spectrum_line.wgsl',
+            'crates/unknown/shader.wgsl',
+        ]
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(gate_readiness, 'Workspace', return_value=workspace), \
+                patch.object(gate_readiness.cpu_scope, 'plan_for_paths', return_value=cpu), \
+                patch.object(gate_readiness.gpu_scope, 'plan_for_paths', return_value=gpu) as gpu_mock, \
+                patch('codex_regressions.inventory', return_value=[]):
+            result = gate_readiness.plan(Path(directory), paths, 'base')
+        self.assertEqual(gpu_mock.call_args.args[0], ['crates/unknown/shader.wgsl'])
+        self.assertTrue(any(label == 'gpu-ownership' for label, _ in result['errors']))
+        self.assertTrue(any(check['name'] == 'analyzer-gpu-proof'
+                            for check in result['tooling']))
+
     def test_invalid_flow_manifest_collects_shape_and_reference_errors(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)

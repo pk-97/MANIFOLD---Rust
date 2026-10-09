@@ -160,9 +160,70 @@ def flow_filters(repo, paths):
     return run_ui_flows.filters_for_paths(paths, manifest)[0]
 
 
+ANALYZER_ROOTS = tuple(
+    f'plugins/manifold-analyzer-{name}' for name in ('dsp', 'gui', 'plugin'))
+ANALYZER_MANIFESTS = {'plugins/Cargo.toml', 'plugins/Cargo.lock'}
+
+
+def analyzer_paths(paths):
+    """Return paths owned by the nested analyzer workspace."""
+    return sorted({path for path in paths
+                   if path in ANALYZER_MANIFESTS
+                   or any(path == root or path.startswith(root + '/')
+                          for root in ANALYZER_ROOTS)})
+
+
+def analyzer_tooling(repo, paths):
+    """Select focused checks for the analyzer's separate Cargo workspace."""
+    if not analyzer_paths(paths):
+        return []
+    manifest = str(Path(repo) / 'plugins/Cargo.toml')
+    checks = []
+    checks.append({'name': 'analyzer-check/manifold-analyzer-plugin',
+                   'argv': ['cargo', 'check', '--manifest-path', manifest,
+                            '-p', 'manifold-analyzer-plugin'],
+                   'cwd': str(repo), 'timeout': 600})
+    for action in ('check', 'clippy'):
+        for package, features in (
+                ('manifold-analyzer-dsp', []),
+                ('manifold-analyzer-gui', ['--features', 'gpu-proofs'])):
+            argv = ['cargo', action, '--manifest-path', manifest,
+                    '-p', package, '--tests', *features]
+            if action == 'clippy':
+                argv += ['--', '-D', 'warnings']
+            checks.append({'name': f'analyzer-{action}/{package}',
+                           'argv': argv, 'cwd': str(repo), 'timeout': 600})
+    focused = (
+        ('dsp-reference', 'manifold-analyzer-dsp', 'reference::tests::'),
+        ('dsp-median', 'manifold-analyzer-dsp', 'median::tests::'),
+        ('gui-precision', 'manifold-analyzer-gui', 'precision_tests::'),
+        ('gui-spectrum-worker', 'manifold-analyzer-gui', 'spectrum_worker::'),
+    )
+    for label, package, test_filter in focused:
+        features = ['--features', 'gpu-proofs'] if package.endswith('-gui') else []
+        checks.append({
+            'name': f'analyzer-test/{label}',
+            'argv': ['cargo', 'test', '--manifest-path', manifest,
+                     '-p', package, '--release', *features, test_filter],
+            'cwd': str(repo), 'timeout': 600,
+        })
+    # The nested workspace uses Cargo patches, so run measured proofs with a
+    # bounded watchdog rather than reusing a root-workspace cache receipt.
+    checks.append({
+        'name': 'analyzer-gpu-proof',
+        'argv': ['python3', 'scripts/gpu_proofs_gate.py',
+                 '--manifest-path', manifest, '--package',
+                 'manifold-analyzer-gui', '--filter',
+                 'spectrum_gpu::spectrogram_gpu_tests::', '--budget', '120',
+                 '--hang-allowance', '120'],
+        'cwd': str(repo), 'timeout': 600,
+    })
+    return checks
+
+
 def selected_tooling(repo, paths):
     from codex_checks import tooling_checks
-    return tooling_checks(repo, paths)
+    return tooling_checks(repo, paths) + analyzer_tooling(repo, paths)
 
 
 def plan(repo, paths, base=None):
@@ -208,8 +269,10 @@ def plan(repo, paths, base=None):
                 if target and (package not in workspace.packages or not any(
                         t['name'] == target[1] for t in workspace.targets(package))):
                     result['errors'].append(('cpu-ownership', f'missing target: {expression}'))
+        nested_paths = set(analyzer_paths(paths))
+        gpu_paths = [path for path in paths if path not in nested_paths]
         result['gpu'] = attempt('gpu-ownership', lambda: gpu_scope.plan_for_paths(
-            paths, repo, base=base or 'HEAD', workspace=workspace, cpu_plan=result['cpu']))
+            gpu_paths, repo, base=base or 'HEAD', workspace=workspace, cpu_plan=result['cpu']))
         if result['gpu'] and result['gpu'].unmapped:
             result['errors'].append(('gpu-ownership', gpu_scope.unmapped_message(result['gpu'])))
         references = attempt('references', lambda: reference_problems(repo, workspace, result['packages']))
