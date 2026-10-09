@@ -2,9 +2,10 @@
 """Changed Rust modules -> nextest filtersets. Full crate runs belong to nightly.
 
 Source files select their module (including nested tests), existing sibling
-*_tests modules and explicitly mapped integration binaries. Test files select
-their integration binary. Empty path-derived module selections widen to the
-package suite after compiled inventory validation; explicit mappings fail closed.
+*_tests modules and explicitly mapped integration binaries. Private test files
+select their mounted module; shared helpers select their integration binary.
+Empty path-derived selections widen to their owning binary or package after
+compiled inventory validation; explicit mappings fail closed.
 """
 
 import re
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from gate_policy import godfile_paths, integration_rows, PREFIX_ROWS, is_inert_plan_path
 from gate_policy import CATALOG_PATHS, CATALOG_PACKAGE
-from gate_workspace import Workspace
+from gate_workspace import Workspace, module_mounts
 
 def module_parts(relative):
     parts = list(relative.with_suffix("").parts)
@@ -38,6 +39,7 @@ class Plan:
     filters: set = field(default_factory=set)
     whole: set = field(default_factory=set)
     gpu_binaries: set = field(default_factory=set)
+    gpu_filters: set = field(default_factory=set)
     path_filters: dict = field(default_factory=dict)
     widening_reasons: set = field(default_factory=set)
 
@@ -70,6 +72,20 @@ def gpu_proofs_only(source):
     return bool(GPU_PROOF_TESTS.search(text)) and '#[cfg(test)]' not in text
 
 
+def test_module_prefixes(source, prefixes):
+    """Keep helper callers covered when narrowing a folded test target."""
+    from crate_move_replay import code_mask
+    text = code_mask(source.read_text())
+    # Without tests of its own this can be shared setup. Public exports and
+    # opaque inclusions can affect callers anywhere in the binary.
+    if (not re.search(r'#\[\s*test\s*\]', text)
+            or re.search(r'\bpub\b(?!\s*\(\s*super\s*\))|\bmacro_export\b|\b(?:include|macro_rules)\s*!', text)):
+        return {()}
+    if re.search(r'\bpub\s*\(\s*super\s*\)', text):
+        return {prefix[:-1] for prefix in prefixes}
+    return prefixes
+
+
 def plan_for_paths(paths, repo, workspace=None, base=None):
     repo, plan, cache = Path(repo).resolve(), Plan(), {}
     workspace = workspace or Workspace(repo)
@@ -78,6 +94,7 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
         ownership = workspace.ownership_errors(paths, base)
         if ownership:
             raise ValueError('; '.join(ownership))
+    mounts = {}
     rows = integration_rows()
     explicit_filters = set()
     for path in sorted(set(paths)):
@@ -129,17 +146,33 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
             plan.whole.add(package)
         binaries = set()
         if parts[2] == "tests":
-            relative = Path(*parts[2:]).as_posix()
-            explicit = [t["name"] for t in manifest.get("test", [])
-                        if relative == t.get("path", "") or
-                        (Path(t.get("path", "")).name in {"main.rs", "mod.rs"}
-                         and relative.startswith(str(Path(t["path"]).parent) + "/"))]
-            if explicit:
-                binaries.update(explicit)
-            elif (len(parts) == 4 or parts[4:] == ("main.rs",)
+            source = (repo / path).resolve()
+            explicit = False
+            for target in manifest.get("test", []):
+                target_source = (crate / target["path"]).resolve()
+                if target_source not in mounts:
+                    mounts[target_source] = module_mounts(target_source)
+                prefixes = mounts[target_source].get(source)
+                if prefixes:
+                    explicit = True
+                    for prefix in test_module_prefixes(source, prefixes):
+                        if not prefix:
+                            binaries.add(target["name"])
+                            continue
+                        prefix = "::".join(prefix) + "::"
+                        expression = (f"(package(={package}) & binary(={target['name']})"
+                                      f" & test(/^{prefix}/))")
+                        plan.filters.add(expression)
+                        plan.path_filters.setdefault(expression, set()).add(path)
+                elif (source == target_source or
+                      (target_source.name in {"main.rs", "mod.rs"}
+                       and source.is_relative_to(target_source.parent))):
+                    explicit = True
+                    binaries.add(target["name"])
+            if not explicit and (len(parts) == 4 or parts[4:] == ("main.rs",)
                   or (crate / "tests" / parts[3] / "main.rs").exists()):
                 binaries.add(Path(parts[3]).stem)
-            else:
+            elif not explicit:
                 # Shared test code (tests/support/): no binary of its own, so
                 # every top-level test that declares or #[path]s the directory.
                 from crate_move_replay import production_text
@@ -184,7 +217,11 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
             continue
         target = next((t for t in workspace.targets(package) if t['name'] == binary[1]), None)
         if target and 'gpu-proofs' in target.get('required-features', []):
-            plan.gpu_binaries.add((package, binary[1]))
+            module = re.search(r'test\(/\^(.*)/\)', expression)
+            if module:
+                plan.gpu_filters.add(module[1])
+            else:
+                plan.gpu_binaries.add((package, binary[1]))
             plan.filters.remove(expression)
     plan.packages = plan.whole | {p for p in plan.packages if any(f'package(={p})' in f for f in plan.filters)}
     if any(path.startswith(CATALOG_PATHS) for path in paths):
@@ -225,11 +262,22 @@ def validate_inventory(plan, package, listing):
         raise ValueError(f'{package}: default-feature inventory contains no tests')
     if package not in plan.whole:
         missing_paths = set()
+        missing_binaries = set()
         for expression in sorted(plan.filters):
             if f'package(={package})' in expression and not matches(expression):
                 if expression not in plan.path_filters:
                     raise ValueError(f'{package}: ownership mapping resolves to no tests: {expression}')
-                missing_paths.update(plan.path_filters[expression])
+                binary = re.search(r'binary\(=([^)]*)\)', expression)
+                if binary:
+                    whole_binary = f"(package(={package}) & binary(={binary[1]}))"
+                    if not matches(whole_binary):
+                        raise ValueError(f'{package}: owning binary has no tests: {binary[1]}')
+                    missing_binaries.add(whole_binary)
+                    plan.widening_reasons.add(
+                        f'{binary[1]} has an empty module selection: running the whole binary')
+                else:
+                    missing_paths.update(plan.path_filters[expression])
+        plan.filters.update(missing_binaries)
         if missing_paths:
             plan.whole.add(package)
             plan.widening_reasons.update(
