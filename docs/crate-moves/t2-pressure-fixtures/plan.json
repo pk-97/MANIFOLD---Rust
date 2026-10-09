@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "source_crate": "crates/manifold-node-engine",
+  "destination_crate": "crates/manifold-nodes-water",
+  "rewrite_roots": [
+    "crates"
+  ]
+}
