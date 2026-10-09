@@ -405,6 +405,18 @@ identify a kick by itself. No fusion weights were fitted. Seven timing/causality
 tests pass; no live change. See
 `tools/audio_analysis/eval/scoreboard/kick_upper_cue_2026-10-09.json`.
 
+**DSP feature fusion, 2026-10-09 — fixed-cutoff trial not adopted:** nine causal
+features feed a regularised linear logistic score, with each evaluated song
+excluded from fitting and normalisation. The 40 ms evidence horizon rounds up
+to a hop boundary; actual availability is scored. At ±50 ms, matches rise 116→139/174
+but unmatched triggers rise 54→260. Heavy On Mind rises 4→25/32 (31 at ±70 ms).
+Across four reviewed kick-free cores, extras rise 5→34. All original widely
+associated labels are retained. This first trial uses equal class weighting and
+a fixed 0.5 cutoff, not calibrated probabilities; threshold calibration and
+additional bandwise features remain untested. Ten focused tests pass. All nine
+songs are development material; no untouched validation or live change. See
+`tools/audio_analysis/eval/scoreboard/kick_fusion_2026-10-09.json`.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
