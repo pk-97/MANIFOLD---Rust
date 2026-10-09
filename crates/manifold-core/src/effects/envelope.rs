@@ -62,12 +62,6 @@ pub struct ParamEnvelope {
     pub action: TriggerAction,
     /// Cached decay output (0-1) for UI display. Not serialized.
     pub current_level: f32,
-    /// Rising edge detection: was a clip active on the previous frame?
-    pub was_clip_active: bool,
-    /// Rising edge detection: the elapsed-into-clip value on the previous frame,
-    /// so a loop restart (elapsed resets while the clip stays active) is detected
-    /// as a new trigger. Not serialized.
-    pub prev_active_elapsed: Beats,
     /// PARAM_STEP_ACTIONS D4: monotonic fire counter for `Random` — the value
     /// sequence is deterministic by this ordinal so export reproduces identically.
     /// Not serialized; reset on load/transport stop.
@@ -131,8 +125,6 @@ impl ParamEnvelope {
             legacy_param_index: None,
             action: TriggerAction::Continuous,
             current_level: 0.0,
-            was_clip_active: false,
-            prev_active_elapsed: Beats(-1.0),
             fire_count: 0,
             step_value: None,
             step_dir: 1.0,
@@ -199,8 +191,6 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
             legacy_param_index,
             action: raw.action,
             current_level: 0.0,
-            was_clip_active: false,
-            prev_active_elapsed: Beats(-1.0),
             fire_count: 0,
             step_value: None,
             step_dir: 1.0,

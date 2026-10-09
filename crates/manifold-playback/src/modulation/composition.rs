@@ -11,6 +11,7 @@ use manifold_core::params::constrain_to_range;
 use manifold_core::{Beats, Bpm, Seconds};
 
 /// Sources for one parameter-manifest composition pass.
+#[derive(Clone, Copy)]
 pub struct ControlSources<'a> {
     /// Whether audio and drivers are enabled for this instance. Envelope
     /// shadows still apply; continuous envelopes use `active_elapsed`.
@@ -38,7 +39,8 @@ pub struct ControlSample {
 pub struct AudioControlState {
     pub step_value: Option<f32>,
     pub held_output: Option<f32>,
-    pub fire_count: u32,
+    /// `None` means this input supplies no counter contribution.
+    pub fire_count: Option<u32>,
 }
 
 impl AudioControlState {
@@ -47,7 +49,7 @@ impl AudioControlState {
         Self {
             step_value: m.step_value,
             held_output: m.audio_held_output,
-            fire_count: m.fire_count,
+            fire_count: Some(m.fire_count),
         }
     }
 }
@@ -66,7 +68,25 @@ impl AudioControlState {
 pub fn compose_controls(
     params: &mut ParamManifest,
     sources: ControlSources<'_>,
-    sample: ControlSample,
+    sample_for_param: impl Fn(&Param) -> ControlSample,
+    audio_state: impl Fn(usize, &ParameterAudioMod) -> AudioControlState,
+) -> bool {
+    if sources.drivers.is_empty() && sources.envelopes.is_empty() && sources.audio_mods.is_empty() {
+        return false;
+    }
+    let prepared = prepare_control_bases(params, sources, &audio_state);
+    let composed = compose_prepared_controls(params, sources, sample_for_param, audio_state);
+    prepared || composed
+}
+
+/// Apply only stepped audio and envelope shadows to parameter values.
+///
+/// This is the preparation stage used when a caller captures historical
+/// shadows before advancing the live input state. It deliberately does not
+/// evaluate drivers, continuous audio, trigger counters, or envelope decay.
+pub fn prepare_control_bases(
+    params: &mut ParamManifest,
+    sources: ControlSources<'_>,
     audio_state: impl Fn(usize, &ParameterAudioMod) -> AudioControlState,
 ) -> bool {
     if sources.drivers.is_empty() && sources.envelopes.is_empty() && sources.audio_mods.is_empty() {
@@ -74,7 +94,29 @@ pub fn compose_controls(
     }
     let mut dirty = false;
     for param in params.iter_mut() {
-        if let Some(value) = compose_param(param, param.value, &sources, sample, &audio_state) {
+        let (value, written) = compose_shadows(param, param.value, &sources, &audio_state);
+        if written {
+            param.value = value;
+            dirty = true;
+        }
+    }
+    dirty
+}
+
+/// Compose drivers, continuous audio and envelope decay onto prepared values.
+pub fn compose_prepared_controls(
+    params: &mut ParamManifest,
+    sources: ControlSources<'_>,
+    sample_for_param: impl Fn(&Param) -> ControlSample,
+    audio_state: impl Fn(usize, &ParameterAudioMod) -> AudioControlState,
+) -> bool {
+    if sources.drivers.is_empty() && sources.envelopes.is_empty() && sources.audio_mods.is_empty() {
+        return false;
+    }
+    let mut dirty = false;
+    for param in params.iter_mut() {
+        let sample = sample_for_param(param);
+        if let Some(value) = compose_dynamic(param, param.value, &sources, sample, &audio_state) {
             param.value = value;
             dirty = true;
         }
@@ -96,6 +138,17 @@ pub fn compose_param(
     sample: ControlSample,
     audio_state: &impl Fn(usize, &ParameterAudioMod) -> AudioControlState,
 ) -> Option<f32> {
+    let (value, shadow_written) = compose_shadows(param, prepared, sources, audio_state);
+    let dynamic = compose_dynamic(param, value, sources, sample, audio_state);
+    dynamic.or_else(|| shadow_written.then_some(value))
+}
+
+fn compose_shadows(
+    param: &Param,
+    prepared: f32,
+    sources: &ControlSources<'_>,
+    audio_state: &impl Fn(usize, &ParameterAudioMod) -> AudioControlState,
+) -> (f32, bool) {
     let id = param.spec.id.as_str();
     let mut value = prepared;
     let mut written = false;
@@ -128,6 +181,20 @@ pub fn compose_param(
         }
     }
 
+    (value, written)
+}
+
+fn compose_dynamic(
+    param: &Param,
+    prepared: f32,
+    sources: &ControlSources<'_>,
+    sample: ControlSample,
+    audio_state: &impl Fn(usize, &ParameterAudioMod) -> AudioControlState,
+) -> Option<f32> {
+    let id = param.spec.id.as_str();
+    let mut value = prepared;
+    let mut written = false;
+
     if sources.enabled {
         for driver in sources
             .drivers
@@ -158,8 +225,10 @@ pub fn compose_param(
             }
             let state = audio_state(index, audio);
             if param.spec.is_trigger && !param.spec.is_trigger_gate {
-                value = param.base + state.fire_count as f32;
-                written = true;
+                if let Some(count) = state.fire_count {
+                    value = param.base + count as f32;
+                    written = true;
+                }
             } else if !param.spec.is_trigger_gate
                 && matches!(audio.action, manifold_core::audio_mod::TriggerAction::Continuous)
                 && let Some(output) = state.held_output
@@ -335,7 +404,7 @@ mod tests {
                     envelopes: &envelopes[..envelope_count],
                     audio_mods: &audio_mods[..audio_count],
                 },
-                sample(Some(Beats(0.5))),
+                |_| sample(Some(Beats(0.5))),
                 |_, m| AudioControlState::current(m),
             ));
             assert!((params.get("value").unwrap().value - expected).abs() < 1e-6);
@@ -359,7 +428,7 @@ mod tests {
                 envelopes: &[],
                 audio_mods: &audio_mods,
             },
-            sample(None),
+            |_| sample(None),
             |_, m| AudioControlState::current(m),
         );
         assert_eq!(params.get("value").unwrap().value, 0.8);
@@ -377,11 +446,11 @@ mod tests {
                 envelopes: &[],
                 audio_mods: std::slice::from_ref(&trigger),
             },
-            sample(None),
+            |_| sample(None),
             |_, _| AudioControlState {
                 step_value: None,
                 held_output: None,
-                fire_count,
+                fire_count: Some(fire_count),
             },
         );
         assert_eq!(trigger_params.get("value").unwrap().value, 4.25);
@@ -396,7 +465,7 @@ mod tests {
         let captured = AudioControlState {
             step_value: Some(0.6),
             held_output: Some(0.7),
-            fire_count: 3,
+            fire_count: Some(3),
         };
         let before = AudioControlState::current(&mod_state);
         let mods = [mod_state];
@@ -409,7 +478,7 @@ mod tests {
                     envelopes: &[],
                     audio_mods: &mods,
                 },
-                sample(None),
+                |_| sample(None),
                 |_, _| captured,
             )
         };
@@ -420,6 +489,58 @@ mod tests {
         assert_eq!(first.get("value").unwrap().value, 0.7);
         assert_eq!(second.get("value").unwrap().value, 0.7);
         assert_eq!(AudioControlState::current(&mods[0]), before);
+    }
+
+    #[test]
+    fn prepared_shadow_survives_input_advance_until_full_composition() {
+        let mut stepped = audio("value");
+        stepped.action = TriggerAction::Step {
+            amount: 0.1,
+            wrap: manifold_core::audio_mod::WrapMode::Clamp,
+        };
+        stepped.step_value = Some(0.2);
+        let mut mods = [stepped];
+        let mut prepared = ParamManifest::from_params(vec![param("value", 0.0, 1.0, 0.0)]);
+        {
+            let sources = ControlSources {
+                enabled: true,
+                drivers: &[],
+                envelopes: &[],
+                audio_mods: &mods,
+            };
+            assert!(prepare_control_bases(
+                &mut prepared,
+                sources,
+                |_, _| AudioControlState {
+                    step_value: Some(0.2),
+                    held_output: None,
+                    fire_count: Some(0),
+                },
+            ));
+        }
+        mods[0].step_value = Some(0.8);
+        let sources = ControlSources {
+            enabled: true,
+            drivers: &[],
+            envelopes: &[],
+            audio_mods: &mods,
+        };
+        assert!(!compose_prepared_controls(
+            &mut prepared,
+            sources,
+            |_| sample(None),
+            |_, m| AudioControlState::current(m),
+        ));
+        assert_eq!(prepared.get("value").unwrap().value, 0.2);
+
+        let mut current = ParamManifest::from_params(vec![param("value", 0.0, 1.0, 0.0)]);
+        assert!(compose_controls(
+            &mut current,
+            sources,
+            |_| sample(None),
+            |_, m| AudioControlState::current(m),
+        ));
+        assert_eq!(current.get("value").unwrap().value, 0.8);
     }
 
     #[test]
@@ -441,7 +562,7 @@ mod tests {
                 envelopes: &[],
                 audio_mods: &mods,
             },
-            sample(None),
+            |_| sample(None),
             |_, m| AudioControlState::current(m),
         ));
         assert_eq!(params.get("value").unwrap().value, 0.4);
@@ -464,7 +585,7 @@ mod tests {
                 envelopes: &[],
                 audio_mods: &[],
             },
-            sample(None),
+            |_| sample(None),
             |_, m| AudioControlState::current(m),
         ));
         let p = params.get("value").unwrap();

@@ -1,7 +1,6 @@
 use manifold_core::ClipId;
 use std::collections::HashMap;
 
-use manifold_core::PresetTypeId;
 use manifold_core::midi::MidiNoteMapping;
 use manifold_core::project::Project;
 use manifold_core::tempo::TempoMapConverter;
@@ -355,24 +354,21 @@ impl ClipLauncher {
             None => return false,
         };
 
-        // Resolve what this layer fires (generator vs video folder vs nothing) —
+        // Resolve what this layer fires (trigger, generator, video folder or nothing) —
         // shared with the audio one-shot path so the rule lives in one place.
-        let (generator_type, source_clip_ids) = match resolve_layer_live_content(project, layer_index)
-        {
-            LayerLiveContent::Generator(g) => (g, Vec::new()),
-            LayerLiveContent::Video(ids) => (PresetTypeId::NONE, ids),
-            LayerLiveContent::Empty => return false,
-        };
+        let live_content = resolve_layer_live_content(project, layer_index);
 
-        if generator_type != PresetTypeId::NONE {
+        if matches!(
+            &live_content,
+            LayerLiveContent::Trigger | LayerLiveContent::Generator(_)
+        ) {
             let bpm = project.settings.bpm;
             let spb = TempoMapConverter::seconds_per_beat_from_bpm(bpm.0);
             let generator_duration = spb * 4.0; // 1 bar at 4/4 default feel
 
-            let gen_clip = live_clip_manager.trigger_live_generator_clip(
+            let content_clip = live_clip_manager.trigger_live_content_clip(
                 project,
                 host,
-                generator_type.clone(),
                 layer_index,
                 generator_duration,
                 beat_stamp,
@@ -382,16 +378,24 @@ impl ClipLauncher {
                 midi_note,
             );
 
-            let gen_clip = match gen_clip {
+            let content_clip = match content_clip {
                 Some(c) => c,
                 None => return false,
+            };
+
+            let launch_label = match &live_content {
+                LayerLiveContent::Trigger => "trigger".to_string(),
+                LayerLiveContent::Generator(generator_type) => {
+                    format!("generator:{generator_type:?}")
+                }
+                _ => unreachable!("live content was checked above"),
             };
 
             self.active_note_off_clips.insert(
                 key,
                 NoteOffTracking {
                     layer_index,
-                    clip_id: gen_clip.id.clone(),
+                    clip_id: content_clip.id.clone(),
                     source_channel: midi_channel,
                     creation_time: realtime_now,
                     creation_sequence: event_sequence,
@@ -402,7 +406,7 @@ impl ClipLauncher {
             if let Some(cb) = &mut self.on_clip_launched {
                 cb(
                     midi_note,
-                    format!("generator:{:?}", generator_type),
+                    launch_label.clone(),
                     layer_index,
                     current_time.as_f32(),
                     0.0,
@@ -417,10 +421,10 @@ impl ClipLauncher {
                     .map(|l| l.name.as_str())
                     .unwrap_or("");
                 log::debug!(
-                    "[ClipLauncher] Note {} ch={} → generator {:?} on layer {} \"{}\"",
+                    "[ClipLauncher] Note {} ch={} → {} on layer {} \"{}\"",
                     midi_note,
                     midi_channel,
-                    generator_type,
+                    launch_label,
                     layer_index,
                     layer_name
                 );
@@ -428,6 +432,14 @@ impl ClipLauncher {
 
             return true;
         }
+
+        let source_clip_ids = match live_content {
+            LayerLiveContent::Video(ids) => ids,
+            LayerLiveContent::Empty => return false,
+            LayerLiveContent::Trigger | LayerLiveContent::Generator(_) => {
+                unreachable!("live content was handled above")
+            }
+        };
 
         // `source_clip_ids` is non-empty here — the Video arm guaranteed it.
         // Select a random clip from the layer's folder

@@ -106,6 +106,7 @@ pub fn layer_badge(layer_type: crate::types::LayerType) -> Icon {
         LayerType::Group => Icon::LayerGroup,
         LayerType::Audio => Icon::LayerAudio,
         LayerType::Dmx => Icon::LayerLed,
+        LayerType::Trigger => Icon::WaveSquare,
     }
 }
 

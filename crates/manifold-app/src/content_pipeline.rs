@@ -374,6 +374,20 @@ fn clip_atlas_cell_full(i: usize) -> (f32, f32, f32, f32) {
     )
 }
 
+/// Validate UI thumbnail requests against the current project before allocating
+/// cache entries or rendering previews. The UI may hold an older snapshot.
+fn retain_thumbnail_requests(
+    visible: &mut Vec<ClipId>,
+    project: Option<&manifold_core::project::Project>,
+) {
+    visible.retain(|id| project.is_some_and(|p| {
+        p.timeline.layers.iter().any(|layer| {
+            layer.layer_type.supports_clip_thumbnails()
+                && layer.clips.iter().any(|clip| clip.id == *id)
+        })
+    }));
+}
+
 /// section 24 5c cold-start: locate a PARKED generator clip by id — its layer (must be a
 /// generator), clip index, and clip-start `(time, beat)` for a thumbnail render.
 /// `None` if not found or the layer isn't a generator (video posters are separate).
@@ -383,7 +397,7 @@ fn find_parked_generator_clip<'a>(
     clip_id: &str,
 ) -> Option<(&'a manifold_core::layer::Layer, u32, f64, f64)> {
     for layer in layers {
-        if layer.gen_params().is_none() {
+        if !layer.hosts_generator() || layer.gen_params().is_none() {
             continue;
         }
         for (ci, clip) in layer.clips.iter().enumerate() {
@@ -1959,7 +1973,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
     /// Set the clips that currently want a timeline thumbnail (deduped by the UI).
     /// Empty = no timeline visible, so the snapshot path is skipped entirely.
-    pub fn set_clip_atlas_visible(&mut self, visible: Vec<ClipId>) {
+    pub fn set_clip_atlas_visible(
+        &mut self,
+        mut visible: Vec<ClipId>,
+        project: Option<&manifold_core::project::Project>,
+    ) {
+        retain_thumbnail_requests(&mut visible, project);
         self.clip_atlas_visible = visible;
     }
 
@@ -2033,28 +2052,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // the solver. Audio and clip-edge fires take the same producer the
             // manual Fire button calls (`FireParameter` in content_commands).
             if let Some((layer_id, param)) = targets.scene_impulse(pulse) {
-                let layer = project.and_then(|project| {
-                    project.timeline.layers.iter().find(|layer| &layer.layer_id == layer_id)
-                });
-                if let (Some(layer), Some(gr)) = (layer, gen_renderer.as_deref_mut()) {
-                    let tempo = project_tempo.get_or_insert_with(|| {
-                        project.map(|project| {
+                if let Some(project) = project {
+                    let layer = project
+                        .timeline
+                        .layers
+                        .iter()
+                        .find(|layer| &layer.layer_id == layer_id);
+                    if let (Some(layer), Some(gr)) = (layer, gen_renderer.as_deref_mut()) {
+                        let tempo = project_tempo.get_or_insert_with(|| {
                             manifold_node_engine::runtime::preset_context::ProjectTempo::new(
                                 &project.tempo_map,
                                 project.settings.bpm,
                             )
-                        })
-                    });
-                    let source = manifold_node_engine::exec::effect_node::FrameTime {
-                        seconds: captured.accepted_time,
-                        beats: captured.accepted_beat,
-                        delta: manifold_core::Seconds::ZERO,
-                        frame_count: 0,
-                    };
-                    if let Err(message) =
-                        gr.fire_scene_impulse(layer, param, source, tempo.as_ref())
-                    {
-                        log::warn!("Scene impulse {param} on {layer_id}: {message}");
+                        });
+                        let (source_seconds, source_beats) = captured.source_clock(project);
+                        let source = manifold_node_engine::exec::effect_node::FrameTime {
+                            seconds: source_seconds,
+                            beats: source_beats,
+                            delta: manifold_core::Seconds::ZERO,
+                            frame_count: 0,
+                        };
+                        if let Err(message) =
+                            gr.fire_scene_impulse(layer, param, source, Some(tempo))
+                        {
+                            log::warn!("Scene impulse {param} on {layer_id}: {message}");
+                        }
                     }
                 }
                 continue;
@@ -2712,9 +2734,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
         let layer_descs: Vec<CompositeLayerDescriptor> = layers
             .iter()
-            // Audio layers produce no visual output and must not enter the
-            // compositor (their solo/mute is an audible bus). section 5 of the design.
-            .filter(|layer| !layer.is_audio())
+            // Audio and trigger lanes never contribute visual content.
+            .filter(|layer| !layer.is_audio() && !layer.is_trigger())
             .map(|layer| CompositeLayerDescriptor {
                 layer_index: layer.index,
                 layer_id: &layer.layer_id,
@@ -4299,6 +4320,39 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 }
 
 #[cfg(test)]
+mod thumbnail_admission_tests {
+    use super::retain_thumbnail_requests;
+    use manifold_core::{Beats, LayerType};
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
+    use manifold_core::project::Project;
+
+    #[test]
+    fn thumbnail_requests_use_container_capability_and_reject_stale_ids() {
+        let mut project = Project::default();
+        let mut requests = Vec::new();
+        let mut expected = Vec::new();
+        for (index, kind) in [LayerType::Video, LayerType::Generator, LayerType::Dmx,
+            LayerType::Audio, LayerType::Group, LayerType::Trigger].into_iter().enumerate()
+        {
+            let mut layer = Layer::new("Lane".into(), kind, index as i32);
+            // Resource fields must not turn a non-visual container into media.
+            let mut clip = TimelineClip::new_trigger(Beats::ZERO, Beats(1.0));
+            clip.video_clip_id = "media".into();
+            requests.push(clip.id.clone());
+            if index < 3 { expected.push(clip.id.clone()); }
+            layer.clips.push(clip);
+            project.timeline.layers.push(layer);
+        }
+        requests.push("deleted-clip".into());
+        retain_thumbnail_requests(&mut requests, Some(&project));
+        assert_eq!(requests, expected);
+        retain_thumbnail_requests(&mut requests, None);
+        assert!(requests.is_empty());
+    }
+}
+
+#[cfg(test)]
 mod trigger_delivery_tests {
     use manifold_core::{Beats, PresetTypeId, Seconds};
     use manifold_playback::engine::trigger_delivery::CapturedTriggerPulse;
@@ -4329,13 +4383,16 @@ mod trigger_delivery_tests {
                     layer_id: None,
                     owner_id: owner_id.clone(),
                     param_key: manifold_core::audio_trigger::fire_meter_key_for_param("", "gate"),
-                    audio_stamp: Some(manifold_core::audio_features::AudioHopStamp {
-                        epoch: 1,
-                        end_sample: (index as u64 + 1) * 256,
-                        sample_rate: 48_000,
-                        source_time: None,
-                        timeline_time: Some(Seconds(time)),
-                    }),
+                    source_stamp: manifold_playback::modulation::TriggerSourceStamp::Audio {
+                        stamp: manifold_core::audio_features::AudioHopStamp {
+                            epoch: 1,
+                            end_sample: (index as u64 + 1) * 256,
+                            sample_rate: 48_000,
+                            source_time: None,
+                            timeline_time: Some(Seconds(time)),
+                        },
+                        time: Seconds(time),
+                    },
                 },
                 epoch: 3,
                 sequence: index as u64,
@@ -4380,6 +4437,7 @@ mod occlusion_tests {
             layer_index,
             clip_index: 0,
             start_beat: manifold_core::Beats(0.0),
+            control_from: manifold_core::Beats(0.0),
             duration_beats: manifold_core::Beats(4.0),
             is_looping: false,
             is_video: false,
@@ -4518,6 +4576,7 @@ mod render_skip_tests {
             layer_index,
             clip_index: 0,
             start_beat: manifold_core::Beats(0.0),
+            control_from: manifold_core::Beats(0.0),
             duration_beats: manifold_core::Beats(4.0),
             is_looping: false,
             is_video: false,

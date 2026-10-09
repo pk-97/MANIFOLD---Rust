@@ -22,6 +22,8 @@ pub enum LayerType {
     Audio,
     /// A direct-drive DMX/LED layer: LED-composite only, screen-invisible.
     Dmx,
+    /// A child lane containing timing clips, with no media output.
+    Trigger,
 }
 
 /// How a MIDI-triggered layer interprets incoming notes.

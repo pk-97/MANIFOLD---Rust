@@ -847,7 +847,7 @@ impl ContentThread {
                 self.content_pipeline.set_node_atlas_visible(nodes);
             }
             ContentCommand::SetClipAtlasVisible(clips) => {
-                self.content_pipeline.set_clip_atlas_visible(clips);
+                self.content_pipeline.set_clip_atlas_visible(clips, self.engine.project());
             }
             ContentCommand::DumpGraphOutputs => {
                 if let Some(manifold_core::GraphTarget::Effect(effect_id)) =
@@ -2204,6 +2204,7 @@ impl ContentThread {
             self.engine.reconcile_tempo_edit(&map, bpm);
         }
         self.commit_automation_recording(false);
+        self.engine.reconcile_clip_control_bindings();
         false
     }
 }
