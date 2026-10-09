@@ -1,0 +1,20 @@
+{
+  "candidate_commit": "42814b9ed",
+  "comparison": "Unchanged Python v5 versus v5 plus validate_confirmed_fires, frozen35ms persistence validation.",
+  "tracks": [
+    "miracle",
+    "heavy_on_mind"
+  ],
+  "selection": "For each track: one12s core with maximal isolated kick RMS and one12s core with maximal bass RMS where kick stem is exactly silent. Search starts every4s from8s to duration-20s. Review250ms margins. If no silent-bass12s core exists, report that and use the minimum-kick-RMS12s core as a mixed negative control; never label it kick-free.",
+  "labels": "Detector-blind source-assisted visual review of stem and mastered waveforms/spectrograms. No BPM/grid-generated labels. No detector execution before final label JSON is frozen. Do not force master to stem timing; unresolved differences explicitly uncertain. Provisional onset intervals, not sample-accurate or independently audible truth.",
+  "metrics": "Existing score_passage:35/50/70ms symmetric, plus -35/+200ms association diagnostic; unchanged uncertain-region and boundary handling. Full chronological mono masters at native sample rate. No resets/backdating/warp.",
+  "acceptance": "Retain every v5-associated labelled kick in each reviewed passage under fixed wide association; fewer unmatched fires in aggregate with no increase on either track or any kick-free passage. Added output latency <=35ms; report50/70ms scores and actual associated timing without treating200ms diagnostic tolerance as acceptable latency. If criteria fail, report failure without tuning.",
+  "limitations": "Two tracks and short visually reviewed passages cannot establish general-purpose reliability. These tracks cease to be independent if later used to guide changes.",
+  "source_sha256": {
+    "kick_dsp_experiments.py": "e5595079d48ef086e0731ac871f9c4fc07c53e7de87e2796f51cbe5c3983dd3b",
+    "kick_attack_rejection.py": "cb5e8ad261f64ae5b6e3bafce2f232e14ec99bb3fc54c0599f113dcfaed6a144",
+    "kick_sustain_audit.py": "d72f8fc18bc8414bf72ee85e7aa2bfa27669e6f2fd951dede86b29209eb34917",
+    "master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145",
+    "live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2"
+  }
+}

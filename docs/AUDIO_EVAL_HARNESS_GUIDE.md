@@ -340,6 +340,24 @@ Eight focused tests and both sets of seven reference replays pass. The prior
 sustained-bass improvement remains frozen; no held-out or live change was made.
 See `tools/audio_analysis/eval/scoreboard/kick_continuity_trials_2026-10-09.json`.
 
+**Frozen held-out evaluation, 2026-10-09 — failed generalisation:** detector-blind
+master/stem visual review labelled 44 kicks in two 12 s cores, plus two 12 s
+bass-only controls. Cores were selected by isolated-stem RMS before detection;
+labels and implementation hashes were frozen before running full native-rate
+masters. Miracle remains 9/12 caught, with extras reduced 4→3. Heavy On Mind
+falls from 4/32 to 3/32 caught, with no extras. Both bass-only controls remain
+at zero fires. These counts agree at 35/50/70 ms and wider association.
+Persistence rejects the real 209.240 s Heavy On Mind kick; it therefore fails
+the requirement to retain every original associated kick. In a read-only
+[-15,+70] ms probe, all 31 original misses lack simultaneous eligibility;
+30 nevertheless pass each individual condition at some point. Brief body-rise
+evidence is not specific to false bass triggers. No threshold was changed.
+Twelve focused scorer/persistence tests pass, and both baseline sequences replay
+exactly. This is limited provisional visual truth, not audited listening or app
+latency evidence. See `tools/audio_analysis/eval/scoreboard/kick_heldout_2026-10-09.json`
+and `tests/fixtures/audio_labels/heldout_passages_2026-10-09.json`. These tracks
+must be treated as development material if this diagnosis informs later changes.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
