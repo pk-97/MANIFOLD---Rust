@@ -956,10 +956,11 @@ mod tests {
 
     #[test]
     fn offline_control_observations_preserve_every_hop_across_frame_rates() {
-        use manifold_core::audio_mod::{AudioModContribution, ParameterAudioMod};
+        use manifold_core::audio_mod::ParameterAudioMod;
+        use manifold_core::control_history::{ControlContribution, TriggerSourceStamp};
         use manifold_core::params::Param;
         use manifold_core::{Beats, PresetTypeId};
-        use manifold_playback::modulation::{audio_control_capture_error, evaluate_modulation};
+        use manifold_playback::modulation::{control_capture_error, evaluate_modulation};
 
         let rate = 44_100u32;
         let pre_roll = 4_413usize;
@@ -997,13 +998,13 @@ mod tests {
                 evaluate_modulation(&mut project, Beats(current.0 * 2.0), current,
                     Seconds(1.0 / fps as f64), engine.audio_snapshot(),
                     &controls, &mut pulses, &mut meters);
-                assert!(audio_control_capture_error(&project).is_none());
+                assert!(control_capture_error(&project).is_none());
                 let m = &project.settings.master_effects[0].audio_mods.as_ref().unwrap()[0];
-                assert_eq!(m.audio_observations.hops().len(), engine.audio_snapshot().hop_batches[0].hops().len());
-                for observation in m.audio_observations.hops() {
+                assert_eq!(m.control_observations.observations().len(), engine.audio_snapshot().hop_batches[0].hops().len());
+                for observation in m.control_observations.observations() {
                     assert_eq!(observation.evaluation_time, Some(current));
-                    assert!(!observation.clip_edge);
-                    trace.push((observation.stamp.end_sample, observation.stamp.timeline_time.unwrap(),
+                    let TriggerSourceStamp::Audio { stamp, .. } = observation.stamp else { panic!("expected an audio observation"); };
+                    trace.push((stamp.end_sample, stamp.timeline_time.unwrap(),
                         observation.dt, observation.contribution));
                 }
             }
@@ -1011,7 +1012,7 @@ mod tests {
         };
         let expected = run(60);
         assert!(expected.len() > 60, "more control updates than display frames");
-        assert!(expected.iter().all(|sample| matches!(sample.3, AudioModContribution::Continuous(_))));
+        assert!(expected.iter().all(|sample| matches!(sample.3, ControlContribution::Continuous(_))));
         assert!(expected.windows(2).any(|pair| pair[0].3 != pair[1].3));
         for fps in [24, 30, 1] {
             assert_eq!(run(fps), expected, "{fps} FPS changed retained controls");

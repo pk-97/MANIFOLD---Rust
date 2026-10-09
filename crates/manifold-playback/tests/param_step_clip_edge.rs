@@ -119,6 +119,65 @@ fn envelope_step_value_of(engine: &PlaybackEngine, layer_index: usize) -> Option
 const DT: f64 = 1.0 / 60.0;
 
 #[test]
+fn child_patterns_keep_step_responses_isolated_without_audio_or_renderer() {
+    use manifold_core::audio_mod::{AudioFeature, ParameterAudioMod};
+    use manifold_core::audio_trigger::TriggerFireMode;
+    use manifold_core::params::ClipTriggerSource;
+    let build = || {
+        let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+        project.timeline.layers.truncate(1);
+        let owner = &mut project.timeline.layers[0];
+        owner.clips.clear();
+        owner.is_muted = true;
+        let mut first = Layer::new_trigger("First".into(), owner.layer_id.clone(), 1);
+        first.clips = [0.0, 0.2, 0.4].into_iter()
+            .map(|beat| TimelineClip::new_trigger(Beats(beat), Beats(0.05))).collect();
+        let mut second = Layer::new_trigger("Second".into(), owner.layer_id.clone(), 2);
+        second.clips = [0.1, 0.3].into_iter()
+            .map(|beat| TimelineClip::new_trigger(Beats(beat), Beats(0.05))).collect();
+        let gp = owner.gen_params_mut().unwrap();
+        gp.envelopes = None;
+        add_whole_number_param(gp, "other", 8.0);
+        for (param, source) in [("level", first.layer_id.clone()), ("other", second.layer_id.clone())] {
+            gp.params.get_mut(param).unwrap().clip_trigger_source = ClipTriggerSource::Lane { layer_id: source };
+            let mut m = ParameterAudioMod::new(param.into(), manifold_core::AudioSendId::new("missing"), AudioFeature::default());
+            m.action = TriggerAction::Step { amount: 1.0, wrap: WrapMode::Clamp };
+            m.trigger_mode = Some(TriggerFireMode::ClipEdge);
+            gp.audio_mods_mut().push(m);
+        }
+        project.timeline.layers.extend([first, second]);
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+        engine.set_state(PlaybackState::Playing);
+        engine
+    };
+    let assert_values = |engine: &PlaybackEngine| {
+        let gp = engine.project().unwrap().timeline.layers[0].gen_params().unwrap();
+        assert_eq!(gp.params.get("level").unwrap().value, 3.0);
+        assert_eq!(gp.params.get("other").unwrap().value, 2.0);
+    };
+    let mut coarse = build();
+    tick_n(&mut coarse, 1, 0.25);
+    let gp = coarse.project().unwrap().timeline.layers[0].gen_params().unwrap();
+    for (m, expected) in gp.audio_mods.as_ref().unwrap().iter().zip([vec![0.0, 0.1, 0.2], vec![0.05, 0.15]]) {
+        assert_eq!(m.hop_timeline.values.iter().map(|point| point.time.0).collect::<Vec<_>>(), expected);
+    }
+    tick_n(&mut coarse, 1, 0.0);
+    assert_values(&coarse);
+    let mut fine = build();
+    tick_n(&mut fine, 50, 0.005);
+    assert_values(&fine);
+    let mut export = build();
+    export.set_export_mode(true);
+    export.set_export_origin(Seconds::ZERO);
+    for frame_count in 0..3 {
+        let result = export.tick(TickContext { frame_count, export_fixed_dt: Seconds(0.25), ..Default::default() });
+        export.reclaim_tick_result(result);
+    }
+    assert_values(&export);
+}
+
+#[test]
 fn selected_source_fires_without_a_renderer_or_unmuted_owner() {
     let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
     let source_id = project.timeline.layers[1].layer_id.clone();

@@ -196,6 +196,15 @@ value or Fire counter; retained counters continue through input gaps. Compatibil
 entry points delegate their arithmetic to the same composer. Historical sampling
 does not advance inputs or publish meters.
 
+`ControlHistory` replaces the audio-only observation batch. It retains typed
+audio and clip contributions in transport-time order, using the same
+`TriggerSourceStamp` as targeted delivery. Step, Random and Fire consume every
+clip start independently of audio availability; equal-time clip and audio events
+remain separate, with clip starts first. Both contribute to the existing sampled
+parameter timeline. Capacity is checked before advancing an interval; overflow
+latches an explicit capture error and exposes no partial history. Transport reset
+clears the latch. The normal path reuses bounded storage.
+
 The timing migration now builds each retained hop's `ControlSample` at the hop's
 timestamp and tempo-derived beat. Arrangement spans cover the interval since the
 last evaluation, including session loops and quantized replacement/stop boundaries.
@@ -309,9 +318,9 @@ cannot overwrite earlier session samples or replay a start from before resumptio
 `session_mode::back_to_arrangement_preserves_control_history_and_phase` reproduces
 the former error and checks repeated transitions, stopped-session gaps and seeking.
 
-Full acceptance below remains open: external-clock discontinuities, audio clip-Step/Random
-multiplicity, audio source-time verification and rendered scene timing must be completed
-before exposing trigger lanes.
+Full acceptance below remains open: external-clock discontinuities, source reassignment,
+runtime routing scope and rendered scene timing must be completed before exposing
+trigger lanes. CPU event-order proofs do not establish rendered scene behaviour.
 
 ### Model, scheduling and delivery
 

@@ -10,21 +10,7 @@ pub enum TriggerPulseKind {
     Parameter,
 }
 
-/// Clock provenance for a trigger pulse. Clip starts stay in the beat domain
-/// until delivery resolves them against the current project tempo map.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TriggerSourceStamp {
-    Snapshot,
-    Audio {
-        stamp: manifold_core::audio_features::AudioHopStamp,
-        time: manifold_core::Seconds,
-    },
-    Clip {
-        layer_id: manifold_core::LayerId,
-        clip_id: manifold_core::ClipId,
-        beat: manifold_core::Beats,
-    },
-}
+pub use manifold_core::control_history::TriggerSourceStamp;
 
 /// The existing modulation event payload, distinguishing gate events from
 /// named parameter events.
