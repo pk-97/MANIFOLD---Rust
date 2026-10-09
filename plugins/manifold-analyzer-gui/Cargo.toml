@@ -46,3 +46,6 @@ objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSV
 
 [features]
 gpu-proofs = []
+
+[dev-dependencies]
+serde_json = "1"

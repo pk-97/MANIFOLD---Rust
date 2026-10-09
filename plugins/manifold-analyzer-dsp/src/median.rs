@@ -225,35 +225,33 @@ impl QuantizedHistogram {
         self.bins.len()
     }
 
-    /// Return the rounded-rank quantile used by the original reference path.
-    pub fn estimate(&self, quantile: f32) -> Option<f32> {
-        assert!(quantile.is_finite() && (0.0..=1.0).contains(&quantile));
+    /// Return approximate `[10th, 50th, 90th]` percentiles.
+    pub fn estimates(&self) -> Option<[f32; 3]> {
         if self.count == 0 {
             return None;
         }
-        let rank = (quantile * (self.count - 1) as f32).round() as u64;
-        Some(self.value_at_rank(rank))
-    }
-
-    /// Return approximate `[10th, 50th, 90th]` percentiles.
-    pub fn estimates(&self) -> Option<[f32; 3]> {
-        Some([
-            self.estimate(0.10)?,
-            self.estimate(0.50)?,
-            self.estimate(0.90)?,
-        ])
-    }
-
-    fn value_at_rank(&self, rank: u64) -> f32 {
+        let ranks = [
+            (0.10 * (self.count - 1) as f32).round() as u64,
+            (0.50 * (self.count - 1) as f32).round() as u64,
+            (0.90 * (self.count - 1) as f32).round() as u64,
+        ];
+        let mut estimates = [0.0; 3];
+        let mut rank_index = 0;
         let mut offset = 0u64;
         for (&key, &count) in &self.bins {
-            if rank < offset + count {
-                return key as f32 * HISTOGRAM_STEP_DB;
+            while rank_index < ranks.len() && ranks[rank_index] < offset + count {
+                estimates[rank_index] = key as f32 * HISTOGRAM_STEP_DB;
+                rank_index += 1;
+            }
+            if rank_index == ranks.len() {
+                break;
             }
             offset += count;
         }
-        unreachable!("rank is within histogram sample count")
+        Some(estimates)
     }
+
+
 }
 
 #[cfg(test)]

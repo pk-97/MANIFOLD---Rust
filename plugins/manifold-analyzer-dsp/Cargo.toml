@@ -26,3 +26,8 @@ symphonia = { version = "0.5", default-features = false, features = [
 
 # Persist/serialize ref-track envelopes alongside the plugin state.
 serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+miniz_oxide = "0.8"
+
+[dev-dependencies]
+serde_json = "1"
