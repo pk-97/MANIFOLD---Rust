@@ -262,7 +262,7 @@ pub(crate) fn serialized_value_as_f32(
     }
 }
 
-/// Convert a renderer-side [`manifold_renderer::node_graph::NodeSnapshot`]
+/// Convert a renderer-side [`manifold_nodes::node_graph::NodeSnapshot`]
 /// into the UI-facing [`manifold_ui::panels::graph_editor::GraphEditorNodeView`]
 /// that the right-sidebar panel consumes.
 ///

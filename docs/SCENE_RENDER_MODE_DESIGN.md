@@ -34,7 +34,7 @@ registrations**), `REALTIME_3D_DESIGN.md` D5 (the atmosphere port precedent),
 
 | Piece | Where | State |
 |---|---|---|
-| File-authored modifier recipes — JSON, `presetMetadata.sceneModifier`, catalog-loaded, no Rust registration | `crates/manifold-renderer/assets/scene-modifier-presets/SceneFog.json`; loader `node_graph/bundled_presets.rs:106` | **Shipped. The authoring path this design uses.** |
+| File-authored modifier recipes — JSON, `presetMetadata.sceneModifier`, catalog-loaded, no Rust registration | `crates/manifold-nodes/assets/scene-modifier-presets/SceneFog.json`; loader `node_graph/bundled_presets.rs:106` | **Shipped. The authoring path this design uses.** |
 | Gate-family enable — `enabledParam` + `node.value` × `node.math` Mul into a port-shadowed scalar | SceneFog.json nodes `fog_enabled`/`fog_amount`/`fog_mul` | Shipped; copied wire-for-wire here |
 | Stage→endpoint wiring — recipe stage declares `outputs: [{port, endpoint}]`; endpoint resolves to a `render_scene` input | SceneFog.json `stages[0]`; resolution in `node_graph/scene_vm.rs` | Shipped for `atmosphere`; must learn `render_mode` (⚠ VERIFY-AT-IMPL: how stage endpoints resolve — read `scene_vm.rs` stage wiring before P1) |
 | CPU wire-value port precedent — `Atmosphere` struct, `PortType::Atmosphere`, unwired = default = byte-identical to no port | `node_graph/atmosphere.rs:23`, `node_graph/ports.rs:68` | Shipped; `RenderMode` mirrors it exactly |
@@ -176,7 +176,7 @@ without the port load byte-identical (unwired default).
   with mode = Wireframe produces the Rendered uniform set (no fill-mode
   flag reaches any RT draw).
 - **INV-R5 — No Rust descriptor registration for this kind.** Enforcement:
-  `rg -n 'RenderMode' crates/manifold-renderer/src/node_graph/scene_modifier*` —
+  `rg -n 'RenderMode' crates/manifold-nodes/src/node_graph/scene_modifier*` —
   zero hits outside `scene_modifier_preset` schema code.
 
 ## 5. Phasing
@@ -207,7 +207,7 @@ mechanism (no shader, no pipeline).
 - **Forbidden moves:** registering a Rust descriptor for the kind · gating
   the per-mode floats · letting the depth/shadow pass take the fill mode ·
   adding params to `render_scene` itself · a viewport-local override switch.
-- **Gate:** `cargo nextest run -p manifold-renderer render_mode` green;
+- **Gate:** `cargo nextest run -p manifold-nodes render_mode` green;
   `scripts/gpu_proofs_gate.py` green (render_scene touched); the INV-R5 `rg`
   zero-hit; `MANIFOLD_RENDER_TRACE=1` run — no frame >20ms attributable to
   the mode branch (content-thread gate).
@@ -221,7 +221,7 @@ mechanism (no shader, no pipeline).
   artifact, agent gate is the flow exit code).
 - **Performer gesture:** mode dropdown on a MIDI pad, flipped mid-playback —
   the round-trip gate's binding exercise covers it.
-- **Test scope:** `-p manifold-renderer` focused; `-p manifold-gpu` if the
+- **Test scope:** `-p manifold-nodes` focused; `-p manifold-gpu` if the
   encoder signature changes.
 
 ### P2 — Solid (clay)
@@ -232,13 +232,13 @@ mechanism (no shader, no pipeline).
   Phong under mode = Solid; INV-R1 parity extended to Solid-off.
 - **Forbidden moves:** a new shader or pipeline (Phong exists) · per-object
   albedo tinting (Deferred, section 7).
-- **Gate:** `cargo nextest run -p manifold-renderer render_mode` green;
+- **Gate:** `cargo nextest run -p manifold-nodes render_mode` green;
   headless PNG of a multi-material scene in Solid — every object one clay
   color, lighting intact (Peter looks; agent gate is a region-mean probe:
   two different-albedo objects' region means within stated tolerance).
 - **Acceptance demo:** same PNG pair. **Performer gesture:** automate
   Rendered→Solid over 8 bars on a clip envelope.
-- **Test scope:** `-p manifold-renderer`.
+- **Test scope:** `-p manifold-nodes`.
 
 ### P3 — Points
 
@@ -250,13 +250,13 @@ mechanism (no shader, no pipeline).
   Points frame must not compile).
 - **Forbidden moves:** a separate point vertex buffer or mesh copy (the
   existing buffers draw as-is) · point sprites/round points (Deferred).
-- **Gate:** `cargo nextest run -p manifold-renderer render_mode` green;
+- **Gate:** `cargo nextest run -p manifold-nodes render_mode` green;
   `scripts/gpu_proofs_gate.py` green (shader touched); headless PNG — GLB
   scan as a point cloud (Peter looks; agent gate: non-zero pixel count above
   background in a stated region).
 - **Acceptance demo:** the point-cloud PNG. **Performer gesture:**
   `point_size` on an audio mod, kick-driven.
-- **Test scope:** `-p manifold-renderer` + `-p manifold-gpu`.
+- **Test scope:** `-p manifold-nodes` + `-p manifold-gpu`.
 
 ## 6. Decided — do not reopen
 

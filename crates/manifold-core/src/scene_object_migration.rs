@@ -7,7 +7,7 @@
 //! carries the legacy wiring — this migration rewrites it in place,
 //! structurally, with no version gate (idempotence is the gate itself, per
 //! D5). Beside `flatten.rs`: defs are core vocabulary, and every def-to-Graph
-//! conversion converges on `instantiate_def` (`manifold-renderer`'s
+//! conversion converges on `instantiate_def` (`manifold-nodes`'s
 //! `graph_loader.rs`), the one choke point that calls this — project load,
 //! bundled/reference preset load, user-library preset load, `graph_tool
 //! migrate`, and the live glTF importer's freshly-built output all pass

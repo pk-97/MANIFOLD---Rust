@@ -73,7 +73,7 @@ def _gpu_processes():
     """List concurrent GPU work.
 
     Matches on process cmdline (not just process names) so cargo test
-    invocations carrying gpu-proofs / manifold_renderer, a running
+    invocations carrying gpu-proofs / manifold_nodes, a running
     bridge-probe binary, and manifold render/capture runs are all caught.
     """
     gpu_processes = []
@@ -111,7 +111,7 @@ def _is_gpu_process(cmd):
     """Return True if a process command line indicates GPU work."""
     if "cargo" in cmd and "test" in cmd and (
         "gpu-proofs" in cmd
-        or "manifold_renderer" in cmd
+        or "manifold_nodes" in cmd
         or "--features gpu" in cmd
     ):
         return True

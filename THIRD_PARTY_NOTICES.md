@@ -6,7 +6,7 @@ MANIFOLD includes code derived from the projects below. Each derived file carrie
 
 Source: FLIP Fluids by Ryan L. Guy & Dennis Fassbaender, MIT license. Vendored at `crates/manifold-fluids/native/flip_engine/`, with MANIFOLD integration changes (license copy: `crates/manifold-fluids/native/LICENSE_MIT.md`).
 
-Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primitives/`; each `.rs` has a matching `shaders/<name>_body.wgsl` where one exists):
+Modules ported from it (all under `crates/manifold-nodes/src/node_graph/primitives/`; each `.rs` has a matching `shaders/<name>_body.wgsl` where one exists):
 
 - `crossing_distance`, `lattice_curvature` — from `particlelevelset.cpp`
 - `upwind_distance`, `whitewater_distance` and their WGSL, `whitewater_engine_cpu.rs` — valid-band construction and upwind reinitialisation from `particlelevelset.cpp::calculateCurvatureGrid` and `levelsetsolver.cpp::reinitializeUpwind`, including the vendored convergence and return rule
@@ -50,9 +50,9 @@ Checked against the engine, no engine code in them (each file's header says so):
 - `liquid/conformance.rs`, `tests/gpu_proofs/liquid_conformance.rs` — the engine's coupled tank (its gravity tests)
 - `manifold-fluids/src/whitewater_oracle.rs` — runs the engine's whitewater emitter and curvature as test oracles
 
-`crates/manifold-renderer/src/live_sim_clock_reference.rs` ports the CFL duration rule from `fluidsimulation.cpp::_calculateNextTimeStep` (including epsilon, optional surface-tension/color restrictions and equal frame partition). It is a standalone CPU reference, not runtime integration.
+`crates/manifold-nodes/src/live_sim_clock_reference.rs` ports the CFL duration rule from `fluidsimulation.cpp::_calculateNextTimeStep` (including epsilon, optional surface-tension/color restrictions and equal frame partition). It is a standalone CPU reference, not runtime integration.
 
-`crates/manifold-physics/src/stepping.rs` ports `_calculateNextTimeStep`, the internal final-substep remainder rule in `nextUpdateTimeStep`, and `_getMarkerParticleSpeedLimit`, including MANIFOLD's minimum speed-limit protection. The GPU clock (`crates/manifold-renderer/src/node_graph/primitives/gpu_flip_clock.rs` and `shaders/gpu_flip_clock.wgsl`) ports the same CFL scheduling rule, marker/source maximum-speed calculation, the complete `_getMarkerParticleSpeedLimit` policy over the accepted frame interval (a live late span measures one Sim Rate interval of simulated time, as the vendored engine's `setMarkerSpeedLimitFrameDeltaTime` does), and `rigidfluidcoupling.cpp::pointSpeed` endpoint bound. These ports retain the FLIP Fluids MIT attribution to Ryan L. Guy and Dennis Fassbaender. The runtime GPU FLIP step uses this clock and removes extreme markers before survivor compaction and inflow emission.
+`crates/manifold-physics/src/stepping.rs` ports `_calculateNextTimeStep`, the internal final-substep remainder rule in `nextUpdateTimeStep`, and `_getMarkerParticleSpeedLimit`, including MANIFOLD's minimum speed-limit protection. The GPU clock (`crates/manifold-nodes/src/node_graph/primitives/gpu_flip_clock.rs` and `shaders/gpu_flip_clock.wgsl`) ports the same CFL scheduling rule, marker/source maximum-speed calculation, the complete `_getMarkerParticleSpeedLimit` policy over the accepted frame interval (a live late span measures one Sim Rate interval of simulated time, as the vendored engine's `setMarkerSpeedLimitFrameDeltaTime` does), and `rigidfluidcoupling.cpp::pointSpeed` endpoint bound. These ports retain the FLIP Fluids MIT attribution to Ryan L. Guy and Dennis Fassbaender. The runtime GPU FLIP step uses this clock and removes extreme markers before survivor compaction and inflow emission.
 
 The GPU structure (the step's passes, the multigrid preconditioner) is MANIFOLD's own; the ported parts are the rules above.
 

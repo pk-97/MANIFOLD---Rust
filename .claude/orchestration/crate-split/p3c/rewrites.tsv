@@ -1,0 +1,10 @@
+manifold_renderer::generators::registry	manifold_nodes::registry
+manifold_renderer::generators::bundled_generator_presets	manifold_nodes::bundled_generator_presets
+manifold_renderer::node_graph::catalog_gen	manifold_nodes::catalog_gen
+manifold_renderer::node_graph::bundled_presets	manifold_nodes::bundled_presets
+manifold_renderer::node_graph::bundled_preset_def	manifold_nodes::bundled_presets::bundled_preset_def
+manifold_renderer::node_graph::bundled_preset_json	manifold_nodes::bundled_presets::bundled_preset_json
+manifold_renderer::node_graph::bundled_preset_type_ids	manifold_nodes::bundled_presets::bundled_preset_type_ids
+manifold_renderer::node_graph::loaded_presets_from_bundled	manifold_nodes::bundled_presets::loaded_presets_from_bundled
+manifold_renderer::node_graph::loaded_scene_modifier_presets_from_bundled	manifold_nodes::bundled_presets::loaded_scene_modifier_presets_from_bundled
+manifold_renderer	manifold_nodes

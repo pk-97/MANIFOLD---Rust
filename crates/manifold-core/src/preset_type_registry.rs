@@ -69,7 +69,7 @@ pub const ALL_CATEGORIES: &[&str] = &[SPATIAL, COLOR, STYLIZE, FILMIC, DIAGNOSTI
 // to the user dir at runtime never appeared in the browser without an app
 // restart, even though the hot-reload watcher was already rebuilding the
 // (separate) param-definition store. [`rebuild`] is called from
-// `manifold-renderer`'s `apply_reload` right beside
+// `manifold-nodes`'s `apply_reload` right beside
 // `rebuild_preset_definitions`, so both stores swap in the same reload pass.
 static REGISTRY: LazyLock<ArcSwap<Vec<PresetTypeRegistration>>> = LazyLock::new(|| {
     ArcSwap::from_pointee(build_registry(
@@ -130,7 +130,7 @@ fn build_registry(
 
 /// Hot-reload: rebuild the registry from freshly-reloaded JSON metadata for
 /// both kinds and swap it in with one atomic `ArcSwap::store`. Called by
-/// `manifold-renderer`'s `apply_reload`, right beside
+/// `manifold-nodes`'s `apply_reload`, right beside
 /// `preset_definition_registry::rebuild_preset_definitions`, so a directory
 /// change (new/edited/removed preset file) reaches the browser popup's item
 /// list on the same reload pass that reaches the param-definition store.

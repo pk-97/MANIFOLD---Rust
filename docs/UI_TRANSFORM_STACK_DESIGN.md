@@ -34,7 +34,7 @@ The motion layer's four pieces (`AnimF32`/`Transient`/`FlipList`/exit-state) pro
 ## Gate
 - Unit: `Affine2` math (identity, compose, rotate_about pivot, associativity).
 - **Visual (required):** headless `ui-snap` render proving (a) a rotated rounded rect keeps crisp AA'd rounded corners, (b) a rotated glyph renders rotated, (c) a scaled-about-center rect. Commit the PNGs. This is the capability's proof — a green unit test is not a look.
-- `cargo test -p manifold-ui --lib` + `cargo test -p manifold-renderer --lib` (renderer touched) + `cargo clippy --workspace -- -D warnings`.
+- `cargo test -p manifold-ui --lib` + `cargo test -p manifold-nodes --lib` (renderer touched) + `cargo clippy --workspace -- -D warnings`.
 
 ## Explicitly NOT in v1
 - Subtree transform inheritance (node-local only).

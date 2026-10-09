@@ -12,8 +12,8 @@ Always read the actual shader code before modifying. Never synthesize from descr
 Touch exactly **2 files** to add a new effect:
 
 ```
-1. manifold-renderer/src/effects/my_effect.rs    (NEW FILE — impl + registration)
-2. manifold-renderer/src/effects/mod.rs           pub mod my_effect;
+1. manifold-nodes/src/effects/my_effect.rs    (NEW FILE — impl + registration)
+2. manifold-nodes/src/effects/mod.rs           pub mod my_effect;
 ```
 
 All metadata and factory registration lives in the implementation file via `inventory::submit!`:

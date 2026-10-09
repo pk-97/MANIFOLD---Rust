@@ -11,7 +11,7 @@
 //! preserved verbatim; the template's nodes get fresh ids above the def's
 //! max and `rl_`-prefixed handles.
 //!
-//! This lives in `manifold-renderer` (not `manifold-core`, where
+//! This lives in `manifold-nodes` (not `manifold-core`, where
 //! `EffectGraphDef` and the group flattener live) because it needs
 //! [`PrimitiveRegistry`] to answer "what is this type_id's `depth_rule` and
 //! Texture2D port shape" — exactly the same reason `graph_loader` and

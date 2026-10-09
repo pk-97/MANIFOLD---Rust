@@ -23,7 +23,7 @@ After this design, any liquid Peter drops into a scene answers his hands the sam
 
 ## 1. Audit — what exists (verified 2026-09-30 at `dfc884568`; SWASH at `79d477fb8`)
 
-Paths: `R/` = `crates/manifold-renderer/src/node_graph/`, `RP/` = `crates/manifold-renderer/src/preset_runtime/`, `P/` = `crates/manifold-physics/src/`, `core/` = `crates/manifold-core/src/`, `edit/` = `crates/manifold-editing/src/`, `app/` = `crates/manifold-app/src/`. SWASH paths are on `origin/feat/fft-water`; main has no SWASH code.
+Paths: `R/` = `crates/manifold-nodes/src/node_graph/`, `RP/` = `crates/manifold-nodes/src/preset_runtime/`, `P/` = `crates/manifold-physics/src/`, `core/` = `crates/manifold-core/src/`, `edit/` = `crates/manifold-editing/src/`, `app/` = `crates/manifold-app/src/`. SWASH paths are on `origin/feat/fft-water`; main has no SWASH code.
 
 ### 1.1 The three solvers side by side
 
@@ -49,7 +49,7 @@ Paths: `R/` = `crates/manifold-renderer/src/node_graph/`, `RP/` = `crates/manifo
 - Domain layout: `domain_layout` (`R/fluid/domain.rs:24`): cells per axis rounded up from Resolution along the longest side, box grown about its centre, no size-multiple rule.
 - Liquid predicate: `is_liquid_domain` = FLIP or matter, hard-coded (`core/liquid_domain.rs:10`). The walk `liquid_domain_of` (`R/scene_modifier_expand/acceleration.rs:87`) runs over `FlatSceneIndex` (`R/scene_modifier_expand/index.rs:15`), which uses only manifold-core types; both are `pub(super)` in the renderer, so editing and the app can't call them.
 - Load-time type renames: `TYPE_ID_MIGRATIONS` (`core/type_id_migration.rs:219`).
-- The added-mass result: holding the body during an explicit pressure exchange gave 16.1× and 23.7× body energy at density ratio 0.1, and halving dt did not help (FLUID_ENGINE_INTEGRATION_PLAN.md P8b; `coupling_partitioned_light_body_rejects_energy_growth`, `crates/manifold-fluids/src/tests/coupling.rs:330`). MPM's light-body proof passes (`crates/manifold-renderer/tests/gpu_proofs/matter_coupling.rs:675`).
+- The added-mass result: holding the body during an explicit pressure exchange gave 16.1× and 23.7× body energy at density ratio 0.1, and halving dt did not help (FLUID_ENGINE_INTEGRATION_PLAN.md P8b; `coupling_partitioned_light_body_rejects_energy_growth`, `crates/manifold-fluids/src/tests/coupling.rs:330`). MPM's light-body proof passes (`crates/manifold-nodes/tests/gpu_proofs/matter_coupling.rs:675`).
 
 ### 1.3 Where the scene layer names a solver
 
@@ -67,7 +67,7 @@ Historical pre-retirement inventory: CPU FLIP runtime entries below are now proo
 
 ### 1.4 Section 2.5 primitive audit (DECOMPOSING_GENERATORS.md section 2.5 (primitive audit))
 
-Survey: `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`, plus the MPM water presets read end to end. No `FluidParticle` tick boundary, stats reduction or frame publisher exists; the precedents (`node.matter_state`, `node.matter_stats`, `node.matter_frame`) are typed on the 80-byte `MatterPoint`, and `node.array_feedback` on the 64-byte `Particle`. So `node.liquid_state`, `node.liquid_stats` and `node.liquid_frame` are genuinely new, each shaped like its MPM precedent. `node.matter_solid_distance` already computes walls plus bodies on the solid lattice with nothing MPM-specific: one rename away. Face resampling is genuinely new (two per-element gathers, P10).
+Survey: `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-nodes/src/node_graph/primitives/ -g "*.rs"`, plus the MPM water presets read end to end. No `FluidParticle` tick boundary, stats reduction or frame publisher exists; the precedents (`node.matter_state`, `node.matter_stats`, `node.matter_frame`) are typed on the 80-byte `MatterPoint`, and `node.array_feedback` on the 64-byte `Particle`. So `node.liquid_state`, `node.liquid_stats` and `node.liquid_frame` are genuinely new, each shaped like its MPM precedent. `node.matter_solid_distance` already computes walls plus bodies on the solid lattice with nothing MPM-specific: one rename away. Face resampling is genuinely new (two per-element gathers, P10).
 
 ## 2. Decisions
 
@@ -375,7 +375,7 @@ WGSL twin (D15): `liquid_pose.wgsl` gains `liquid_body_state(...) -> LiquidBodyS
 | I1 | Liquid type-id literals live in one place | `liquid_type_ids_live_in_one_place` (core test): scans every `.rs` under `crates/`; the literals of `LIQUID_DOMAIN_TYPE_IDS` may appear only in `core/liquid_domain.rs`, `core/type_id_migration.rs` and each domain's own primitive file |
 | I2 | Every domain type has a conformance row | `liquid_conformance_covers_every_domain` (CPU) |
 | I3 | Every domain meets the scene contract, gaps only shrink | `liquid_domain_scene_contract` with `LIQUID_SCENE_OWED` |
-| I4 | A coupled Box3D world steps once per tick, only through its owner | `liquid_coupled_world_steps_once_per_tick` (conformance, coupled rows); negative: `rg -n '\.advance_worker\(' crates/manifold-renderer/src -g '!**/tests/**'` hits only `R/liquid/coupling.rs`, `R/fluid/coupled/native.rs` and the inline tests of `R/physics/worker.rs` |
+| I4 | A coupled Box3D world steps once per tick, only through its owner | `liquid_coupled_world_steps_once_per_tick` (conformance, coupled rows); negative: `rg -n '\.advance_worker\(' crates/manifold-nodes/src -g '!**/tests/**'` hits only `R/liquid/coupling.rs`, `R/fluid/coupled/native.rs` and the inline tests of `R/physics/worker.rs` |
 | I5 | Momentum and energy hold across the boundary | `liquid_coupling_collision`, `liquid_floating_draft`, `liquid_hydrostatic_lift`, `liquid_free_flight` |
 | I6 | Pause holds frames and discards impulses | `liquid_pause_holds_frames`, `liquid_pause_discards_impulses` |
 | I7 | Export never drops ticks | `liquid_export_frame_rate_independent` (30 fps equals 60 fps) |
@@ -385,7 +385,7 @@ WGSL twin (D15): `liquid_pose.wgsl` gains `liquid_body_state(...) -> LiquidBodyS
 | I11 | Overflow is counted and reported | `liquid_overflow_is_reported` |
 | I12 | No atomics where a solver forbids them | `liquid_atomic_free_atoms` (scans each listed atom's WGSL for `atomic`) |
 | I13 | Uncoupled live frames never wait; coupled live frames use bounded per-tick exchanges | `liquid_live_frames_never_wait` (uncoupled); `liquid_coupled_live_frame_rate` (24 fps and 60 fps tick states) |
-| I14 | No new locks | `rg -n 'Arc<(Mutex\|RwLock)' crates/manifold-node-engine/src/water/liquid crates/manifold-renderer/src/node_graph/primitives -g '{matter,gpu_flip,liquid}_*.rs'` → zero |
+| I14 | No new locks | `rg -n 'Arc<(Mutex\|RwLock)' crates/manifold-node-engine/src/water/liquid crates/manifold-nodes/src/node_graph/primitives -g '{matter,gpu_flip,liquid}_*.rs'` → zero |
 | I15 | Fusion never crosses a region border; regions never nest | `substeps_freeze_never_fuses_across_border`, `substeps_region_nested_boundary_rejected` |
 | I16 | Grid outputs share one layout | `liquid_face_grid_layout` (a rigid-rotation field through each solver's resample matches CPU-expected at every face) |
 | I17 | The motion law matches Box3D | `coupled_motion_matches_box3d` (manifold-physics, CPU): a free body under gravity and a steady force in a real Box3D world at 15, 30 and 60 Hz; end position and velocity within 1e-5 relative; the angular case under its stated bound |
@@ -418,12 +418,12 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
   | `node.matter_solid_distance` (`R/primitives/matter_solid_distance.rs`, `shaders/matter_solid_distance_body.wgsl`) | `node.liquid_solid_distance` (`liquid_solid_distance.rs`, `liquid_solid_distance_body.wgsl`) plus a `TYPE_ID_MIGRATIONS` row |
 
   Stays in MPM: `MatterPoint`, `MatterGridNode`, `MatterLattice`, `PADDING_NODES`, `REACTION_WORDS`, `decode`, `body_limit`, `body_substep`, `ReactionScale`, and everything else in `matter_domain.rs`.
-- **Call-site inventory:** 230 matching lines in 30 files at `dfc884568` (15 renderer sources, 8 shaders, 5 files under `crates/manifold-renderer/tests`, `WaterDamBreakMatter.json`, `WaterFloatingBoxMatter.json`). Re-derive, and if the count differs, list the new sites before touching anything:
+- **Call-site inventory:** 230 matching lines in 30 files at `dfc884568` (15 renderer sources, 8 shaders, 5 files under `crates/manifold-nodes/tests`, `WaterDamBreakMatter.json`, `WaterFloatingBoxMatter.json`). Re-derive, and if the count differs, list the new sites before touching anything:
   `rg -c 'MatterClock|\bClockFrame\b|MAX_LIVE_TICKS|\bMatterBody\b|MATTER_BODY_SPECS|\bMatterShape\b|MATTER_SHAPE_SPECS|\bMatterBodies\b|BodiesStatus|\bRigidOwner\b|\bReactionSlot\b|\bMatterCoupling\b|pack_distance_atlas|body_pose_at|matter_pose\.wgsl|matter_collider\.wgsl|matter_solid_distance|MatterSolidDistance|matter_rotate|matter_turn|matter_body_velocity|matter_atlas_half' crates -g '*.rs' -g '*.json' -g '*.wgsl'`
   All sites are mechanical renames except `settle`'s callers in `matter_domain.rs` (`:655-692`, `:854`), which pass the decode closure. Worked example: `owner.settle(&observation.inputs, |_| true, || reaction_words(Some(reaction)))` → `owner.settle(&observation.inputs, |_| true, |pending, rows, impulses| decode(pending, scale, rows, reaction_words(Some(reaction)), impulses))`.
 - **Migration:** compiler-driven: delete the old names first. The two MPM preset JSONs take the new type id; saved projects load through the migration row. The clock tests move with the clock as `liquid_clock_*`.
 - **Deliverables:** `R/liquid.rs`, `R/liquid/{clock,bodies,coupling,frame_ring}.rs`, the renamed shaders and node, the migration row; pointer lines in GPU_MPM_SOLVER_DESIGN.md section 13 (Phasing): P3a → this doc's P2a/P2b, P3c → P8, P4b → P9, P6 → BUG-imy3 plus P10, P7 → keys on the predicate, not `MATTER_DOMAIN_TYPE_ID`.
-- **Gate:** positive: `cargo nextest run -p manifold-renderer liquid matter`; `cargo nextest run -p manifold-core type_id_migration`; `scripts/gpu_proofs_gate.py` green with the recorded MPM proof numbers unchanged; `cargo run -p manifold-renderer --bin graph-tool -- validate <preset> --kind generator` on both MPM water presets. Negative: the inventory pattern returns zero outside `core/type_id_migration.rs`; `rg -n 'pub use .*[Mm]atter' crates/manifold-node-engine/src/water/liquid.rs crates/manifold-node-engine/src/water/liquid` returns zero.
+- **Gate:** positive: `cargo nextest run -p manifold-nodes liquid matter`; `cargo nextest run -p manifold-core type_id_migration`; `scripts/gpu_proofs_gate.py` green with the recorded MPM proof numbers unchanged; `cargo run -p manifold-app --bin graph-tool -- validate <preset> --kind generator` on both MPM water presets. Negative: the inventory pattern returns zero outside `core/type_id_migration.rs`; `rg -n 'pub use .*[Mm]atter' crates/manifold-node-engine/src/water/liquid.rs crates/manifold-node-engine/src/water/liquid` returns zero.
 - **Demo:** none — L1. Nothing changes on stage.
 - **Forbidden:** `pub use` aliases; any changed number (a move that changes behaviour is a broken move); moving MPM's decode, `body_limit` or `body_substep` into the shared module; touching `feat/fft-water`.
 - **Test scope:** focused renderer and core; GPU proofs (shaders moved).
@@ -445,7 +445,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 - **Read-back:** section 3.5 (Scene recognition), section 3.8 (Committed signatures); `R/scene_vm.rs:1060` and `:1234`; `edit/commands/graph/scene/physics.rs:1025`.
 - **Old → new:** `R/scene_modifier_expand/index.rs` `pub(super) struct FlatSceneIndex` and its `SceneModifierExpandError` returns → `core/scene_index.rs` with `SceneIndexError`, and `impl From<SceneIndexError> for SceneModifierExpandError` in the renderer. `acceleration.rs:87` `pub(super) fn liquid_domain_of(...) -> Result<Option<SceneNodeRef>, SceneModifierExpandError>` → `core::liquid_domain::liquid_domain_of(...) -> Result<Option<SceneNodeRef>, SceneIndexError>`. `scene_vm.rs:1234`'s own walk → the core walk. `scene_object_physics_plan` refuses when `liquid_domain_of(object)` is `Some`; the app hides the Enable Physics toggle by the same call. Inventory: `rg -c 'FlatSceneIndex' crates -g '*.rs'` (44 lines in 11 files at `dfc884568`, all under `R/scene_modifier_expand`, all mechanical import changes).
 - **Deliverables:** the moves; `liquid_domain_scene_contract` and `LIQUID_SCENE_OWED` (MPM owes `acceleration_field` and the impulse hooks to P8); tests `scene_physics_refuses_enable_physics_on_water`, `scene_vm_traces_matter_domain`; flow `scripts/ui-flows/scene-liquid-recognition.json`.
-- **Gate:** positive: the tests; every `scene-fluid-*` and `scene-physics-*` flow on disk (count them). Negative: `rg -n 'fn liquid_domain_of|struct FlatSceneIndex' crates/manifold-renderer` returns zero.
+- **Gate:** positive: the tests; every `scene-fluid-*` and `scene-physics-*` flow on disk (count them). Negative: `rg -n 'fn liquid_domain_of|struct FlatSceneIndex' crates/manifold-nodes` returns zero.
 - **Demo:** L3: the flow opens Dam Break Matter as a scene and selects the water; the water panel shows its dials, Enable Physics is absent, the Force target list offers the water; undo, redo, save, reload, check again.
 - **Gesture:** click the water in a GPU-liquid scene and turn Speed on the water panel.
 - **Forbidden:** a second walk; a renderer copy of the index kept for convenience; changing FLIP behaviour.
@@ -453,9 +453,9 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 
 ### P3 — Safety rails on the CPU
 
-- **Entry state:** P1 on main. `rg -n 'fn matter_buffers_cover_their_dispatch_at_every_resolution' crates/manifold-renderer/src/node_graph/primitives/matter_extent_tests.rs` matches.
-- **Read-back:** section 3.7 (Safety rails); `matter_extent_tests.rs` whole; SWASH's `swash_extent_tests.rs` via `git show origin/feat/fft-water:crates/manifold-renderer/src/node_graph/primitives/swash_extent_tests.rs`; `admit_lattice` (`matter_domain.rs:280`).
-- **Deliverables:** `R/liquid/extent.rs` with MPM's rules moved in (`matter_extent_tests.rs` deleted) and `liquid_presets_all_extent_checked`: every preset under `crates/manifold-renderer/assets/generator-presets` holding a liquid domain, at every resolution from the domain's floor to its ceiling; an atom type without a rule fails by name. `LIQUID_MAX_RESOLUTION` and the matter domain's refusal above it, naming Resolution. `R/liquid/conformance.rs` with the MPM and FLIP rows, `liquid_conformance_covers_every_domain` and `liquid_refusals_name_their_control`.
+- **Entry state:** P1 on main. `rg -n 'fn matter_buffers_cover_their_dispatch_at_every_resolution' crates/manifold-nodes/src/node_graph/primitives/matter_extent_tests.rs` matches.
+- **Read-back:** section 3.7 (Safety rails); `matter_extent_tests.rs` whole; SWASH's `swash_extent_tests.rs` via `git show origin/feat/fft-water:crates/manifold-nodes/src/node_graph/primitives/swash_extent_tests.rs`; `admit_lattice` (`matter_domain.rs:280`).
+- **Deliverables:** `R/liquid/extent.rs` with MPM's rules moved in (`matter_extent_tests.rs` deleted) and `liquid_presets_all_extent_checked`: every preset under `crates/manifold-nodes/assets/generator-presets` holding a liquid domain, at every resolution from the domain's floor to its ceiling; an atom type without a rule fails by name. `LIQUID_MAX_RESOLUTION` and the matter domain's refusal above it, naming Resolution. `R/liquid/conformance.rs` with the MPM and FLIP rows, `liquid_conformance_covers_every_domain` and `liquid_refusals_name_their_control`.
 - **Gate:** positive: the tests. Negative: `rg -n 'fn matter_buffers_cover' crates` returns zero.
 - **Demo:** L1: the refusal texts, printed by the test, in the phase report.
 - **Gesture:** drag Resolution past 64 on Dam Break Matter; the node says which control stopped it and why.
@@ -467,7 +467,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 - **Entry state:** P3 on main.
 - **Read-back:** section 3.3 (Two-way Box3D coupling), section 3.4 (Clock, pause, speed, reset, export), section 4 (Invariants & enforcement); the proofs being replaced: `tests/gpu_proofs/matter_coupling.rs:596` (`export_frame_rate_independent`), `:675` (`energy_light_body`), `tests/gpu_proofs/matter_scene.rs:680` (`nonfinite_tick_not_published`).
 - **Deliverables:** `tests/gpu_proofs/liquid_conformance.rs` running I4–I8, I11, I13 for each GPU row, plus a speed-0.5 check (half the water time) and a reset check (new epoch); the test-build wait counter on the frame clock; the FLIP row runs its CPU checks and lists its exemptions: live debt policy (D3), synchronous coupling (D3), pause-discards-impulses (BUG-xt71 (MIDI impulse during pause lands on resume), FLIP frozen). MPM's impulse checks sit on `LIQUID_SCENE_OWED` until P8. The three MPM proofs above are deleted.
-- **Gate:** positive: `scripts/gpu_proofs_gate.py` green; the report lists energy ratio and momentum error per density ratio, draft error and lift error. Negative: `rg -n 'fn (export_frame_rate_independent|energy_light_body|nonfinite_tick_not_published)' crates/manifold-renderer/tests/gpu_proofs` returns zero.
+- **Gate:** positive: `scripts/gpu_proofs_gate.py` green; the report lists energy ratio and momentum error per density ratio, draft error and lift error. Negative: `rg -n 'fn (export_frame_rate_independent|energy_light_body|nonfinite_tick_not_published)' crates/manifold-nodes/tests/gpu_proofs` returns zero.
 - **Demo:** L1: the proof numbers.
 - **Forbidden:** loosening a threshold to pass MPM (escalate instead); per-solver copies of a generic check.
 - **Test scope:** GPU proofs (`cargo test`, never nextest).
@@ -479,7 +479,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 - **Entry state:** `rg -n 'never nested' crates/manifold-node-engine/src/exec/substeps.rs` matches.
 - **Read-back:** FREEZE_COMPILER_MAP.md section 4 (The cut rules — when fusion says no) and section 9 (Executor contracts fusion leans on), item 12; `R/substeps.rs` whole; MPM D7; SWASH D8 and D10 on the branch.
 - **Deliverables:** a region's body may contain whole regions, depth at most 2. An inner region lies wholly inside one outer body; only an outer region may name a clock; an inner region's escaping outputs feed only its outer body or the outer capture. Compile errors name the NodeIds for partial overlap, depth 3 and a clock on an inner region. Tests: `nested_region_contracts_inner_whole`, `nested_region_rejects_partial_overlap`, `nested_region_rejects_depth_three`, `nested_region_rejects_inner_clock`; every existing substep test unchanged.
-- **Gate:** `cargo nextest run -p manifold-renderer substep`.
+- **Gate:** `cargo nextest run -p manifold-nodes substep`.
 - **Demo:** none — L1.
 - **Forbidden:** flattening the inner region into the outer; host syncs in an inner region; depth 3; running a malformed nest as plain traversal.
 - **Test scope:** focused renderer.
@@ -498,7 +498,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 
 ### P7a — SWASH on the contract (`feat/fft-water`)
 
-- **Entry state:** SWASH P3 built; P1, P3, P4 and P6 merged into the branch from `origin/main`. `rg -n 'fn water_step' crates/manifold-renderer/src/node_graph/primitives/swash_preset.rs` and `rg -n 'liquid_feedback' crates/manifold-renderer/src/node_graph/primitives/swash_preset.rs` match.
+- **Entry state:** SWASH P3 built; P1, P3, P4 and P6 merged into the branch from `origin/main`. `rg -n 'fn water_step' crates/manifold-nodes/src/node_graph/primitives/swash_preset.rs` and `rg -n 'liquid_feedback' crates/manifold-nodes/src/node_graph/primitives/swash_preset.rs` match.
 - **Read-back:** sections 3.1–3.7 here; the SWASH design's D7, D8, D10 and I6; `swash_preset.rs` whole; `matter_domain.rs` as the shape of a domain node (read, never import).
 - **Deliverables:**
   - `node.swash_domain`: params under FLIP's names (Resolution, Speed, Reset, gravity); a `LiquidClock`; roles through `PreparedFluidGeometry`; the extent check before the first dispatch; a named refusal when Resolution gives a lattice other than the preset's baked one (lifted in P7b); refusal of inflow and drain roles by name.
@@ -507,7 +507,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
   - `node.liquid_solid_distance` feeds the surface's `solid`; `grid_bounds` and nodes come from the domain; the `DAM_MIN` box constants are deleted.
   - `SWASH_DOMAIN_TYPE_ID` in `LIQUID_DOMAIN_TYPE_IDS`; the SWASH conformance row (coupled checks owed to SWASH P3b, its atomic-free list from SWASH D7); its dial row; its extent rules in `liquid::extent` (`swash_extent_tests.rs` deleted).
   - SWASH design amendments: D8 (tick region with the Krylov regions nested, D10 here), P3b (D7 and D12 here: bodies inside the solve, faces from the shared distance lattice, the held-out mesh collider), I6 → I9 here; its Deferred row on nested regions removed.
-- **Gate:** positive: the SWASH conformance rows green; SWASH's P3 race numbers (ms per tick, volume drift) within 5% of before, since only the loop moved. Negative: `rg -n 'liquid_feedback|DAM_MIN' crates/manifold-renderer/src` and SWASH's I1 pattern both return zero.
+- **Gate:** positive: the SWASH conformance rows green; SWASH's P3 race numbers (ms per tick, volume drift) within 5% of before, since only the loop moved. Negative: `rg -n 'liquid_feedback|DAM_MIN' crates/manifold-nodes/src` and SWASH's I1 pattern both return zero.
 - **Demo:** L2: Dam Break SWASH, 300 frames headless at 60 fps and exported at 30 fps; a scripted diff checks frame 300 at 60 fps against frame 150 at 30 fps (the agent's gate); a paused run's frames are identical. Peter looks at the PNGs.
 - **Gesture:** pause mid-wave, then play; the wave carries on from the same crest.
 - **Forbidden:** mux-gated step copies; a SWASH-only clock; importing any `matter_*` item; changing the step's numerics.

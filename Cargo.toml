@@ -10,7 +10,7 @@ members = [
     "crates/manifold-playback",
     "crates/manifold-editing",
     "crates/manifold-io",
-    "crates/manifold-renderer",
+    "crates/manifold-nodes",
     "crates/manifold-node-engine",
     "crates/manifold-compositor",
     "crates/manifold-nodes-scene",

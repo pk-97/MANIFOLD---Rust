@@ -10,7 +10,7 @@
 
 ## 1. Audit
 
-Existing precedents: `crates/manifold-renderer/tests/scene_modifier_inv_gate.rs`, `scene_loop_wrap_parity.rs`, `scene_loop_roundtrip.rs`; per-primitive codegen `gpu_tests`; `scripts/gpu_proofs_gate.py:172` supports `--manifest-path` and `--filter`; existing `cargo xtask ui-snap gltfscene` and semantic flows. Test names introduced by this programme are planned deliverables, never evidence of a passed check today.
+Existing precedents: `crates/manifold-nodes/tests/scene_modifier_inv_gate.rs`, `scene_loop_wrap_parity.rs`, `scene_loop_roundtrip.rs`; per-primitive codegen `gpu_tests`; `scripts/gpu_proofs_gate.py:172` supports `--manifest-path` and `--filter`; existing `cargo xtask ui-snap gltfscene` and semantic flows. Test names introduced by this programme are planned deliverables, never evidence of a passed check today.
 
 **September 12 baseline:** the [photoscan landing report](landings/2026-09-11-photoscan-modifiers.md) records all ten landing checks green, nine focused Metal proofs, five recipe tests, four editing tests, the 34-step control flow and observed mushroom raster phase strips. Reuse `tests/photoscan_modifier_plans.rs`, editing `tests/scene_mesh_modifier_roundtrip.rs`, primitive `photoscan_modifier` tests and `scripts/ui-flows/scene-photoscan-modifiers.json`. The old UI fixture had no playing clip, so its black viewport only qualified controls. Peter subsequently praised all three looks and reported that LFOs appeared to work. That is user-observed visual/LFO evidence, not a measured audio, save/reopen or timing result. BUG-e3p6.5 retains those remaining checks; BUG-e3p6.4 owns dynamic RT.
 
@@ -43,7 +43,7 @@ September 13 landing correction: the native mask proof and real-photoscan recipe
 | Faces | Two adjacent triangles with UV seam and a degenerate triangle | Rigid face motion, cracks, degeneracy and reconstruction |
 | Splats, later | Synthetic anisotropic splats plus held-out supported scan | Extent/orientation, masks, sort, mesh depth and return pose |
 
-Generated fixtures live under `crates/manifold-renderer/tests/fixtures/scene-modifiers/` and must use legal distributable assets. Held-out asset is selected by the lead after worker development; record its hash/counts. No fixture is fetched or rendered for this documentation task.
+Generated fixtures live under `crates/manifold-nodes/tests/fixtures/scene-modifiers/` and must use legal distributable assets. Held-out asset is selected by the lead after worker development; record its hash/counts. No fixture is fetched or rendered for this documentation task.
 
 ## 4. Shared gates
 
@@ -101,7 +101,7 @@ Run from a leased slot; set `MODIFIER_WORKTREE` to its absolute path. Examples a
 cargo test --manifest-path "$MODIFIER_WORKTREE/Cargo.toml" -p manifold-core -p manifold-io scene_modifier_v3
 cargo test --manifest-path "$MODIFIER_WORKTREE/Cargo.toml" -p manifold-editing scene_modifier
 python3 "$MODIFIER_WORKTREE/scripts/gpu_proofs_gate.py" --manifest-path "$MODIFIER_WORKTREE/Cargo.toml" --filter scene_modifier_photoscan_migration
-cargo clippy --manifest-path "$MODIFIER_WORKTREE/Cargo.toml" -p manifold-renderer --tests -- -D warnings
+cargo clippy --manifest-path "$MODIFIER_WORKTREE/Cargo.toml" -p manifold-nodes --tests -- -D warnings
 cargo run --manifest-path "$MODIFIER_WORKTREE/Cargo.toml" --quiet -p manifold-app --bin manifold --features ui-snapshot -- ui-snap gltfscene --script "$MODIFIER_WORKTREE/scripts/ui-flows/scene-modifier-preset.json"
 ```
 

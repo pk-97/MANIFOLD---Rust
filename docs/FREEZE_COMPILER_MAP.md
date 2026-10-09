@@ -51,7 +51,7 @@ make that impossible; the invariant list (section 9) is what a review must attac
 
 ## 2. File map
 
-Engine paths below are relative to `crates/manifold-node-engine/src/`. The legacy generator registry remains at `crates/manifold-renderer/src/generators/registry.rs`.
+Engine paths below are relative to `crates/manifold-node-engine/src/`. The legacy generator registry remains at `crates/manifold-nodes/src/generators/registry.rs`.
 
 | File | Role | Size |
 |---|---|---|
@@ -69,7 +69,7 @@ Engine paths below are relative to `crates/manifold-node-engine/src/`. The legac
 | `exec/execution.rs` | The executor: per-frame liveness (mux short-circuit), memoized-dataflow skip (`is_pure`), empty-output skip, preview capture, dump/thumbnail pinning, the aliased-output stale guard, end-of-frame feedback texture swap. | 2923 |
 | `load/graph_loader.rs` | `instantiate_def`: flatten groups → construct + configure primitives → wires; array output pre-allocation (`array_output_capacity`). | 1838 |
 | `runtime/` (was preset_runtime.rs — Wave 3 P3-R split, 2026-07-22; core.rs holds the chain build) | Effect-chain build: segmentation pass → per-card `fused_view_for` → splice. The live entry point for effect fusion. `groups.rs` owns membership validation/filtering and wet/dry/mask Mix assembly. | — |
-| `crates/manifold-renderer/src/generators/registry.rs` | Generator entry point: `should_render_fused` → `fused_generator_def_for` → `from_def`. | — |
+| `crates/manifold-nodes/src/generators/registry.rs` | Generator entry point: `should_render_fused` → `fused_generator_def_for` → `from_def`. | — |
 | `chain_dispatch.rs` | Calls `pump_segment_results()` each dispatch (drains the chain-fusion worker). | — |
 
 ## 3. The pipeline, end to end
@@ -516,9 +516,9 @@ invariant a fused def must respect:
   hazard, not an accepted fact of life.
 - **Known pre-existing failures** (not fusion's): DepthOfField prewarm,
   and the Liveschool FluidSimulation Ableton param-id fixture.
-- Scope: freeze suite = `cargo test -p manifold-renderer --lib
+- Scope: freeze suite = `cargo test -p manifold-nodes --lib
   node_graph::freeze`. After ANY codegen/macro change run the full
-  `-p manifold-renderer --lib` — focused runs miss cross-atom staleness.
+  `-p manifold-nodes --lib` — focused runs miss cross-atom staleness.
 
 ## 11. Honest edges (the bug hunt starts here)
 

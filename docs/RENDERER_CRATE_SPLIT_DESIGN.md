@@ -1,6 +1,6 @@
 # Renderer Crate Split — one engine crate, node families as leaves
 
-**Status:** IN PROGRESS · P0, P1a, P1 and P2 landed · P3–P4 owed · P5 awaits Peter. Section 5 (Phasing).
+**Status:** IN PROGRESS · P0–P3 landed · P4 review and measurement owed · P5 waits for Peter. Section 5 (Phasing).
 **Prerequisites:** none.
 **Work items:** epic BUG-hkbdp (renderer crate split epic); phases BUG-jo1qt (P0 census and seams), BUG-k452g (P1a ui-paint), BUG-9hndn (P1 carve manifold-node-engine), BUG-vnbdt (P2 leaves), BUG-uones (P3 catalog), BUG-l6ltu (P4 review and measurement), BUG-t2jwg (P5 water seam). Status is recorded only above.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before any phase. Lead: Opus 5.5. Lanes: Astra (Codex) for every mechanical phase (Peter, 2026-10-07: *"please use Astra agents for this work"*); this overrides `feedback_astra_review_only` for this campaign only. Lanes make one commit then stop; the lead lands.
@@ -201,8 +201,8 @@ Common to every phase: one Astra lane per phase or sub-phase in its own slot wor
 ### P3 — The catalog, and `manifold-renderer` is gone
 
 - **Entry:** P2a–c landed. `manifold-renderer` now holds: bins, `assets/`, `bundled_presets`, `generators/registry.rs` + `bundled_generator_presets.rs`, cross-family tests. (The water primitives and adapters are in `manifold-node-engine` after P1 per D9, not here.) ⚠ VERIFY-AT-IMPL: `fd -e rs . crates/manifold-renderer/src | wc -l` and list; anything not in this sentence is an escalation.
-- **Deliverables:** `crates/manifold-nodes` per D1 and D6; `assets/` moved; the `PresetAssetsRoot` registration moves from `manifold-renderer` to `manifold-nodes` with the assets; bins moved; cross-family tests folded; `crates/manifold-renderer` deleted; workspace members updated; every remaining `manifold-renderer`/`manifold_renderer` string in `scripts/`, `.config/`, `.claude/`, `docs/` resolved (re-derive: `rg -l 'manifold[-_]renderer' scripts .config .claude docs crates`) — zero hits is the deletion gate; BUG-yd6b (fold per-file test binaries into one per crate) closed.
-- **Gate:** INV-1 through INV-7; full `scripts/landing_gate.py`; `scripts/feature_matrix.py` (every moved feature builds); `rg -l 'manifold[-_]renderer' …` → 0 outside `docs/archive/` and git history.
+- **Deliverables:** `crates/manifold-nodes` per D1 and D6; `assets/` moved; the `PresetAssetsRoot` registration moves from `manifold-renderer` to `manifold-nodes` with the assets; bins moved; cross-family tests folded; `crates/manifold-renderer` deleted; workspace members updated; every remaining live `manifold-renderer`/`manifold_renderer` reference in `scripts/`, `.config/`, `.claude/`, `docs/` resolved (re-derive: `rg -l 'manifold[-_]renderer' scripts .config .claude docs crates`) — zero live references is the deletion gate; BUG-yd6b (fold per-file test binaries into one per crate) closed.
+- **Gate:** INV-1 through INV-7; full `scripts/landing_gate.py`; `scripts/feature_matrix.py` (every moved feature builds); `rg -l 'manifold[-_]renderer' …` → 0 live references; historical descriptions (including this design and its generated index entry), archived docs, committed replay plans and git history retain the source crate name.
 - **Demo:** L3 — full flow suite, count match; plus the two P1 preset renders at threshold 0.
 
 ### P4 — Surface review, measurement, docs

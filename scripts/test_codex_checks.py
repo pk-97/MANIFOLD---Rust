@@ -24,7 +24,7 @@ class PlannerTests(unittest.TestCase):
 
     def test_feature_coverage_is_checked_without_builds(self):
         repo = Path(__file__).resolve().parents[1]
-        for path in ("Cargo.toml", "crates/manifold-renderer/Cargo.toml", "scripts/feature_matrix.py"):
+        for path in ("Cargo.toml", "crates/manifold-nodes/Cargo.toml", "scripts/feature_matrix.py"):
             checks = codex_checks.tooling_checks(repo, [path])
             coverage = [c for c in checks if c["name"] == "feature-coverage"]
             self.assertEqual(len(coverage), 1)
@@ -60,7 +60,7 @@ class PlannerTests(unittest.TestCase):
     def test_gpu_plan_passes_paths_and_scopes_glb_only_for_gltf(self):
         repo = Path(__file__).resolve().parents[1]
         rt = "crates/manifold-gpu/src/metal/raytrace.rs"
-        glb = "crates/manifold-renderer/tests/glb_conformance.rs"
+        glb = "crates/manifold-nodes/tests/gpu_proofs/glb_conformance.rs"
         fixture = "tests/fixtures/gltf/khronos/manifest.json"
         for paths, glb_expected in [([rt], False), ([glb], True), ([fixture], True), ([rt, glb], True)]:
             with self.subTest(paths=paths):

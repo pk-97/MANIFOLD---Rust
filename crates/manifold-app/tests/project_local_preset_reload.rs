@@ -34,7 +34,7 @@
 //! catalog-reading tests in a shared binary. Keep any future tests here
 //! behind a shared lock (see `project_preset_overlay.rs` in the renderer).
 
-use manifold_renderer as _;
+use manifold_nodes as _;
 use manifold_core::PresetTypeId;
 use manifold_core::preset_def::PresetKind;
 use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};
@@ -66,7 +66,7 @@ fn install(presets: &[EmbeddedPreset]) {
 fn fake_imported_generator(id: &PresetTypeId) -> EmbeddedPreset {
     let tess_json = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../manifold-renderer/assets/generator-presets/Tesseract.json"),
+            .join("../manifold-nodes/assets/generator-presets/Tesseract.json"),
     )
     .expect("read Tesseract.json");
     let mut def: manifold_core::effect_graph_def::EffectGraphDef =

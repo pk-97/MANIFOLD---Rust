@@ -761,7 +761,7 @@ mod tests {
 /// decodes in a live project hits `run()` step 7's
 /// `self.pipeline.get_or_insert_with(...)` as a cache hit rather than
 /// compiling the blit shader on the content thread. Run deliberately:
-/// `cargo test -p manifold-renderer --features gpu-proofs
+/// `cargo test -p manifold-nodes-scene --features gpu-proofs
 /// node_graph::primitives::gltf_texture_source::gpu_tests`.
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {

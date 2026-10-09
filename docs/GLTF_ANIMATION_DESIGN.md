@@ -16,7 +16,7 @@ Honesty about certification: this doc barely moves the conformance number — mo
 ```
 rg -n 'JOINTS_0|WEIGHTS_0|read_morph|animations\(\)|skins\(\)' crates/manifold-nodes-scene/src/node_graph/gltf_load.rs   # expect: still zero hits
 rg -n 'purpose: "' crates/manifold-nodes-scene/src/node_graph/primitives/{morph_mesh,bend_mesh,displace_mesh,gltf_mesh_source}.rs
-rg -n 'anim_progress|trigger_count' crates/manifold-renderer/src/node_graph/effect_runtime.rs | head
+rg -n 'anim_progress|trigger_count' crates/manifold-nodes/src/node_graph/effect_runtime.rs | head
 ```
 
 Snapshot: meshes flow through the graph as first-class data — `gltf_mesh_source` → deform atoms (`morph_mesh`, `bend_mesh`, `displace_mesh` — MESH_DEFORM_AND_CURVE_GEOMETRY, SHIPPED 2026-07-11) → `render_3d_mesh` / `render_scene`. `PresetContext` already carries `time`, `beat`, `anim_progress`, `trigger_count` per frame. Per-object transforms reach `render_scene` as graph params (the import graph wires them), so animating a rigid node = animating params — machinery that exists. Genuinely new: keyframe storage + sampling, skinning (JOINTS_0/WEIGHTS_0 → joint palette → per-vertex blend), and morph-target weight animation.
@@ -64,8 +64,8 @@ Snapshot: meshes flow through the graph as first-class data — `gltf_mesh_sourc
 - Positive: a new `#[test]` in `gltf_import.rs` (or a sibling test module) rendering the four-phase PNG sequence for `BoxAnimated.glb` to `tests/fixtures/gltf/goldens/` (follow the existing `imported_*_renders_faithfully_to_png` naming/goldens convention) — four distinct, non-identical PNGs. A round-trip test: build the import graph, serialize via the V1/V2 project path, reload, re-render at progress 0.5, confirm pixel match with the pre-reload progress-0.5 render. A saw-LFO loop test asserting near-progress-0 and near-progress-1 renders are near-identical (loop continuity).
 - Phase-sequence frames go through `assert_phase_sequence_distinct`: every run writes to `MESH_SNAP_OUT_DIR` (gitignored), and the committed `tests/fixtures/gltf/goldens/` copies are refreshed only under `MANIFOLD_REBASELINE_GOLDENS=1`, after the assertions pass. A failing run must never overwrite the goldens it just contradicted (2026-07-26, BUG-325 (box-animated-test-renders-all-zero-frames)).
 - Negative: `rg -n 'JOINTS_0|WEIGHTS_0|skins\(\)'` in this phase's diff returns zero hits (A1 is TRS-only, skinning is A2 — don't scope-creep).
-- Test scope: focused — `cargo test -p manifold-renderer --lib gltf_import`, `... gltf_load`, `... primitives::gltf_animation_source` (new render/round-trip tests are GPU-touching via `render_scene`'s existing headless path — check whether the existing `imported_*_renders_to_png` tests already require `--features gpu-proofs`; match that convention, don't invent a new one).
-- Clippy: `cargo clippy -p manifold-renderer -- -D warnings` (worktree-scoped).
+- Test scope: focused — `cargo test -p manifold-nodes --lib gltf_import`, `... gltf_load`, `... primitives::gltf_animation_source` (new render/round-trip tests are GPU-touching via `render_scene`'s existing headless path — check whether the existing `imported_*_renders_to_png` tests already require `--features gpu-proofs`; match that convention, don't invent a new one).
+- Clippy: `cargo clippy -p manifold-nodes -- -D warnings` (worktree-scoped).
 
 **Forbidden moves:** a parallel "animation player" outside the graph (D1, decided); baking seconds→beats at import (D3, decided); CPU skinning or scope-creep into A2 (D2/A2 boundary); silently dropping a channel type A1 doesn't handle (fail loudly or leave inert-but-present, per the round-trip corollary); synthesizing the keyframe-sampling math from memory instead of implementing straight off the glTF spec's defined interpolation (LINEAR only for A1 — CUBICSPLINE/STEP are Deferred unless `BoxAnimated` needs them, re-derive at execution).
 
@@ -138,7 +138,7 @@ turned out to be the WRONG stress axis (see Deviation from D2 below).
   frame to find the range — cheap at the joint counts these fixtures carry, confirmed by
   the hot-path gate below) instead of one Table per channel.
 - **section 2.5 audit (CLAUDE.md, mandatory before proposing `node.skin_mesh`):**
-  `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"` — no
+  `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-nodes/src/node_graph/primitives/ -g "*.rs"` — no
   existing primitive does per-vertex joint blending, matrix-palette lookup, or anything
   adjacent (`node.morph_mesh` is the nearest relative — a coincident two-mesh lerp with
   an optional coincident weights buffer — and it directly informed the `joints`/`weights`
@@ -203,12 +203,12 @@ turned out to be the WRONG stress axis (see Deviation from D2 below).
   avg 5.4ms, max 5.8ms. Both comfortably under the 20ms budget.
 - Negative gate carried over from A1: scope stayed inside A2 — no morph-target work (A3),
   no clip-selector/performance-surface work (A4).
-- Test scope: `cargo test -p manifold-renderer --lib` (default sweep, 1339/1339 green) +
-  `cargo test -p manifold-renderer --features gpu-proofs --lib` (targeted skin_mesh/
+- Test scope: `cargo test -p manifold-nodes --lib` (default sweep, 1339/1339 green) +
+  `cargo test -p manifold-nodes --features gpu-proofs --lib` (targeted skin_mesh/
   gltf_skeleton_pose/gltf_skinned_mesh_source/gltf_import module runs, all green) +
-  `cargo run -p manifold-renderer --bin gen_node_catalog` (regenerated for the 3 new
+  `cargo run -p manifold-nodes --bin gen_node_catalog` (regenerated for the 3 new
   primitives — `node_graph::catalog_gen::tests::regenerates_in_sync` requires this after
-  any primitive addition) + `cargo clippy -p manifold-renderer -- -D warnings` (clean,
+  any primitive addition) + `cargo clippy -p manifold-nodes -- -D warnings` (clean,
   worktree-scoped).
 
 **Deviation found and NOT chased (logged instead):** `BrainStem.glb`, the design doc's
@@ -249,7 +249,7 @@ assumed):**
   A2's node-transform deviation (see A2 brief above): the doc's assumption doesn't survive
   contact with the real assets.
 - section 2.5 audit (CLAUDE.md, mandatory before proposing new primitives):
-  `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/` — no existing
+  `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-nodes/src/node_graph/primitives/` — no existing
   primitive does N-ary weighted delta-sum blending. `node.morph_mesh` and
   `node.blend_copies` are the nearest relatives, both strictly 2-ary. Genuinely new,
   confirmed.
@@ -330,12 +330,12 @@ assumed):**
   (existing param-serialization path, prove not assume, per A1's gate doctrine).
 - Negative: `node.morph_mesh` diff is empty in this phase — zero lines changed in
   `morph_mesh.rs` (its header's warning is a hard boundary, not a suggestion).
-- Test scope: `cargo test -p manifold-renderer --lib` (default sweep) +
-  `cargo test -p manifold-renderer --features gpu-proofs --lib` (targeted
+- Test scope: `cargo test -p manifold-nodes --lib` (default sweep) +
+  `cargo test -p manifold-nodes --features gpu-proofs --lib` (targeted
   morph_targets_blend/gltf_morph_weights/gltf_import module runs) +
-  `cargo run -p manifold-renderer --bin gen_node_catalog` (regenerate for the 2 new
+  `cargo run -p manifold-nodes --bin gen_node_catalog` (regenerate for the 2 new
   primitives; `catalog_gen::tests::regenerates_in_sync` requires this) + `cargo clippy -p
-  manifold-renderer -- -D warnings` (worktree-scoped).
+  manifold-nodes -- -D warnings` (worktree-scoped).
 
 **Forbidden moves:** growing `node.morph_mesh` toward N-ary morph playback (its header's
 explicit boundary); a fused single-kernel that parses+samples+blends in one primitive (CPU
@@ -487,7 +487,7 @@ hard gate (A2 didn't repeat A1's LFO test either — precedent for reasonable sc
    card re-renders with the expected widget state.
 
 **Gate:**
-- Positive (value-level, `cargo test -p manifold-renderer --lib`): retrigger
+- Positive (value-level, `cargo test -p manifold-nodes --lib`): retrigger
   resets progress to ~0 within one frame of a `trigger_count` edge (compare the
   sampled output right after the edge against the frame-0/progress-0 output);
   `Once` holds its end value past `progress > 1`; `PingPong` reflects correctly
@@ -518,10 +518,10 @@ hard gate (A2 didn't repeat A1's LFO test either — precedent for reasonable sc
 - Negative: `Fox.glb`'s 3-clip parse (`clip_index` 0/1/2) produces three
   distinct, non-empty row ranges per animated joint — proves the compound-key
   builder isn't shaped around the single-clip fixtures alone.
-- Test scope: `cargo test -p manifold-renderer --lib` (default sweep) +
-  `cargo run -p manifold-renderer --bin gen_node_catalog` (regenerate for
+- Test scope: `cargo test -p manifold-nodes --lib` (default sweep) +
+  `cargo run -p manifold-nodes --bin gen_node_catalog` (regenerate for
   param/input changes on 3 existing primitives — `catalog_gen::tests::regenerates_in_sync`
-  requires this) + `cargo clippy -p manifold-renderer -p manifold-app -- -D warnings`
+  requires this) + `cargo clippy -p manifold-nodes -p manifold-app -- -D warnings`
   (worktree-scoped).
 
 **Forbidden moves:** clip *blending*/crossfade (D4, explicitly Deferred);

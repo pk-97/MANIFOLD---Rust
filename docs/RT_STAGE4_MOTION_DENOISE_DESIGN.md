@@ -106,22 +106,22 @@ Same budget discipline as stage-3 (≤2 ms at 4K steady state). P1: zero added c
 - **Entry state:** P1 on main. Read the refl accumulate kernel's moments writes (raytrace.rs) and state whether refl carries per-texel history length in an addressable channel — if not, P2a adds it to the refl moments write (mirroring `moments_write.w` at `raytrace.rs:3322`) as its own committable step with a gpu-proofs value test, before any filtering. Re-verify: refl history/moments textures and the refl composite consumption seam (`render_scene.rs:6734` area).
 - **Read-back:** D1, section 3.3, I1/I3; stage-3 D1 (why refl was excluded) — restate what changed (motion, not stills, is the target now).
 - **Deliverables:** `rt_refl_filtered`/`_b` pair; dispatch + composite rebind at the refl seam; P2a if needed; gpu-proofs value test mirroring P1's.
-- **Gate:** clippy `-p manifold-gpu -p manifold-renderer`; gpu-proofs green (lead); helmet motion A/B: refl-history boil down ≥15%, composite down with it — **if refl filtering cannot show that, the phase reverts and section 9 records it** (the channel wasn't the carrier; P1 still stands); perf on apricot 4K rays 100%: added ms recorded, ≤2 ms over stage-3.
+- **Gate:** clippy `-p manifold-gpu -p manifold-nodes`; gpu-proofs green (lead); helmet motion A/B: refl-history boil down ≥15%, composite down with it — **if refl filtering cannot show that, the phase reverts and section 9 records it** (the channel wasn't the carrier; P1 still stands); perf on apricot 4K rays 100%: added ms recorded, ≤2 ms over stage-3.
 - **Acceptance demo:** PNG pair on the helmet at a specular-heavy frame (L2 for Peter); region-mean probe numbers as the agent gate.
 - **Performer gesture:** slow camera dolly across the glossy shell — reflections glued, no sparkle boil, hoses/thin geometry not smeared.
 - **Forbidden moves:** filtering sv (SV-ACCUM + hold machinery owns that channel — overlap is scope creep); touching stage-3's irradiance constants; beauty-pass filtering anywhere.
-- **Test scope:** manifold-gpu + manifold-renderer + gpu-proofs.
+- **Test scope:** manifold-gpu + manifold-nodes + gpu-proofs.
 
 ### P3 — Temporal feedback (lane: pro; lead reviews every diff)
 
 - **Entry state:** P1 + P2 on main with their helmet numbers in the doc. Re-verify: `reset_decision` call site and its three inputs (`render_scene.rs:6221-6223`); `irr_filtered_valid` lifetime (`:4376`, `:6462`).
 - **Read-back:** D3, D4, D5, section 3.2 (the seam brief), I2′/I4/I6; the forbidden shape in section 4, restated aloud.
 - **Deliverables:** `irr_filtered_feedback_valid` persistence + clearing rules; the feedback read-address change; reset-frame bypass; I2′ poison test; I6 convergence test; (refl feedback rides the same seam, added in the same diff).
-- **Gate:** clippy `-p manifold-renderer`; gpu-proofs green (lead); helmet motion A/B: composite motion boil vs post-P2 build — the convergence number, target ≥2× reduction in composite mean |delta| under continuous rotation vs the 2026-08-28 baseline (2.036 mean on the quiet span); **gesture ghost gate**: RtEmissiveStrength continuous intensity ramp + one-shot ambient snap (apricot fixture) — frame-to-frame |delta| tail after the cue returns to baseline within stage-3's window +2 frames, no sustained offset (the ghost detector); strobe leg: 4 Hz intensity square, no frame shows the previous phase's content (pixel-diff at phase boundary vs raw-history control run).
+- **Gate:** clippy `-p manifold-nodes`; gpu-proofs green (lead); helmet motion A/B: composite motion boil vs post-P2 build — the convergence number, target ≥2× reduction in composite mean |delta| under continuous rotation vs the 2026-08-28 baseline (2.036 mean on the quiet span); **gesture ghost gate**: RtEmissiveStrength continuous intensity ramp + one-shot ambient snap (apricot fixture) — frame-to-frame |delta| tail after the cue returns to baseline within stage-3's window +2 frames, no sustained offset (the ghost detector); strobe leg: 4 Hz intensity square, no frame shows the previous phase's content (pixel-diff at phase boundary vs raw-history control run).
 - **Acceptance demo:** helmet 60-frame clip PNGs at three rotation phases + the gesture recovery curve, for Peter (L2).
 - **Performer gesture:** strobe cue mid-rotation — the frame after each snap is clean, no smeared afterimage of the pre-snap lighting.
 - **Forbidden moves:** ANY change to `reset_decision`'s inputs or a second detector; letting `irr_filtered_feedback_valid` survive a dimension change; touching the alpha expression; filtering the moments writes.
-- **Test scope:** manifold-renderer + gpu-proofs.
+- **Test scope:** manifold-nodes + gpu-proofs.
 
 ### P4 — Measure, gate, land (lead, not a lane)
 

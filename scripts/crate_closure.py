@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Crate-split census for the renderer: what the engine core pulls in, and where it reaches into a family.
 
-Two modes, both read-only, both over `crates/manifold-renderer/src` (or `--root`):
+Two modes, both read-only, both over `crates/manifold-nodes/src` (or `--root`):
 
   closure  [unit...]   transitive module closure of the seed units, with line counts.
                        A unit is `ng:<module>` (a node_graph module file or directory),
@@ -26,7 +26,7 @@ import re
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_ROOT = os.path.join(REPO, "crates", "manifold-renderer", "src")
+DEFAULT_ROOT = os.path.join(REPO, "crates", "manifold-nodes", "src")
 
 # RENDERER_CRATE_SPLIT_DESIGN.md D1/D2/D9: node_graph modules that are family, not engine.
 # Scene vocabulary (camera, light, material, transform, ...) is deliberately absent:

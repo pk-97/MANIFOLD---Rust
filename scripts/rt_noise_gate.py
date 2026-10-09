@@ -23,7 +23,7 @@ requires BOTH:
 1. Stability — the frame-to-frame ceilings below.
 2. Correctness — the RT furnace oracle
    (`crates/manifold-nodes-scene/tests/gpu_proofs/rt_furnace_oracle.rs`, run via
-   `cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs
+   `cargo test -p manifold-nodes --features gpu-proofs --test gpu_proofs
    -- rt_furnace`): a flat albedo-1 surface under a closed-form uniform
    environment must read back the field radiance on the TRACED path (RT on)
    and match the raster path (RT off) within tolerance (I-ED4's brightness

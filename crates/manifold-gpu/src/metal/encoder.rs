@@ -2335,7 +2335,7 @@ impl GpuEncoder {
         // intended. That is the cropped-DNN-analysis bug class (depth /
         // flow / person estimating on the top-left ~9% of a 4K frame).
         // Make it unwriteable: differently-sized textures must go through
-        // a sampling resize (manifold-renderer's GpuEncoder::resize_sample),
+        // a sampling resize (manifold-nodes's GpuEncoder::resize_sample),
         // never this blit. (Every current caller is a same-size full copy
         // — ping-pong, feedback capture, passthrough, LED tap.)
         assert!(

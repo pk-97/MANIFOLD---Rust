@@ -381,7 +381,7 @@ crates/manifold-compositor/src/layer_compositor.rs` — re-run at execution time
 field set differs from this table, stop and list before touching. Compiler-driven:
 change the field types first; red is the checklist. **Negative gate:** after P2, no
 chain map keyed by bare `LayerId` remains on the screen path — `rg -n
-'AHashMap<LayerId, Option<PresetRuntime>>' crates/manifold-renderer/` returns only
+'AHashMap<LayerId, Option<PresetRuntime>>' crates/manifold-nodes/` returns only
 the two `led_group_*` fields.
 
 ### Consequences, stated honestly
@@ -709,7 +709,7 @@ serialized — D3); shader changes for island support (section 6.1's whole point
   applies). Read-back: section 7.1–7.2, `node_graph/effect_node.rs` (FrameTime carrier),
   `feedback_wgsl_vec3_alignment`. Forbidden: fusing the three atoms into one
   "stage info" monolith. Gate: gpu_tests for mask/stage_uv (value-level: exact rect
-  edges), display_info plain unit test; focused `manifold-renderer` lib tests.
+  edges), display_info plain unit test; focused `manifold-nodes` lib tests.
 - **P5 — stage view UI.** Arrangement panel (drag, snap-to-island with visible merge,
   numeric fields, EDID prefill, rotation, live pixel readout, assign picker), advanced
   flap (keystone, trim, density cap). Read-back: section 5 UX whole; existing panel/scroll

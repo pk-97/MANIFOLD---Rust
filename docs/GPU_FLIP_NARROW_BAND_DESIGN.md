@@ -34,7 +34,7 @@ GPU_FLIP_STRUCTURAL_OPTIONS.md (approved scope).
 | Particle frame publication | `primitives/liquid_frame.rs` (`LiquidFrame`), `liquid/frame_ring.rs` (`FrameRing`) | Interior distance must follow the same tick/epoch and A/B ownership. |
 | Native GPU API | `manifold-gpu/src/metal/encoder.rs` | Every pass uses manifold-gpu. |
 
-Paths above are relative to `crates/manifold-renderer/src/node_graph` except
+Paths above are relative to `crates/manifold-nodes/src/node_graph` except
 the GPU crate. The particle-ball field is negative but shallow throughout a
 filled pool; thresholding it directly cannot find a deep interior. Re-distance
 from its zero crossings before deleting any particles.
@@ -181,7 +181,7 @@ exercise sorter compaction. These new GPU proofs have not been executed here.
 Run the compiled GPU proofs only on a GPU-capable lane, from slot-4:
 
 ```sh
-CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= scripts/gpu_queue.py --label gpu-flip-narrow-band -- cargo test --manifest-path '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-4/Cargo.toml' -p manifold-renderer --lib --features gpu-proofs narrow_band -- --test-threads=1
+CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= scripts/gpu_queue.py --label gpu-flip-narrow-band -- cargo test --manifest-path '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-4/Cargo.toml' -p manifold-nodes --lib --features gpu-proofs narrow_band -- --test-threads=1
 ```
 
 **S2 — step integration.** Entry: S1 gates passed; re-read `StepState::encode`

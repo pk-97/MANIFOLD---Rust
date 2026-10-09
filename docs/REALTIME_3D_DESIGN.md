@@ -123,7 +123,7 @@ between this doc and execution.
 ## 3. Data model (committed)
 
 ```rust
-// manifold-renderer/src/node_graph/atmosphere.rs — pattern-copy of material.rs (M1)
+// manifold-nodes/src/node_graph/atmosphere.rs — pattern-copy of material.rs (M1)
 pub struct Atmosphere {
     pub fog_color: [f32; 4],
     pub fog_density: f32,      // exp depth fog; 0 = off
@@ -227,7 +227,7 @@ feature is unwired (unwired = zero cost, checked, not assumed).
   Overlays (grid/camera-frustum/light-billboard) are drawn on the CPU straight
   onto the tonemapped readback pixels via `Camera::project_to_pixel` — no new GPU
   pipeline, since overlay chrome is editor-only 2D chrome, never scene geometry.
-  Gate: `cargo test -p manifold-renderer --features gpu-proofs scene_viewport_navigate`
+  Gate: `cargo test -p manifold-nodes --features gpu-proofs scene_viewport_navigate`
   — headless PNG (`/tmp/viewport_navigate_p5.png`) + byte-exact D9 diff. **Deferred
   this session (named trigger: live UI wiring is genuinely separate infra —
   winit mouse/trackpad events → `ViewportCamera` → re-render, docked into the graph
@@ -358,7 +358,7 @@ before P1.
   barycentric bounds (value-level); `vertices` mode on a cube yields exactly 8
   distinct positions (dedup-free count ≤ capacity). **Gate (negative):**
   `rg 'Arc<Mutex' ` on the new file → zero. **Test scope:** focused
-  (`-p manifold-renderer --lib`).
+  (`-p manifold-nodes --lib`).
 - **Forbidden:** CPU-side per-frame reseeding (respect the recompute gate — seeding
   is per-trigger, not per-frame) · inventing a new particle struct.
 
@@ -389,7 +389,7 @@ each at a bounded draw-call count.
 | Producer | `scatter_on_mesh.rs:61-62` outputs `Array(InstanceTransform)`; `count` is port-shadowed (`:51`) | Density is a live control on the producer |
 | Port rebuild | `render_scene.rs:253-342` — object-group ports are name-generated | Adding one optional port per group is mechanical; old projects load it unwired (no migration) |
 | Always-bind ABI-stub pattern | `render_scene.rs:874` (`ensure_shadow_binding_stubs` — dummy depth + comparison sampler) | The identity-instance stub copies this |
-| Garden | `crates/manifold-renderer/assets/generator-presets/Garden.json` + `manifold-app/tests/garden_preset_round_trip.rs` | The two-pass composite this kills; the acceptance demo |
+| Garden | `crates/manifold-nodes/assets/generator-presets/Garden.json` + `manifold-app/tests/garden_preset_round_trip.rs` | The two-pass composite this kills; the acceptance demo |
 
 ### D11 — instancing is a port on the object group, in the scene pass
 
@@ -442,7 +442,7 @@ each at a bounded draw-call count.
   composition_notes · gpu test module `render_scene_instances` · Garden.json
   re-wired single-pass (flowers become an object group with `instances_n` wired;
   the `node.mix` composite deleted) with `garden_preset_round_trip` still green.
-- **Gate (positive, gpu-proofs — deliberate `cargo test -p manifold-renderer
+- **Gate (positive, gpu-proofs — deliberate `cargo test -p manifold-nodes
   --features gpu-proofs render_scene`):** occlusion — an instance placed fully
   behind an occluder object contributes no pixels (value-level, shape it like
   `render_scene_shadows`); **identity parity — a wired 1-entry identity instance
@@ -459,7 +459,7 @@ each at a bounded draw-call count.
   read by the landing session.
 - **Performer gesture:** sweep scatter `count` on a fader during a camera dolly —
   occlusion correct at every density, nothing to babysit.
-- **Test scope:** focused `-p manifold-renderer --lib` for rebuild/port tests; the
+- **Test scope:** focused `-p manifold-nodes --lib` for rebuild/port tests; the
   gpu-proofs run above for the render path; full workspace sweep at landing per
   protocol.
 - **Forbidden moves:** reusing `render_instanced_3d_mesh`'s shader/pipeline for

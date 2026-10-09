@@ -268,7 +268,7 @@ Export is unaffected: export ticks already sync every tick.
   `muted_layer_does_not_occlude_below`, `audio_solo_does_not_suppress_video` (D2c),
   `muted_led_layer_goes_dark` (review finding 8: LED consumes LayerOutputs, hidden
   layers push none), `all_muted_paused_rig_idles` (D7a).
-- **Gate — positive:** `cargo test -p manifold-core -p manifold-playback -p manifold-renderer -p manifold-app`
+- **Gate — positive:** `cargo test -p manifold-core -p manifold-playback -p manifold-nodes -p manifold-app`
   green; new cure-tests fail on pre-P2 code. **Negative:** `rg "any_solo|is_solo"
   crates/manifold-compositor/src/layer_compositor.rs` → zero; `rg "is_muted"
   crates/manifold-core/src/timeline.rs` → zero inside the query fn; `rg "is_muted|is_solo"
@@ -284,7 +284,7 @@ Export is unaffected: export ticks already sync every tick.
   the generator reappears evolved, no reboot, no black frame.
 - **Forbidden moves:** pausing muted video players (Deferred); a second visibility
   predicate anywhere; muting via membership "temporarily" for groups.
-- **Test scope:** nextest `-p manifold-core -p manifold-playback -p manifold-renderer -p manifold-app`;
+- **Test scope:** nextest `-p manifold-core -p manifold-playback -p manifold-nodes -p manifold-app`;
   clippy same. GPU-proofs NOT required (no kernel, graph, or shared-WGSL change —
   predicate is CPU-side).
 

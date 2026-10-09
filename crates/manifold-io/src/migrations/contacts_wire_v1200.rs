@@ -84,8 +84,8 @@ fn migrate_graph_value(graph: &mut Value) -> bool {
 mod tests {
     use super::*;
 
-    const BUNDLED: &str = include_str!("../../../manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json");
-    const PARTICLES: &str = include_str!("../../../manifold-renderer/assets/generator-presets/WaterDamBreakParticles.json");
+    const BUNDLED: &str = include_str!("../../../manifold-nodes/assets/generator-presets/WaterDamBreakGpuFlip.json");
+    const PARTICLES: &str = include_str!("../../../manifold-nodes/assets/generator-presets/WaterDamBreakParticles.json");
     const PETER_LAYER: &str = include_str!("../../tests/fixtures/water_layer_graph_v1160.json");
 
     fn migrate_project(before: &Value) -> Value {

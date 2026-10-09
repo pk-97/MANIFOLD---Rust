@@ -102,16 +102,16 @@ class ReplayTests(unittest.TestCase):
         self.git('init', '-q')
         self.plan = self.repo / 'plans/p1'
         self.plan.mkdir(parents=True)
-        config = {'version': 1, 'source_crate': 'crates/manifold-renderer',
+        config = {'version': 1, 'source_crate': 'crates/manifold-nodes',
                   'destination_crate': 'crates/manifold-node-engine',
-                  'rewrite_roots': ['crates/manifold-renderer', 'crates/manifold-node-engine']}
+                  'rewrite_roots': ['crates/manifold-nodes', 'crates/manifold-node-engine']}
         (self.plan / 'plan.json').write_text(json.dumps(config)+'\n')
-        (self.plan / 'moves.tsv').write_text('crates/manifold-renderer/src/foo.rs\tcrates/manifold-node-engine/src/foo.rs\n')
-        (self.plan / 'rewrites.tsv').write_text('manifold_renderer::primitive!::\tmanifold_node_engine::primitive!::\nmanifold_renderer::param_tooltips!::\tmanifold_node_engine::param_tooltips!::\n')
+        (self.plan / 'moves.tsv').write_text('crates/manifold-nodes/src/foo.rs\tcrates/manifold-node-engine/src/foo.rs\n')
+        (self.plan / 'rewrites.tsv').write_text('manifold_nodes::primitive!::\tmanifold_node_engine::primitive!::\nmanifold_nodes::param_tooltips!::\tmanifold_node_engine::param_tooltips!::\n')
         self.original = {
             'Cargo.toml': ('100644', b'[workspace]\nmembers = []\n'),
-            'crates/manifold-renderer/src/foo.rs': ('100644', b'pub const X: u32 = 7;\n'),
-            'crates/manifold-renderer/src/lib.rs': ('100644', b'mod foo;\nuse crate::foo::{X, Y};\ncrate::primitive! {}\ncrate::param_tooltips! {}\n'),
+            'crates/manifold-nodes/src/foo.rs': ('100644', b'pub const X: u32 = 7;\n'),
+            'crates/manifold-nodes/src/lib.rs': ('100644', b'mod foo;\nuse crate::foo::{X, Y};\ncrate::primitive! {}\ncrate::param_tooltips! {}\n'),
             'run': ('100755', b'#!/bin/sh\nexit 0\n'),
             'link': ('120000', b'run'),
             'binary': ('100644', b'\0\xff\n'),
@@ -165,21 +165,81 @@ class ReplayTests(unittest.TestCase):
     def test_replay_expected_tree(self):
         actual = self.moved()
         expected = dict(self.original)
-        expected['crates/manifold-node-engine/src/foo.rs'] = expected.pop('crates/manifold-renderer/src/foo.rs')
-        expected['crates/manifold-renderer/src/lib.rs'] = ('100644', b'use manifold_node_engine::foo::{X, Y};\nmanifold_node_engine::primitive! {}\nmanifold_node_engine::param_tooltips! {}\n')
+        expected['crates/manifold-node-engine/src/foo.rs'] = expected.pop('crates/manifold-nodes/src/foo.rs')
+        expected['crates/manifold-nodes/src/lib.rs'] = ('100644', b'use manifold_node_engine::foo::{X, Y};\nmanifold_node_engine::primitive! {}\nmanifold_node_engine::param_tooltips! {}\n')
         expected['crates/manifold-node-engine/src/lib.rs'] = ('100644', b'mod foo;\n')
         expected.update({'plans/p1/'+p:v for p,v in replay.files(self.plan).items()})
         self.assertEqual(actual, expected)
 
+    def bin_plan(self, directory=False, collision=False):
+        source = 'crates/manifold-nodes'
+        dest = 'crates/manifold-node-engine'
+        relative = 'src/bin/tool/main.rs' if directory else 'src/bin/tool.rs'
+        declaration = '[[bin]]\nname = "graph-tool"\npath = "' + relative + '"\n'
+        old = '[package]\nname = "manifold-nodes"\n' + declaration
+        self.original[source + '/Cargo.toml'] = ('100644', old.encode())
+        self.original[source + '/' + relative] = ('100644', b'fn main() { crate::run(); }\nfn run() {}\n')
+        with (self.plan / 'moves.tsv').open('a') as f:
+            f.write(source + '/' + relative + '\t' + dest + '/' + relative + '\n')
+            if directory:
+                self.original[source + '/src/bin/tool/helper.rs'] = ('100644', b'pub fn help() {}\n')
+                f.write(source + '/src/bin/tool/helper.rs\t' + dest + '/src/bin/tool/helper.rs\n')
+        after = '[package]\nname = "manifold-node-engine"\n' + declaration
+        if collision:
+            after += '[[bin]]\nname = "graph-tool"\npath = "src/bin/other.rs"\n'
+            self.original[dest + '/src/bin/other.rs'] = ('100644', b'fn main() {}\n')
+        self.template(dest + '/Cargo.toml', after)
+        (self.plan / 'manifests.json').write_text(json.dumps([
+            {'path': source + '/Cargo.toml', 'before': old,
+             'after': '[package]\nname = "manifold-nodes"\n'}]))
+        self.pin()
+        return source, dest, relative
+
+    def test_single_file_bin_moves_with_manifest(self):
+        source, dest, relative = self.bin_plan()
+        actual = self.moved()
+        self.assertEqual(actual[dest + '/' + relative], self.original[source + '/' + relative])
+        self.assertEqual(self.run_tool('verify', self.commit(actual, self.base)), 0, self.output)
+
+    def test_directory_bin_moves_whole_with_manifest(self):
+        source, dest, relative = self.bin_plan(directory=True)
+        actual = self.moved()
+        self.assertEqual(actual[dest + '/' + relative], self.original[source + '/' + relative])
+        self.assertEqual(actual[dest + '/src/bin/tool/helper.rs'],
+                         self.original[source + '/src/bin/tool/helper.rs'])
+        self.assertEqual(self.run_tool('verify', self.commit(actual, self.base)), 0, self.output)
+
+    def test_bin_destination_name_collision_rejected(self):
+        self.bin_plan(collision=True)
+        self.rejects_replay()
+        self.assertIn('colliding bin target', self.output)
+
+    def test_directory_bin_partial_move_rejected(self):
+        self.bin_plan(directory=True)
+        p = self.plan / 'moves.tsv'
+        p.write_text(''.join(line for line in p.read_text().splitlines(keepends=True)
+                             if 'helper.rs' not in line))
+        self.pin()
+        self.rejects_replay()
+        self.assertIn('directory bin must move whole', self.output)
+
+    def test_bin_target_configuration_change_rejected(self):
+        self.bin_plan()
+        p = self.plan / 'templates/crates/manifold-node-engine/Cargo.toml'
+        p.write_text(p.read_text() + 'required-features = ["unexpected"]\n')
+        self.pin()
+        self.rejects_replay()
+        self.assertIn('bin target configuration changed', self.output)
+
     def test_directory_source_preserves_applied_residual(self):
         source = self.repo / 'draft'
         entries = dict(self.original)
-        entries['crates/manifold-renderer/src/foo.rs'] = ('100644', b'pub const X: u32 = 8;\n')
+        entries['crates/manifold-nodes/src/foo.rs'] = ('100644', b'pub const X: u32 = 8;\n')
         replay.write_files(source, entries)
         dest = self.repo / 'directory-result'
         self.assertEqual(self.run_tool('replay', '--source', str(source), '--dest', str(dest)), 0, self.output)
         self.assertEqual(replay.files(dest)['crates/manifold-node-engine/src/foo.rs'],
-                         entries['crates/manifold-renderer/src/foo.rs'])
+                         entries['crates/manifold-nodes/src/foo.rs'])
         self.assertEqual(replay.files(source), entries)
         self.assertEqual(self.run_tool('verify', str(source)), 1, self.output)
 
@@ -214,7 +274,7 @@ class ReplayTests(unittest.TestCase):
         self.pin()
         moved = self.moved()
         self.assertEqual(moved['crates/manifold-node-engine/src/foo.rs'],
-                         self.original['crates/manifold-renderer/src/foo.rs'])
+                         self.original['crates/manifold-nodes/src/foo.rs'])
         self.assertEqual(moved['binary'], self.original['binary'])
         self.assertEqual(self.run_tool('verify', self.commit(moved, self.base)), 0, self.output)
         moved['plans/p1/residual-deleted.txt'] = ('100644', b'run\n')
@@ -340,10 +400,12 @@ class ReplayTests(unittest.TestCase):
 
     def test_family_reference_keeps_owner(self):
         replay.CONFIG = {}
-        text = 'crate::node_graph::primitives::blob_bounds::BlobBounds::new();\n'
-        actual = replay.rewrite_rust(text, 'crates/manifold-renderer/src/node_graph/primitives/liquid_surface_tests.rs',
+        # Library crate:: references keep the original family owner. An
+        # integration-test source has its own crate root and cannot prove this.
+        text = 'crate::node_graph::primitives::invert::Invert::new();\n'
+        actual = replay.rewrite_rust(text, 'crates/manifold-nodes-image/src/node_graph/primitives/invert.rs',
                                     'crates/manifold-node-engine/src/water/primitives/liquid_surface_tests.rs', {}, {})
-        self.assertEqual(actual, text.replace('crate::', 'manifold_renderer::', 1))
+        self.assertEqual(actual, text.replace('crate::', 'manifold_nodes_image::', 1))
 
     def pin(self):
         self.original.update({'plans/p1/'+p:v for p,v in replay.files(self.plan).items()})
@@ -366,7 +428,7 @@ class ReplayTests(unittest.TestCase):
 
     def test_case_collision_move_destinations_silently_overwrite(self):
         self.original['second'] = ('100644', b'other')
-        (self.plan/'moves.tsv').write_bytes(b'crates/manifold-renderer/src/foo.rs\tOut\nsecond\tout\n')
+        (self.plan/'moves.tsv').write_bytes(b'crates/manifold-nodes/src/foo.rs\tOut\nsecond\tout\n')
         self.pin()
         self.rejects_replay()
 
@@ -406,12 +468,12 @@ class ReplayTests(unittest.TestCase):
     def test_each_patch_channel_accepts_arbitrary_body_change(self):
         for name in ('manifests.json', 'declarations.json', 'finish.json'):
             with self.subTest(channel=name):
-                (self.plan/name).write_bytes(json.dumps([{'path':'crates/manifold-renderer/src/foo.rs', 'before':'= 7', 'after':'= 999'}]).encode())
+                (self.plan/name).write_bytes(json.dumps([{'path':'crates/manifold-nodes/src/foo.rs', 'before':'= 7', 'after':'= 999'}]).encode())
                 self.rejects_replay()
                 (self.plan/name).unlink()
 
     def test_rewrite_nonpath_code_injection(self):
-        (self.plan/'rewrites.tsv').write_bytes(b'manifold_renderer::foo::X\tstd::process::exit(42)\n')
+        (self.plan/'rewrites.tsv').write_bytes(b'manifold_nodes::foo::X\tstd::process::exit(42)\n')
         self.rejects_replay()
 
     def test_path_rewrites_modify_string_literals(self):
@@ -450,7 +512,7 @@ class ReplayTests(unittest.TestCase):
         outside = self.repo/'outside'
         outside.mkdir()
         self.original['escape'] = ('120000', os.fsencode(outside))
-        (self.plan/'moves.tsv').write_bytes(b'crates/manifold-renderer/src/foo.rs\tescape/leaked/sub/foo.rs\n')
+        (self.plan/'moves.tsv').write_bytes(b'crates/manifold-nodes/src/foo.rs\tescape/leaked/sub/foo.rs\n')
         self.pin()
         self.rejects_replay()
         self.assertEqual(list(outside.iterdir()), [])
@@ -466,7 +528,7 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(list((self.repo/'target').glob('crate-move-*')), [])
 
     def test_locale_ascii_without_utf8_mode(self):
-        self.original['crates/manifold-renderer/src/foo.rs'] = ('100644', '// café\npub const X: u32 = 7;\n'.encode('utf-8'))
+        self.original['crates/manifold-nodes/src/foo.rs'] = ('100644', '// café\npub const X: u32 = 7;\n'.encode('utf-8'))
         self.pin()
         import sys
         env = dict(os.environ, LC_ALL='C', PYTHONUTF8='0', PYTHONCOERCECLOCALE='0')
@@ -534,13 +596,13 @@ class ReplayTests(unittest.TestCase):
         self.assertIn('move commit changes plan', self.output)
 
     def test_conflicting_derived_mapping_rejected(self):
-        (self.plan/'rewrites.tsv').write_bytes(b'manifold_renderer::foo\texternal::foo\n')
+        (self.plan/'rewrites.tsv').write_bytes(b'manifold_nodes::foo\texternal::foo\n')
         self.rejects_replay()
         self.assertIn('conflicting derived rewrite', self.output)
 
     def test_invalid_alias_rejected(self):
         config = json.loads((self.plan/'plan.json').read_bytes())
-        config['aliases'] = {'manifold_renderer::foo': 'std::process::exit(42)'}
+        config['aliases'] = {'manifold_nodes::foo': 'std::process::exit(42)'}
         (self.plan/'plan.json').write_bytes(json.dumps(config).encode('utf-8'))
         self.rejects_replay()
 
@@ -551,7 +613,7 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(actual, text.replace('external::call();', 'other::call();').replace('\r\ninclude_str!("old.txt")', '\r\ninclude_str!("new.txt")'))
 
     def declarations(self, rows, source='mod foo;\nfn unchanged() {}\n'):
-        self.original['crates/manifold-renderer/src/lib.rs'] = ('100644', source.encode())
+        self.original['crates/manifold-nodes/src/lib.rs'] = ('100644', source.encode())
         (self.plan/'declarations.tsv').write_text(''.join('\t'.join(row)+'\n' for row in rows))
         self.pin()
 
@@ -591,13 +653,13 @@ class ReplayTests(unittest.TestCase):
         ]
         for name, source, operations in cases:
             with self.subTest(case=name):
-                self.declarations([('crates/manifold-renderer/src/lib.rs', *op) for op in operations], source)
+                self.declarations([('crates/manifold-nodes/src/lib.rs', *op) for op in operations], source)
                 self.rejects_replay()
                 self.assertIn('unsupported plan file: declarations.tsv', self.output)
 
     def test_derived_template_mount_preserves_cfg_visibility_and_crlf(self):
         item = '#[cfg_attr(test, cfg(any(test, feature = "proof")))]\r\n#[doc(hidden)]\r\npub(crate) mod foo;\r\n'
-        old = 'crates/manifold-renderer/src/lib.rs'
+        old = 'crates/manifold-nodes/src/lib.rs'
         new = 'crates/manifold-node-engine/src/lib.rs'
         self.original[old] = ('100644', ('// keep\r\n'+item+'use crate::foo::X as Alias;\r\n').encode())
         self.template(new, item)
@@ -608,7 +670,7 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(self.run_tool('verify', self.commit(actual, self.base)), 0, self.output)
 
     def test_derived_existing_parent_mount(self):
-        old = 'crates/manifold-renderer/src/lib.rs'
+        old = 'crates/manifold-nodes/src/lib.rs'
         new = 'crates/manifold-node-engine/src/lib.rs'
         item = '#[cfg(test)]\npub(crate) mod foo;\n'
         self.original[old] = ('100644', (item+'fn keep() {}\n').encode())
@@ -620,7 +682,7 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(actual[new][1], ('#![allow(unused)]\nfn existing() {}\n'+item).encode())
 
     def test_derived_comoved_parent_and_renamed_child(self):
-        old = 'crates/manifold-renderer/src/'
+        old = 'crates/manifold-nodes/src/'
         new = 'crates/manifold-node-engine/src/'
         item = '#[cfg(test)]\npub(crate) mod child;\n'
         self.original[old+'foo.rs'] = ('100644', item.encode())
@@ -632,7 +694,7 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(actual[new+'foo.rs'][1], item.encode())
 
     def test_derived_identifier_rename_preserves_attribute_literal(self):
-        old = 'crates/manifold-renderer/src/'
+        old = 'crates/manifold-nodes/src/'
         new = 'crates/manifold-node-engine/src/'
         item = '#[doc = "mod foo;"]\npub(crate) mod foo;\n'
         self.original[old+'lib.rs'] = ('100644', item.encode())
@@ -643,7 +705,7 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(actual[new+'lib.rs'][1], b'#[doc = "mod foo;"]\npub(crate) mod bar;\n')
 
     def test_complementary_mount_pair_moves_and_renames_together(self):
-        old = 'crates/manifold-renderer/src/'
+        old = 'crates/manifold-nodes/src/'
         new = 'crates/manifold-node-engine/src/'
         first = '#[cfg(not(any(test, feature = "testkit")))]\nmod foo;\n'
         second = '#[cfg(any(test, feature = "testkit"))]\npub mod foo;\n'
@@ -663,15 +725,15 @@ class ReplayTests(unittest.TestCase):
                        '#[cfg(not(feature = "testkit"))]\n#[cfg(any())]\npub mod foo;\n'):
             with self.subTest(second=second):
                 source = '#[cfg(feature = "testkit")]\nmod foo;\n'+second
-                self.original['crates/manifold-renderer/src/lib.rs'] = ('100644', source.encode())
+                self.original['crates/manifold-nodes/src/lib.rs'] = ('100644', source.encode())
                 self.pin()
                 self.rejects_replay()
 
     def test_complementary_mount_pair_with_different_files_rejected(self):
         source = ('#[cfg(test)]\n#[path = "foo.rs"]\nmod foo;\n'
                   '#[cfg(not(test))]\n#[path = "other.rs"]\nmod foo;\n')
-        self.original['crates/manifold-renderer/src/lib.rs'] = ('100644', source.encode())
-        self.original['crates/manifold-renderer/src/other.rs'] = ('100644', b'pub const X: u32 = 8;\n')
+        self.original['crates/manifold-nodes/src/lib.rs'] = ('100644', source.encode())
+        self.original['crates/manifold-nodes/src/other.rs'] = ('100644', b'pub const X: u32 = 8;\n')
         self.pin()
         self.rejects_replay()
         self.assertIn('path/include module mounts are forbidden', self.output)
@@ -682,7 +744,7 @@ class ReplayTests(unittest.TestCase):
                        '#[cfg_attr(test, path = "foo.rs")]\nmod foo;\n',
                        'fn f() { mod foo; }\n', '/* mod foo; */\n'):
             with self.subTest(source=source):
-                self.original['crates/manifold-renderer/src/lib.rs'] = ('100644', source.encode())
+                self.original['crates/manifold-nodes/src/lib.rs'] = ('100644', source.encode())
                 self.pin()
                 self.rejects_replay()
 

@@ -1353,7 +1353,7 @@ fn states_scene() -> SceneData {
 /// arm today; an effect needs a chain to live in, which this fixture doesn't build).
 pub fn generator_editor_fixture(preset: &str) -> Option<(Project, GraphTarget, UIState)> {
     let pid = PresetTypeId::from_string(preset.to_string());
-    let is_generator = manifold_renderer::node_graph::bundled_preset_type_ids(PresetKind::Generator)
+    let is_generator = manifold_nodes::bundled_presets::bundled_preset_type_ids(PresetKind::Generator)
         .any(|id| id == pid);
     if !is_generator {
         return None;

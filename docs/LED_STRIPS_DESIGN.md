@@ -202,7 +202,7 @@ Peter's directives (2026-09-03, verbatim — these decide the MVP):
   layers default to PLASMA at `crates/manifold-app/src/ui_bridge/editing.rs:245-256` via
   `AddLayerCommand` (`crates/manifold-editing/src/commands/layer.rs:13,47`).
 - **Presets are disk JSON, hot-reloadable.** Bundle root
-  `crates/manifold-renderer/assets/generator-presets/` (32 presets; loader
+  `crates/manifold-nodes/assets/generator-presets/` (32 presets; loader
   `crates/manifold-node-engine/src/load/preset_loader.rs:162-168`). Type id = filename stem
   (`node_graph/bundled_presets.rs:23-24`). Picker: `build_preset_picker_items`
   (`crates/manifold-app/src/ui_root/dropdowns.rs:113-161`).
@@ -210,7 +210,7 @@ Peter's directives (2026-09-03, verbatim — these decide the MVP):
   → `live_clip_manager.rs` (phantom clips, 5ms guard); layer matching via
   `Layer.midi_note/channel/device/trigger_mode` (`crates/manifold-core/src/layer.rs:146-155`).
   LED layers inherit all of it — zero new trigger work.
-- **Pattern atoms exist.** 254 primitives (`rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/`);
+- **Pattern atoms exist.** 254 primitives (`rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-nodes/src/node_graph/primitives/`);
   beat gates/ramps, directional ramps, trigger cycling, texture combines all present.
   Per D3's prediction: the pack composes from existing atoms, no new primitives expected.
   Section 2.5 audit re-run at preset-authoring time regardless.
@@ -519,7 +519,7 @@ for LED-type layers per NIT below).
   predicates at any site (D11); a new
   screen-visibility flag instead of the occluded path (D14); changing `blit_to_led`
   mirror semantics; TODO-as-deferral on the switch partition.
-- *Test scope:* `cargo nextest run -p manifold-core -p manifold-renderer -p manifold-app`
+- *Test scope:* `cargo nextest run -p manifold-core -p manifold-nodes -p manifold-app`
   (touched crates); gpu-proofs gate if compositor dispatch is touched (it is —
   `scripts/gpu_proofs_gate.py`); clippy `-p` same set.
 
@@ -553,9 +553,9 @@ for the whole pack (Vec4 color binding is deferred to its own pass — noted in 
 - *LED Pixel Walk* — a single white pixel steps through the whole grid in linear order: finds
   dead LEDs and reveals reversed/top-down wiring.
 
-- *Entry state:* MVP-P1 shipped. Anchors: `ls crates/manifold-renderer/assets/generator-presets/`
+- *Entry state:* MVP-P1 shipped. Anchors: `ls crates/manifold-nodes/assets/generator-presets/`
   (LED Fill.json is the shape + description-format precedent), `rg -n "beat_ramp|trigger_count"
-  crates/manifold-renderer/assets/generator-presets/` (beat/trigger wiring precedents),
+  crates/manifold-nodes/assets/generator-presets/` (beat/trigger wiring precedents),
   BasicShapes.json end-to-end (trigger cycling precedent).
 - *Read-back:* restate D3/D9/D12 + the family spec above; read LED Fill.json + BasicShapes.json
   whole.
@@ -687,7 +687,7 @@ LFOs, triggers."
   presets; (2) unit — a Generator-mode picker request built for a DMX layer carries the
   LED category active and items filtered to `category == "LED"`; (3) the P1 default-preset
   contract still green (LED Fill id unchanged — D18).
-- *Gate (negative):* `rg -n '"category": "Pattern"' crates/manifold-renderer/assets/generator-presets/`
+- *Gate (negative):* `rg -n '"category": "Pattern"' crates/manifold-nodes/assets/generator-presets/`
   returns zero hits in `LED*.json`; `rg -n 'category: None' crates/manifold-core/src/preset_type_registry.rs`
   returns zero hits outside inventory-generator registration.
 - *Demo:* L3 — ui-flow: open the generator browser from a DMX lane → assert the LED chip

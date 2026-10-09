@@ -6,13 +6,15 @@ import unittest
 from unittest import mock
 from pathlib import Path
 import tempfile
+import shutil
+import subprocess
 
 import gpu_scope as g
 
-R = "crates/manifold-renderer/src/"
+R = "crates/manifold-nodes/src/"
 E = "crates/manifold-node-engine/src/"
 W = E + "water/primitives/"
-P = R + "node_graph/primitives/"
+P = E + "primitives/"
 
 
 def plan(paths, users=None, repo=None):
@@ -26,20 +28,21 @@ def fixture_workspace(repo):
     repo = repo.resolve()
     packages = []
     rows = {
+        "manifold-app": ("crates/manifold-app", True, ["renderer_contracts", "renderer_gpu_proofs"]),
         "manifold-compositor": ("crates/manifold-compositor", True, ["gpu_proofs"]),
         "manifold-nodes-scene": ("crates/manifold-nodes-scene", True, ["gpu_proofs"]),
         "manifold-nodes-image": ("crates/manifold-nodes-image", True, []),
-        "manifold-renderer": ("crates/manifold-renderer", True, ["gpu_proofs", "glb_conformance"]),
+        "manifold-nodes": ("crates/manifold-nodes", True, ["gpu_proofs", "glb_conformance", "main"]),
         "manifold-node-engine": ("crates/manifold-node-engine", True, []),
-        "manifold-ui-paint": ("crates/manifold-ui-paint", True, []),
+        "manifold-ui-paint": ("crates/manifold-ui-paint", True, ["main"]),
         "manifold-gpu": ("crates/manifold-gpu", False, []),
     }
     for index, (name, (root, gpu, tests)) in enumerate(rows.items()):
         targets = [{"name": name, "kind": ["lib"], "src_path": str(repo / root / "src/lib.rs"),
                     "required-features": []}]
         targets.extend({"name": target, "kind": ["test"],
-                        "src_path": str(repo / root / "tests" / ("gpu_proofs/main.rs" if target == "gpu_proofs" else f"{target}.rs")),
-                        "required-features": ["gpu-proofs"]}
+                        "src_path": str(repo / root / "tests" / ("renderer_contracts/gpu_proofs/main.rs" if target == "renderer_gpu_proofs" else "gpu_proofs/main.rs" if target == "gpu_proofs" else f"{target}.rs")),
+                        "required-features": [] if (name in ("manifold-ui-paint", "manifold-nodes") and target == "main") or target == "renderer_contracts" else ["gpu-proofs"]}
                        for target in tests)
         packages.append({
             "id": f"path+file://{repo}/{root}#{name}@0.1.0",
@@ -56,18 +59,118 @@ def fixture_workspace(repo):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_every_primitive_directory_selects_both_catalog_layout_proofs(self):
+        import cpu_scope
+        from gate_policy import PRIMITIVE_PATHS, CATALOG_PATHS
+        root = Path(__file__).resolve().parents[1]
+        directories = {str(p.relative_to(root)) + '/'
+                       for p in (root / 'crates').rglob('primitives')
+                       if p.is_dir() and 'src' in p.relative_to(root).parts
+                       and any(p.rglob('*.rs'))}
+        self.assertEqual(set(PRIMITIVE_PATHS), directories)
+        workspace = fixture_workspace(Path('/nonexistent'))
+        for directory in sorted(directories):
+            self.assertIn(directory, CATALOG_PATHS)
+            for suffix in ('.rs', '.wgsl'):
+                source = next(p for p in sorted((root / directory).rglob('*' + suffix))
+                              if p.name != 'mod.rs')
+                with self.subTest(source=str(source.relative_to(root))):
+                    selected = cpu_scope.plan_for_paths(
+                        [source.relative_to(root).as_posix()], Path('/nonexistent'), workspace)
+                    for module in ('uniform_layout_proof', 'uniform_layout_extended'):
+                        self.assertIn(f'(package(=manifold-nodes) & test(/^{module}::/))', selected.filters)
+                        self.assertIn(f'mod {module};', (root / 'crates/manifold-nodes/tests/main.rs').read_text())
+
+    def test_whole_crate_deletion_keeps_base_ownership_in_nested_cpu_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            old = 'crates/retired-catalog'
+            deleted = [old + '/Cargo.toml', old + '/src/lib.rs',
+                       old + '/tests/gpu_proofs/proof.rs']
+            current = 'crates/manifold-app/tests/renderer_contracts/gpu_proofs/proof.rs'
+            contents = {
+                'Cargo.toml': '[workspace]\nmembers = ["crates/retired-catalog", "crates/manifold-app"]\n',
+                deleted[0]: '[package]\nname = "retired-catalog"\nversion = "0.1.0"\n',
+                deleted[1]: '', deleted[2]: '#[test]\nfn old_proof() {}\n',
+                'crates/manifold-app/Cargo.toml': '[package]\nname = "manifold-app"\nversion = "0.1.0"\n',
+            }
+            for path, text in contents.items():
+                file = repo / path
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(text)
+            def git(*args):
+                return subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Scope Test',
+                                       '-c', 'user.email=scope@example.invalid',
+                                       '-c', 'core.hooksPath=/dev/null', *args],
+                                      check=True, capture_output=True, text=True)
+            git('init', '-q')
+            git('add', '--', *contents)
+            git('commit', '-qm', 'Base workspace with catalog')
+            shutil.rmtree(repo / old)
+            (repo / 'Cargo.toml').write_text('[workspace]\nmembers = ["crates/manifold-app"]\n')
+            proof = repo / current
+            proof.parent.mkdir(parents=True, exist_ok=True)
+            proof.write_text('#[test]\nfn moved_proof() {}\n')
+            workspace = fixture_workspace(repo)
+            result = g.plan_for_paths(deleted + [current], repo, base='HEAD', workspace=workspace)
+            self.assertEqual(result.paths, [current])
+            self.assertFalse(result.unmapped)
+            self.assertTrue(any(run['package'] == 'manifold-app'
+                                and run['target'] == 'renderer_gpu_proofs' for run in result.runs()))
+            with self.assertRaisesRegex(ValueError, 'no current or base Cargo workspace owner'):
+                g.plan_for_paths(['crates/never-owned/src/lib.rs'], repo, base='HEAD', workspace=workspace)
+
+    def test_moved_contract_harnesses_and_nested_proofs_keep_gpu_ownership(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            workspace = fixture_workspace(repo)
+            for package, target in g.GPU_CONTRACT_TARGETS.items():
+                harness = repo / f"crates/{package}/tests/{target}.rs"
+                proof = harness.parent / 'contracts/proof.rs'
+                proof.parent.mkdir(parents=True)
+                harness.write_text('mod contracts;\n')
+                (proof.parent / 'mod.rs').write_text('mod proof;\n')
+                proof.write_text('#[cfg(feature = "gpu-proofs")]\n#[test]\nfn value_proof() {}\n')
+                path = proof.relative_to(repo).as_posix()
+                selected = g.plan_for_paths([path], repo, workspace=workspace, cpu_plan=None)
+                self.assertTrue(selected.active)
+                self.assertFalse(selected.unmapped)
+                run = next(row for row in selected.runs() if (row['package'], row['target']) == (package, target))
+                self.assertIn('contracts::proof::', run['filters'])
+            nested = 'crates/manifold-app/tests/renderer_contracts/gpu_proofs/liquid_conformance.rs'
+            self.assertTrue(g.is_gpu_path(nested.replace('.rs', '.json'), workspace))
+            selected = g.plan_for_paths([nested], repo, workspace=workspace, cpu_plan=None)
+            self.assertTrue(selected.active)
+            self.assertFalse(selected.unmapped)
+            run = next(row for row in selected.runs() if (row['package'], row['target']) == ('manifold-app', 'renderer_gpu_proofs'))
+            self.assertIn('liquid_conformance::', run['filters'])
+
+    def test_retired_crate_proof_requires_confirmed_git_deletion(self):
+        path = "crates/retired-catalog/tests/gpu_proofs/proof.rs"
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / '.git').touch()
+            workspace = fixture_workspace(repo)
+            for output, expected in [(path + '\n', []), ('', [path])]:
+                with self.subTest(deleted=bool(output)), mock.patch.object(
+                    g.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout=output, stderr='')
+                ):
+                    result = g.plan_for_paths([path], repo, shader_users=lambda _: [], workspace=workspace,
+                                              cpu_plan=None)
+                    self.assertEqual([item[0] for item in result.unmapped], expected)
+
     def test_path_attr_filter_finds_testkit_visible_mount(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
-            mount = repo / R / "node_graph" / "mod.rs"
+            mount = repo / E / "fixture" / "mod.rs"
             mount.parent.mkdir(parents=True)
             mount.write_text(
                 'manifold_core::testkit_visible! {\n'
                 '    #[path = "tests/wrapped.rs"] mod wrapped;\n'
                 '}\n'
             )
-            path = R + "node_graph/tests/wrapped.rs"
-            self.assertEqual(g.path_attr_filters(path, repo), ["node_graph::wrapped::"])
+            path = E + "fixture/tests/wrapped.rs"
+            self.assertEqual(g.path_attr_filters(path, repo), ["fixture::wrapped::"])
 
     def test_p2_catalog_contracts_follow_leaf_sources(self):
         cases = {
@@ -94,7 +197,7 @@ class ScopeTests(unittest.TestCase):
         for owner in ("manifold-nodes-image", "manifold-nodes-scene"):
             path = f"crates/{owner}/src/node_graph/primitives/mod.rs"
             cpu = cpu_scope.plan_for_paths([path], Path("/nonexistent"), fixture_workspace(Path("/nonexistent")))
-            self.assertIn("binary(=file_loader_exhaustiveness)", cpu.filterset)
+            self.assertIn("binary(=main)", cpu.filterset)
 
     def test_all_p2_extraction_rows_select_catalog_home(self):
         import cpu_scope
@@ -139,7 +242,7 @@ class ScopeTests(unittest.TestCase):
 
     def folded_glb_workspace(self, repo, module='glb_conformance'):
         workspace = fixture_workspace(repo)
-        renderer = workspace.packages['manifold-renderer']
+        renderer = workspace.packages['manifold-nodes']
         standalone = next(t for t in renderer['targets'] if t['name'] == 'glb_conformance')
         renderer['targets'].remove(standalone)
         scene = dict(renderer, name='manifold-nodes', targets=[{
@@ -157,14 +260,14 @@ class ScopeTests(unittest.TestCase):
 
     def test_standalone_glb_stays_with_metadata_discovered_catalog_owner(self):
         workspace = fixture_workspace(Path("/nonexistent"))
-        target = next(t for t in workspace.packages["manifold-renderer"]["targets"]
+        target = next(t for t in workspace.packages["manifold-nodes"]["targets"]
                       if t["name"] == "glb_conformance")
         target["name"] = "catalog_glb_checks"
-        target["src_path"] = str(workspace.repo / "crates/manifold-renderer/tests/glb_conformance.rs")
+        target["src_path"] = str(workspace.repo / "crates/manifold-nodes/tests/gpu_proofs/glb_conformance.rs")
         self.assertEqual(g.glb_conformance_route(workspace),
-                         ("manifold-renderer", "catalog_glb_checks", ""))
+                         ("manifold-nodes", "catalog_glb_checks", ""))
         result = g.Plan(paths=["gltf"], glb=True, workspace=workspace)
-        self.assertEqual(result.runs()[-1]["package"], "manifold-renderer")
+        self.assertEqual(result.runs()[-1]["package"], "manifold-nodes")
         self.assertEqual(result.runs()[-1]["targets"], ["catalog_glb_checks"])
         self.assertFalse(result.runs()[-1]["budgeted"])
         self.assertEqual(sum("catalog_glb_checks" in run["targets"] for run in result.runs()), 1)
@@ -266,18 +369,18 @@ class ScopeTests(unittest.TestCase):
 
     def test_contract_mounts_select_real_module_names(self):
         repo = Path(__file__).resolve().parent.parent
-        path = R + "engine_contract_tests/freeze_install.rs"
+        path = "crates/manifold-nodes/tests/contracts/freeze/install.rs"
         result = plan([path], repo=repo)
         self.assertIn(path, result.paths)
-        self.assertIn("freeze::install::", result.filters)
+        self.assertIn("contracts::freeze::install::", result.filters)
         self.assertNotIn("engine_contract_tests::freeze_install::", result.filters)
         names = g.read_times(repo / "scripts/gpu_test_times.json")
-        self.assertTrue(any(key.split("/", 2)[-1].startswith("freeze::install::tests::")
+        self.assertTrue(any(key.split("/", 2)[-1].startswith("contracts::freeze::install::tests::")
                             for key in names))
         self.assertFalse(result.unmapped)
 
     def test_unmounted_contract_is_unmapped(self):
-        path = R + "engine_contract_tests/orphan.rs"
+        path = "crates/manifold-nodes/tests/contracts/freeze/orphan.rs"
         result = plan([path], repo=self._repo_with(path))
         self.assertEqual([row[0] for row in result.unmapped], [path])
 
@@ -291,7 +394,7 @@ class ScopeTests(unittest.TestCase):
             "water::runtime::physics_carry::", "water::runtime::physics_sampling::",
             "water::runtime::physics_impulses::tests::coupled_playback_tests::",
         }
-        for path in (R + "reference_fixtures.rs", *(
+        for path in (R + "testkit/reference_fixtures.rs", *(
                 g.CPU_FLIP_FIXTURES_DIR + name for name in (
                     "WaterBasin.json", "WaterDamBreak.json", "WaterDamBreakGpu.json"))):
             with self.subTest(path=path):
@@ -306,7 +409,7 @@ class ScopeTests(unittest.TestCase):
         result = plan(["crates/manifold-ui-paint/src/native_text.rs"])
         self.assertFalse(result.unmapped)
         renderer = next(run for run in result.runs()
-                        if run.get("package") == "manifold-renderer" and run["target"] == "lib")
+                        if run.get("package") == "manifold-nodes" and run["target"] == "lib")
         self.assertEqual(renderer["filters"], sorted(g.SMOKE_FILTERS))
         paint = next(run for run in result.runs()
                      if run.get("package") == "manifold-ui-paint" and run["target"] == "lib")
@@ -314,6 +417,10 @@ class ScopeTests(unittest.TestCase):
         self.assertTrue(paint["lib"])
         self.assertEqual(paint["targets"], [])
         self.assertEqual(paint["filters"], g.UI_PAINT_FILTERS)
+        contracts = next(run for run in result.runs()
+                         if run["package"] == "manifold-ui-paint" and run["target"] == "main")
+        self.assertFalse(contracts["lib"])
+        self.assertIn("contracts::", contracts["filters"])
 
     def test_gpu_core_also_selects_ui_paint(self):
         result = plan(["crates/manifold-gpu/src/testkit.rs"])
@@ -370,10 +477,10 @@ class ScopeTests(unittest.TestCase):
             self.assertFalse(result.unmapped)
 
     def test_blob_bounds_selects_dense_and_sparse_consumers(self):
-        for path in (P + "blob_bounds.rs", P + "shaders/blob_bounds.wgsl"):
-            result = plan([path], users=lambda _: [P + "blob_bounds.rs"],
+        for path in (W + "blob_bounds.rs", W + "shaders/blob_bounds.wgsl"):
+            result = plan([path], users=lambda _: [W + "blob_bounds.rs"],
                           repo=self._repo_with(path))
-            self.assertTrue({"node_graph::primitives::blob_bounds::",
+            self.assertTrue({"water::primitives::blob_bounds::",
                              "liquid_surface_tests::",
                              "liquid_bricks::tests::gpu_tests::"} <= result.filters)
             self.assertFalse(result.unmapped)
@@ -416,23 +523,23 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(p.runs(), [])
 
     def test_primitive_maps_to_its_own_proofs_plus_smoke(self):
-        p = plan([P + "invert.rs"])
-        self.assertEqual(p.final_filters(), sorted(g.SMOKE_FILTERS + ["node_graph::primitives::invert::"]))
+        p = plan([P + "gain.rs"])
+        self.assertEqual(p.final_filters(), sorted(g.SMOKE_FILTERS + ["primitives::gain::"]))
         self.assertFalse(p.glb)
         self.assertEqual(p.broad, [])
 
     def test_primitive_gpu_tests_file_maps_to_parent_primitive(self):
-        p = plan([P + "analytic_echo_instances_gpu_tests.rs"])
-        self.assertIn("node_graph::primitives::analytic_echo_instances::", p.filters)
+        filters = g.module_filters(P + "fixture_gpu_tests.rs")
+        self.assertIn("primitives::fixture::", filters)
 
     def test_primitive_directory_maps_to_dir_module(self):
-        p = plan([P + "render_scene/lights.rs"])
-        self.assertIn("node_graph::primitives::render_scene::lights::", p.filters)
+        p = plan([P + "gain/extent.rs"])
+        self.assertIn("primitives::gain::extent::", p.filters)
 
     def test_primitive_shader_maps_through_its_user(self):
-        p = plan([P + "shaders/invert.wgsl"], users=lambda s: [P + "invert.rs"],
-                 repo=self._repo_with(P + "shaders/invert.wgsl"))
-        self.assertIn("node_graph::primitives::invert::", p.filters)
+        p = plan([P + "shaders/gain.wgsl"], users=lambda s: [P + "gain.rs"],
+                 repo=self._repo_with(P + "shaders/gain.wgsl"))
+        self.assertIn("primitives::gain::", p.filters)
         self.assertEqual(p.broad, [])
 
     def test_shader_included_by_another_shader_reaches_the_rust_user(self):
@@ -467,7 +574,8 @@ class ScopeTests(unittest.TestCase):
                               and target["name"] not in g.GLB_TESTS
                               and target["name"] != "glb_conformance"])
                        for package in p.workspace.feature_packages("gpu-proofs"))
-        self.assertEqual(len(runs), expected)
+        # The ordinary UI, app and catalog harnesses also own device proofs.
+        self.assertEqual(len(runs), expected + 3)
         self.assertIn("manifold-ui-paint", {run["package"] for run in runs})
 
     def test_broad_set_is_bounded(self):
@@ -488,7 +596,7 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(p.broad, [])
 
     def test_skip_dropped_when_it_would_hide_a_selected_filter(self):
-        p = plan(["crates/manifold-gpu/src/metal/raytrace.rs", P + "particletext.rs"])
+        p = plan(["crates/manifold-gpu/src/metal/raytrace.rs", "crates/manifold-nodes-image/src/node_graph/primitives/particletext.rs"])
         self.assertEqual(sorted(set(p.final_skips()) - {n for n, _ in g.slow_tests()}), [])
 
     def test_matter_row(self):
@@ -565,7 +673,7 @@ class ScopeTests(unittest.TestCase):
         for name in g.REPORTER_SKIPS:
             self.assertIn(name, plan([W + 'gpu_flip_step.rs']).final_skips() +
                           plan([W + 'matter_fill.rs']).final_skips())
-        own = plan(["crates/manifold-renderer/tests/gpu_proofs/matter_cost_probe.rs"])
+        own = plan(["crates/manifold-nodes/tests/gpu_proofs/matter_cost_probe.rs"])
         self.assertNotIn("matter_cost_probe", own.final_skips())
 
     def with_times(self, times):
@@ -707,8 +815,8 @@ class ScopeTests(unittest.TestCase):
 
     def test_committed_times_file_seeds_the_known_slow_tests(self):
         names = {n for n, _ in g.slow_tests()}
-        self.assertIn("manifold-renderer/gpu_proofs/matter_bodies::matter_fill_skips_colliders", names)
-        self.assertIn("manifold-renderer/gpu_proofs/matter_look::matter_momentum_conserved_free_blob", names)
+        self.assertIn("manifold-nodes/gpu_proofs/matter_bodies::matter_fill_skips_colliders", names)
+        self.assertIn("manifold-nodes/gpu_proofs/matter_look::matter_momentum_conserved_free_blob", names)
 
     def test_proof_file_maps_to_its_own_module(self):
         p = plan([g.PROOFS_DIR + "render_scene_fog.rs"])
@@ -731,9 +839,9 @@ class ScopeTests(unittest.TestCase):
         self.assertTrue(set(g.BROAD_FILTERS) <= p.filters)
 
     def test_glb_runs_only_for_gltf_paths(self):
-        self.assertFalse(plan([P + "invert.rs"]).glb)
+        self.assertFalse(plan([P + "gain.rs"]).glb)
         self.assertFalse(plan(["crates/manifold-gpu/src/metal/device.rs"]).glb)
-        for path in ["crates/manifold-renderer/tests/glb_conformance.rs",
+        for path in ["crates/manifold-nodes/tests/gpu_proofs/glb_conformance.rs",
                      "tests/fixtures/gltf/khronos/manifest.json",
                      "crates/manifold-nodes-scene/src/node_graph/gltf_import/mod.rs"]:
             p = plan([path])
@@ -744,15 +852,15 @@ class ScopeTests(unittest.TestCase):
             self.assertTrue(runs[0]["budgeted"])
 
     def test_unknown_file_type_in_gpu_dir_is_unmapped(self):
-        p = plan([R + "node_graph/something.bin"])
-        self.assertEqual(p.unmapped[0][0], R + "node_graph/something.bin")
+        p = plan(["crates/manifold-nodes/tests/contracts/node_graph/something.bin"])
+        self.assertEqual(p.unmapped[0][0], "crates/manifold-nodes/tests/contracts/node_graph/something.bin")
 
     def test_main_run_targets_lib_and_gpu_proofs_never_glb(self):
-        runs = plan([P + "invert.rs"]).runs()
+        runs = plan([P + "gain.rs"]).runs()
         run = next(run for run in runs
-                   if run["package"] == "manifold-renderer" and run["target"] == "lib")
+                   if run["package"] == "manifold-nodes" and run["target"] == "lib")
         proof = next(run for run in runs
-                     if run["package"] == "manifold-renderer" and run["target"] == "gpu_proofs")
+                     if run["package"] == "manifold-nodes" and run["target"] == "gpu_proofs")
         self.assertTrue(run["lib"])
         self.assertEqual(run["targets"], [])
         self.assertFalse(proof["lib"])

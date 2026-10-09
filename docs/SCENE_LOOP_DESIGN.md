@@ -298,7 +298,7 @@ PNG — every gate in this design is a computed number or exit code (Peter
   `scene.rs:1148,1411`, `commands/graph/mod.rs:68`. Gate: INV-1..4 tests green;
   `scene_loop_wrap_parity` red on a deliberately non-phased driver (gate must
   see red before green); round-trip save/load re-traces the group.
-  Test scope: `manifold-renderer` + `manifold-editing` + **`manifold-app`
+  Test scope: `manifold-nodes` + `manifold-editing` + **`manifold-app`
   clippy/compile** (the CameraVm arm lands in renderer but its match-site
   consumers live in app — P1 execution missed this and the landing gate
   caught it; the scope line is the fix); gpu-proofs suite for the new atom. Acceptance demo — fully numeric, no human look

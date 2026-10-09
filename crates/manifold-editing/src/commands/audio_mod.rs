@@ -332,7 +332,7 @@ mod tests {
     }
 
     /// A project with one master effect whose id is "fx-1". Built without the
-    /// registry (manifold-renderer isn't linked into this test binary) — audio
+    /// registry (manifold-nodes isn't linked into this test binary) — audio
     /// mods don't need a registered def.
     fn project_with_effect() -> Project {
         let mut project = Project::default();

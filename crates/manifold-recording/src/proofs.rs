@@ -24,15 +24,15 @@ const NUM_BLOCKS: u32 = 26;
 const INDEX_BITS: u32 = 24;
 
 // ---------------------------------------------------------------------
-// Headless GPU device (mirrors manifold-renderer's `test_device()`,
-// crates/manifold-renderer/src/lib.rs).
+// Headless GPU device (mirrors manifold-nodes's `test_device()`,
+// crates/manifold-nodes/src/lib.rs).
 // ---------------------------------------------------------------------
 
 /// Process-wide serialization lock for the proof suite's GPU + AVAssetWriter
 /// work. `GpuDevice` construction (~200-500ms) and the ProRes hardware
 /// encoder are shared, contended resources; running the suite's tests
 /// concurrently (cargo test's default per-binary thread parallelism) risks
-/// exactly the nondeterministic flakiness `manifold-renderer`'s
+/// exactly the nondeterministic flakiness `manifold-nodes`'s
 /// `GPU_TEST_LOCK` was added to avoid. Plain `std::sync::Mutex` (not
 /// `parking_lot`) — no new dependency beyond the design's specified
 /// `serde_json` optional dep.

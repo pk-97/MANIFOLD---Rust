@@ -1586,7 +1586,7 @@ impl ContentThread {
                     // routings from the override def's own metadata — captures
                     // user-added bindings the compositor's type view wouldn't.
                     let mut d = override_def.clone();
-                    manifold_renderer::generators::registry::graft_preset_metadata_from_bundle(
+                    manifold_nodes::registry::graft_preset_metadata_from_bundle(
                         &mut d, gen_type,
                     );
                     let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(&d)?;

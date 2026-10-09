@@ -282,7 +282,7 @@ pub fn sync_inspector_data(
                     let def = l
                         .generator_graph()
                         .cloned()
-                        .or_else(|| manifold_renderer::node_graph::bundled_preset_def(&gen_type).cloned());
+                        .or_else(|| manifold_nodes::bundled_presets::bundled_preset_def(&gen_type).cloned());
                     let layer_ids: Vec<manifold_core::LayerId> =
                         project.timeline.layers.iter().map(|l| l.layer_id.clone()).collect();
                     match def.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
@@ -707,7 +707,7 @@ pub fn sync_inspector_data(
                             // constants (`light.rs`) — this crate can't
                             // depend on them directly through the UI DTO
                             // boundary (`manifold-ui` doesn't depend on
-                            // `manifold-renderer`), same convention as
+                            // `manifold-nodes`), same convention as
                             // `EnvironmentRowVm::mode_is_hdri`.
                             const LIGHT_MODE_LABELS: &[&str] = &["Sun", "Point"];
                             const SHADOW_SOFTNESS_LABELS: &[&str] = &["Hard", "Soft", "VerySoft", "Contact"];
@@ -1266,7 +1266,7 @@ pub fn sync_inspector_data(
                         .generator_graph()
                         .cloned()
                         .or_else(|| {
-                            manifold_renderer::node_graph::bundled_preset_def(
+                            manifold_nodes::bundled_presets::bundled_preset_def(
                                 &layer.generator_type().clone(),
                             )
                             .cloned()

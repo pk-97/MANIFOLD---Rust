@@ -542,7 +542,7 @@ mod tests {
     // inlined into the entry: the constant struct array store
     // `spirv_msl_fixup` rewrites. Self-contained on purpose — a hand copy of
     // the generated mesher drifted from it (BUG-jro0j); the real mesher's
-    // Metal compile is proven in manifold-renderer's volume_surface_mesh
+    // Metal compile is proven in manifold-nodes's volume_surface_mesh
     // gpu_tests on its generated source.
     const STRUCT_ARRAY_LOCAL_WGSL: &str = r#"
 struct Element {

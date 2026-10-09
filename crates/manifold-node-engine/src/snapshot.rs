@@ -225,7 +225,7 @@ pub enum ParamSnapshotKind {
     Bool,
     Enum,
     /// Momentary "fire once" button. See [`ParamType::Trigger`] in
-    /// `manifold-renderer/.../parameters.rs` for the storage / cold-start
+    /// `manifold-nodes/.../parameters.rs` for the storage / cold-start
     /// contract; the outer-card click handler increments by one per press.
     Trigger,
     /// RGBA colour. Editable via a swatch + R/G/B/A channel sliders; its live
@@ -551,7 +551,7 @@ impl GraphSnapshot {
             Ok(g) => g,
             Err(e) => {
                 eprintln!(
-                    "[manifold-renderer] GraphSnapshot::from_def: \
+                    "[manifold-nodes] GraphSnapshot::from_def: \
                      failed to materialize per-instance graph: {e}. \
                      Editor canvas will treat this as empty."
                 );

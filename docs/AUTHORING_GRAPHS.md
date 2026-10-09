@@ -21,7 +21,7 @@ a tool a future agent calls instead of reading this.
 One JSON file = one `EffectGraphDef`: a typed node graph plus optional
 `presetMetadata` describing its performance surface (the param cards a user sees and
 binds faders/LFOs/audio to). Generators live in
-`crates/manifold-renderer/assets/generator-presets/<TypeId>.json`, effects in
+`crates/manifold-nodes/assets/generator-presets/<TypeId>.json`, effects in
 `assets/effect-presets/`. Same schema; generators start from `system.generator_input`
 and end at `system.final_output`.
 
@@ -123,9 +123,9 @@ legibility per [GROUPING_GRAPHS.md](GROUPING_GRAPHS.md), not granularity.
    the nearest shipped preset and read it end-to-end (section 2.5 discipline). No new
    primitives without the audit.
 2. **Edit the JSON.** Python surgery beats hand-editing for wire renumbering.
-3. **Validate**: `cargo test -p manifold-renderer --lib preset` (~0.4s) — parse,
+3. **Validate**: `cargo test -p manifold-nodes --lib preset` (~0.4s) — parse,
    port/type, and compile checks for every bundled preset.
-4. **Render**: `cargo run -p manifold-renderer --release --bin render-generator-preset
+4. **Render**: `cargo run -p manifold-nodes --release --bin render-generator-preset
    -- <PresetId> --size 1280x720 --frames 3000 --out /tmp/x.png --param id=value ...`
    — `--param` takes outer-card ids. **Always `--frames 3000`** until BUG-117 (render-generator-preset-silently-under-renders-a…)
    (silent under-render while async loads converge) ships its `--wait-converged` fix.

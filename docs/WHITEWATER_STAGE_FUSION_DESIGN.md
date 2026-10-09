@@ -54,7 +54,7 @@ Every claim below is anchored. Extend, don't redesign: the stage, its hand kerne
 
 ### 1.2 The atom bodies the fusions will copy (operation order, RNG streams, dead-slot rules)
 
-All under `crates/manifold-renderer/src/node_graph/primitives/shaders/`. The fused kernels copy this text phase by phase (D3); nothing here is re-derived from the engine.
+All under `crates/manifold-nodes/src/node_graph/primitives/shaders/`. The fused kernels copy this text phase by phase (D3); nothing here is re-derived from the engine.
 
 | Body | Reads | Writes | Dead-slot / early-out rule | RNG stream |
 |---|---|---|---|---|
@@ -123,7 +123,7 @@ This design removes 11 dispatches and 1 blit per tick (2 pads, 1 influence blit,
 
 ### 1.6 Catalog status of the whitewater atoms (the brief's question)
 
-Method: `grep -rl '"node.<id>"' crates/manifold-renderer/assets/` per atom, plus `picker:` / `examples:` in each `primitive!`.
+Method: `grep -rl '"node.<id>"' crates/manifold-nodes/assets/` per atom, plus `picker:` / `examples:` in each `primitive!`.
 
 **Catalog atoms other presets wire (stay catalog, untouched by this design):**
 
@@ -260,10 +260,10 @@ House method, stated once: two **release** binaries, A = the pinned base SHA, B 
 | I6 | Packed read equals axis read | `whitewater_packed_faces_match_axis_arrays`: the shipped def wired both ways, I1's fingerprints equal; plus a fixture with nonzero padding, mixed valid weights, and substep history in use |
 | I7 | Whole-frame hashes unchanged | `gpu_flip_frame_perf*` printed hash lines identical on base and branch (landing report quotes both) |
 | I8 | Shipped presets equal the builder | existing `gpu_flip_preset` snapshot tests (:1609-1639) |
-| I9 | Hidden atoms still load; catalog in sync | `hidden_whitewater_atoms_still_register` (registry has every type id; `palette_atoms()` has none); `cargo run -p manifold-renderer --bin gen_node_catalog -- --check` |
+| I9 | Hidden atoms still load; catalog in sync | `hidden_whitewater_atoms_still_register` (registry has every type id; `palette_atoms()` has none); `cargo run -p manifold-nodes --bin gen_node_catalog -- --check` |
 | I10 | Fused pipelines are legal at the dispatched workgroup size | `whitewater_fused_pipelines_are_dispatch_legal` (section 3.5; values printed as diagnostics) |
 | I11 | The regenerated preset round-trips | save the regenerated Dam Break → reload → I1 fingerprints equal |
-| I12 | No new lock or thread | `git diff -U0 origin/main -- crates/manifold-renderer crates/manifold-gpu ':!*tests.rs'` added lines: `rg -e 'Arc<Mutex' -e 'Arc<RwLock' -e 'thread::'` → 0 |
+| I12 | No new lock or thread | `git diff -U0 origin/main -- crates/manifold-nodes crates/manifold-gpu ':!*tests.rs'` added lines: `rg -e 'Arc<Mutex' -e 'Arc<RwLock' -e 'thread::'` → 0 |
 | I13 | No per-frame allocation on the stage's run path | added lines in `whitewater_step.rs` outside `#[cfg(test)]`: `rg -e 'Vec::new\(\)' -e 'to_string\(\)' -e 'format!\('` → 0 beyond the existing error strings (list them in the brief) |
 | I14 | Production never dispatches the replaced atoms | `rg -n 'atom::<(JitterParticles|SampleFacesAtParticles|WhitewaterEmitterVelocity|EnergyPotential|WavecrestPotential|InsideTurbulencePotential|TurbulenceEmissionCount|DustPotential|SpawnWhitewater|WhitewaterType|AdvectWhitewater|RetypeWhitewater|AgeWhitewater|TurbulenceField)>' crates/manifold-node-engine/src/water/primitives/whitewater_step.rs` → 0 (all live in `whitewater_reference.rs`). Phase-scoped: after P2 the regex covers only the eight emitter/dust atoms; after P3 add spawn, type, advect, retype, age; `TurbulenceField` joins at P4 |
 | I15 | RNG streams, seeds and draw indices unchanged | the constant-set check alone cannot catch particle id used for slot, or emitter index used for spawn index; so `whitewater_rng_calls_are_the_atoms` compares each `ww_random(...)` call's full argument text (index expression, seed expression, stream) per phase against the atom body, and I2's synthetic thinning and capacity-overflow cases catch the rest dynamically |
@@ -278,7 +278,7 @@ Order P0 → P1 → P2 → P3 → P3b → P4 → P5; each lands on its own. P1, 
 - **Entry:** the base SHA is pinned in the brief (current main) and the golden is recorded there; `scripts/gpu_proofs_gate.py --filter <fully qualified whitewater_per_tick_gpu_rows test>` green with a nonzero count; anchors re-checked: whitewater_step.rs:928-970, whitewater_scene_tests.rs:407-610, gpu_flip_frame_perf.rs:467-516.
 - **Read-back:** this doc section 1.3, section 1.7, D4; restate the two fixtures and why fingerprints are recorded on the base SHA.
 - **Deliverables:** `whitewater_golden_tests.rs` (gpu-proofs cfg): `Show`-based run of the shipped Dam Break def, capturing **every simulation tick** (not only each display frame's last result), dumping `whitewater` `pool_out`, `state_out`, `counts_out` and the four populations per tick via `dumped::<T>`, FNV fingerprints per buffer per tick. Tick count and enabled flags do not prove coverage: the test asserts that spawns, deaths, compaction, capacity overflow, the id wrap at 256 and dust spawns each occurred in the recorded run, and constructed cases supply any the scenes do not reach; the all-emitters fixture = the same def with `dust_emission 1, boundary_dust 1, inside_emission 1, preserve_foam 1, generation_rate 0.5, spray_speed 2.0` on the whitewater node; `tests/fixtures/whitewater_tick_golden.txt` recorded with `MANIFOLD_RECORD_GOLDEN=1`; `whitewater_tick_state_matches_golden` (I1).
-- **Gate:** the test passes twice in a row (determinism); `scripts/gpu_proofs_gate.py --filter <fully qualified whitewater_tick_state_matches_golden>` with a nonzero count; `cargo clippy -p manifold-renderer -- -D warnings`.
+- **Gate:** the test passes twice in a row (determinism); `scripts/gpu_proofs_gate.py --filter <fully qualified whitewater_tick_state_matches_golden>` with a nonzero count; `cargo clippy -p manifold-nodes -- -D warnings`.
 - **Forbidden:** recording the golden on a branch with any stage change; hashing only counts (hash the full buffers); a tolerance anywhere.
 - **Test scope:** focused (the new test, `whitewater_step_tests`); no workspace run. Demo: none — L1.
 
@@ -286,7 +286,7 @@ Order P0 → P1 → P2 → P3 → P3b → P4 → P5; each lands on its own. P1, 
 - **Entry:** P0 landed; anchors: whitewater_step.rs:1056-1063, :1095-1101, :670-708; whitewater.rs:170-183; pad_distance_lattice.rs:31-38.
 - **Read-back:** D5, D6, I3, I4; restate that the padded path stays and the legacy copy at :1093 is untouched.
 - **Deliverables:** `Fields.distance/surface: Option<GpuBuffer>` allocated for legacy mode or pad > 0, mode in the reservation key; views resolved for the whole emit-plus-lifecycle interval; alias branch in `emit`; `influence_current`; `held_bytes` updated; `whitewater_alias_follows_live_padding`, `whitewater_influence_swap_lifecycle`.
-- **Gate:** I1 golden match; I3 (live pad 0 → 2 → 0 transition and legacy pad 0); I4 rg → 0 and the swap lifecycle test; `whitewater_extents_at_64` updated and green; `whitewater_per_tick_gpu_rows_match_at_every_frame_rate`, `whitewater_step_matches_cpu_across_frames*` green; clippy `-p manifold-renderer`.
+- **Gate:** I1 golden match; I3 (live pad 0 → 2 → 0 transition and legacy pad 0); I4 rg → 0 and the swap lifecycle test; `whitewater_extents_at_64` updated and green; `whitewater_per_tick_gpu_rows_match_at_every_frame_rate`, `whitewater_step_matches_cpu_across_frames*` green; clippy `-p manifold-nodes`.
 - **Forbidden:** deleting `pad_distance_lattice.rs`; touching the legacy level-set copy; "while here" edits to the surface-distance passes.
 - **Test scope:** focused. Demo: none — L1.
 
@@ -294,7 +294,7 @@ Order P0 → P1 → P2 → P3 → P3b → P4 → P5; each lands on its own. P1, 
 - **Entry:** P1 landed; anchors: whitewater_step.rs:1131-1250, :488-533; the 8 emitter bodies in section 1.2; gpu_flip_step.rs:233-246, :398-403.
 - **Read-back:** D1–D4, section 3.1, section 3.2, section 3.4, section 3.5; restate the RNG stream table and the dead-slot rules verbatim.
 - **Deliverables:** `shaders/whitewater_fused.wgsl` with `ww_emit`, `ww_dust` (axis variant only in this phase); `whitewater_reference.rs` with the moved emitter chain and the instance-local reference selector, its own scratch and defaults; `ParticleScratch` reshaped; `Fields.spawns` kept until P3; `GpuComputePipeline::max_threads_per_threadgroup` in manifold-gpu; tests `whitewater_fused_emit_matches_reference`, `whitewater_fused_dust_matches_reference` (all-emitters fixture plus the D4 synthetic emitter cases: half-integer counts, zero emitters, dead slots), `whitewater_fused_pipelines_are_dispatch_legal`, `whitewater_rng_calls_are_the_atoms`. No hoisting (D3).
-- **Gate:** I1 on both fixtures; I2 for emit/dust with intermediates (emitter records, unscaled, energy, pre-scan counts); I10 legality, values printed; I14 phase-scoped; I12–I14 rg gates; `whitewater_emitter_gpu_tests` and `whitewater_engine_gpu_tests` green (atoms untouched); `gpu_flip_frame_perf` hash lines identical to base (I7); clippy `-p manifold-renderer -p manifold-gpu`.
+- **Gate:** I1 on both fixtures; I2 for emit/dust with intermediates (emitter records, unscaled, energy, pre-scan counts); I10 legality, values printed; I14 phase-scoped; I12–I14 rg gates; `whitewater_emitter_gpu_tests` and `whitewater_engine_gpu_tests` green (atoms untouched); `gpu_flip_frame_perf` hash lines identical to base (I7); clippy `-p manifold-nodes -p manifold-gpu`.
 - **Forbidden:** fuse-for-parity shortcuts (changing an atom body to make the fused kernel match — the atoms are the oracle); any edit under `flip_engine/`; a runtime flag choosing fused vs reference; editing a `wgsl_body` file; dropping `unscaled` for dead slots.
 - **Test scope:** focused GPU proofs through the gate script; no workspace run. Demo: `gpu_flip_frame_perf` output quoted (hashes + whitewater counts) — L1 (the PNG is not an agent gate).
 
@@ -316,7 +316,7 @@ Order P0 → P1 → P2 → P3 → P3b → P4 → P5; each lands on its own. P1, 
 - **Entry:** P3 landed; anchors: gpu_flip_preset.rs:92-94, :495-506, :764-854, :879, :1609-1639; whitewater_scene_tests.rs:278-300; liquid_state.rs:508-516, :556-575, :770-773; liquid_frame.rs:330-345.
 - **Read-back:** D7, D8, D10, section 3.1 face access, section 3.3 seam brief; re-run the section 3.3 inventory command and list the sites.
 - **Deliverables:** `faces` input + optional `face_u/v/w` on the stage; `FaceSource`; `ww_unpack_faces` (D7 amended) and `ww_turbulence` (the turbulence grid pass moves into the fused shader with its own reference oracle `whitewater_fused_turbulence_matches_reference`); the whitewater extent rule (liquid/extent.rs:1831) rewritten to the same truth table as `run`; builder: the forced `with_faces()` overrides in `render_def` and `particle_view_def` (gpu_flip_preset.rs:766, :880) removed, the vendored comparison's explicit `with_faces()` kept, whitewater adapters removed from the seed and `step.faces → whitewater.faces` pushed (retain-then-push shape, :836-840); both presets regenerated with `UPDATE_GPU_FLIP_PRESET=1`; tests I5, I6, I11; dump proving `liquid_state`'s held faces are unallocated (`provided_bytes("state", "faces") == 0` or the field `None`) — closes the ⚠ in section 1.5; second A/B.
-- **Gate:** I1 (the golden still matches: the packed read is value-identical), I5, I6, I7, I8, I11 (the regenerated preset round-trips: save → reload → fingerprints), `check-presets` sub-second validator, `whitewater_per_tick_preset_closes_the_liquid_region`, the vendored comparison in `whitewater_scene_tests` (needs `faces: true` in its own scene — ⚠ VERIFY-AT-IMPL `rg 'faces:' crates/manifold-node-engine/src/water/primitives/gpu_flip_preset.rs whitewater_scene_tests.rs`); A/B table; clippy `-p manifold-renderer`.
+- **Gate:** I1 (the golden still matches: the packed read is value-identical), I5, I6, I7, I8, I11 (the regenerated preset round-trips: save → reload → fingerprints), `check-presets` sub-second validator, `whitewater_per_tick_preset_closes_the_liquid_region`, the vendored comparison in `whitewater_scene_tests` (needs `faces: true` in its own scene — ⚠ VERIFY-AT-IMPL `rg 'faces:' crates/manifold-node-engine/src/water/primitives/gpu_flip_preset.rs whitewater_scene_tests.rs`); A/B table; clippy `-p manifold-nodes`.
 - **Forbidden:** hand-editing either preset JSON; deleting `node.face_sample_component`, `liquid_frame.face_*_in` or `liquid_state.faces`; touching `substep_u/v/w`.
 - **Test scope:** focused. Demo: the A/B table — measure level; **round-trip gate mandatory**.
 
@@ -324,7 +324,7 @@ Order P0 → P1 → P2 → P3 → P3b → P4 → P5; each lands on its own. P1, 
 - **Entry:** P2–P4 landed; anchors: primitive.rs:1300, :1405-1413; catalog_gen.rs:57-58, :199-200; gen_node_catalog.rs:13-14.
 - **Read-back:** D9, section 1.6 list; resolve the `emission_count` ⚠.
 - **Deliverables:** remove `picker:` from the 25 atoms; `hidden_whitewater_atoms_still_register`; regenerated `docs/NODE_CATALOG.md`; `GPU_WHITEWATER_DESIGN.md` section 3.9 gains an "as fused" paragraph pointing here; this doc's Status line updated by the landing.
-- **Gate:** I9; `gen_node_catalog --check`; `cargo test -p manifold-renderer palette` (whatever names the palette tests carry — list them in the brief after `rg palette_atoms`); clippy.
+- **Gate:** I9; `gen_node_catalog --check`; `cargo test -p manifold-nodes palette` (whatever names the palette tests carry — list them in the brief after `rg palette_atoms`); clippy.
 - **Forbidden:** deregistering or deleting atom files; renaming type ids.
 - **Test scope:** focused CPU tests. Demo: none — L1.
 

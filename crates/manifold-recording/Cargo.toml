@@ -25,7 +25,7 @@ cc = "1"
 # `recording-proofs` (see [features]) so it's excluded from the default
 # `cargo test` sweep — run deliberately with
 # `cargo test -p manifold-recording --features recording-proofs`.
-# Mirrors manifold-renderer's `gpu-proofs` wiring.
+# Mirrors manifold-nodes's `gpu-proofs` wiring.
 [[test]]
 name = "recording_proofs"
 path = "tests/recording_proofs.rs"

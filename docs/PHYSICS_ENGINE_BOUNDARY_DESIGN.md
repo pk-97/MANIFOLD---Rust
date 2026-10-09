@@ -25,7 +25,7 @@ Companions:
 
 Verified 2026-10-06 against `c67c1e9ad84a51db2dc3f433247a1d6100cd5eb7`, branch `feat/physics-boundary-design`. HEAD and clean working state were checked before reading. This is a static source audit, not a runtime or visual verification. **Extend the listed infrastructure; do not redesign it.** Line numbers are snapshot anchors and must be re-resolved before implementation. Amendments, dependency metadata, and duplication were checked at `16dd977ab` (reviewed boundary-design commit), with a clean worktree before this edit.
 
-Path abbreviations below are exact repository-relative prefixes: `P = crates/manifold-physics/src/`, `F = crates/manifold-fluids/src/`, `R = crates/manifold-renderer/src/node_graph/`, `C = crates/manifold-core/src/`, `E = crates/manifold-editing/src/commands/graph/`, `A = crates/manifold-app/src/`, `U = crates/manifold-ui/src/`.
+Path abbreviations below are exact repository-relative prefixes: `P = crates/manifold-physics/src/`, `F = crates/manifold-fluids/src/`, `R = crates/manifold-nodes/src/node_graph/`, `C = crates/manifold-core/src/`, `E = crates/manifold-editing/src/commands/graph/`, `A = crates/manifold-app/src/`, `U = crates/manifold-ui/src/`.
 
 ### 1.1 Engine and host code
 
@@ -43,7 +43,7 @@ Path abbreviations below are exact repository-relative prefixes: `P = crates/man
 | Allocation dependency | `R/scene_modifier_expand/buffer_budget.rs:310`, `:343`; `primitives/gpu_flip_step.rs:601`; `gpu_flip_narrow_band.rs:208`; `gpu_flip_sheeting.rs:196`; `whitewater_step.rs:954` | Preserve admission while separating checked arithmetic from scene policy/errors. |
 | Shatter | `R/scene_modifier_authoring.rs:29`; `scene_modifier_expand/compiler/shatter.rs:156`, `:174`, `:233`; `C/scene_modifier_preset.rs:195` | A modifier recipe compiled into rigid participants, not a solver. |
 
-Cargo manifests and `cargo metadata --offline --format-version 1` were checked at the reviewed commit, including normal, build, dev, and target-conditioned workspace edges. Physics depends on foundation; fluids on foundation/physics; GPU and UI on foundation. None of these four has a host dependency. Renderer depends on physics, fluids, GPU, core, native, playback, and UI (`crates/manifold-renderer/Cargo.toml:8`–`:17`). The exact ban allowlists and the cargo-deny check are in section 3.2. No implementation dependency fix is needed today.
+Cargo manifests and `cargo metadata --offline --format-version 1` were checked at the reviewed commit, including normal, build, dev, and target-conditioned workspace edges. Physics depends on foundation; fluids on foundation/physics; GPU and UI on foundation. None of these four has a host dependency. Renderer depends on physics, fluids, GPU, core, native, playback, and UI (`crates/manifold-nodes/Cargo.toml:8`–`:17`). The exact ban allowlists and the cargo-deny check are in section 3.2. No implementation dependency fix is needed today.
 
 The production source import search `rg -n 'use .*manifold_(renderer|app|ui|core)|crate::(app|ui)' crates/manifold-{physics,fluids}/src` returned zero. GPU primitives and liquid/whitewater atoms still use graph contexts, descriptors, and freeze codegen; those are deferred separation work, not evidence of an independent GPU engine today. MPM keeps its concrete `matter_*` stages. Remove FLIP's `matter_domain::closed_faces` dependency (`gpu_flip_domain.rs:25`) during the numerical moves, without a universal solver trait.
 
@@ -207,21 +207,21 @@ P1 adds the entries below to `[bans].deny` in deny.toml, beside the wgpu/metal p
 deny = [
     { name = "manifold-app", wrappers = ["manifold-app"] },
     { name = "manifold-audio", wrappers = ["manifold-app", "manifold-recording"] },
-    { name = "manifold-core", wrappers = ["manifold-app", "manifold-audio", "manifold-editing", "manifold-io", "manifold-media", "manifold-playback", "manifold-renderer"] },
-    { name = "manifold-editing", wrappers = ["manifold-app", "manifold-playback", "manifold-renderer"] },
-    { name = "manifold-fluids", wrappers = ["manifold-renderer"] },
-    { name = "manifold-gpu", wrappers = ["manifold-app", "manifold-led", "manifold-media", "manifold-recording", "manifold-renderer", "manifold-spectral"] },
-    { name = "manifold-io", wrappers = ["manifold-app", "manifold-editing", "manifold-playback", "manifold-renderer"] },
+    { name = "manifold-core", wrappers = ["manifold-app", "manifold-audio", "manifold-editing", "manifold-io", "manifold-media", "manifold-playback", "manifold-nodes"] },
+    { name = "manifold-editing", wrappers = ["manifold-app", "manifold-playback", "manifold-nodes"] },
+    { name = "manifold-fluids", wrappers = ["manifold-nodes"] },
+    { name = "manifold-gpu", wrappers = ["manifold-app", "manifold-led", "manifold-media", "manifold-recording", "manifold-nodes", "manifold-spectral"] },
+    { name = "manifold-io", wrappers = ["manifold-app", "manifold-editing", "manifold-playback", "manifold-nodes"] },
     { name = "manifold-led", wrappers = ["manifold-app"] },
     { name = "manifold-media", wrappers = ["manifold-app"] },
-    { name = "manifold-native", wrappers = ["manifold-renderer"] },
-    { name = "manifold-physics", wrappers = ["manifold-fluids", "manifold-renderer"] },
-    { name = "manifold-playback", wrappers = ["manifold-app", "manifold-audio", "manifold-media", "manifold-renderer"] },
+    { name = "manifold-native", wrappers = ["manifold-nodes"] },
+    { name = "manifold-physics", wrappers = ["manifold-fluids", "manifold-nodes"] },
+    { name = "manifold-playback", wrappers = ["manifold-app", "manifold-audio", "manifold-media", "manifold-nodes"] },
     { name = "manifold-profiler", wrappers = ["manifold-profiler"] },
     { name = "manifold-recording", wrappers = ["manifold-app"] },
-    { name = "manifold-renderer", wrappers = ["manifold-app"] },
+    { name = "manifold-nodes", wrappers = ["manifold-app"] },
     { name = "manifold-spectral", wrappers = ["manifold-app", "manifold-audio"] },
-    { name = "manifold-ui", wrappers = ["manifold-app", "manifold-renderer"] },
+    { name = "manifold-ui", wrappers = ["manifold-app", "manifold-nodes"] },
 ]
 ```
 
@@ -540,7 +540,7 @@ P3 baseline field inventory: `rg -n '\.fluid_controls\b|pub fluid_controls:' cra
 
 ### P8 — Shatter presentation and ownership
 
-- **Entry/read-back:** P1/P3; read `scene_modifier_edit`, `scene_modifier_authoring`, shatter compiler admission, and modifier card host. Re-run `rg -n 'prepare_new_scene_modifier|shatter_targets' crates/manifold-app/src crates/manifold-renderer/src` and confirm P1 already owns commit.
+- **Entry/read-back:** P1/P3; read `scene_modifier_edit`, `scene_modifier_authoring`, shatter compiler admission, and modifier card host. Re-run `rg -n 'prepare_new_scene_modifier|shatter_targets' crates/manifold-app/src crates/manifold-nodes/src` and confirm P1 already owns commit.
 - **Deliverables:** Shatter action/selection uses common object references and capabilities; modifier parameters remain existing ParamSurface cards; rejected targets preserve owner state. Tests `physics_boundary_shatter_targets`, `physics_boundary_shatter_undo_reload`. No new simulation type or insertion command.
 - **Seam:** existing renderer preparation signature stays; app converts shared model selection to its existing scoped target list. Remove any duplicated eligibility computation superseded by the model, while renderer compiler validation remains authoritative for prepared geometry.
 - **Gate/scope:** focused modifier/renderer/app tests and mapped proof gate. Negative test rejects unsupported animated/deformed/second-active-shatter cases. Saved recipe and controls round-trip and modulate after reload. Use a held-out supported imported mesh.

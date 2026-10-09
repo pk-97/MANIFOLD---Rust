@@ -57,7 +57,7 @@ pub struct AddSceneLayerPlaneCommand {
     height: f32,
     /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new material/
     /// transform/scene_object nodes' full param manifests, computed by the
-    /// app-side caller via `manifold_renderer::node_graph::scene_exposure::
+    /// app-side caller via `manifold_nodes::node_graph::scene_exposure::
     /// metadata_for_node_type` (this crate has no renderer dep) — `execute`
     /// stamps them into the def's top-level `preset_metadata` after minting
     /// the new nodes' ids.

@@ -1320,7 +1320,7 @@ fn compute_active_clip_timing(
 // that changes, and `effect_envelope_resolves_target_by_type_first_match`
 // documents the leak the move fixes.
 //
-// manifold-renderer (which submits the real shipping presets) isn't linked
+// manifold-nodes (which submits the real shipping presets) isn't linked
 // into the manifold-playback test binary, so the evaluators would resolve
 // nothing. We register one synthetic effect and one synthetic generator here
 // via `inventory` so `resolve_param_in` / the generator registry have a

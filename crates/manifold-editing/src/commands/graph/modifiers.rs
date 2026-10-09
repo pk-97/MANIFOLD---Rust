@@ -33,7 +33,7 @@ use super::{
 
 /// The curated D6 mesh-modifier vocabulary — the same 7 atoms
 /// `scene_vm.rs`'s `MODIFIER_TYPE_IDS` curates for discovery, duplicated here
-/// (this crate doesn't depend on `manifold-renderer`) — keep the two in sync
+/// (this crate doesn't depend on `manifold-nodes`) — keep the two in sync
 /// if either list changes.
 pub(super) const MESH_MODIFIER_TYPE_IDS: &[&str] = &[
     "node.bend_mesh",
@@ -330,7 +330,7 @@ pub struct InsertMeshModifierCommand {
     position: Option<usize>,
     /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new modifier
     /// node's full param manifest, computed by the app-side caller via
-    /// `manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(&type_id)`
+    /// `manifold_nodes::node_graph::scene_exposure::metadata_for_node_type(&type_id)`
     /// (this crate has no renderer dep).
     modifier_metadata: Vec<SceneParamMetadata>,
     catalog_default: EffectGraphDef,
@@ -380,7 +380,7 @@ impl InsertMeshModifierCommand {
 }
 
 /// Human-readable label for a mesh-modifier atom's card section — mirrors
-/// `manifold_renderer::node_graph::scene_exposure::section_name_for_node`'s
+/// `manifold_nodes::node_graph::scene_exposure::section_name_for_node`'s
 /// modifier fallback convention (duplicated: this crate has no renderer dep,
 /// same reason `MESH_MODIFIER_TYPE_IDS` above is duplicated).
 fn modifier_section_label(type_id: &str) -> String {

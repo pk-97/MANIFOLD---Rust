@@ -12,7 +12,7 @@ This is the reusable tool the §9 audit calls for in
 below; the apply / dry-run / report machinery doesn't change.
 
 After all renames apply, the script:
-  1. Runs `cargo test -p manifold-renderer --test bundled_presets_drift
+  1. Runs `cargo test -p manifold-nodes --test bundled_presets_drift
      -- --ignored` to regenerate the bundled effect-preset JSON.
   2. Runs `cargo test --workspace --lib` to gate the diff.
 
@@ -47,11 +47,11 @@ class Rename:
 # Path helpers — keep the rename table readable.
 
 def effect(name: str) -> Path:
-    return REPO_ROOT / "crates" / "manifold-renderer" / "src" / "effects" / f"{name}.rs"
+    return REPO_ROOT / "crates" / "manifold-nodes" / "src" / "effects" / f"{name}.rs"
 
 
 def primitive(name: str) -> Path:
-    return REPO_ROOT / "crates" / "manifold-renderer" / "src" / "node_graph" / "primitives" / f"{name}.rs"
+    return REPO_ROOT / "crates" / "manifold-nodes" / "src" / "node_graph" / "primitives" / f"{name}.rs"
 
 
 def gen_metadata() -> Path:
@@ -59,7 +59,7 @@ def gen_metadata() -> Path:
 
 
 def generator(name: str) -> Path:
-    return REPO_ROOT / "crates" / "manifold-renderer" / "src" / "generators" / f"{name}.rs"
+    return REPO_ROOT / "crates" / "manifold-nodes" / "src" / "generators" / f"{name}.rs"
 
 
 # ============================================================================
@@ -2230,7 +2230,7 @@ def main() -> int:
             "cargo",
             "test",
             "-p",
-            "manifold-renderer",
+            "manifold-nodes",
             "--test",
             "bundled_presets_drift",
             "--",

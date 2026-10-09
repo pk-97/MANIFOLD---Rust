@@ -25,7 +25,7 @@ Complete chain for how a parameter goes from definition → UI → content threa
    sync_clips_to_time() copies base_param_values → param_values
    (with any OSC/automation modulation applied on top)
 
-5. EFFECT APPLY (manifold-renderer/src/effects/bloom.rs)
+5. EFFECT APPLY (manifold-nodes/src/effects/bloom.rs)
    let amount = fx.param_values.first().copied().unwrap_or(0.187);
    → feeds into uniform struct → GPU dispatch
 

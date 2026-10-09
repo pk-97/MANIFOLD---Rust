@@ -6,7 +6,7 @@ Effects and generators ship through the same path: a JSON preset file, loaded fr
 
 ## Adding an Effect — drop a JSON file
 
-A new effect is one file: `crates/manifold-renderer/assets/effect-presets/<TypeId>.json`. The preset loader (`preset_loader.rs`) scans that directory at startup and builds the catalog at runtime — the binary embeds no preset JSON, there's no `build.rs` codegen, no central registry edit, and no Rust to write. While the app is running, edits to a preset JSON hot-reload live (no rebuild, no restart) via the catalog's `ArcSwap` snapshot + file watcher.
+A new effect is one file: `crates/manifold-nodes/assets/effect-presets/<TypeId>.json`. The preset loader (`preset_loader.rs`) scans that directory at startup and builds the catalog at runtime — the binary embeds no preset JSON, there's no `build.rs` codegen, no central registry edit, and no Rust to write. While the app is running, edits to a preset JSON hot-reload live (no rebuild, no restart) via the catalog's `ArcSwap` snapshot + file watcher.
 
 If your effect can be expressed by composing primitives that already exist, that's the whole step. If it needs a new atomic operation (new shader, new shape of compute work), add a primitive first ([ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md)) and then reference it from your JSON.
 
@@ -94,7 +94,7 @@ The test `every_bundled_preset_loads_validates_and_compiles` in `bundled_presets
 
 ### Tests
 
-- **Cheap:** `cargo test -p manifold-renderer --lib bundled_preset` — loads + validates + compiles every preset.
+- **Cheap:** `cargo test -p manifold-nodes --lib bundled_preset` — loads + validates + compiles every preset.
 - **Per-preset GPU parity** (optional): the `composites/` Rust builders carry pixel-exact parity tests against legacy fused shaders for the 6 grandfathered presets. New JSON presets don't need this unless they're replacing a legacy fused shader.
 
 ### Real examples to crib from
@@ -117,8 +117,8 @@ Generators have **not** yet migrated to the JSON workflow. They still ship throu
 
 ### Two files
 
-1. **`crates/manifold-renderer/src/generators/<name>.rs`** — implement the `Generator` trait + two `inventory::submit!` blocks (`GeneratorMetadata` + `GeneratorFactory`).
-2. **`crates/manifold-renderer/src/generators/mod.rs`** — `pub mod <name>;` so the file is part of the crate.
+1. **`crates/manifold-nodes/src/generators/<name>.rs`** — implement the `Generator` trait + two `inventory::submit!` blocks (`GeneratorMetadata` + `GeneratorFactory`).
+2. **`crates/manifold-nodes/src/generators/mod.rs`** — `pub mod <name>;` so the file is part of the crate.
 
 ### Template
 
@@ -173,7 +173,7 @@ Optional — new generators can use `GeneratorTypeId::new("MyGen")` inline.
 
 ### How it works
 
-The `inventory` crate collects all `submit!` blocks across the entire binary at link time. At startup, `manifold-core` iterates `inventory::iter::<GeneratorMetadata>` to build the definition map. The `manifold-renderer` factory registry does the same with `GeneratorFactory` to build the creation map.
+The `inventory` crate collects all `submit!` blocks across the entire binary at link time. At startup, `manifold-core` iterates `inventory::iter::<GeneratorMetadata>` to build the definition map. The `manifold-nodes` factory registry does the same with `GeneratorFactory` to build the creation map.
 
 ### Future migration
 
@@ -188,4 +188,4 @@ Generators will eventually follow effects onto a JSON-authoritative workflow und
 - [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog, decomposition recipes
 - [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md) section 7.11 (Bindings unification (Phases 1–4, May 2026)) — bindings unification (one ResolvedBinding, one ParamConvert)
 - `crates/manifold-node-engine/src/load/preset_loader.rs` — disk scan, catalog build, fail-loud rules, hot-reload watcher
-- `crates/manifold-renderer/src/node_graph/bundled_presets.rs` — thin lookup over the disk-loaded catalog + the `every_bundled_preset_loads_validates_and_compiles` test
+- `crates/manifold-nodes/src/node_graph/bundled_presets.rs` — thin lookup over the disk-loaded catalog + the `every_bundled_preset_loads_validates_and_compiles` test

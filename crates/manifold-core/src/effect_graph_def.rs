@@ -5,11 +5,11 @@
 //! These types are pure serde shapes: zero references back into the
 //! live runtime graph, zero GPU types. They live in `manifold-core`
 //! so [`PresetInstance`](crate::effects::PresetInstance) can hold one
-//! by value without dragging `manifold-renderer` into the dependency
+//! by value without dragging `manifold-nodes` into the dependency
 //! graph.
 //!
 //! The renderer round-trips between [`EffectGraphDef`] and its live
-//! `Graph` via `manifold_renderer::node_graph::persistence` — that's
+//! `Graph` via `manifold_nodes::node_graph::persistence` — that's
 //! where the [`PrimitiveRegistry`] and the `ParamValue` ↔
 //! [`SerializedParamValue`] conversions live.
 //!
@@ -306,7 +306,7 @@ pub fn find_node_mut<'a>(nodes: &'a mut [EffectGraphNode], node_id: &str) -> Opt
 /// untagged would conflate `Float(0.0)` / `Int(0)` / `Bool(false)`.
 ///
 /// Conversions to/from the renderer's `ParamValue` live in
-/// `manifold_renderer::node_graph::persistence`.
+/// `manifold_nodes::node_graph::persistence`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "PascalCase")]
 pub enum SerializedParamValue {
@@ -396,7 +396,7 @@ impl EffectGraphDef {
 /// `&'static str` / `Cow`-flavoured optimisations like the
 /// renderer-side compile-time submission types). Conversion to/from
 /// the renderer's runtime types (`ParamSpec`, `ParamBinding`)
-/// lives in the loader (`manifold_renderer::node_graph::persistence`).
+/// lives in the loader (`manifold_nodes::node_graph::persistence`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PresetMetadata {
@@ -628,7 +628,7 @@ impl Default for ParamSpecDef {
     }
 }
 
-/// JSON-wire shape mirroring `manifold_renderer::node_graph::ParamBinding`.
+/// JSON-wire shape mirroring `manifold_nodes::node_graph::ParamBinding`.
 /// Conversion happens in the loader once the renderer-side handles
 /// resolve.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

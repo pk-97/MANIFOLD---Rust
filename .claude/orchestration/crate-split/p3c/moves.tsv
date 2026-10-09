@@ -1,0 +1,555 @@
+crates/manifold-renderer/Cargo.toml	crates/manifold-nodes/Cargo.toml
+crates/manifold-renderer/assets/effect-presets/AutoGain.json	crates/manifold-nodes/assets/effect-presets/AutoGain.json
+crates/manifold-renderer/assets/effect-presets/BlobTracking.json	crates/manifold-nodes/assets/effect-presets/BlobTracking.json
+crates/manifold-renderer/assets/effect-presets/BlobTrackingV2.json	crates/manifold-nodes/assets/effect-presets/BlobTrackingV2.json
+crates/manifold-renderer/assets/effect-presets/BlobTrackingV2Colour.json	crates/manifold-nodes/assets/effect-presets/BlobTrackingV2Colour.json
+crates/manifold-renderer/assets/effect-presets/BlobTrackingV2Motion.json	crates/manifold-nodes/assets/effect-presets/BlobTrackingV2Motion.json
+crates/manifold-renderer/assets/effect-presets/Bloom.json	crates/manifold-nodes/assets/effect-presets/Bloom.json
+crates/manifold-renderer/assets/effect-presets/ChromaticAberration.json	crates/manifold-nodes/assets/effect-presets/ChromaticAberration.json
+crates/manifold-renderer/assets/effect-presets/CodeTerminal.json	crates/manifold-nodes/assets/effect-presets/CodeTerminal.json
+crates/manifold-renderer/assets/effect-presets/ColorCompass.json	crates/manifold-nodes/assets/effect-presets/ColorCompass.json
+crates/manifold-renderer/assets/effect-presets/ColorGrade.json	crates/manifold-nodes/assets/effect-presets/ColorGrade.json
+crates/manifold-renderer/assets/effect-presets/DataMosh.json	crates/manifold-nodes/assets/effect-presets/DataMosh.json
+crates/manifold-renderer/assets/effect-presets/DepthOfField.json	crates/manifold-nodes/assets/effect-presets/DepthOfField.json
+crates/manifold-renderer/assets/effect-presets/DigitalDrift.json	crates/manifold-nodes/assets/effect-presets/DigitalDrift.json
+crates/manifold-renderer/assets/effect-presets/Dither.json	crates/manifold-nodes/assets/effect-presets/Dither.json
+crates/manifold-renderer/assets/effect-presets/EdgeDetect.json	crates/manifold-nodes/assets/effect-presets/EdgeDetect.json
+crates/manifold-renderer/assets/effect-presets/EdgeStretch.json	crates/manifold-nodes/assets/effect-presets/EdgeStretch.json
+crates/manifold-renderer/assets/effect-presets/FilmGrain.json	crates/manifold-nodes/assets/effect-presets/FilmGrain.json
+crates/manifold-renderer/assets/effect-presets/Glitch.json	crates/manifold-nodes/assets/effect-presets/Glitch.json
+crates/manifold-renderer/assets/effect-presets/HighlightBoost.json	crates/manifold-nodes/assets/effect-presets/HighlightBoost.json
+crates/manifold-renderer/assets/effect-presets/Infrared.json	crates/manifold-nodes/assets/effect-presets/Infrared.json
+crates/manifold-renderer/assets/effect-presets/Invert.json	crates/manifold-nodes/assets/effect-presets/Invert.json
+crates/manifold-renderer/assets/effect-presets/Kaleidoscope.json	crates/manifold-nodes/assets/effect-presets/Kaleidoscope.json
+crates/manifold-renderer/assets/effect-presets/MaskBlobColour.json	crates/manifold-nodes/assets/effect-presets/MaskBlobColour.json
+crates/manifold-renderer/assets/effect-presets/MaskBlobMotion.json	crates/manifold-nodes/assets/effect-presets/MaskBlobMotion.json
+crates/manifold-renderer/assets/effect-presets/MaskCircle.json	crates/manifold-nodes/assets/effect-presets/MaskCircle.json
+crates/manifold-renderer/assets/effect-presets/MaskGradient.json	crates/manifold-nodes/assets/effect-presets/MaskGradient.json
+crates/manifold-renderer/assets/effect-presets/MaskImage.json	crates/manifold-nodes/assets/effect-presets/MaskImage.json
+crates/manifold-renderer/assets/effect-presets/MaskLayer.json	crates/manifold-nodes/assets/effect-presets/MaskLayer.json
+crates/manifold-renderer/assets/effect-presets/MaskRectangle.json	crates/manifold-nodes/assets/effect-presets/MaskRectangle.json
+crates/manifold-renderer/assets/effect-presets/Mirror.json	crates/manifold-nodes/assets/effect-presets/Mirror.json
+crates/manifold-renderer/assets/effect-presets/MotionMosh.json	crates/manifold-nodes/assets/effect-presets/MotionMosh.json
+crates/manifold-renderer/assets/effect-presets/QuadMirror.json	crates/manifold-nodes/assets/effect-presets/QuadMirror.json
+crates/manifold-renderer/assets/effect-presets/SoftFocus.json	crates/manifold-nodes/assets/effect-presets/SoftFocus.json
+crates/manifold-renderer/assets/effect-presets/Strobe.json	crates/manifold-nodes/assets/effect-presets/Strobe.json
+crates/manifold-renderer/assets/effect-presets/StylizedFeedback.json	crates/manifold-nodes/assets/effect-presets/StylizedFeedback.json
+crates/manifold-renderer/assets/effect-presets/Transform.json	crates/manifold-nodes/assets/effect-presets/Transform.json
+crates/manifold-renderer/assets/effect-presets/VoronoiPrism.json	crates/manifold-nodes/assets/effect-presets/VoronoiPrism.json
+crates/manifold-renderer/assets/effect-presets/Watercolor.json	crates/manifold-nodes/assets/effect-presets/Watercolor.json
+crates/manifold-renderer/assets/effect-presets/WireframeDepth.json	crates/manifold-nodes/assets/effect-presets/WireframeDepth.json
+crates/manifold-renderer/assets/generator-presets/BasicShapes.json	crates/manifold-nodes/assets/generator-presets/BasicShapes.json
+crates/manifold-renderer/assets/generator-presets/BlackHole.json	crates/manifold-nodes/assets/generator-presets/BlackHole.json
+crates/manifold-renderer/assets/generator-presets/BlossomWire.json	crates/manifold-nodes/assets/generator-presets/BlossomWire.json
+crates/manifold-renderer/assets/generator-presets/Caustics.json	crates/manifold-nodes/assets/generator-presets/Caustics.json
+crates/manifold-renderer/assets/generator-presets/ConcentricTunnel.json	crates/manifold-nodes/assets/generator-presets/ConcentricTunnel.json
+crates/manifold-renderer/assets/generator-presets/Cymatics.json	crates/manifold-nodes/assets/generator-presets/Cymatics.json
+crates/manifold-renderer/assets/generator-presets/DigitalPlants.json	crates/manifold-nodes/assets/generator-presets/DigitalPlants.json
+crates/manifold-renderer/assets/generator-presets/Duocylinder.json	crates/manifold-nodes/assets/generator-presets/Duocylinder.json
+crates/manifold-renderer/assets/generator-presets/FluidSim2D.json	crates/manifold-nodes/assets/generator-presets/FluidSim2D.json
+crates/manifold-renderer/assets/generator-presets/FluidSim3D.json	crates/manifold-nodes/assets/generator-presets/FluidSim3D.json
+crates/manifold-renderer/assets/generator-presets/LED Barber Pole.json	crates/manifold-nodes/assets/generator-presets/LED Barber Pole.json
+crates/manifold-renderer/assets/generator-presets/LED Beat Rain.json	crates/manifold-nodes/assets/generator-presets/LED Beat Rain.json
+crates/manifold-renderer/assets/generator-presets/LED Burst.json	crates/manifold-nodes/assets/generator-presets/LED Burst.json
+crates/manifold-renderer/assets/generator-presets/LED Chase Sweep.json	crates/manifold-nodes/assets/generator-presets/LED Chase Sweep.json
+crates/manifold-renderer/assets/generator-presets/LED Chase.json	crates/manifold-nodes/assets/generator-presets/LED Chase.json
+crates/manifold-renderer/assets/generator-presets/LED Chevron.json	crates/manifold-nodes/assets/generator-presets/LED Chevron.json
+crates/manifold-renderer/assets/generator-presets/LED Cycle.json	crates/manifold-nodes/assets/generator-presets/LED Cycle.json
+crates/manifold-renderer/assets/generator-presets/LED Fill.json	crates/manifold-nodes/assets/generator-presets/LED Fill.json
+crates/manifold-renderer/assets/generator-presets/LED Pixel Walk.json	crates/manifold-nodes/assets/generator-presets/LED Pixel Walk.json
+crates/manifold-renderer/assets/generator-presets/LED Pulse.json	crates/manifold-nodes/assets/generator-presets/LED Pulse.json
+crates/manifold-renderer/assets/generator-presets/LED Shaped Pulse.json	crates/manifold-nodes/assets/generator-presets/LED Shaped Pulse.json
+crates/manifold-renderer/assets/generator-presets/LED Step Chase.json	crates/manifold-nodes/assets/generator-presets/LED Step Chase.json
+crates/manifold-renderer/assets/generator-presets/LED Step Scan.json	crates/manifold-nodes/assets/generator-presets/LED Step Scan.json
+crates/manifold-renderer/assets/generator-presets/LED Strip Fire.json	crates/manifold-nodes/assets/generator-presets/LED Strip Fire.json
+crates/manifold-renderer/assets/generator-presets/LED Strip ID.json	crates/manifold-nodes/assets/generator-presets/LED Strip ID.json
+crates/manifold-renderer/assets/generator-presets/LED Strobe.json	crates/manifold-nodes/assets/generator-presets/LED Strobe.json
+crates/manifold-renderer/assets/generator-presets/LED Studio Light.json	crates/manifold-nodes/assets/generator-presets/LED Studio Light.json
+crates/manifold-renderer/assets/generator-presets/LED Studio Mask.json	crates/manifold-nodes/assets/generator-presets/LED Studio Mask.json
+crates/manifold-renderer/assets/generator-presets/Lantern.json	crates/manifold-nodes/assets/generator-presets/Lantern.json
+crates/manifold-renderer/assets/generator-presets/Lightning.json	crates/manifold-nodes/assets/generator-presets/Lightning.json
+crates/manifold-renderer/assets/generator-presets/Lissajous.json	crates/manifold-nodes/assets/generator-presets/Lissajous.json
+crates/manifold-renderer/assets/generator-presets/MetallicGlass.json	crates/manifold-nodes/assets/generator-presets/MetallicGlass.json
+crates/manifold-renderer/assets/generator-presets/MriVolume.json	crates/manifold-nodes/assets/generator-presets/MriVolume.json
+crates/manifold-renderer/assets/generator-presets/NestedCubes.json	crates/manifold-nodes/assets/generator-presets/NestedCubes.json
+crates/manifold-renderer/assets/generator-presets/Ocean.json	crates/manifold-nodes/assets/generator-presets/Ocean.json
+crates/manifold-renderer/assets/generator-presets/OceanCliff.json	crates/manifold-nodes/assets/generator-presets/OceanCliff.json
+crates/manifold-renderer/assets/generator-presets/OilyFluid.json	crates/manifold-nodes/assets/generator-presets/OilyFluid.json
+crates/manifold-renderer/assets/generator-presets/Oscilloscope.json	crates/manifold-nodes/assets/generator-presets/Oscilloscope.json
+crates/manifold-renderer/assets/generator-presets/ParticleText.json	crates/manifold-nodes/assets/generator-presets/ParticleText.json
+crates/manifold-renderer/assets/generator-presets/PhysicsBoxes.json	crates/manifold-nodes/assets/generator-presets/PhysicsBoxes.json
+crates/manifold-renderer/assets/generator-presets/PhysicsSolids.json	crates/manifold-nodes/assets/generator-presets/PhysicsSolids.json
+crates/manifold-renderer/assets/generator-presets/Plasma.json	crates/manifold-nodes/assets/generator-presets/Plasma.json
+crates/manifold-renderer/assets/generator-presets/Scene.json	crates/manifold-nodes/assets/generator-presets/Scene.json
+crates/manifold-renderer/assets/generator-presets/Spectrogram.json	crates/manifold-nodes/assets/generator-presets/Spectrogram.json
+crates/manifold-renderer/assets/generator-presets/StarField.json	crates/manifold-nodes/assets/generator-presets/StarField.json
+crates/manifold-renderer/assets/generator-presets/StrangeAttractor.json	crates/manifold-nodes/assets/generator-presets/StrangeAttractor.json
+crates/manifold-renderer/assets/generator-presets/Tesseract.json	crates/manifold-nodes/assets/generator-presets/Tesseract.json
+crates/manifold-renderer/assets/generator-presets/Text.json	crates/manifold-nodes/assets/generator-presets/Text.json
+crates/manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json	crates/manifold-nodes/assets/generator-presets/WaterDamBreakGpuFlip.json
+crates/manifold-renderer/assets/generator-presets/WaterDamBreakMatter.json	crates/manifold-nodes/assets/generator-presets/WaterDamBreakMatter.json
+crates/manifold-renderer/assets/generator-presets/WaterDamBreakParticles.json	crates/manifold-nodes/assets/generator-presets/WaterDamBreakParticles.json
+crates/manifold-renderer/assets/generator-presets/WaterFloatingBoxMatter.json	crates/manifold-nodes/assets/generator-presets/WaterFloatingBoxMatter.json
+crates/manifold-renderer/assets/generator-presets/WaterSeaWallGpuFlip.json	crates/manifold-nodes/assets/generator-presets/WaterSeaWallGpuFlip.json
+crates/manifold-renderer/assets/generator-presets/WaterStillPoolMatter.json	crates/manifold-nodes/assets/generator-presets/WaterStillPoolMatter.json
+crates/manifold-renderer/assets/generator-presets/Wireframe.json	crates/manifold-nodes/assets/generator-presets/Wireframe.json
+crates/manifold-renderer/assets/preset-thumbnails/effects/AutoGain.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/AutoGain.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/AutoGain.png	crates/manifold-nodes/assets/preset-thumbnails/effects/AutoGain.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/BlobTracking.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/BlobTracking.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/BlobTracking.png	crates/manifold-nodes/assets/preset-thumbnails/effects/BlobTracking.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/BlobTrackingV2.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/BlobTrackingV2.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/BlobTrackingV2.png	crates/manifold-nodes/assets/preset-thumbnails/effects/BlobTrackingV2.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/BlobTrackingV2Colour.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/BlobTrackingV2Colour.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/BlobTrackingV2Colour.png	crates/manifold-nodes/assets/preset-thumbnails/effects/BlobTrackingV2Colour.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/BlobTrackingV2Motion.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/BlobTrackingV2Motion.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/BlobTrackingV2Motion.png	crates/manifold-nodes/assets/preset-thumbnails/effects/BlobTrackingV2Motion.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/Bloom.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/Bloom.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/Bloom.png	crates/manifold-nodes/assets/preset-thumbnails/effects/Bloom.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/ChromaticAberration.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/ChromaticAberration.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/ChromaticAberration.png	crates/manifold-nodes/assets/preset-thumbnails/effects/ChromaticAberration.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/CodeTerminal.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/CodeTerminal.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/CodeTerminal.png	crates/manifold-nodes/assets/preset-thumbnails/effects/CodeTerminal.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/ColorCompass.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/ColorCompass.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/ColorCompass.png	crates/manifold-nodes/assets/preset-thumbnails/effects/ColorCompass.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/ColorGrade.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/ColorGrade.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/ColorGrade.png	crates/manifold-nodes/assets/preset-thumbnails/effects/ColorGrade.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/DataMosh.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/DataMosh.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/DataMosh.png	crates/manifold-nodes/assets/preset-thumbnails/effects/DataMosh.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/DepthOfField.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/DepthOfField.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/DepthOfField.png	crates/manifold-nodes/assets/preset-thumbnails/effects/DepthOfField.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/DigitalDrift.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/DigitalDrift.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/DigitalDrift.png	crates/manifold-nodes/assets/preset-thumbnails/effects/DigitalDrift.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/Dither.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/Dither.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/Dither.png	crates/manifold-nodes/assets/preset-thumbnails/effects/Dither.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/EdgeDetect.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/EdgeDetect.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/EdgeDetect.png	crates/manifold-nodes/assets/preset-thumbnails/effects/EdgeDetect.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/EdgeStretch.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/EdgeStretch.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/EdgeStretch.png	crates/manifold-nodes/assets/preset-thumbnails/effects/EdgeStretch.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/FilmGrain.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/FilmGrain.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/FilmGrain.png	crates/manifold-nodes/assets/preset-thumbnails/effects/FilmGrain.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/Glitch.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/Glitch.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/Glitch.png	crates/manifold-nodes/assets/preset-thumbnails/effects/Glitch.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/HighlightBoost.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/HighlightBoost.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/HighlightBoost.png	crates/manifold-nodes/assets/preset-thumbnails/effects/HighlightBoost.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/Infrared.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/Infrared.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/Infrared.png	crates/manifold-nodes/assets/preset-thumbnails/effects/Infrared.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/Invert.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/Invert.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/Invert.png	crates/manifold-nodes/assets/preset-thumbnails/effects/Invert.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/Kaleidoscope.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/Kaleidoscope.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/Kaleidoscope.png	crates/manifold-nodes/assets/preset-thumbnails/effects/Kaleidoscope.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskBlob.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskBlob.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskBlob.png	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskBlob.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskBlobColour.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskBlobColour.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskBlobColour.png	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskBlobColour.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskBlobMotion.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskBlobMotion.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskBlobMotion.png	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskBlobMotion.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskCircle.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskCircle.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskCircle.png	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskCircle.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskGradient.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskGradient.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskGradient.png	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskGradient.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskImage.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskImage.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskImage.png	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskImage.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskLayer.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskLayer.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskLayer.png	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskLayer.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskRectangle.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskRectangle.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/MaskRectangle.png	crates/manifold-nodes/assets/preset-thumbnails/effects/MaskRectangle.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/Mirror.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/Mirror.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/Mirror.png	crates/manifold-nodes/assets/preset-thumbnails/effects/Mirror.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/MotionMosh.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/MotionMosh.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/MotionMosh.png	crates/manifold-nodes/assets/preset-thumbnails/effects/MotionMosh.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/QuadMirror.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/QuadMirror.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/QuadMirror.png	crates/manifold-nodes/assets/preset-thumbnails/effects/QuadMirror.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/SoftFocus.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/SoftFocus.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/SoftFocus.png	crates/manifold-nodes/assets/preset-thumbnails/effects/SoftFocus.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/Strobe.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/Strobe.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/Strobe.png	crates/manifold-nodes/assets/preset-thumbnails/effects/Strobe.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/StylizedFeedback.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/StylizedFeedback.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/StylizedFeedback.png	crates/manifold-nodes/assets/preset-thumbnails/effects/StylizedFeedback.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/Transform.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/Transform.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/Transform.png	crates/manifold-nodes/assets/preset-thumbnails/effects/Transform.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/VoronoiPrism.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/VoronoiPrism.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/VoronoiPrism.png	crates/manifold-nodes/assets/preset-thumbnails/effects/VoronoiPrism.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/Watercolor.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/Watercolor.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/Watercolor.png	crates/manifold-nodes/assets/preset-thumbnails/effects/Watercolor.png
+crates/manifold-renderer/assets/preset-thumbnails/effects/WireframeDepth.hash	crates/manifold-nodes/assets/preset-thumbnails/effects/WireframeDepth.hash
+crates/manifold-renderer/assets/preset-thumbnails/effects/WireframeDepth.png	crates/manifold-nodes/assets/preset-thumbnails/effects/WireframeDepth.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/BasicShapes.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/BasicShapes.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/BasicShapes.png	crates/manifold-nodes/assets/preset-thumbnails/generators/BasicShapes.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/BlackHole.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/BlackHole.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/BlackHole.png	crates/manifold-nodes/assets/preset-thumbnails/generators/BlackHole.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/BlossomWire.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/BlossomWire.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/BlossomWire.png	crates/manifold-nodes/assets/preset-thumbnails/generators/BlossomWire.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Caustics.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Caustics.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Caustics.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Caustics.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/ConcentricTunnel.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/ConcentricTunnel.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/ConcentricTunnel.png	crates/manifold-nodes/assets/preset-thumbnails/generators/ConcentricTunnel.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Cymatics.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Cymatics.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Cymatics.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Cymatics.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/DigitalPlants.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/DigitalPlants.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/DigitalPlants.png	crates/manifold-nodes/assets/preset-thumbnails/generators/DigitalPlants.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Duocylinder.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Duocylinder.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Duocylinder.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Duocylinder.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/FluidSim2D.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/FluidSim2D.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/FluidSim2D.png	crates/manifold-nodes/assets/preset-thumbnails/generators/FluidSim2D.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/FluidSim3D.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/FluidSim3D.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/FluidSim3D.png	crates/manifold-nodes/assets/preset-thumbnails/generators/FluidSim3D.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Barber Pole.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Barber Pole.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Barber Pole.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Barber Pole.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Beat Rain.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Beat Rain.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Beat Rain.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Beat Rain.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Burst.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Burst.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Burst.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Burst.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Chase Sweep.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Chase Sweep.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Chase Sweep.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Chase Sweep.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Chase.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Chase.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Chase.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Chase.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Chevron.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Chevron.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Chevron.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Chevron.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Cycle.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Cycle.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Cycle.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Cycle.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Fill.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Fill.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Fill.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Fill.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Pixel Walk.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Pixel Walk.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Pixel Walk.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Pixel Walk.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Pulse.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Pulse.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Pulse.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Pulse.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Shaped Pulse.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Shaped Pulse.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Shaped Pulse.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Shaped Pulse.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Step Chase.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Step Chase.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Step Chase.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Step Chase.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Step Scan.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Step Scan.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Step Scan.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Step Scan.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Strip Fire.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Strip Fire.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Strip Fire.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Strip Fire.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Strip ID.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Strip ID.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Strip ID.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Strip ID.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Strobe.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Strobe.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Strobe.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Strobe.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Studio Light.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Studio Light.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Studio Light.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Studio Light.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Studio Mask.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Studio Mask.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/LED Studio Mask.png	crates/manifold-nodes/assets/preset-thumbnails/generators/LED Studio Mask.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Lantern.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Lantern.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Lantern.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Lantern.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Lightning.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Lightning.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Lightning.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Lightning.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Lissajous.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Lissajous.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Lissajous.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Lissajous.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/MetallicGlass.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/MetallicGlass.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/MetallicGlass.png	crates/manifold-nodes/assets/preset-thumbnails/generators/MetallicGlass.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/MriVolume.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/MriVolume.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/MriVolume.png	crates/manifold-nodes/assets/preset-thumbnails/generators/MriVolume.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/NestedCubes.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/NestedCubes.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/NestedCubes.png	crates/manifold-nodes/assets/preset-thumbnails/generators/NestedCubes.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/OilyFluid.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/OilyFluid.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/OilyFluid.png	crates/manifold-nodes/assets/preset-thumbnails/generators/OilyFluid.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Oscilloscope.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Oscilloscope.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Oscilloscope.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Oscilloscope.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/ParticleText.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/ParticleText.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/ParticleText.png	crates/manifold-nodes/assets/preset-thumbnails/generators/ParticleText.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/PhysicsBoxes.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/PhysicsBoxes.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/PhysicsBoxes.png	crates/manifold-nodes/assets/preset-thumbnails/generators/PhysicsBoxes.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/PhysicsSolids.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/PhysicsSolids.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/PhysicsSolids.png	crates/manifold-nodes/assets/preset-thumbnails/generators/PhysicsSolids.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Plasma.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Plasma.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Plasma.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Plasma.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Scene.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Scene.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Scene.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Scene.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Spectrogram.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Spectrogram.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Spectrogram.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Spectrogram.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/StarField.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/StarField.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/StarField.png	crates/manifold-nodes/assets/preset-thumbnails/generators/StarField.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/StrangeAttractor.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/StrangeAttractor.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/StrangeAttractor.png	crates/manifold-nodes/assets/preset-thumbnails/generators/StrangeAttractor.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Tesseract.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Tesseract.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Tesseract.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Tesseract.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Text.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Text.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Text.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Text.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/WaterDamBreakGpuFlip.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/WaterDamBreakGpuFlip.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/WaterDamBreakGpuFlip.png	crates/manifold-nodes/assets/preset-thumbnails/generators/WaterDamBreakGpuFlip.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/WaterDamBreakMatter.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/WaterDamBreakMatter.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/WaterDamBreakMatter.png	crates/manifold-nodes/assets/preset-thumbnails/generators/WaterDamBreakMatter.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/WaterDamBreakParticles.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/WaterDamBreakParticles.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/WaterDamBreakParticles.png	crates/manifold-nodes/assets/preset-thumbnails/generators/WaterDamBreakParticles.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/WaterFloatingBoxMatter.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/WaterFloatingBoxMatter.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/WaterFloatingBoxMatter.png	crates/manifold-nodes/assets/preset-thumbnails/generators/WaterFloatingBoxMatter.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/WaterStillPoolMatter.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/WaterStillPoolMatter.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/WaterStillPoolMatter.png	crates/manifold-nodes/assets/preset-thumbnails/generators/WaterStillPoolMatter.png
+crates/manifold-renderer/assets/preset-thumbnails/generators/Wireframe.hash	crates/manifold-nodes/assets/preset-thumbnails/generators/Wireframe.hash
+crates/manifold-renderer/assets/preset-thumbnails/generators/Wireframe.png	crates/manifold-nodes/assets/preset-thumbnails/generators/Wireframe.png
+crates/manifold-renderer/assets/reference-presets/README.md	crates/manifold-nodes/assets/reference-presets/README.md
+crates/manifold-renderer/assets/reference-presets/ReactionDiffusion.json	crates/manifold-nodes/assets/reference-presets/ReactionDiffusion.json
+crates/manifold-renderer/assets/scene-modifier-presets/ElasticSculpture.json	crates/manifold-nodes/assets/scene-modifier-presets/ElasticSculpture.json
+crates/manifold-renderer/assets/scene-modifier-presets/MaskedPeel.json	crates/manifold-nodes/assets/scene-modifier-presets/MaskedPeel.json
+crates/manifold-renderer/assets/scene-modifier-presets/MathView.json	crates/manifold-nodes/assets/scene-modifier-presets/MathView.json
+crates/manifold-renderer/assets/scene-modifier-presets/OrderedRecon.json	crates/manifold-nodes/assets/scene-modifier-presets/OrderedRecon.json
+crates/manifold-renderer/assets/scene-modifier-presets/OrderedReconHit.json	crates/manifold-nodes/assets/scene-modifier-presets/OrderedReconHit.json
+crates/manifold-renderer/assets/scene-modifier-presets/RadialForce.json	crates/manifold-nodes/assets/scene-modifier-presets/RadialForce.json
+crates/manifold-renderer/assets/scene-modifier-presets/RenderMode.json	crates/manifold-nodes/assets/scene-modifier-presets/RenderMode.json
+crates/manifold-renderer/assets/scene-modifier-presets/SceneFog.json	crates/manifold-nodes/assets/scene-modifier-presets/SceneFog.json
+crates/manifold-renderer/assets/scene-modifier-presets/SceneLoop.json	crates/manifold-nodes/assets/scene-modifier-presets/SceneLoop.json
+crates/manifold-renderer/assets/scene-modifier-presets/Shatter.json	crates/manifold-nodes/assets/scene-modifier-presets/Shatter.json
+crates/manifold-renderer/assets/scene-modifier-presets/SpatialEchoes.json	crates/manifold-nodes/assets/scene-modifier-presets/SpatialEchoes.json
+crates/manifold-renderer/assets/scene-modifier-presets/SurfacePeel.json	crates/manifold-nodes/assets/scene-modifier-presets/SurfacePeel.json
+crates/manifold-renderer/assets/scene-modifier-presets/SurfacePeelHit.json	crates/manifold-nodes/assets/scene-modifier-presets/SurfacePeelHit.json
+crates/manifold-renderer/assets/scene-modifier-presets/SurfaceWaves.json	crates/manifold-nodes/assets/scene-modifier-presets/SurfaceWaves.json
+crates/manifold-renderer/assets/scene-modifier-presets/UniformForce.json	crates/manifold-nodes/assets/scene-modifier-presets/UniformForce.json
+crates/manifold-renderer/assets/scene-modifier-presets/VortexForce.json	crates/manifold-nodes/assets/scene-modifier-presets/VortexForce.json
+crates/manifold-renderer/assets/scene-modifier-presets/VortexFragments.json	crates/manifold-nodes/assets/scene-modifier-presets/VortexFragments.json
+crates/manifold-renderer/assets/scene-modifier-presets/WavesEchoes.json	crates/manifold-nodes/assets/scene-modifier-presets/WavesEchoes.json
+crates/manifold-renderer/examples/flower_mesh_drop.rs	crates/manifold-nodes/examples/flower_mesh_drop.rs
+crates/manifold-renderer/examples/fluid_capture.rs	crates/manifold-nodes/examples/fluid_capture.rs
+crates/manifold-renderer/examples/physics_benchmark.rs	crates/manifold-nodes/examples/physics_benchmark.rs
+crates/manifold-renderer/examples/physics_mesh_benchmark.rs	crates/manifold-nodes/examples/physics_mesh_benchmark.rs
+crates/manifold-renderer/src/bin/check_presets.rs	crates/manifold-nodes/src/bin/check_presets.rs
+crates/manifold-renderer/src/bin/freeze_profile.rs	crates/manifold-nodes/src/bin/freeze_profile.rs
+crates/manifold-renderer/src/bin/gen_node_catalog.rs	crates/manifold-nodes/src/bin/gen_node_catalog.rs
+crates/manifold-renderer/src/bin/render_generator_preset.rs	crates/manifold-nodes/src/bin/render_generator_preset.rs
+crates/manifold-renderer/src/exec.rs	crates/manifold-nodes/tests/contracts/exec.rs
+crates/manifold-renderer/src/exec/execution.rs	crates/manifold-nodes/tests/contracts/exec/execution.rs
+crates/manifold-renderer/src/exec/execution_plan.rs	crates/manifold-nodes/tests/contracts/exec/execution_plan.rs
+crates/manifold-renderer/src/freeze.rs	crates/manifold-nodes/tests/contracts/freeze.rs
+crates/manifold-renderer/src/freeze/classify.rs	crates/manifold-nodes/tests/contracts/freeze/classify.rs
+crates/manifold-renderer/src/freeze/codegen.rs	crates/manifold-nodes/tests/contracts/freeze/codegen.rs
+crates/manifold-renderer/src/freeze/install.rs	crates/manifold-nodes/tests/contracts/freeze/install.rs
+crates/manifold-renderer/src/freeze/proof.rs	crates/manifold-nodes/tests/contracts/freeze/proof.rs
+crates/manifold-renderer/src/freeze/region.rs	crates/manifold-nodes/tests/contracts/freeze/region.rs
+crates/manifold-renderer/src/freeze/segment.rs	crates/manifold-nodes/tests/contracts/freeze/segment.rs
+crates/manifold-renderer/src/freeze/space.rs	crates/manifold-nodes/tests/contracts/freeze/space.rs
+crates/manifold-renderer/src/generators/bundled_generator_presets.rs	crates/manifold-nodes/src/bundled_generator_presets.rs
+crates/manifold-renderer/src/generators/registry.rs	crates/manifold-nodes/src/registry.rs
+crates/manifold-renderer/src/generators/registry/provider.rs	crates/manifold-nodes/src/registry/provider.rs
+crates/manifold-renderer/src/load.rs	crates/manifold-nodes/tests/contracts/load.rs
+crates/manifold-renderer/src/load/expand.rs	crates/manifold-nodes/tests/contracts/load/expand.rs
+crates/manifold-renderer/src/load/expand/compiler.rs	crates/manifold-nodes/tests/contracts/load/expand/compiler.rs
+crates/manifold-renderer/src/load/expand/compiler/camera_endpoint_tests.rs	crates/manifold-nodes/tests/contracts/load/expand/compiler/camera_endpoint_tests.rs
+crates/manifold-renderer/src/load/expand/control_state.rs	crates/manifold-nodes/tests/contracts/load/expand/control_state.rs
+crates/manifold-renderer/src/load/expand/coupling.rs	crates/manifold-nodes/tests/contracts/load/expand/coupling.rs
+crates/manifold-renderer/src/load/graph_loader.rs	crates/manifold-nodes/tests/contracts/load/graph_loader.rs
+crates/manifold-renderer/src/load/migration.rs	crates/manifold-nodes/tests/contracts/load/migration.rs
+crates/manifold-renderer/src/load/preset_loader.rs	crates/manifold-nodes/tests/contracts/load/preset_loader.rs
+crates/manifold-renderer/src/node_graph/bundled_presets.rs	crates/manifold-nodes/src/bundled_presets.rs
+crates/manifold-renderer/src/node_graph/catalog_gen.rs	crates/manifold-nodes/src/catalog_gen.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/acceleration.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/acceleration.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/atomic.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/atomic.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/audio_visual.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/audio_visual.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/binding_migration.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/binding_migration.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/blob_bounds.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/blob_bounds.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/copy_positions.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/copy_positions.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/execution_plan.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/execution_plan.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/expand_acceleration.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/expand_acceleration.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_conformance.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/expand_compiler_conformance.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_parameter_guard_tests.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/expand_compiler_parameter_guard_tests.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/expand_compiler_tests.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/expand_compiler_tests.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/expand_frames.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/expand_frames.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/expand_impulses.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/expand_impulses.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/expand_parameter_guards.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/expand_parameter_guards.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/expand_shatter.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/expand_shatter.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/face_grid_scene_tests.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/face_grid_scene_tests.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/freeze_install.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/freeze_install.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/freeze_region.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/freeze_region.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/fusion_proof.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/fusion_proof.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/fusion_report.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/fusion_report.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/gltf_animation_source.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/gltf_animation_source.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/gltf_card_precedence.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/gltf_card_precedence.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/gltf_import.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/gltf_import.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/gltf_upgrade.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/gltf_upgrade.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/gltf_upgrade_project.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/gltf_upgrade_project.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/gpu_flip_body.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/gpu_flip_body.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/gpu_flip_preset.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/gpu_flip_preset.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/gpu_flip_render_smoke.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/gpu_flip_render_smoke.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/gpu_flip_surface.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/gpu_flip_surface.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/image_fused.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/image_fused.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/liquid_bricks.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/liquid_bricks.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/liquid_bricks_gpu.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/liquid_bricks_gpu.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/liquid_extent.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/liquid_extent.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/liquid_lattice.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/liquid_lattice.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/liquid_prepare.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/liquid_prepare.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/liquid_surface.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/liquid_surface.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/loaded_preset_view.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/loaded_preset_view.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/loop_upgrade.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/loop_upgrade.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/math_view_fixtures.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/math_view_fixtures.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/mod.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/mod.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/nested_cubes_geometry.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/nested_cubes_geometry.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/palette.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/palette.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/particle_frame_blend_tests.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/particle_frame_blend_tests.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/particle_publication_gpu_tests.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/particle_publication_gpu_tests.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/particle_volume.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/particle_volume.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/persistence.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/persistence.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/physics_carry.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/physics_carry.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/physics_host_modulation.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/physics_host_modulation.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/physics_sampling.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/physics_sampling.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/physics_sources.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/physics_sources.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/physics_sources/paths.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/physics_sources/paths.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/refusal_census.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/refusal_census.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/relight.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/relight.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/resource_allocation.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/resource_allocation.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/runtime_array_buffers.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_array_buffers.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/runtime_bool_convert_heal.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_bool_convert_heal.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/runtime_bound_param_survives_rebuild.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_bound_param_survives_rebuild.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/runtime_chain_fusion.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_chain_fusion.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/runtime_generator_runtime.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_generator_runtime.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/runtime_math_view.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_math_view.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/runtime_modifier_events.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/runtime_modifier_events.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/scene_exposure.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/scene_exposure.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/scene_vm.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/scene_vm.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/seed_particles_from_texture.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/seed_particles_from_texture.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/snapshot.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/snapshot.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/surface_mesh_normals.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/surface_mesh_normals.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/validate.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/validate.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/wgsl_snapshot.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/wgsl_snapshot.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/whitewater_emitters.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/whitewater_emitters.rs
+crates/manifold-renderer/src/node_graph/catalog_tests/whitewater_scene.rs	crates/manifold-nodes/tests/contracts/node_graph/catalog_tests/whitewater_scene.rs
+crates/manifold-renderer/src/node_graph/image_tests/fusion_proof.rs	crates/manifold-nodes/tests/contracts/node_graph/image_tests/fusion_proof.rs
+crates/manifold-renderer/src/node_graph/image_tests/mod.rs	crates/manifold-nodes/tests/contracts/node_graph/image_tests/mod.rs
+crates/manifold-renderer/src/node_graph/scene_tests/codegen.rs	crates/manifold-nodes/tests/contracts/node_graph/scene_tests/codegen.rs
+crates/manifold-renderer/src/node_graph/scene_tests/fragment_mask_continuity.rs	crates/manifold-nodes/tests/contracts/node_graph/scene_tests/fragment_mask_continuity.rs
+crates/manifold-renderer/src/node_graph/scene_tests/material_validation.rs	crates/manifold-nodes/tests/contracts/node_graph/scene_tests/material_validation.rs
+crates/manifold-renderer/src/node_graph/scene_tests/mesh_fusion.rs	crates/manifold-nodes/tests/contracts/node_graph/scene_tests/mesh_fusion.rs
+crates/manifold-renderer/src/node_graph/scene_tests/mesh_revision.rs	crates/manifold-nodes/tests/contracts/node_graph/scene_tests/mesh_revision.rs
+crates/manifold-renderer/src/node_graph/scene_tests/mod.rs	crates/manifold-nodes/tests/contracts/node_graph/scene_tests/mod.rs
+crates/manifold-renderer/src/node_graph/scene_tests/object_ports.rs	crates/manifold-nodes/tests/contracts/node_graph/scene_tests/object_ports.rs
+crates/manifold-renderer/src/palette.rs	crates/manifold-nodes/tests/contracts/palette.rs
+crates/manifold-renderer/src/preview_encoding.rs	crates/manifold-nodes/tests/contracts/preview_encoding.rs
+crates/manifold-renderer/src/primitive_registry.rs	crates/manifold-nodes/tests/contracts/primitive_registry.rs
+crates/manifold-renderer/src/primitive_registry/surface_mesh_freeze_tests.rs	crates/manifold-nodes/tests/contracts/primitive_registry/surface_mesh_freeze_tests.rs
+crates/manifold-renderer/src/runtime.rs	crates/manifold-nodes/tests/contracts/runtime.rs
+crates/manifold-renderer/src/runtime/amount_zero_passthrough_tests.rs	crates/manifold-nodes/tests/contracts/runtime/amount_zero_passthrough_tests.rs
+crates/manifold-renderer/src/runtime/binding_seed_tests.rs	crates/manifold-nodes/tests/contracts/runtime/binding_seed_tests.rs
+crates/manifold-renderer/src/runtime/blob_grain_probe_tests.rs	crates/manifold-nodes/tests/contracts/runtime/blob_grain_probe_tests.rs
+crates/manifold-renderer/src/runtime/bug080_manifest_gate_tests.rs	crates/manifold-nodes/tests/contracts/runtime/bug080_manifest_gate_tests.rs
+crates/manifold-renderer/src/runtime/chain_error_tests.rs	crates/manifold-nodes/tests/contracts/runtime/chain_error_tests.rs
+crates/manifold-renderer/src/runtime/generator_input_tests.rs	crates/manifold-nodes/tests/contracts/runtime/generator_input_tests.rs
+crates/manifold-renderer/src/runtime/group_mask_tests.rs	crates/manifold-nodes/tests/contracts/runtime/group_mask_tests.rs
+crates/manifold-renderer/src/runtime/mosh_tests.rs	crates/manifold-nodes/tests/contracts/runtime/mosh_tests.rs
+crates/manifold-renderer/src/runtime/multi_segment_tests.rs	crates/manifold-nodes/tests/contracts/runtime/multi_segment_tests.rs
+crates/manifold-renderer/src/runtime/segment_prewarm_tests.rs	crates/manifold-nodes/tests/contracts/runtime/segment_prewarm_tests.rs
+crates/manifold-renderer/src/runtime/topology_hash_tests.rs	crates/manifold-nodes/tests/contracts/runtime/topology_hash_tests.rs
+crates/manifold-renderer/src/runtime/transient_slot_tests.rs	crates/manifold-nodes/tests/contracts/runtime/transient_slot_tests.rs
+crates/manifold-renderer/src/runtime/trigger_initialization.rs	crates/manifold-nodes/tests/contracts/runtime/trigger_initialization.rs
+crates/manifold-renderer/src/runtime/user_binding_tests.rs	crates/manifold-nodes/tests/contracts/runtime/user_binding_tests.rs
+crates/manifold-renderer/src/testkit/assets.rs	crates/manifold-nodes/src/testkit/assets.rs
+crates/manifold-renderer/src/testkit/liquid_conformance_fixtures.rs	crates/manifold-nodes/src/testkit/liquid_conformance_fixtures.rs
+crates/manifold-renderer/src/testkit/mod.rs	crates/manifold-nodes/src/testkit/mod.rs
+crates/manifold-renderer/src/testkit/reference_fixtures.rs	crates/manifold-nodes/src/testkit/reference_fixtures.rs
+crates/manifold-renderer/src/testkit/rt_dynamic.rs	crates/manifold-nodes/src/testkit/rt_dynamic.rs
+crates/manifold-renderer/src/testkit/scene_modifier.rs	crates/manifold-nodes/src/testkit/scene_modifier.rs
+crates/manifold-renderer/src/testkit/source_roots.rs	crates/manifold-nodes/src/testkit/source_roots.rs
+crates/manifold-renderer/src/water.rs	crates/manifold-nodes/tests/contracts/water.rs
+crates/manifold-renderer/src/water/physics_scene.rs	crates/manifold-nodes/tests/contracts/water/physics_scene.rs
+crates/manifold-renderer/src/water/primitives.rs	crates/manifold-nodes/tests/contracts/water/primitives.rs
+crates/manifold-renderer/src/water/primitives/face_grid_extent_tests.rs	crates/manifold-nodes/tests/contracts/water/primitives/face_grid_extent_tests.rs
+crates/manifold-renderer/src/water/primitives/fluid_role_source.rs	crates/manifold-nodes/tests/contracts/water/primitives/fluid_role_source.rs
+crates/manifold-renderer/src/water/primitives/fluid_role_source/geometry.rs	crates/manifold-nodes/tests/contracts/water/primitives/fluid_role_source/geometry.rs
+crates/manifold-renderer/src/water/primitives/gpu_flip_race_tests.rs	crates/manifold-nodes/tests/contracts/water/primitives/gpu_flip_race_tests.rs
+crates/manifold-renderer/src/water/primitives/gpu_flip_scene_tests.rs	crates/manifold-nodes/tests/contracts/water/primitives/gpu_flip_scene_tests.rs
+crates/manifold-renderer/src/water/primitives/gpu_flip_tile_tests.rs	crates/manifold-nodes/tests/contracts/water/primitives/gpu_flip_tile_tests.rs
+crates/manifold-renderer/src/water/primitives/liquid_bricks.rs	crates/manifold-nodes/tests/contracts/water/primitives/liquid_bricks.rs
+crates/manifold-renderer/src/water/primitives/whitewater_golden_tests.rs	crates/manifold-nodes/tests/contracts/water/primitives/whitewater_golden_tests.rs
+crates/manifold-renderer/src/water/primitives/whitewater_step.rs	crates/manifold-nodes/tests/contracts/water/primitives/whitewater_step.rs
+crates/manifold-renderer/tests/blob_v2_demo.rs	crates/manifold-nodes/tests/blob_v2_demo.rs
+crates/manifold-renderer/tests/blob_v2_presets.rs	crates/manifold-nodes/tests/blob_v2_presets.rs
+crates/manifold-renderer/tests/card_binding_shadow_corpus.rs	crates/manifold-nodes/tests/card_binding_shadow_corpus.rs
+crates/manifold-renderer/tests/code_terminal.rs	crates/manifold-nodes/tests/code_terminal.rs
+crates/manifold-renderer/tests/file_loader_exhaustiveness.rs	crates/manifold-nodes/tests/file_loader_exhaustiveness.rs
+crates/manifold-renderer/tests/fixtures/cpu-flip/WaterBasin.json	crates/manifold-nodes/tests/fixtures/cpu-flip/WaterBasin.json
+crates/manifold-renderer/tests/fixtures/cpu-flip/WaterDamBreak.json	crates/manifold-nodes/tests/fixtures/cpu-flip/WaterDamBreak.json
+crates/manifold-renderer/tests/fixtures/cpu-flip/WaterDamBreakGpu.json	crates/manifold-nodes/tests/fixtures/cpu-flip/WaterDamBreakGpu.json
+crates/manifold-renderer/tests/fixtures/fused_wgsl_snapshot.txt	crates/manifold-nodes/tests/fixtures/fused_wgsl_snapshot.txt
+crates/manifold-renderer/tests/fixtures/gpu_flip_body_golden.txt	crates/manifold-nodes/tests/fixtures/gpu_flip_body_golden.txt
+crates/manifold-renderer/tests/fixtures/pre_migration_scene_starter.json	crates/manifold-nodes/tests/fixtures/pre_migration_scene_starter.json
+crates/manifold-renderer/tests/fixtures/presets/NodeGraphTest.json	crates/manifold-nodes/tests/fixtures/presets/NodeGraphTest.json
+crates/manifold-renderer/tests/fixtures/presets/TrivialPassthrough.json	crates/manifold-nodes/tests/fixtures/presets/TrivialPassthrough.json
+crates/manifold-renderer/tests/fixtures/scene-modifiers/elastic_sculpture_applied_v2.json	crates/manifold-nodes/tests/fixtures/scene-modifiers/elastic_sculpture_applied_v2.json
+crates/manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json	crates/manifold-nodes/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json
+crates/manifold-renderer/tests/fixtures/scene-modifiers/photoscan_stack_applied_v2.json	crates/manifold-nodes/tests/fixtures/scene-modifiers/photoscan_stack_applied_v2.json
+crates/manifold-renderer/tests/fixtures/scene-modifiers/scene_fog_applied_v2.json	crates/manifold-nodes/tests/fixtures/scene-modifiers/scene_fog_applied_v2.json
+crates/manifold-renderer/tests/fixtures/scene-modifiers/scene_loop_applied_v2.json	crates/manifold-nodes/tests/fixtures/scene-modifiers/scene_loop_applied_v2.json
+crates/manifold-renderer/tests/fixtures/scene-modifiers/scene_loop_scene_fog_applied_v2.json	crates/manifold-nodes/tests/fixtures/scene-modifiers/scene_loop_scene_fog_applied_v2.json
+crates/manifold-renderer/tests/fixtures/scene-modifiers/surface_peel_applied_v2.json	crates/manifold-nodes/tests/fixtures/scene-modifiers/surface_peel_applied_v2.json
+crates/manifold-renderer/tests/fixtures/scene-modifiers/vortex_fragments_applied_v2.json	crates/manifold-nodes/tests/fixtures/scene-modifiers/vortex_fragments_applied_v2.json
+crates/manifold-renderer/tests/fixtures/whitewater_tick_golden.txt	crates/manifold-nodes/tests/fixtures/whitewater_tick_golden.txt
+crates/manifold-renderer/tests/fixtures/whitewater_vendored_group.json	crates/manifold-nodes/tests/fixtures/whitewater_vendored_group.json
+crates/manifold-renderer/tests/fragment_cut_scene.rs	crates/manifold-nodes/tests/fragment_cut_scene.rs
+crates/manifold-renderer/tests/glb_conformance.rs	crates/manifold-nodes/tests/gpu_proofs/glb_conformance.rs
+crates/manifold-renderer/tests/gltf_manifest_fetch_coverage.rs	crates/manifold-nodes/tests/gltf_manifest_fetch_coverage.rs
+crates/manifold-renderer/tests/gpu_proofs/alpha_contract.rs	crates/manifold-nodes/tests/gpu_proofs/alpha_contract.rs
+crates/manifold-renderer/tests/gpu_proofs/bug237_light_camera_commit_render_proof.rs	crates/manifold-nodes/tests/gpu_proofs/bug237_light_camera_commit_render_proof.rs
+crates/manifold-renderer/tests/gpu_proofs/catalog/render_scene_material_upgrade.rs	crates/manifold-nodes/tests/gpu_proofs/catalog/render_scene_material_upgrade.rs
+crates/manifold-renderer/tests/gpu_proofs/catalog/rt_bug318_import_toggle.rs	crates/manifold-nodes/tests/gpu_proofs/catalog/rt_bug318_import_toggle.rs
+crates/manifold-renderer/tests/gpu_proofs/catalog/rt_bug326_fix_gate.rs	crates/manifold-nodes/tests/gpu_proofs/catalog/rt_bug326_fix_gate.rs
+crates/manifold-renderer/tests/gpu_proofs/catalog/rt_bugmajv_kernel_toggle.rs	crates/manifold-nodes/tests/gpu_proofs/catalog/rt_bugmajv_kernel_toggle.rs
+crates/manifold-renderer/tests/gpu_proofs/catalog/rt_normal_tangent_mirror.rs	crates/manifold-nodes/tests/gpu_proofs/catalog/rt_normal_tangent_mirror.rs
+crates/manifold-renderer/tests/gpu_proofs/catalog/rt_r3_heldout_gltf.rs	crates/manifold-nodes/tests/gpu_proofs/catalog/rt_r3_heldout_gltf.rs
+crates/manifold-renderer/tests/gpu_proofs/cinematic_scene_tail.rs	crates/manifold-nodes/tests/gpu_proofs/cinematic_scene_tail.rs
+crates/manifold-renderer/tests/gpu_proofs/encode_replay.rs	crates/manifold-nodes/tests/gpu_proofs/encode_replay.rs
+crates/manifold-renderer/tests/gpu_proofs/film_grain_decorrelation.rs	crates/manifold-nodes/tests/gpu_proofs/film_grain_decorrelation.rs
+crates/manifold-renderer/tests/gpu_proofs/fluid_array_growth.rs	crates/manifold-nodes/tests/gpu_proofs/fluid_array_growth.rs
+crates/manifold-renderer/tests/gpu_proofs/fluid_surface_perf.rs	crates/manifold-nodes/tests/gpu_proofs/fluid_surface_perf.rs
+crates/manifold-renderer/tests/gpu_proofs/fragment_storage.rs	crates/manifold-nodes/tests/gpu_proofs/fragment_storage.rs
+crates/manifold-renderer/tests/gpu_proofs/gbuffer_depth.rs	crates/manifold-nodes/tests/gpu_proofs/gbuffer_depth.rs
+crates/manifold-renderer/tests/gpu_proofs/gbuffer_velocity.rs	crates/manifold-nodes/tests/gpu_proofs/gbuffer_velocity.rs
+crates/manifold-renderer/tests/gpu_proofs/gpu_flip_frame_perf.rs	crates/manifold-nodes/tests/gpu_proofs/gpu_flip_frame_perf.rs
+crates/manifold-renderer/tests/gpu_proofs/liquid_indexed.rs	crates/manifold-nodes/tests/gpu_proofs/liquid_indexed.rs
+crates/manifold-renderer/tests/gpu_proofs/main.rs	crates/manifold-nodes/tests/gpu_proofs/main.rs
+crates/manifold-renderer/tests/gpu_proofs/matter_bodies.rs	crates/manifold-nodes/tests/gpu_proofs/matter_bodies.rs
+crates/manifold-renderer/tests/gpu_proofs/matter_cost_probe.rs	crates/manifold-nodes/tests/gpu_proofs/matter_cost_probe.rs
+crates/manifold-renderer/tests/gpu_proofs/matter_coupling.rs	crates/manifold-nodes/tests/gpu_proofs/matter_coupling.rs
+crates/manifold-renderer/tests/gpu_proofs/matter_look.rs	crates/manifold-nodes/tests/gpu_proofs/matter_look.rs
+crates/manifold-renderer/tests/gpu_proofs/matter_scene.rs	crates/manifold-nodes/tests/gpu_proofs/matter_scene.rs
+crates/manifold-renderer/tests/gpu_proofs/matter_solver_perf.rs	crates/manifold-nodes/tests/gpu_proofs/matter_solver_perf.rs
+crates/manifold-renderer/tests/gpu_proofs/matter_transfer.rs	crates/manifold-nodes/tests/gpu_proofs/matter_transfer.rs
+crates/manifold-renderer/tests/gpu_proofs/motion_blur_visibility.rs	crates/manifold-nodes/tests/gpu_proofs/motion_blur_visibility.rs
+crates/manifold-renderer/tests/gpu_proofs/node_error_status.rs	crates/manifold-nodes/tests/gpu_proofs/node_error_status.rs
+crates/manifold-renderer/tests/gpu_proofs/physics_boxes.rs	crates/manifold-nodes/tests/gpu_proofs/physics_boxes.rs
+crates/manifold-renderer/tests/gpu_proofs/physics_takes.rs	crates/manifold-nodes/tests/gpu_proofs/physics_takes.rs
+crates/manifold-renderer/tests/gpu_proofs/render_legacy_parity.rs	crates/manifold-nodes/tests/gpu_proofs/render_legacy_parity.rs
+crates/manifold-renderer/tests/gpu_proofs/render_scene_ao_mask.rs	crates/manifold-nodes/tests/gpu_proofs/render_scene_ao_mask.rs
+crates/manifold-renderer/tests/gpu_proofs/render_scene_map_set.rs	crates/manifold-nodes/tests/gpu_proofs/render_scene_map_set.rs
+crates/manifold-renderer/tests/gpu_proofs/render_scene_pbr_fidelity.rs	crates/manifold-nodes/tests/gpu_proofs/render_scene_pbr_fidelity.rs
+crates/manifold-renderer/tests/gpu_proofs/render_scene_shadow_cache.rs	crates/manifold-nodes/tests/gpu_proofs/render_scene_shadow_cache.rs
+crates/manifold-renderer/tests/gpu_proofs/render_scene_subsurface.rs	crates/manifold-nodes/tests/gpu_proofs/render_scene_subsurface.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_atrous_post.rs	crates/manifold-nodes/tests/gpu_proofs/rt_atrous_post.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_dynamic_current_frame.rs	crates/manifold-nodes/tests/gpu_proofs/rt_dynamic_current_frame.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_dynamic_geometry.rs	crates/manifold-nodes/tests/gpu_proofs/rt_dynamic_geometry.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_dynamic_refit.rs	crates/manifold-nodes/tests/gpu_proofs/rt_dynamic_refit.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_dynamic_shading.rs	crates/manifold-nodes/tests/gpu_proofs/rt_dynamic_shading.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_emissive_instancing.rs	crates/manifold-nodes/tests/gpu_proofs/rt_emissive_instancing.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_emissive_light_table.rs	crates/manifold-nodes/tests/gpu_proofs/rt_emissive_light_table.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_firefly_clamp.rs	crates/manifold-nodes/tests/gpu_proofs/rt_firefly_clamp.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_gesture_response.rs	crates/manifold-nodes/tests/gpu_proofs/rt_gesture_response.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_object_motion_shadow.rs	crates/manifold-nodes/tests/gpu_proofs/rt_object_motion_shadow.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_p2_soft_ao_temporal.rs	crates/manifold-nodes/tests/gpu_proofs/rt_p2_soft_ao_temporal.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_p3_emissive_texture.rs	crates/manifold-nodes/tests/gpu_proofs/rt_p3_emissive_texture.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_r2_accumulation.rs	crates/manifold-nodes/tests/gpu_proofs/rt_r2_accumulation.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_r2_clamp.rs	crates/manifold-nodes/tests/gpu_proofs/rt_r2_clamp.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_t1b_vertex_normals.rs	crates/manifold-nodes/tests/gpu_proofs/rt_t1b_vertex_normals.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_t38_multibounce.rs	crates/manifold-nodes/tests/gpu_proofs/rt_t38_multibounce.rs
+crates/manifold-renderer/tests/gpu_proofs/rt_w0_gbuffer.rs	crates/manifold-nodes/tests/gpu_proofs/rt_w0_gbuffer.rs
+crates/manifold-renderer/tests/gpu_proofs/scene_modifier_legacy.rs	crates/manifold-nodes/tests/gpu_proofs/scene_modifier_legacy.rs
+crates/manifold-renderer/tests/gpu_proofs/scene_object_migration_round_trip.rs	crates/manifold-nodes/tests/gpu_proofs/scene_object_migration_round_trip.rs
+crates/manifold-renderer/tests/gpu_proofs/smoke.rs	crates/manifold-nodes/tests/gpu_proofs/smoke.rs
+crates/manifold-renderer/tests/gpu_proofs/substeps.rs	crates/manifold-nodes/tests/gpu_proofs/substeps.rs
+crates/manifold-renderer/tests/mosh_presets.rs	crates/manifold-nodes/tests/mosh_presets.rs
+crates/manifold-renderer/tests/param_wrap_smoke.rs	crates/manifold-nodes/tests/param_wrap_smoke.rs
+crates/manifold-renderer/tests/photoscan_modifier_plans.rs	crates/manifold-nodes/tests/photoscan_modifier_plans.rs
+crates/manifold-renderer/tests/physics_scene.rs	crates/manifold-nodes/tests/physics_scene.rs
+crates/manifold-renderer/tests/project_preset_overlay.rs	crates/manifold-nodes/tests/project_preset_overlay.rs
+crates/manifold-renderer/tests/scene_force_presets.rs	crates/manifold-nodes/tests/scene_force_presets.rs
+crates/manifold-renderer/tests/scene_loop_e2e_import.rs	crates/manifold-nodes/tests/scene_loop_e2e_import.rs
+crates/manifold-renderer/tests/scene_loop_probe.rs	crates/manifold-nodes/tests/scene_loop_probe.rs
+crates/manifold-renderer/tests/scene_loop_wrap_parity.rs	crates/manifold-nodes/tests/scene_loop_wrap_parity.rs
+crates/manifold-renderer/tests/scene_modifier_file_authoring.rs	crates/manifold-nodes/tests/scene_modifier_file_authoring.rs
+crates/manifold-renderer/tests/scene_modifier_fragment_masks.rs	crates/manifold-nodes/tests/scene_modifier_fragment_masks.rs
+crates/manifold-renderer/tests/scene_modifier_inv_gate.rs	crates/manifold-nodes/tests/scene_modifier_inv_gate.rs
+crates/manifold-renderer/tests/scene_modifier_legacy_migration.rs	crates/manifold-nodes/tests/scene_modifier_legacy_migration.rs
+crates/manifold-renderer/tests/scene_modifier_photoscan_migration.rs	crates/manifold-nodes/tests/scene_modifier_photoscan_migration.rs
+crates/manifold-renderer/tests/scene_modifier_stock.rs	crates/manifold-nodes/tests/scene_modifier_stock.rs
+crates/manifold-renderer/tests/support/custom_abi_cases.rs	crates/manifold-nodes/tests/support/custom_abi_cases.rs
+crates/manifold-renderer/tests/support/rust_items.rs	crates/manifold-nodes/tests/support/rust_items.rs
+crates/manifold-renderer/tests/support/texture_abi_cases.rs	crates/manifold-nodes/tests/support/texture_abi_cases.rs
+crates/manifold-renderer/tests/support/uniform_abi.rs	crates/manifold-nodes/tests/support/uniform_abi.rs
+crates/manifold-renderer/tests/trigger_shadow_class_guard.rs	crates/manifold-nodes/tests/trigger_shadow_class_guard.rs
+crates/manifold-renderer/tests/uniform_layout_extended.rs	crates/manifold-nodes/tests/uniform_layout_extended.rs
+crates/manifold-renderer/tests/uniform_layout_proof.rs	crates/manifold-nodes/tests/uniform_layout_proof.rs
+crates/manifold-renderer/tests/wgsl_validation.rs	crates/manifold-nodes/tests/wgsl_validation.rs

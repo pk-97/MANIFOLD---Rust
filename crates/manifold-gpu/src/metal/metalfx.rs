@@ -187,7 +187,7 @@ pub fn metalfx_temporal_available() -> bool {
 /// it consumes depth + motion vectors alongside color and blends across
 /// frames; callers must supply a camera-jitter sequence on the color source
 /// and drive [`Self::encode`]'s `reset` flag on scene cuts (D3) — the reset
-/// signal itself lives above this seam (manifold-renderer), never here.
+/// signal itself lives above this seam (manifold-nodes), never here.
 ///
 /// Created once per (input_size, output_size, format) combination, same
 /// lifecycle contract as [`MetalFxSpatialScaler`].

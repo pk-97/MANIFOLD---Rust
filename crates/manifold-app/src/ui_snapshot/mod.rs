@@ -726,7 +726,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         .generator_graph()
         .expect("AddSceneObjectCommand/AddSceneLightCommand lifts the graph on first edit");
     let mut d = override_def.clone();
-    manifold_renderer::generators::registry::graft_preset_metadata_from_bundle(&mut d, &pid);
+    manifold_nodes::registry::graft_preset_metadata_from_bundle(&mut d, &pid);
     let rg_snap_after = manifold_node_engine::snapshot::GraphSnapshot::from_def(&d)
         .expect("post-command def snapshots");
     let mut rg_snap_after = rg_snap_after;

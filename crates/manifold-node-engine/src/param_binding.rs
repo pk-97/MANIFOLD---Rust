@@ -638,7 +638,7 @@ pub fn apply_bindings(
                 BindingSource::User => "UserParamBinding",
             };
             eprintln!(
-                "[manifold-renderer] {tag} apply failed: id={} value={} err={:?} — \
+                "[manifold-nodes] {tag} apply failed: id={} value={} err={:?} — \
                  skipping this binding for the current frame. The graph topology likely \
                  changed without rebuilding the bindings list.",
                 binding.id, value, err,
@@ -700,7 +700,7 @@ pub fn apply_binding_defaults(
                 BindingSource::User => "UserParamBinding",
             };
             eprintln!(
-                "[manifold-renderer] {tag} default-seed failed: id={} default={} \
+                "[manifold-nodes] {tag} default-seed failed: id={} default={} \
                  err={:?} — inner node will run at its primitive default until the outer \
                  slot is moved off `default_value`.",
                 binding.id, binding.default_value, err,
