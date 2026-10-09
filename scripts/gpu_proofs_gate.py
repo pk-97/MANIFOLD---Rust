@@ -141,6 +141,7 @@ def cargo_test_cmd(
     and the run so the run finds every binary already built."""
     if full_suite and targets is not None:
         raise ValueError("full_suite and targets are mutually exclusive")
+    manifest_path = Path(manifest_path).resolve()
     features = gate_passes.normalize_features(features)
     cmd = [
         "cargo",
@@ -171,6 +172,7 @@ def build_tests(manifest_path: Path, runs: list[dict]) -> int:
     """Compile every run's test binaries with no GPU lock held, so the hold
     covers test time only: the run that follows re-checks fingerprints and
     starts testing. Returns the first nonzero cargo exit, else 0."""
+    manifest_path = Path(manifest_path).resolve()
     packages = {}
     for run in runs:
         package = run.get("package")
@@ -190,7 +192,7 @@ def build_tests(manifest_path: Path, runs: list[dict]) -> int:
                              build["full"], build["lib"], package,
                              list(features)) + ["--no-run"]
         print(f"$ {' '.join(cmd)}", flush=True)
-        code = subprocess.run(cmd, env=build_environment()).returncode
+        code = subprocess.run(cmd, cwd=manifest_path.parent, env=build_environment()).returncode
         if code:
             return code
     return 0
@@ -240,6 +242,7 @@ def run_gate(
     target_specs: list[dict] | None = None,
     features: list[str] | None = None,
 ) -> tuple[int, str]:
+    manifest_path = Path(manifest_path).resolve()
     cmd = cargo_test_cmd(manifest_path, targets, full_suite, lib, package, features)
     # Serial test threads, always: ~135 proofs share one Metal device, and
     # parallel execution corrupts VALUES, not just timing (BUG-m0c9 — red
@@ -279,7 +282,8 @@ def run_gate(
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            bufsize=0, start_new_session=True, env=build_environment(),
+            bufsize=0, start_new_session=True, cwd=manifest_path.parent,
+            env=build_environment(),
         )
         assert proc.stdout is not None
         pump_thread = threading.Thread(target=pump, daemon=True)
@@ -1015,7 +1019,7 @@ def _main() -> int:
         print(f"Forgot shared GPU timing: {args.forget}")
         return 0
 
-    manifest_path = args.manifest_path or default_manifest_path()
+    manifest_path = Path(args.manifest_path or default_manifest_path()).resolve()
     repo = manifest_path.parent
     try:
         workspace = Workspace(repo)

@@ -54,6 +54,29 @@ class GpuProofsGateTests(unittest.TestCase):
         self.assertEqual(targets(commands[1]), {"gpu_proofs"})
         self.assertTrue(all("--no-run" in command and "--" not in command for command in commands))
 
+    def test_build_tests_resolves_relative_manifest_and_sets_workspace_cwd(self):
+        runs = [dict(package="catalog", targets=["gpu_proofs"], lib=False, full=False)]
+        manifest = Path("nested/worktree/Cargo.toml")
+        with patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as cargo:
+            self.assertEqual(gate.build_tests(manifest, runs), 0)
+        call = cargo.call_args
+        expected_manifest = (Path.cwd() / manifest).resolve()
+        self.assertEqual(call.kwargs["cwd"], expected_manifest.parent)
+        command = call.args[0]
+        self.assertEqual(command[command.index("--manifest-path") + 1], str(expected_manifest))
+
+    def test_run_gate_resolves_relative_manifest_and_sets_workspace_cwd(self):
+        process = FakeProcess()
+        manifest = Path("nested/worktree/Cargo.toml")
+        with patch.object(gate.subprocess, "Popen", return_value=process) as popen:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(gate.run_gate(manifest, [], [])[0], 0)
+        call = popen.call_args
+        expected_manifest = (Path.cwd() / manifest).resolve()
+        self.assertEqual(call.kwargs["cwd"], expected_manifest.parent)
+        command = call.args[0]
+        self.assertEqual(command[command.index("--manifest-path") + 1], str(expected_manifest))
+
     def test_full_package_build_subsumes_selected_targets_and_failure_stops_builds(self):
         runs = [dict(package="catalog", targets=["gpu_proofs"], lib=False, full=False),
                 dict(package="catalog", targets=None, lib=False, full=True),
