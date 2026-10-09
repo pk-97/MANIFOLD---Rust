@@ -78,6 +78,19 @@ SMOKE_FILTERS = [
     "gbuffer_depth::gbuffer_depth_conformance",
 ]
 
+# Exact filters whose Cargo owner has been audited.  Plan.runs may prune a
+# filtered harness only when every selected filter is in this table and none
+# belongs to that harness; unknown filters conservatively keep the old run.
+GPU_FILTER_TARGETS = {
+    "alpha_contract::effects_preserve_transparency": ("manifold-nodes", "gpu_proofs"),
+    "encode_replay::encode_replay_parity": ("manifold-nodes", "gpu_proofs"),
+    "gbuffer_depth::gbuffer_depth_conformance": ("manifold-nodes", "gpu_proofs"),
+    "camera_conformance::render_scene_matches_project_to_pixel_oracle":
+        ("manifold-nodes-scene", "gpu_proofs"),
+    "bundled_presets::": ("manifold-nodes", "lib"),
+    "bundled_generator_presets::": ("manifold-nodes", "lib"),
+}
+
 # Graph runtime + freeze compiler.
 RUNTIME_FILTERS = [
     "freeze::",
