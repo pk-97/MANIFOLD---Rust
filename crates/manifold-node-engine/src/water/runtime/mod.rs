@@ -1,7 +1,7 @@
 pub(crate) mod gpu_flip_surface;
 mod physics_carry;
 manifold_core::testkit_visible! { pub(crate) mod physics_impulses; }
-pub(crate) mod physics_sampling;
+manifold_core::testkit_visible! { pub(crate) mod physics_sampling; }
 #[cfg(feature = "gpu-proofs")]
 mod physics_source_chain;
 #[cfg(feature = "gpu-proofs")]

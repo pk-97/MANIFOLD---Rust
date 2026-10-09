@@ -28,6 +28,21 @@ mod input_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod drain_tests;
 
+manifold_core::testkit_visible! {
+/// Observe retained inputs under the native authored-sample policy.
+pub(crate) fn execute_physics_sample_frame(
+    executor: &mut crate::exec::execution::Executor,
+    graph: &mut Graph,
+    plan: &ExecutionPlan,
+    time: FrameTime,
+    steps: &[bool],
+    params: &[Option<ParamValues>],
+) {
+    let _scope = crate::water::physics::PhysicsAuthoredSampleScope::new();
+    executor.execute_cpu_sample_frame(graph, plan, time, steps, params);
+}
+}
+
 /// GPU liquids whose force field is evaluated at each tick's start.
 fn gpu_liquid(kind: &str) -> bool {
     matches!(kind, GPU_FLIP_DOMAIN_TYPE_ID | MATTER_DOMAIN_TYPE_ID)
@@ -369,7 +384,8 @@ impl PresetRuntime {
             return Ok(());
         };
         inputs.set_sample_time(source);
-        self.executor.execute_physics_sample_frame(
+        execute_physics_sample_frame(
+            &mut self.executor,
             &mut self.graph,
             &self.plan,
             source,
@@ -421,7 +437,8 @@ impl PresetRuntime {
                 ..previous
             };
             inputs.set_sample_time(sample);
-            self.executor.execute_physics_sample_frame(
+            execute_physics_sample_frame(
+                &mut self.executor,
                 &mut self.graph,
                 &self.plan,
                 sample,
@@ -521,7 +538,8 @@ impl PresetRuntime {
             samples_since_drain += 1;
             let drain = drain_offline && samples_since_drain == DRAIN_INTERVAL;
             let _drain = drain.then(PhysicsHistoryDrainScope::new);
-            self.executor.execute_physics_sample_frame(
+            execute_physics_sample_frame(
+                &mut self.executor,
                 &mut self.graph,
                 &self.plan,
                 sample,
@@ -562,7 +580,8 @@ impl PresetRuntime {
         inputs.set_sample_time(closing);
         inputs.apply_hops(bindings, current.seconds.0);
         let _drain = drain_offline.then(PhysicsHistoryDrainScope::new);
-        self.executor.execute_physics_sample_frame(
+        execute_physics_sample_frame(
+            &mut self.executor,
             &mut self.graph,
             &self.plan,
             closing,

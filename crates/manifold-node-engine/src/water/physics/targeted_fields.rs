@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use manifold_physics::{FieldValue, input::HistoryWrite};
 
-use crate::scene::vector_field::ContinuousField;
+use crate::water::vector_field::ContinuousField;
 
 pub const TARGET_SLOTS: usize = super::MAX_BODIES + 1;
 const HISTORY_CAPACITY: usize = super::AUTHORED_HISTORY_CAPACITY;

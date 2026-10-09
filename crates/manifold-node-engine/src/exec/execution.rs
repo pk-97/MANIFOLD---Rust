@@ -25,7 +25,6 @@ use crate::scene::mesh_change::{MeshAspect, MeshRevision};
 use crate::graph::Graph;
 use crate::parameters::ParamValue;
 use crate::ports::{ArrayType, PortType};
-use crate::water::physics::PhysicsAuthoredSampleScope;
 use crate::state_store::{OwnerKey, StateStore};
 
 
@@ -87,7 +86,7 @@ pub(crate) fn resolve_dims(
 type MeshDepSnapshot = (ResourceId, crate::scene::mesh_change::MeshAspect, u64);
 
 #[derive(Clone, Copy)]
-struct PhysicsSample<'a> {
+struct CpuSample<'a> {
     steps: &'a [bool],
     params: &'a [Option<ParamValues>],
 }
@@ -97,7 +96,7 @@ struct PhysicsSample<'a> {
 struct StepEnv<'a> {
     time: FrameTime,
     owner_key: OwnerKey,
-    sample: Option<PhysicsSample<'a>>,
+    sample: Option<CpuSample<'a>>,
     canvas_dims: (u32, u32),
     layer_skin_registry: Option<&'a LayerSkinRegistry>,
 }
@@ -1140,17 +1139,17 @@ impl Executor {
         self.execute_frame_inner(graph, plan, time, Some(gpu), Some(state), owner_key, None);
     }
 
-    /// Evaluate only the caller-supplied physics input ancestry at a
+    /// Evaluate only the caller-supplied CPU input ancestry at a
     /// historical frame time. This pass is deliberately CPU-only: it does
     /// not provide a GPU encoder or state store, does not run late captures,
     /// and leaves acquired resources bound for the following full frame.
     ///
     /// `sample_steps` and `sample_params` slices are indexed exactly like
     /// [`ExecutionPlan::steps`]. The
-    /// caller owns ancestry analysis because physics sampling must follow the
+    /// caller owns ancestry analysis: sampling must follow the
     /// graph's scalar/transform inputs without making the executor infer a
     /// second liveness policy.
-    pub fn execute_physics_sample_frame(
+    pub fn execute_cpu_sample_frame(
         &mut self,
         graph: &mut Graph,
         plan: &ExecutionPlan,
@@ -1161,29 +1160,27 @@ impl Executor {
         assert_eq!(
             sample_steps.len(),
             plan.steps().len(),
-            "physics sample mask must align with execution plan steps",
+            "CPU sample mask must align with execution plan steps",
         );
         assert_eq!(
             sample_params.len(),
             plan.steps().len(),
-            "physics sample params must align with execution plan steps",
+            "CPU sample params must align with execution plan steps",
         );
         assert!(
             sample_steps
                 .iter()
                 .zip(sample_params)
                 .all(|(&selected, params)| !selected || params.is_some()),
-            "physics sample params must be present for every selected step",
+            "CPU sample params must be present for every selected step",
         );
-        // A world's scene sample is captured for its liquid, so a world never
-        // samples without its liquid.
+        // A pair's second node receives the first node's observation.
         assert!(
             plan.node_pairs().iter().all(|pair| {
                 !sample_steps[pair.second_step] || sample_steps[pair.first_step]
             }),
-            "a coupled scene's world must not sample without its liquid",
+            "a paired second node must not sample without its first node",
         );
-        let _scope = PhysicsAuthoredSampleScope::new();
         self.execute_frame_inner(
             graph,
             plan,
@@ -1191,7 +1188,7 @@ impl Executor {
             None,
             None,
             0,
-            Some(PhysicsSample {
+            Some(CpuSample {
                 steps: sample_steps,
                 params: sample_params,
             }),
@@ -1595,7 +1592,7 @@ impl Executor {
         mut gpu: Option<&mut GpuEncoder<'_>>,
         mut state: Option<&mut StateStore>,
         owner_key: OwnerKey,
-        sample: Option<PhysicsSample<'_>>,
+        sample: Option<CpuSample<'_>>,
     ) {
         let partial_sample = sample.is_some();
         if let Some(sample) = sample {
@@ -4201,7 +4198,7 @@ mod tests {
         let params = vec![Some(ParamValues::default()); plan.steps().len()];
 
         let mut exec = Executor::with_mock();
-        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &params);
+        exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &mask, &params);
         assert_eq!(*first_evals.lock().unwrap(), 1);
         assert_eq!(*second_evals.lock().unwrap(), 0);
 
@@ -4213,24 +4210,24 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "physics sample mask must align")]
+    #[should_panic(expected = "CPU sample mask must align")]
     fn physics_sample_rejects_misaligned_mask() {
         let mut g = Graph::new();
         g.add_node(Box::new(PureCountingNode::new(false, Arc::new(Mutex::new(0)))));
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
-        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &[], &[]);
+        exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &[], &[]);
     }
 
     #[test]
-    #[should_panic(expected = "physics sample params must align")]
+    #[should_panic(expected = "CPU sample params must align")]
     fn physics_sample_rejects_misaligned_params() {
         let mut g = Graph::new();
         g.add_node(Box::new(crate::primitives::value::Value::new()));
         let plan = compile(&g).unwrap();
         let mask = vec![true; plan.steps().len()];
         let mut exec = Executor::with_mock();
-        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &[]);
+        exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &mask, &[]);
     }
 
     #[test]
@@ -4242,7 +4239,7 @@ mod tests {
         let params = vec![None; plan.steps().len()];
         let mut exec = Executor::with_mock();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &params);
+            exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &mask, &params);
         }));
         assert!(result.is_err());
         assert_eq!(exec.backend().slot_count(), 0, "validation must precede resource acquisition");
@@ -4322,7 +4319,7 @@ mod tests {
         let mask = vec![true; plan.steps().len()];
 
         let mut exec = Executor::with_mock();
-        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &sample_params);
+        exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &mask, &sample_params);
         let sampled = PHYSICS_SAMPLE_SCALAR_VALUES.with(|values| values.borrow().clone());
         assert_eq!(sampled.as_slice(), &[1.25]);
         assert_eq!(g.get_node(value).unwrap().params, live_params);

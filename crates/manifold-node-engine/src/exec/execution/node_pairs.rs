@@ -10,7 +10,7 @@ impl Executor {
         plan: &ExecutionPlan,
         pair: NodePairSteps,
         time: FrameTime,
-        sample: Option<PhysicsSample<'_>>,
+        sample: Option<CpuSample<'_>>,
     ) {
         let second_step = &plan.steps()[pair.second_step];
         self.input_scratch.clear();

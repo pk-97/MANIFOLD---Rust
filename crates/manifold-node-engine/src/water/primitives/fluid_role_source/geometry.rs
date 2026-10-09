@@ -12,8 +12,9 @@ use manifold_physics::TriangleMesh;
 use super::{CompoundPreparation, WiredPreparation};
 use crate::mesh::MeshVertex;
 use crate::platonic::{platonic_mesh, platonic_points};
-use crate::scene::physics_mesh::{MeshSelection, load_compound_materials, prepare_colliders, transform_vertices};
+use crate::scene::physics_mesh::{MeshSelection, load_compound_materials, transform_vertices};
 use crate::scene::transform::Transform;
+use crate::water::physics_mesh::prepare_colliders;
 
 manifold_core::testkit_visible! {
 /// The two preparation modes exposed by the source node.

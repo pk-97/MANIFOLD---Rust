@@ -347,7 +347,8 @@ impl PresetRuntime {
                     ParamValue::Float(source.beats.0 as f32);
             }
         }
-        self.executor.execute_physics_sample_frame(
+        super::physics_sampling::execute_physics_sample_frame(
+            &mut self.executor,
             &mut self.graph,
             &self.plan,
             source,

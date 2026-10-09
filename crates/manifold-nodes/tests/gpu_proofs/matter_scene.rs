@@ -601,7 +601,8 @@ fn matter_variable_speed_export_grouping_matches_raw_points() {
         params[domain_step] = Some(scene.graph.get_node(scene.domain).unwrap().params.clone());
         // Observe the edit at TICK without accepting work, including in the
         // grouped run whose next full render is at 2*TICK.
-        scene.executor.execute_physics_sample_frame(
+        manifold_node_engine::water::runtime::physics_sampling::execute_physics_sample_frame(
+            &mut scene.executor,
             &mut scene.graph, &scene.plan,
             FrameTime { beats: Beats(0.0), seconds: Seconds(TICK), delta: Seconds(0.0), frame_count: 1 },
             &mask, &params,

@@ -479,6 +479,32 @@ Verify exact serialized recipient shapes and slot bounds, existing authored
 route/coupling contracts, and Shatter default and override inheritance. This
 seam does not establish final water GPU parity or complete the extraction.
 
+#### P5 native mesh and field helpers
+
+Keep shared mesh selection, transforms and triangle partitioning in
+`scene::physics_mesh`. Move `prepare_colliders` unchanged to
+`water::physics_mesh`; expose the existing `fragments` partition helper for
+the water caller. Move the combined partition/collider contract with the
+cooker, preserving every assertion. Rendering continues to use the same
+selection code without depending on native hull cooking.
+
+Move `scene::vector_field` to `water::vector_field`: its retained-field
+interpolation and CPU wire contracts only serve native water consumers.
+Update callers directly, with no compatibility exports or new callbacks.
+These ownership changes preserve numerical bodies and do not establish the
+final crate-move or GPU parity invariants.
+
+The generic executor exposes `execute_cpu_sample_frame` for the existing
+caller-selected ancestry and retained parameters. Its scheduling, validation
+and resource behavior stay unchanged. A water-owned
+`physics_sampling::execute_physics_sample_frame` function holds the existing
+`PhysicsAuthoredSampleScope` around that call; water runtime and native proofs
+use this function. Generic executor/substep contracts use the CPU method.
+This removes the executor's native scope dependency without moving the native
+thread-local state, adding a registry, or allocating per sample. Existing
+history contracts verify that historical observations retain the native scope
+and ordinary observations run after it is restored.
+
 Phasing-completeness check: every D1 crate appears in exactly one phase's deliverables (ui-paint P1a, graph P1, image/scene/compositor P2, nodes P3, water P5); D5 P0; D6 P3; D7 P1/P2; D8 P4; D10 P0; D11 P0; D12 P1a; INV-5's script P0; measurement P4.
 
 ---

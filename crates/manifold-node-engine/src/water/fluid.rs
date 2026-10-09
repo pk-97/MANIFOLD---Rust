@@ -41,7 +41,7 @@ use super::fluid_role::FluidRole;
 use super::physics_events::ResolvedNodeImpulse;
 use crate::scene::transform::Transform;
 #[cfg(feature = "gpu-proofs")]
-use crate::scene::vector_field::ContinuousField;
+use crate::water::vector_field::ContinuousField;
 #[cfg(feature = "gpu-proofs")]
 use crate::mesh::{InstanceTransform, MeshVertex};
 

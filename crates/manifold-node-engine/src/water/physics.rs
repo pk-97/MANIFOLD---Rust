@@ -1238,7 +1238,7 @@ impl RigidSimulation {
                 let field_before = span.before.acceleration_field.clone();
                 let field_after = span.after.acceleration_field.clone();
                 let field_alpha = span.alpha;
-                let sampled_field = crate::scene::vector_field::ContinuousField {
+                let sampled_field = crate::water::vector_field::ContinuousField {
                     before: field_before.as_ref(),
                     after: field_after.as_ref(),
                     alpha: field_alpha,
@@ -1576,7 +1576,7 @@ impl RigidSimulation {
         _solver_substeps: u32,
         bodies: &[Option<RigidBody>; MAX_BODIES],
         prototype: Option<&RigidBody>,
-        sampled_field: &crate::scene::vector_field::ContinuousField<'_>,
+        sampled_field: &crate::water::vector_field::ContinuousField<'_>,
         targeted_indices: Option<(usize, usize, f32)>,
     ) -> Result<(), String> {
         let duration = end - start;
@@ -2030,7 +2030,7 @@ impl RigidSimulation {
         prototype: Option<&RigidBody>,
         target_time: Seconds,
         dt: Seconds,
-        global: &crate::scene::vector_field::ContinuousField<'_>,
+        global: &crate::water::vector_field::ContinuousField<'_>,
         indices: Option<(usize, usize, f32)>,
     ) -> Result<(), String> {
         let mut targets: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
@@ -2089,7 +2089,7 @@ impl RigidSimulation {
     fn apply_sampled_fields(
         &mut self,
         dt: Seconds,
-        global: &crate::scene::vector_field::ContinuousField<'_>,
+        global: &crate::water::vector_field::ContinuousField<'_>,
         indices: Option<(usize, usize, f32)>,
     ) -> Result<(), String> {
         let Some((before, after, alpha)) = indices else {

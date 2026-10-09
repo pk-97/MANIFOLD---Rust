@@ -1728,7 +1728,7 @@ mod tests {
         let n = fx.plan.steps().len();
         let params: Vec<Option<crate::exec::effect_node::ParamValues>> =
             (0..n).map(|_| Some(Default::default())).collect();
-        exec.execute_physics_sample_frame(
+        exec.execute_cpu_sample_frame(
             &mut fx.graph,
             &fx.plan,
             frame_time(),

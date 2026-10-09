@@ -17,6 +17,7 @@ struct Observation {
     time: FrameTime,
     values: [f32; 5],
     draining: bool,
+    authored_only: bool,
 }
 
 thread_local! {
@@ -71,6 +72,7 @@ impl EffectNode for ObservedPhysics {
                 time: ctx.time,
                 values,
                 draining: crate::water::physics::history_drain_requested(),
+                authored_only: crate::water::physics::authored_sample_only(),
             })
         });
     }
@@ -159,7 +161,10 @@ fn physics_history_holds_external_edits_while_authored_motion_advances() {
         "drain the previous observation, eight historical samples and the live frame"
     );
     let (current, historical) = observations.split_last().unwrap();
+    assert!(!current.authored_only, "live observation must restore the native policy");
+    assert!(!crate::water::physics::authored_sample_only());
     for sample in historical {
+        assert!(sample.authored_only, "historical observation must retain native sampling policy");
         assert_eq!(sample.values[0], 1.0);
         assert_eq!(
             sample.values[3], 0.0,
