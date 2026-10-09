@@ -1058,6 +1058,14 @@ impl ContentThread {
                     Err(message) => self.report_graph_edit_rejection(message),
                 }
             }
+            ContentCommand::SceneCameraSetup(layer_id) => {
+                let result = self.engine.project().ok_or_else(|| "Project is no longer available".to_string())
+                    .and_then(|project| crate::scene_camera_edit::build_action(project, layer_id));
+                match result {
+                    Ok(command) => { self.handle_command(ContentCommand::ExecuteOnContent(command)); }
+                    Err(reason) => self.report_graph_edit_rejection(reason),
+                }
+            }
             ContentCommand::SceneItem(action) => {
                 let selection = action.selection_request();
                 let result = self.engine.project().ok_or_else(|| "Project is no longer available".to_string())

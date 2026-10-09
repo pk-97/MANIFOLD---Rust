@@ -48,10 +48,9 @@
 // generated-kernel codegen path (no hand-rolled runtime kernel).
 //
 // PARAMS: [max_blur_px, enabled]. DERIVED_UNIFORMS: [shutter_angle]. Matches
-// motion_blur.wgsl (the hand parity oracle). `enabled` is host-only: the
-// codegen path lays every param into the uniform struct, so the body accepts
-// it, but never reads it — skip_passthrough aliases `in`→`out` when
-// `enabled = false`, so this body only runs when the node is enabled.
+// motion_blur.wgsl (the hand parity oracle). `enabled` mirrors the host
+// skip_passthrough contract inside fused kernels: false returns the center
+// source texel, while an unfused host node aliases `in`→`out` before dispatch.
 
 const MOTION_BLUR_SAMPLES: u32 = 8u;
 
@@ -63,6 +62,9 @@ fn body(
     enabled: u32,
     shutter_angle: f32,
 ) -> vec4<f32> {
+    if (enabled == 0u) {
+        return fetch_in(uv);
+    }
     let velocity_ndc = c_velocity.rg;
     let smear_px_raw = velocity_ndc * 0.5 * dims * (shutter_angle / 360.0);
     let smear_px = clamp(smear_px_raw, vec2<f32>(-max_blur_px), vec2<f32>(max_blur_px));

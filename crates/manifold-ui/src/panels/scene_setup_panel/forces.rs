@@ -365,6 +365,7 @@ mod tests {
                 disabled: None,
             }],
             camera: CameraRowVm::None,
+            camera_setup_needed: false,
             camera_sections: Vec::new(),
             camera_parameter_ids: None,
             world_sections: Vec::new(),

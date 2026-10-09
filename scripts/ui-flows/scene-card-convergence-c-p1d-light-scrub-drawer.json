@@ -18,7 +18,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\ud83d\udca1 sun"
+          "text": "💡 sun"
         }
       },
       "gesture": {
@@ -33,22 +33,37 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Intensity",
-          "nth": 1
+          "name": "param_row.7_intensity",
+          "under_name": "scene_setup"
         }
       },
       "check": "Exists"
     }
   },
   {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_row.7_intensity.slider",
+          "under_name": "scene_setup"
+        }
+      }
+    }
+  },
+  {
     "Pointer": {
-      "target": { "Point": { "x": 722.2, "y": 744.0 } },
+      "target": {
+        "Query": {
+          "name": "param_row.7_intensity.slider",
+          "under_name": "scene_setup"
+        }
+      },
       "gesture": {
         "Drag": {
           "to": {
-            "Point": {
-              "x": 750.0,
-              "y": 744.0
+            "Query": {
+              "text": "Intensity",
+              "under_name": "scene_setup"
             }
           },
           "steps": 8
@@ -61,16 +76,66 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "6.88",
-          "nth": 1
+          "name": "param_row.7_intensity.value",
+          "under_name": "scene_setup",
+          "text": "0.00"
         }
       },
       "check": "Exists"
     }
   },
   {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.7_intensity.value",
+          "text": "0.00"
+        }
+      },
+      "check": {
+        "Count": 2
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.7_intensity.value",
+          "text": "3.50"
+        }
+      },
+      "check": {
+        "Count": 2
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_row.7_intensity.driver_btn",
+          "under_name": "scene_setup"
+        }
+      }
+    }
+  },
+  {
     "Pointer": {
-      "target": { "Point": { "x": 892.0, "y": 744.0 } },
+      "target": {
+        "Query": {
+          "name": "param_row.7_intensity.driver_btn",
+          "under_name": "scene_setup"
+        }
+      },
       "gesture": {
         "Click": {
           "modifiers": {}

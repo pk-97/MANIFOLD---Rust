@@ -189,6 +189,10 @@ Material presentation helpers live in `panels/scene_setup_panel/material_inspect
 
 ### 4.4 Compound edits and command ownership
 
+Emissive Skin binding snapshots and neutralizes the emission colour/intensity
+for PBR, Unlit and Cel materials. Switching away from the emissive target or
+removing the Skin restores the authored values; undo/redo preserves both states.
+
 RGB grouping adds `RowRole::ColourSwatch(MaterialColour)` and feature headers add `RowRole::MaterialFeatureToggle(MaterialFeature)` to shared row construction/routing. These variants follow the widget-tree five-step affordance recipe, including dispatch tests. The feature action emits a discrete MaterialParamsSet for Enum Off=1/On=2; it must not reuse boolean 0/1 toggle arithmetic. Add Feature uses the same action with eligible seed writes. Add `ParamRow.rgb_members: Option<[ParamId; 3]>`, populated by the app projection for the canonical R row after grouping by resolved material identity and colour role; G/B rows remain the same scalar identities in the Advanced drawer. Missing/ambiguous members leave the ordinary scalar rows visible. The descriptor supplies the three member ParamIds; the widget never manufactures a new parameter. Add these variants in `panels/scrub.rs`:
 
 ```rust

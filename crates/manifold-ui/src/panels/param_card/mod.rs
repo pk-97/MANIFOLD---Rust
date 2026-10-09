@@ -2238,6 +2238,21 @@ pub(super) mod tests {
         assert!(tree.has_dirty());
     }
 
+    #[test]
+    fn unavailable_placeholder_needs_no_manifest_slot() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        let mut config = effect_config();
+        config.rows[1].spec.disabled = Some("No scene environment".into());
+        config.rows[1].mapping.mappable = false;
+        panel.configure(&config);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        panel.sync_values(&mut tree, &mut [("radius", crate::view::UiParamSlot::exposed(80.0))].into_iter());
+        let value = panel.row_host.slider_ids[0].as_ref().unwrap().value_text;
+        assert_eq!(tree.get_node(value).unwrap().text.as_deref(), Some("80"));
+        assert!(panel.rows[1].spec.disabled.is_some());
+    }
+
     /// BUG-313: the per-frame value channel JOINS each slot onto the row that
     /// carries the same id — never by position. A manifest param with no built
     /// row (a `card_visible: false` param the curated card skipped), interleaved

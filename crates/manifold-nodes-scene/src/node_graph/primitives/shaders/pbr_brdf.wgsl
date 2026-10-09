@@ -15,9 +15,13 @@ const PBR_PI: f32 = 3.14159265358979;
 
 // GGX / Trowbridge-Reitz normal-distribution function.
 fn pbr_d_ggx(NdotH: f32, roughness: f32) -> f32 {
-    let a = roughness * roughness;
+    let bounded_roughness = clamp(roughness, 0.01, 1.0);
+    let a = bounded_roughness * bounded_roughness;
     let a2 = a * a;
-    let denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    let nh2 = clamp(NdotH * NdotH, 0.0, 1.0);
+    // Keep alpha² outside the subtraction: alpha² - 1 rounds to -1 for
+    // narrow lobes, making the old denominator zero at N.H == 1.
+    let denom = (1.0 - nh2) + nh2 * a2;
     return a2 / (PBR_PI * denom * denom);
 }
 
@@ -114,7 +118,7 @@ fn pbr_hammersley(i: u32, n: u32) -> vec2<f32> {
 fn pbr_importance_sample_ggx(xi: vec2<f32>, roughness: f32, n: vec3<f32>) -> vec3<f32> {
     let a = roughness * roughness;
     let phi = 2.0 * PBR_PI * xi.x;
-    let cos_theta = sqrt((1.0 - xi.y) / (1.0 + (a * a - 1.0) * xi.y));
+    let cos_theta = sqrt((1.0 - xi.y) / ((1.0 - xi.y) + a * a * xi.y));
     let sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
     let h_tangent = vec3<f32>(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta);
     let up = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(n.z) < 0.999);
