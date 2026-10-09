@@ -1164,44 +1164,16 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
-        // D7 "New 3D Scene" empty-state action: assign the bundled Scene
-        // Starter preset through the existing empty-state command. The browser
-        // picker uses content-owned replacement to preserve applied modifiers.
+        // Both scene actions resolve against authoritative content state.
+        ProjectAction::SceneSetupPrepareCamera(layer_id) => {
+            ContentCommand::send(content_tx, ContentCommand::SceneCameraSetup(layer_id.clone()));
+            DispatchResult::structural()
+        }
         ProjectAction::SceneSetupNewScene(layer_id) => {
-            let new_type = manifold_core::PresetTypeId::from_string("Scene".to_string());
-            if let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id) {
-                let old_type = layer
-                    .gen_params()
-                    .map(|gp| gp.generator_type().clone())
-                    .unwrap_or(PresetTypeId::NONE);
-                if new_type != old_type {
-                    let old_params: Vec<f32> = layer
-                        .gen_params()
-                        .map(|gp| gp.params.iter().map(|s| s.value).collect())
-                        .unwrap_or_default();
-                    let old_drivers = layer.gen_params().and_then(|gp| gp.drivers.clone());
-                    let old_envelopes = layer.gen_params().and_then(|gp| gp.envelopes.clone());
-                    let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
-                        layer_id.clone(),
-                        old_type,
-                        new_type.clone(),
-                        old_params,
-                        old_drivers,
-                        old_envelopes,
-                    );
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                    ContentCommand::send(
-                        content_tx,
-                        ContentCommand::GeneratorTypeChanged {
-                            layer_id: layer_id.clone(),
-                            new_type,
-                        },
-                    );
-                }
-            }
+            ContentCommand::send(content_tx, ContentCommand::ChangeGeneratorType {
+                layer_id: layer_id.clone(),
+                new_type: PresetTypeId::new("Scene"),
+            });
             DispatchResult::structural()
         }
 

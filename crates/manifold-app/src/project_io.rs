@@ -530,6 +530,11 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         {
             let graph = host.graph.as_mut().expect("graph checked above");
             manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
+            match manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(graph) {
+                Ok(true) => notices.push("Scene camera controls restored with depth of field and motion blur off.".into()),
+                Ok(false) => {}
+                Err(error) => notices.push(error),
+            }
             manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(graph);
             let report = manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
             notices.extend(report.diagnostics);

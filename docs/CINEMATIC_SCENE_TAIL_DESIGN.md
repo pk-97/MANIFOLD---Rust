@@ -3,6 +3,15 @@
 **Status:** IN PROGRESS — P0+P1+P2+P4 executed; camera On/Off controls repaired and new-import DoF default On (2026-09-22); P3 look-pass running (Peter). Half-resolution DoF implementation and flower acceptance are covered by CINEMATIC_POST D10 (2026-09-26); near reduction blocked by BUG-rdy0 (RT zero-intensity sun direction leak). Phase history lives in git. · k3 (lead)
 **Prerequisites:** none (all atoms shipped; BUG-136 (motion blur no visible effect) root-caused in P0 of this doc)
 
+Native-scene consolidation (2026-10-09): `node_graph/cinematic_tail.rs` is the
+shared constructor for import and bare native scenes. Native preparation adds
+the tail with both effects off; import defaults remain unchanged. Camera
+ownership follows actual render, colour, depth, velocity and lens connections.
+Scene Setup restores supported missing side inputs through an undoable command;
+ambiguous or partial custom colour chains remain unchanged. Inspector ordering
+is specified in `SCENE_PANEL_VS_INSPECTOR_CARDS.md`. Fused Bool uniforms retain
+their type, and motion blur's shader honors its enabled value.
+
 Camera-control correction (2026-09-22): Motion Blur and Depth of Field use the shared On/Off buttons, with live value sync across panel rebuilds. New model imports default DoF to On; existing projects retain their saved choice and legacy neutral-lens migration remains unchanged. Required GPU validation exposed BUG-8a3c: the 4K tail measured a best peak delta of 32.60 ms (mean 14.21 ms), exceeding the 20 ms any-frame target. Peter ruled on 2026-09-23 that this measured performance target warns rather than blocks unrelated landings; BUG-8a3c stays open for the deferred half-resolution DoF work. The requested On default remains. The 1080p budget and remaining GPU proofs passed.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 

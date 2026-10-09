@@ -48,6 +48,9 @@ pub fn loaded_generator_presets_from_bundled()
         .filter_map(|(id, json)| {
             let mut def: EffectGraphDef = serde_json::from_str(&json)
                 .unwrap_or_else(|e| panic!("bundled generator preset {id}: parse failed: {e}"));
+            if let Err(error) = manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(&mut def) {
+                log::warn!("Scene camera setup for {id}: {error}");
+            }
             // P1 scene-panel exposure convergence: the preset-definition
             // registry seeds PresetInstance slots (via `init_defaults`), so it
             // MUST carry the same stamped scene exposures as the def cache

@@ -105,6 +105,9 @@ fn rebuild_def_cache(generation: u64) {
         let mut def: EffectGraphDef = serde_json::from_str(&json)
             .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
         let id_static: &'static str = Box::leak(id.to_string().into_boxed_str());
+        if let Err(error) = manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(&mut def) {
+            log::warn!("Scene camera setup for {id}: {error}");
+        }
         // P1: stamp scene-vocabulary exposures so bundled scene presets carry
         // the same full-param manifest as freshly imported models.
         migrate_scene_exposures(&mut def);
@@ -174,6 +177,9 @@ pub fn loaded_presets_from_bundled() -> Vec<manifold_core::effect_graph_def::Pre
         .filter_map(|(id, json)| {
             let mut def: EffectGraphDef = serde_json::from_str(&json)
                 .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
+            if let Err(error) = manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(&mut def) {
+                log::warn!("Scene camera setup for {id}: {error}");
+            }
             // P1 scene-panel exposure convergence: keep the preset-definition
             // registry (instance-slot seed) in lockstep with the def cache's
             // stamped exposures — same call as `rebuild_def_cache`. A no-op for

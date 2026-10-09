@@ -11,9 +11,14 @@ impl ScenePanel {
     /// messaging (no camera vocabulary matched, or the port is unwired)
     /// stays panel-shaped, unchanged.
     pub(super) fn build_camera_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, vm: &SceneSetupVm) -> f32 {
-        match &vm.camera {
+        cy = match &vm.camera {
             CameraRowVm::Orbit(_) | CameraRowVm::Free(_) | CameraRowVm::LookAt(_) => {
-                self.build_filtered_properties(tree, inner_x, inner_w, cy, &vm.camera_sections)
+                match vm.camera_parameter_ids.as_deref() {
+                    Some(owned) => self.build_filtered_properties_parameter_ids(
+                        tree, inner_x, inner_w, cy, (&vm.camera_sections, owned, &[]),
+                    ),
+                    None => self.build_filtered_properties(tree, inner_x, inner_w, cy, &vm.camera_sections),
+                }
             }
             CameraRowVm::Custom => {
                 if !vm.camera_sections.is_empty() {
@@ -40,6 +45,23 @@ impl ScenePanel {
                 tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "No camera wired", label_style());
                 cy + ROW_H
             }
+        };
+        if vm.camera_setup_needed {
+            let button = tree.add_button_keyed(
+                Some(self.content_parent),
+                inner_x,
+                cy,
+                inner_w,
+                ROW_H,
+                btn_style(),
+                "Set Up Camera Effects",
+                KEY_CAMERA_SETUP,
+            );
+            tree.set_name(button, "scene_setup.camera.setup_effects");
+            self.camera_setup_id = Some(button);
+            cy + ROW_H + ROW_GAP
+        } else {
+            cy
         }
     }
 

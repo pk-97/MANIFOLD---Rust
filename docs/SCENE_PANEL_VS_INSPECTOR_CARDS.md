@@ -1,58 +1,55 @@
 # Scene panel vs inspector cards
 
-Provenance: RT toggles card-visibility bug, 2026-08-11.
+Both surfaces read `PresetInstance.params` and send edits through the content
+thread. The graph remains authoritative for ownership and connections; neither
+surface keeps a separate scene model or parameter store.
 
-## What each surface is FOR
+## Inspector
 
-**Scene Setup panel** (`crates/manifold-ui/src/panels/scene_setup_panel.rs`): the full 3D scene config surface. Shows every node in the scene vocabulary (transform, material, light, camera, atmosphere, render root) grouped by section, so a user can tune the entire scene build without opening the graph editor. Reads the manifest with `SurfaceVisibility::All` — every param becomes a row. The panel applies its own section-based filtering at the UI level.
+Scene generator cards project the same manifest rows into a fixed order:
 
-**Inspector effect card** (`crates/manifold-ui/src/panels/param_card/`): the curated performance surface. Shows only the params the preset author or the scene-exposure system marked as useful for live performance. Reads the manifest with `SurfaceVisibility::CuratedCard` — only `card_visible: true` params become rows. Renders as the same `ParamCardPanel` (with toggle buttons, sliders, modulation drawers, etc.) the inspector uses for effects.
+1. Camera: Horizontal Angle, Vertical Angle, Distance, Field of View.
+2. Lighting: Exposure, Environment Strength, Main Light Intensity.
+3. Depth of Field: On/Off, Focus Distance, Aperture.
+4. Motion Blur: On/Off, Shutter Angle.
 
-## Where each surface sources its params
+Unavailable controls remain in place, disabled and unmappable. Available rows
+retain their parameter IDs, values, ranges, mappings and modulation. Sliders
+remain usable while an effect is off, allowing settings to be prepared before
+enabling it. Explicitly exposed user controls and authored composite macros
+follow under Scene Controls. Automatic object, material, quality and per-light
+details belong in Scene Setup.
 
-Object modifiers in Scene Setup use the same `ParamCardPanel` as inspector
-effects and scene modifiers. Their controls stay attached to stable instance
-IDs through reorder, duplicate, rename, undo, and save/reopen. Card titles and
-drag handles both start reordering; buttons retain their own actions.
+`ui_bridge/projection/scene_performance.rs` selects roles from SceneVm and real
+graph bindings. Presentation labels and sections may differ from manifest
+labels; storage and command addresses do not. Non-scene cards continue to use
+`card_visible`. Per-frame values join the full manifest by ID; unavailable
+presentation placeholders deliberately have no live slot.
 
-Successful insertions select and reveal the new item from the content-thread
-result. Rejected edits preserve the previous selection. Inspector tab changes
-retarget card shortcuts immediately. Pasting a group preserves its membership.
+## Scene Setup
 
-Scene modifier controls describe the recipe's actual scope: Fog and Render Mode
-have no object-target selector; Scene Loop exposes a labeled Camera Travel
-toggle because disabling travel retains the repeated objects. Unavailable
-recipes show an admission reason in the picker. Bend and Twist show degrees
-with an initial −360° to 360° scrub range; the primitive input remains unbounded.
+The outliner order is Camera, Lighting & Environment, Objects, Motion & Physics,
+Rendering. Object properties order Transform, Material, Modifiers, Physics.
+The panel receives `SurfaceVisibility::All`; ownership and category filters
+select the relevant rows. Camera controls follow the render camera's actual
+connections across groups. Unrelated or miswired effects do not masquerade as
+controls for the active camera.
 
-Both surfaces read from the same `PresetInstance.params` manifest, built by `build_param_manifest` (`crates/manifold-core/src/effects/instance_serde.rs`).
+New and bare older scenes use the shared cinematic-tail builder also used by
+GLB import. Newly added DoF and motion blur start off to preserve appearance.
+Existing authored chains are preserved during load. The Camera page offers
+Set Up Camera Effects when dependencies are missing. It restores supported
+standard wiring as one undoable content command; ambiguous custom graphs are
+left unchanged with a diagnostic.
 
-For scene generators (imported .glb, the scene-builder), the manifest comes from the graph's `preset_metadata.params`, which is populated at load time by `migrate_scene_exposures` (`crates/manifold-core/src/scene_exposure.rs`). That function walks every scene-vocabulary node (the `SCENE_VOCABULARY_TYPE_IDS` list) and calls `stamp_scene_node_exposures_into`, which writes one `ParamSpecDef` + one `BindingDef` per param. The `card_visible` flag on each `ParamSpecDef` is set by calling `card_visible_for(type_id, param_name)` — a hand-curated lookup table in the same file.
+Scene and object modifiers reuse ParamCardPanel and stable instance IDs through
+reorder, duplicate, rename, undo and save/reopen. Successful insertions select
+the new item only after the content command succeeds.
 
-The projection from manifest to `ParamSurface` rows is `param_surface` (`crates/manifold-app/src/ui_bridge/projection/cards.rs`). It branches on `SurfaceVisibility`: `CuratedCard` filters to `card_visible: true` params; `All` keeps every param.
+## Adding controls
 
-The inspector card calls `gen_params_to_surface` with `CuratedCard`. The Scene Setup panel calls it with `All`.
-
-The per-frame value push (`sync_card_values`, same file) feeds the full manifest as an id-keyed channel; the card joins by id (`row_id_index`). A hidden (`card_visible: false`) param simply finds no row — there is no second filter to drift.
-
-## How keyed the two surfaces stay in sync
-
-`RENDER_SCENE_STAMPED_PARAMS` (`crates/manifold-nodes-scene/src/node_graph/scene_exposure.rs`) defines which `node.render_scene` params get stamped. `card_visible_for` (`crates/manifold-core/src/scene_exposure.rs`) defines which stamped params appear on the curated card.
-
-These are two separate tables in two crates. There is no mechanical coupling between them — the stamp writes `card_visible` by calling `card_visible_for`, so a param in the stamp list but NOT in `card_visible_for` gets stamped with `card_visible: false`.
-
-## Rule for adding a new param
-
-For a scene-vocabulary param on an existing type:
-
-1. Add the param name to the type's arm in `card_visible_for` (`crates/manifold-core/src/scene_exposure.rs`). If it is on `node.render_scene`, also add it to `RENDER_SCENE_STAMPED_PARAMS` (`crates/manifold-nodes-scene/src/node_graph/scene_exposure.rs`).
-
-2. If you skip step 1 (card_visible_for), the param will appear in the Scene Setup panel ONLY — it will be invisible on the inspector card. The Scene Setup panel uses `SurfaceVisibility::All` and filters by section, so it sees every stamped param regardless of `card_visible`.
-
-3. If you want the param visible only in the Scene Setup panel and never on the card, add it to the stamp list but omit it from `card_visible_for`. This is deliberate for params like `node.transform_3d`'s scale — they are scene-config, not performance-curation.
-
-Existing projects auto-correct on load: the `migrate_scene_exposures` repair pass 2 re-derives `card_visible_for` for every auto-stamped exposure and overwrites a stale flag. No project re-save needed.
-
-## Failure mode we just lived
-
-Seven params were on `RENDER_SCENE_STAMPED_PARAMS` (stamp list) but only three were in the `node.render_scene` arm of `card_visible_for`. The four missing (`rt_denoise_feed`, `rt_shadows`, `rt_ao`, `rt_gi`) got stamped as real, addressable exposures with `card_visible: false`. The Scene Setup panel showed them as sliders (it reads `All`). The inspector card showed nothing for them (it reads `CuratedCard`, which filters by `card_visible`). The symptom was `rt_reflections` appearing as an ON/OFF toggle on the card while `rt_denoise_feed` — same stamp list, same `is_toggle` metadata — was absent. The two sources (stamp list and curation table) had drifted independently.
+`scene_exposure::migrate_scene_exposures` stamps graph bindings and manifest
+descriptors. `RENDER_SCENE_STAMPED_PARAMS` selects renderer parameters available
+to Scene Setup. Add a performance control to the scene projection only when it
+belongs in the stable high-level layout; adding a primitive parameter does not
+automatically add inspector clutter.

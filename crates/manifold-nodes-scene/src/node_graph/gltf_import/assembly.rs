@@ -1,67 +1,8 @@
-//! Shared graph-op constructors (`plain_node`, `wire`, param value ctors)
-//! and naming helpers used across the importer's assembly modules.
+//! Import-specific naming helpers.
 
-
-use std::collections::{BTreeMap, BTreeSet};
-
-use manifold_core::NodeId;
-use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
-
-/// Build an [`EffectGraphNode`] with the given identity and every other
-/// field at its "ordinary node" default. `EffectGraphNode` doesn't derive
-/// `Default` (several fields are meaningful `Option`s used by grouping /
-/// the graph editor), so this centralises the shape once rather than
-/// repeating all eleven fields at every call site.
-pub(super) fn plain_node(id: u32, node_id: &str, type_id: &str, handle: &str) -> EffectGraphNode {
-    EffectGraphNode {
-        id,
-        node_id: NodeId::new(node_id),
-        type_id: type_id.to_string(),
-        handle: Some(handle.to_string()),
-        params: BTreeMap::new(),
-        exposed_params: BTreeSet::new(),
-        editor_pos: None,
-        wgsl_source: None,
-        title: None,
-        output_formats: BTreeMap::new(),
-        output_canvas_scales: BTreeMap::new(),
-        group: None,
-    }
-}
-
+pub(super) use crate::node_graph::scene_graph::{plain_node, table};
 manifold_core::testkit_visible! {
-pub(super) fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphWire {
-    EffectGraphWire {
-        from_node,
-        from_port: from_port.to_string(),
-        to_node,
-        to_port: to_port.to_string(),
-    }
-}
-}
-
-manifold_core::testkit_visible! {
-pub(super) fn float(v: f32) -> SerializedParamValue {
-    SerializedParamValue::Float { value: v }
-}
-}
-manifold_core::testkit_visible! {
-pub(super) fn int(v: i32) -> SerializedParamValue {
-    SerializedParamValue::Int { value: v }
-}
-}
-manifold_core::testkit_visible! {
-pub(super) fn bool_val(v: bool) -> SerializedParamValue {
-    SerializedParamValue::Bool { value: v }
-}
-}
-manifold_core::testkit_visible! {
-pub(super) fn enum_val(v: u32) -> SerializedParamValue {
-    SerializedParamValue::Enum { value: v }
-}
-}
-pub(super) fn table(rows: Vec<Vec<f32>>) -> SerializedParamValue {
-    SerializedParamValue::Table { rows }
+pub(super) use crate::node_graph::scene_graph::{bool_val, enum_val, float, int, wire};
 }
 
 /// Replace every run of non-alphanumeric characters with a single `_` and

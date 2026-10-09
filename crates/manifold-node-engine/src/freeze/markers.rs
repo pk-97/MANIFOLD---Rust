@@ -104,6 +104,10 @@ pub enum Marker {
     /// `precision_critical` (D6(a)). Lets the fused kernel keep requesting the
     /// fp32 upstream intermediate its members would have requested unfused.
     PrecisionCritical { port: String },
+    /// `// @bool_uniform: <field>` — fused codegen, one per Bool parameter
+    /// field. WGSL represents the field as `u32`, so this typed side-channel
+    /// lets `node.wgsl_compute` preserve Bool parameter and packing semantics.
+    BoolUniform { field: String },
 }
 
 impl Marker {
@@ -141,6 +145,7 @@ impl Marker {
             }
             Marker::InputAccess { port, token } => format!("// @input_access: {port} {token}"),
             Marker::PrecisionCritical { port } => format!("// @precision_critical: {port}"),
+            Marker::BoolUniform { field } => format!("// @bool_uniform: {field}"),
             Marker::FusedOutputCapacity { expr } => {
                 format!("// @fused_output_capacity: {}", expr.to_marker_payload())
             }
@@ -203,6 +208,10 @@ impl Marker {
             let name = rest.trim();
             return (!name.is_empty())
                 .then(|| Marker::PrecisionCritical { port: name.to_string() });
+        }
+        if let Some(rest) = c.strip_prefix("@bool_uniform:") {
+            let field = rest.trim();
+            return (!field.is_empty()).then(|| Marker::BoolUniform { field: field.to_string() });
         }
         if let Some(rest) = c.strip_prefix("@fused_output_capacity:") {
             let expr = CapacityExpr::parse_marker_payload(rest)?;
@@ -267,6 +276,7 @@ mod tests {
             Marker::Fusion { kind: "pointwise".to_string() },
             Marker::Fusion { kind: "source".to_string() },
             Marker::CameraExternal { name: "camera_ext_0".to_string() },
+            Marker::BoolUniform { field: "n0_enabled".to_string() },
             Marker::DerivedUniformMember {
                 first_field: "n0_dt_scaled".to_string(),
                 words: 1,

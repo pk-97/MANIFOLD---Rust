@@ -48,6 +48,7 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.look_at_camera",
     "node.camera_lens",
     "node.bokeh_gather",
+    "node.motion_blur",
     "node.atmosphere",
     "node.bake_environment",
     "node.scene_object",
@@ -430,6 +431,7 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
         | "node.free_camera"
         | "node.look_at_camera"
         | "node.camera_lens"
+        | "node.motion_blur"
         | "node.bokeh_gather" => {
             "Camera".to_string()
         }

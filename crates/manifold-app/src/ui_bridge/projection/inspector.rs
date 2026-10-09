@@ -910,12 +910,11 @@ pub fn sync_inspector_data(
                             // so they show exactly the lens and tail's own
                             // controls.
                             let camera_sections = sections_for_nodes(def.as_ref(), &vm.camera_controls);
-                            let camera_parameter_ids = matches!(
-                                vm.camera,
-                                manifold_nodes_scene::node_graph::scene_vm::CameraVm::Custom { .. }
-                                    | manifold_nodes_scene::node_graph::scene_vm::CameraVm::Loop(_)
-                            )
-                            .then(|| super::scene::parameter_ids_for_nodes(def.as_ref(), &vm.camera_controls));
+                            let camera_parameter_ids = Some(super::scene::parameter_ids_for_nodes(
+                                def.as_ref(), &vm.camera_controls,
+                            ));
+                            let camera_setup_needed = def.as_ref().is_some_and(|graph|
+                                crate::scene_camera_edit::needs_setup(graph, vm.scene_root_node_id));
                             let world_sections = sections_for_nodes(def.as_ref(), &vm.world_controls);
                             let environment = match vm.environment {
                                 manifold_nodes_scene::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
@@ -1069,6 +1068,7 @@ pub fn sync_inspector_data(
                                 camera,
                                 camera_sections,
                                 camera_parameter_ids,
+                                camera_setup_needed,
                                 world_sections,
                                 // SCENE_MODIFIER_FRAMEWORK P3 (D4): the Scene
                                 // Loop's panel surface is deleted — the loop

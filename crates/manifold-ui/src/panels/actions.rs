@@ -247,6 +247,8 @@ pub enum ProjectAction {
     /// generator-assignment path the picker's `SetGenType` already uses
     /// (section 1 VERIFY marker, resolved: `PanelAction::SetGenType`).
     SceneSetupNewScene(LayerId),
+    /// Restore standard camera dependencies through one undoable content edit.
+    SceneSetupPrepareCamera(LayerId),
     /// P2 "+ Object" button: `(layer_id, render_scene_node_doc_id,
     /// next_index)`. Dispatches the EXISTING `AddSceneObjectCommand`
     /// (SCENE_BUILD P5) — no new mutation path.

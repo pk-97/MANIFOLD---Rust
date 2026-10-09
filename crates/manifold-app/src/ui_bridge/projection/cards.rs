@@ -411,7 +411,12 @@ fn param_surface(
     // hands the FULL manifest as an id-keyed channel and the card JOINS by id
     // (BUG-313), so a hidden param simply finds no row — there is no second
     // filter to drift out of alignment.
+    let scene_graph = (visibility == SurfaceVisibility::CuratedCard && kind == PresetKind::Generator)
+        .then(|| inst.graph.as_ref().or_else(|| manifold_nodes::bundled_presets::bundled_preset_def(preset_type)))
+        .flatten()
+        .filter(|def| manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).is_some());
     let visible_params: Vec<&manifold_core::params::Param> = match visibility {
+        SurfaceVisibility::CuratedCard if scene_graph.is_some() => inst.params.iter().collect(),
         SurfaceVisibility::CuratedCard => {
             let modifier_bindings = inst.graph.as_ref().and_then(|graph| graph.preset_metadata.as_ref());
             inst.params.iter().filter(|p| p.spec.card_visible && !modifier_bindings.is_some_and(|metadata|
@@ -519,6 +524,10 @@ fn param_surface(
         };
         let is_fire = rows[pi].spec.is_trigger && !rows[pi].spec.is_trigger_gate;
         rows[pi].audio = audio_row_state(am, is_fire);
+    }
+
+    if let Some(def) = scene_graph {
+        super::scene_performance::curate_scene_rows(&mut rows, inst, def);
     }
 
     // String params are sourced from the registry def. Graph-backed audio-send

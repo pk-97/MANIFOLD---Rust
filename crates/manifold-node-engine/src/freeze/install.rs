@@ -2183,8 +2183,13 @@ pub(crate) fn fuse_canonical_def_masked(
                     (stable.as_str().to_string(), p.name.to_string()),
                     (fused_id.clone(), field.clone()),
                 );
-                let value = effective_param_f32(doc_node.params.get(p.name.as_ref()), &p.default)?;
-                fused_params.insert(field.clone(), SerializedParamValue::Float { value });
+                if p.ty == ParamType::Bool {
+                    let value = effective_param_bool(doc_node.params.get(p.name.as_ref()), &p.default)?;
+                    fused_params.insert(field.clone(), SerializedParamValue::Bool { value });
+                } else {
+                    let value = effective_param_f32(doc_node.params.get(p.name.as_ref()), &p.default)?;
+                    fused_params.insert(field.clone(), SerializedParamValue::Float { value });
+                }
 
                 // A control wire driving this param (LFO → gain.gain) is re-anchored
                 // onto the fused node's port-shadow `n{idx}_<param>`, so the producer
@@ -2520,10 +2525,8 @@ pub(crate) fn resolve_node_id(n: &EffectGraphNode) -> NodeId {
 }
 
 /// Effective scalar value for a region param: the def override if present, else
-/// the atom's declared default. Every fused uniform field is f32 / i32 / u32
-/// (the codegen maps Bool/Enum → u32 too), so all seed as a single f32 the
-/// `WgslCompute` casts at the uniform-write boundary. `None` for a non-scalar
-/// value (which the finder already rejected upstream — defensive).
+/// the atom's declared default. `None` for a non-scalar value (which the finder
+/// already rejected upstream — defensive).
 fn effective_param_f32(
     override_val: Option<&SerializedParamValue>,
     default: &ParamValue,
@@ -2532,6 +2535,30 @@ fn effective_param_f32(
         return serialized_to_f32(v);
     }
     param_value_to_f32(default)
+}
+
+/// Bool counterpart to [`effective_param_f32`]. Keep fused node params typed as
+/// Bool so graph validation and `BoolThreshold` bindings retain their authored
+/// contract after the WGSL field lowers to `u32`.
+fn effective_param_bool(
+    override_val: Option<&SerializedParamValue>,
+    default: &ParamValue,
+) -> Option<bool> {
+    if let Some(v) = override_val {
+        return match v {
+            SerializedParamValue::Bool { value } => Some(*value),
+            SerializedParamValue::Float { value } => Some(*value > 0.5),
+            SerializedParamValue::Int { value } => Some(*value as f32 > 0.5),
+            SerializedParamValue::Enum { value } => Some(*value as f32 > 0.5),
+            _ => None,
+        };
+    }
+    match default {
+        ParamValue::Bool(value) => Some(*value),
+        ParamValue::Float(value) => Some(*value > 0.5),
+        ParamValue::Enum(value) => Some(*value > 0),
+        _ => None,
+    }
 }
 
 fn serialized_to_f32(v: &SerializedParamValue) -> Option<f32> {
@@ -2544,10 +2571,13 @@ fn serialized_to_f32(v: &SerializedParamValue) -> Option<f32> {
     }
 }
 
-/// Live writes must use the same numeric storage as the compiler's uniform
-/// seeds. Enum and Bool remain typed on authored nodes, but fused fields store
-/// all scalars as Float and cast to the shader type when packing uniforms.
+/// Live writes must use the same storage as the compiler's uniform seeds. Bool
+/// stays typed so graph validation and BoolThreshold bindings remain intact;
+/// integer-like scalar fields continue to use Float storage and cast at pack.
 pub(crate) fn fused_param_value(value: &SerializedParamValue) -> ParamValue {
+    if let SerializedParamValue::Bool { value } = value {
+        return ParamValue::Bool(*value);
+    }
     serialized_to_f32(value)
         .map(ParamValue::Float)
         .unwrap_or_else(|| value.clone().into())
@@ -2606,6 +2636,24 @@ mod tests {
         let mut registry = PrimitiveRegistry::with_builtin();
         crate::testkit::fusion_fixtures::register_fusion_test_nodes(&mut registry);
         registry
+    }
+
+    #[test]
+    fn fused_bool_seed_and_live_value_stay_typed() {
+        let default = ParamValue::Bool(true);
+        assert_eq!(effective_param_bool(None, &default), Some(true));
+        assert_eq!(
+            effective_param_bool(
+                Some(&SerializedParamValue::Float { value: 0.5 }),
+                &default,
+            ),
+            Some(false),
+            "seeded numeric Bool values use strict BoolThreshold semantics"
+        );
+        assert_eq!(
+            fused_param_value(&SerializedParamValue::Bool { value: true }),
+            ParamValue::Bool(true)
+        );
     }
 
 
