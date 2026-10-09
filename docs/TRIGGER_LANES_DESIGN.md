@@ -2,8 +2,9 @@
 
 <!-- index: Child trigger lanes with no thumbnails; shared assignment from lane headers and parameter drawers. Current-code audit, proposed architecture, and first-slice acceptance contract. -->
 
-**Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence and undoable
-assignment are the first implementation seam; full playback and UI remain pending.
+**Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence, undoable
+assignment and shared active-source timing are implemented. Interval event delivery,
+trigger-lane ownership, media exclusion and authoring UI remain pending.
 **Tracking:** `BUG-tqtel` (feature).
 **Prerequisites:** crate refactor landed; reverify the audited seams against subsequent cleanup.
 **Execution contract:** read `DESIGN_DOC_STANDARD.md` sections 5–6 before briefing
@@ -177,11 +178,9 @@ The two paths have documented shadow-update timing differences. Characterize tho
 before consolidation; do not silently change existing show timing. A single pure
 composer can serve both while input-advancement policy remains explicit.
 
-Also, `record_hop_values` computes each observation's transport timestamp but passes
-the outer `ControlSample` into `compose_param`. This is an inspected API constraint,
-not a reproduced defect report. The new contract must supply the selected clip's
-phase at the observation's timestamp, including a boundary crossed within one frame.
-A frame-only lane lookup would undermine simulation/export consistency.
+The timing migration now builds each retained hop's `ControlSample` at the hop's
+timestamp and tempo-derived beat. The producer still needs interval coverage across
+clip boundaries; sampling the correct time against only current spans is insufficient.
 
 Small typed interfaces should expose only what their consumers need: clip events
 and phase to modulation, evaluated controls/events to rendering, and snapshots plus
@@ -210,6 +209,26 @@ rg -n 'evaluate_modulation|evaluate_all_envelopes|evaluate_all_audio_mods|compos
 
 Classify tests separately and read enclosing functions; raw text-hit counts include
 comments, imports and test code. A new production caller changes the seam brief.
+
+**Implemented timing contract (2026-10-09).** `ClipControlFrame` is keyed by stable
+`LayerId` and exposes `elapsed(source, owner, beat)` and ordered `starts(source, owner)`.
+The scheduler records logical membership from the same timeline/live/session refs
+used by `sync_clips_to_time`, before renderer acquisition or its warm-up guard.
+Rebinding a clip remains silent; session iteration changes emit starts. Main clip
+mute is carried with the event so envelopes preserve their mute behavior while
+legacy audio clip-edge responses remain compatible. Parent mute does not gate it.
+
+`evaluate_modulation`, `evaluate_all_envelopes` and `evaluate_all_audio_mods` consume
+that frame. `compose_controls` receives a per-parameter sample. The independent
+arrangement scanner, numeric-layer edge buffer and envelope edge-inference fields
+are removed. Scripted UI steps use an engine with no content renderers; it verifies
+UI/control state, not scene impulse delivery. Export already uses engine ticks.
+
+Focused CPU checks cover source isolation, disabled/missing sources, adjacent starts,
+renderer independence, mute, source deletion, seek cancellation and session launch.
+Full acceptance below remains open: crossed short clips and multiple loop boundaries,
+historical spans, clip event timestamps through delivery, and snapshot/retained
+composition consolidation must be completed before exposing trigger lanes.
 
 ### Model, scheduling and delivery
 

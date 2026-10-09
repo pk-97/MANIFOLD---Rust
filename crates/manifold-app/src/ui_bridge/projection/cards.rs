@@ -1284,7 +1284,8 @@ mod modifier_audio_projection_tests {
         let mut fire_meters = FireMeterCapture::default();
         manifold_playback::modulation::evaluate_all_audio_mods(
             &mut project, &snapshot, manifold_core::Seconds(1.0 / 60.0),
-            &mut Vec::<manifold_playback::modulation::TriggerPulse>::new(), &[], &mut fire_meters,
+            &manifold_playback::clip_controls::ClipControlFrame::default(),
+            &mut Vec::<manifold_playback::modulation::TriggerPulse>::new(), &mut fire_meters,
         );
         let host = project.timeline.layers[0].gen_params().unwrap();
         let produced = fire_meter_key_for_param(host.id.as_str(), &strength);

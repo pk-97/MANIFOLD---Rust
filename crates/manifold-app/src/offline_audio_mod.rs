@@ -988,7 +988,7 @@ mod tests {
             let mut driver = OfflineAudioModDriver::new(&project, &audio, fps as f64, Seconds(17.25)).unwrap();
             let mut engine = PlaybackEngine::new(Vec::new());
             let mut trace = Vec::new();
-            let mut timing = Vec::new();
+            let controls = manifold_playback::clip_controls::ClipControlFrame::default();
             let mut pulses = Vec::new();
             let mut meters = FireMeterCapture::default();
             for frame in 0..fps {
@@ -996,7 +996,7 @@ mod tests {
                 let current = Seconds(17.25 + frame as f64 / fps as f64);
                 evaluate_modulation(&mut project, Beats(current.0 * 2.0), current,
                     Seconds(1.0 / fps as f64), engine.audio_snapshot(),
-                    &mut timing, &mut pulses, &[], &mut meters);
+                    &controls, &mut pulses, &mut meters);
                 assert!(audio_control_capture_error(&project).is_none());
                 let m = &project.settings.master_effects[0].audio_mods.as_ref().unwrap()[0];
                 assert_eq!(m.audio_observations.hops().len(), engine.audio_snapshot().hop_batches[0].hops().len());

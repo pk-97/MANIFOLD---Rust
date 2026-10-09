@@ -333,9 +333,8 @@ mod tests {
             Seconds::ZERO,
             Seconds(1.0 / 60.0),
             &snapshot,
-            &mut Vec::new(),
+            &manifold_playback::clip_controls::ClipControlFrame::default(),
             &mut pulses,
-            &[],
             &mut FireMeterCapture::default(),
         );
         assert_eq!(pulses.len(), 1, "one kick fires the armed Fire once");

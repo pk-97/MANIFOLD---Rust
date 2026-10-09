@@ -66,7 +66,7 @@ impl AudioControlState {
 pub fn compose_controls(
     params: &mut ParamManifest,
     sources: ControlSources<'_>,
-    sample: ControlSample,
+    sample_for_param: impl Fn(&Param) -> ControlSample,
     audio_state: impl Fn(usize, &ParameterAudioMod) -> AudioControlState,
 ) -> bool {
     if sources.drivers.is_empty() && sources.envelopes.is_empty() && sources.audio_mods.is_empty() {
@@ -74,6 +74,7 @@ pub fn compose_controls(
     }
     let mut dirty = false;
     for param in params.iter_mut() {
+        let sample = sample_for_param(param);
         if let Some(value) = compose_param(param, param.value, &sources, sample, &audio_state) {
             param.value = value;
             dirty = true;
@@ -335,7 +336,7 @@ mod tests {
                     envelopes: &envelopes[..envelope_count],
                     audio_mods: &audio_mods[..audio_count],
                 },
-                sample(Some(Beats(0.5))),
+                |_| sample(Some(Beats(0.5))),
                 |_, m| AudioControlState::current(m),
             ));
             assert!((params.get("value").unwrap().value - expected).abs() < 1e-6);
@@ -359,7 +360,7 @@ mod tests {
                 envelopes: &[],
                 audio_mods: &audio_mods,
             },
-            sample(None),
+            |_| sample(None),
             |_, m| AudioControlState::current(m),
         );
         assert_eq!(params.get("value").unwrap().value, 0.8);
@@ -377,7 +378,7 @@ mod tests {
                 envelopes: &[],
                 audio_mods: std::slice::from_ref(&trigger),
             },
-            sample(None),
+            |_| sample(None),
             |_, _| AudioControlState {
                 step_value: None,
                 held_output: None,
@@ -409,7 +410,7 @@ mod tests {
                     envelopes: &[],
                     audio_mods: &mods,
                 },
-                sample(None),
+                |_| sample(None),
                 |_, _| captured,
             )
         };
@@ -441,7 +442,7 @@ mod tests {
                 envelopes: &[],
                 audio_mods: &mods,
             },
-            sample(None),
+            |_| sample(None),
             |_, m| AudioControlState::current(m),
         ));
         assert_eq!(params.get("value").unwrap().value, 0.4);
@@ -464,7 +465,7 @@ mod tests {
                 envelopes: &[],
                 audio_mods: &[],
             },
-            sample(None),
+            |_| sample(None),
             |_, m| AudioControlState::current(m),
         ));
         let p = params.get("value").unwrap();

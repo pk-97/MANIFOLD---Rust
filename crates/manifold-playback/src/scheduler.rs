@@ -1,4 +1,5 @@
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
+use crate::clip_controls::{ClipControlFrame, ClipControlSpan, ClipControlStart};
 use manifold_core::ClipId;
 use manifold_core::LayerId;
 use manifold_core::{Beats, Seconds};
@@ -93,6 +94,8 @@ pub struct SyncResult {
 /// No platform dependencies. Zero per-frame allocations (pre-allocated collections reused).
 pub struct ClipScheduler {
     should_be_active_ids: AHashSet<ClipId>,
+    /// Logical source membership, independent of renderer acquisition.
+    control_active: AHashMap<ClipId, ActiveClipRef>,
     // Internal buffers — drained into SyncResult each call, reclaimed next call.
     _merged_list: Vec<ActiveClipRef>,
     _to_stop: Vec<ClipId>,
@@ -107,6 +110,7 @@ impl ClipScheduler {
     pub fn new() -> Self {
         Self {
             should_be_active_ids: AHashSet::with_capacity(32),
+            control_active: AHashMap::with_capacity(32),
             _merged_list: Vec::with_capacity(64),
             _to_stop: Vec::with_capacity(16),
             _to_start: Vec::with_capacity(16),
@@ -114,6 +118,38 @@ impl ClipScheduler {
             reclaimed_to_stop: Vec::new(),
             reclaimed_to_start: Vec::new(),
         }
+    }
+
+    /// Record controls from the same desired membership used for media sync.
+    /// A renderer retry cannot generate another source event. Rebinding an
+    /// active clip to a different layer updates its source silently.
+    pub(crate) fn record_controls(&mut self, result: &SyncResult, controls: &mut ClipControlFrame) {
+        self.control_active.retain(|id, _| self.should_be_active_ids.contains(id));
+        for entry in &result.should_be_active {
+            if entry.is_visible() {
+                controls.record_span(entry.layer_id.clone(), ClipControlSpan {
+                    clip_id: entry.clip_id.clone(),
+                    start_beat: entry.start_beat,
+                    end_beat: (!entry.is_live_slot()).then(|| entry.end_beat()),
+                });
+            }
+            let starts = match self.control_active.get(&entry.clip_id) {
+                None => true,
+                Some(previous) => previous.layer_id == entry.layer_id
+                    && entry.is_session_slot() && previous.start_beat != entry.start_beat,
+            };
+            if starts {
+                controls.record_start(entry.layer_id.clone(), ClipControlStart {
+                    clip_id: entry.clip_id.clone(), beat: entry.start_beat,
+                    is_muted: entry.is_muted,
+                });
+            }
+            self.control_active.insert(entry.clip_id.clone(), entry.clone());
+        }
+    }
+
+    pub(crate) fn reset_controls(&mut self) {
+        self.control_active.clear();
     }
 
     /// Compute what clips should start, stop, or continue playing.
@@ -231,6 +267,56 @@ impl Default for ClipScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn controls_tick(
+        scheduler: &mut ClipScheduler,
+        controls: &mut ClipControlFrame,
+        refs: &[ActiveClipRef],
+        beat: Beats,
+    ) {
+        let result = scheduler.compute_sync(
+            Seconds::ZERO, beat, refs, &[], &[], &AHashSet::new(), &AHashSet::new(), Beats(1.0),
+        );
+        controls.clear_spans();
+        scheduler.record_controls(&result, controls);
+        controls.finish();
+        scheduler.reclaim(result);
+    }
+
+    #[test]
+    fn source_controls_do_not_depend_on_renderer_start_or_warmup() {
+        use manifold_core::params::ClipTriggerSource;
+        let mut scheduler = ClipScheduler::new();
+        let mut controls = ClipControlFrame::default();
+        let clip = make_ref("short", 0, 0.0, 0.01);
+        let owner = clip.layer_id.clone();
+        controls_tick(&mut scheduler, &mut controls, std::slice::from_ref(&clip), Beats(0.005));
+        assert_eq!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&owner)).len(), 1);
+        assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(0.005)), Some(Beats(0.005)));
+        controls.clear_starts();
+        // The renderer remains absent, so another media start is attempted.
+        // Source membership nevertheless remains unchanged.
+        controls_tick(&mut scheduler, &mut controls, &[clip], Beats(0.006));
+        assert!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&owner)).is_empty());
+    }
+
+    #[test]
+    fn source_controls_rebind_silently_and_restart_session_iterations() {
+        use manifold_core::params::ClipTriggerSource;
+        let mut scheduler = ClipScheduler::new();
+        let mut controls = ClipControlFrame::default();
+        let mut clip = make_ref("session", 0, 0.0, 4.0);
+        clip.clip_index = ActiveClipRef::SESSION_SLOT;
+        controls_tick(&mut scheduler, &mut controls, std::slice::from_ref(&clip), Beats(1.0));
+        controls.clear_starts();
+        clip.layer_id = LayerId::new("moved-owner");
+        controls_tick(&mut scheduler, &mut controls, std::slice::from_ref(&clip), Beats(1.0));
+        assert!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&clip.layer_id)).is_empty());
+        assert!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&clip.layer_id), Beats(1.0)).is_some());
+        clip.start_beat = Beats(4.0);
+        controls_tick(&mut scheduler, &mut controls, std::slice::from_ref(&clip), Beats(4.0));
+        assert_eq!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&clip.layer_id)).len(), 1);
+    }
 
     fn make_ref(id: &str, layer_index: i32, start_beat: f32, duration_beats: f32) -> ActiveClipRef {
         ActiveClipRef {

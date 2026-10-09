@@ -1,8 +1,8 @@
 //! PARAM_STEP_ACTIONS P2/P3 — engine-side clip-edge envelope tests.
 //!
 //! Exercises the real `PlaybackEngine` so the production path —
-//! `sync_clips_to_time`'s per-layer `last_active_clip_id` tracking feeding
-//! `evaluate_all_envelopes`'s rising-edge gate — is what's under test. The
+//! `sync_clips_to_time`'s stable source membership feeding the shared
+//! clip-control frame — is what's under test. The
 //! Step/Random audio-mod clip-edge behavior moved onto `ParamEnvelope` in D8;
 //! these scenarios now live on the envelope path.
 //!
@@ -117,6 +117,99 @@ fn envelope_step_value_of(engine: &PlaybackEngine, layer_index: usize) -> Option
 }
 
 const DT: f64 = 1.0 / 60.0;
+
+#[test]
+fn selected_source_fires_without_a_renderer_or_unmuted_owner() {
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    let source_id = project.timeline.layers[1].layer_id.clone();
+    project.timeline.layers[0].is_muted = true;
+    project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut("level").unwrap()
+        .clip_trigger_source = manifold_core::params::ClipTriggerSource::Lane { layer_id: source_id };
+    let mut engine = PlaybackEngine::new(Vec::new());
+    engine.initialize(project);
+    engine.set_time(Seconds(0.5));
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), None, "own clip is not the selected source");
+    engine.set_time(Seconds(2.25));
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
+    tick_n(&mut engine, 2, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0), "renderer retries are not new source starts");
+}
+
+#[test]
+fn adjacent_clips_at_equal_elapsed_times_are_distinct_starts() {
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[0].clips[1].start_beat = Beats(4.0);
+    let mut engine = create_engine();
+    engine.initialize(project);
+    engine.set_time(Seconds(0.25));
+    tick_n(&mut engine, 1, DT);
+    engine.set_time(Seconds(2.25));
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(2.0));
+}
+
+#[test]
+fn muted_main_clip_does_not_advance_an_envelope() {
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[0].clips[0].is_muted = true;
+    let mut engine = create_engine();
+    engine.initialize(project);
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), None);
+}
+
+#[test]
+fn deleting_a_source_cancels_its_unconsumed_start() {
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    let source_id = project.timeline.layers[1].layer_id.clone();
+    project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut("level").unwrap()
+        .clip_trigger_source = manifold_core::params::ClipTriggerSource::Lane { layer_id: source_id };
+    let mut engine = create_engine();
+    engine.initialize(project);
+    engine.set_time(Seconds(2.25));
+    engine.sync_clips_to_time();
+    engine.project_mut().unwrap().timeline.remove_layer(1);
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), None);
+}
+
+#[test]
+fn seeking_cancels_starts_queued_before_the_new_playhead() {
+    let mut engine = create_engine();
+    engine.initialize(two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp)));
+    engine.sync_clips_to_time();
+    // Seek to the gap before modulation could consume the first clip start.
+    engine.seek_to(Seconds(3.0));
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), None);
+}
+
+#[test]
+fn session_launch_and_loop_advance_the_same_envelope_source() {
+    use manifold_core::session::{ClipSequence, Scene, SessionSlot};
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[0].clips.clear();
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let scene_id = manifold_core::SceneId::new("source-scene");
+    project.session.scenes.push(Scene { id: scene_id.clone(), name: "Source".into(), color: None });
+    project.session.slots.push(SessionSlot {
+        layer_id: layer_id.clone(), scene_id: scene_id.clone(), name: "Pattern".into(), color: None,
+        sequence: ClipSequence {
+            length_beats: Beats(4.0),
+            clips: vec![TimelineClip::new_generator(Beats::ZERO, Beats(4.0))],
+        },
+    });
+    let mut engine = PlaybackEngine::new(Vec::new());
+    engine.initialize(project);
+    engine.session_launch_slot(layer_id, scene_id);
+    tick_n(&mut engine, 2, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
+    engine.set_time(Seconds(2.1));
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(2.0));
+}
 
 #[test]
 fn timeline_clip_start_fires_step_envelope() {
@@ -237,10 +330,7 @@ fn second_timeline_clip_start_refires_step_envelope() {
     );
 }
 
-/// A layer index that never appears in the project must never spuriously
-/// gate a step — guards against an off-by-one or stale-index bug in the
-/// `clip_edge_layers` → `evaluate_all_envelopes` wiring surfacing as a
-/// false fire on an unrelated layer.
+/// Reordering rows must not turn another source's start into an own-layer event.
 #[test]
 fn unrelated_layer_edge_after_reorder_does_not_confuse_the_gate() {
     // Two clip starts on DIFFERENT layers at the same beat: only layer 0's
