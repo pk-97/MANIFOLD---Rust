@@ -187,7 +187,7 @@ The mid-show editing safety question (section 12.9 of PRIMITIVE_LIBRARY_DESIGN) 
 
 ## 13. Save Format
 
-Preset JSON schema lives in [`crates/manifold-core/src/effect_definition_registry.rs`](../crates/manifold-core/src/effect_definition_registry.rs) and the structures it points at. Key invariants:
+Preset JSON schema lives in [`crates/manifold-core/src/preset_definition_registry.rs`](../crates/manifold-core/src/preset_definition_registry.rs) and the structures it points at. Key invariants:
 
 - `version: 2` is the current schema.
 - `nodes` carry stable `typeId` (`"node.gain"`, `"node.feedback"`, …) — treated as public API.
@@ -220,5 +220,5 @@ Real ones, parked. Not the "(none yet)" placeholder from V0.
 - [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md) — historical record of Phases 1–5
 - [EFFECT_CHAIN_LIFECYCLE.md](EFFECT_CHAIN_LIFECYCLE.md) — chain pool, state-cache eviction, feedback bleed-through
 - [MANIFOLD_GPU_ARCHITECTURE.md](MANIFOLD_GPU_ARCHITECTURE.md) — Metal backend, texture formats, uniform layout
-- `crates/manifold-nodes/src/node_graph/` — module structure for the runtime
+- `crates/manifold-node-engine/src/` — module structure for the runtime
 - `crates/manifold-nodes/assets/effect-presets/` — shipping presets
