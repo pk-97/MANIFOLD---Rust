@@ -5,6 +5,7 @@ Cargo, renderer execution and GPU holds are mocked. No simulated pass is ever
 written in the real repository's common directory.
 """
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -24,6 +25,68 @@ import gpu_queue
 import gpu_scope
 import landing_gate as landing
 import land_branch
+
+
+class FixtureQueries:
+    """Memoize Git/metadata queries over byte-identical disposable fixtures.
+
+    Production snapshots and every validation boundary still execute. Rescan
+    bytes (not mtimes) and modes on every query, including ignored fixtures and
+    shared refs/indexes, so mid-run edits and worktree changes remain observable.
+    Only Git's immutable objects, reflogs, receipts and ignored gate output are
+    omitted. This cache never escapes one test or handles a Git mutation.
+    """
+    def __init__(self, common, execute):
+        self.common, self.execute = common, execute
+        self.results = {}
+        self.execute_run = subprocess.run
+        self.metadata = {}
+
+    @staticmethod
+    def tree(root, excluded):
+        digest = hashlib.sha256()
+        def scan(directory, prefix=''):
+            with os.scandir(directory) as entries:
+                entries = sorted(entries, key=lambda entry: entry.name)
+            for entry in entries:
+                rel = prefix + entry.name
+                if rel in excluded:
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    scan(entry.path, rel + '/')
+                    continue
+                mode = entry.stat(follow_symlinks=False).st_mode
+                if entry.is_symlink():
+                    content = os.readlink(entry.path).encode()
+                else:
+                    with open(entry.path, 'rb') as stream:
+                        content = stream.read()
+                digest.update(repr((rel, mode, len(content))).encode())
+                digest.update(content)
+        scan(root)
+        return digest.digest()
+
+    def __call__(self, repo, *args):
+        if args[0] not in {'rev-parse', 'ls-tree', 'ls-files', 'diff', 'merge-base'}:
+            raise AssertionError(f'fixture cache cannot run mutations: {args}')
+        working_tree = (self.tree(repo, {'.git', 'target', '.claude/orchestration'})
+                        if args[0] == 'diff' or '--others' in args else None)
+        key = (str(repo), args, working_tree,
+               self.tree(self.common, {'objects', 'logs', 'gate-passes-v1'}))
+        if key not in self.results:
+            self.results[key] = self.execute(repo, *args)
+        return self.results[key]
+
+    def run(self, command, *args, **kwargs):
+        if command[:2] != ['cargo', 'metadata']:
+            return self.execute_run(command, *args, **kwargs)
+        repo = Path(command[command.index('--manifest-path') + 1]).parent
+        key = (tuple(command),
+               self.tree(repo, {'.git', 'target', '.claude/orchestration'}),
+               tuple(sorted(kwargs.get('env', os.environ).items())))
+        if key not in self.metadata:
+            self.metadata[key] = self.execute_run(command, *args, **kwargs)
+        return self.metadata[key]
 
 
 class CacheTests(unittest.TestCase):
@@ -72,6 +135,10 @@ class CacheTests(unittest.TestCase):
         self.write('crates/b/src/lib.rs', 'pub fn changed() {}\n')
         self.write('crates/manifold-nodes/src/registry.rs', 'pub fn invert() {}\n')
         self.commit('BUG-cache branch change')
+        self.real_cache_git = cache.git
+        self.fixture_git = FixtureQueries(self.repo / '.git', cache.git)
+        self.enterContext(patch.object(cache, 'git', self.fixture_git))
+        self.enterContext(patch.object(subprocess, 'run', self.fixture_git.run))
         self.real_host_inputs = cache.host_inputs
         self.host = patch.object(cache, 'host_inputs', return_value={'host': 'cpu-test'})
         self.host.start()
@@ -98,6 +165,37 @@ class CacheTests(unittest.TestCase):
     def clippy(self, name):
         return cache.command_pass(self.repo, 'clippy/' + name,
                                   ['cargo', 'clippy', '-p', name, '--tests', '--', '-D', 'warnings'])
+
+    def test_fixture_git_cache_observes_bytes_modes_refs_and_ignored_files(self):
+        commands = [('ls-tree', '-r', '-z', 'HEAD'),
+                    ('diff', '--name-only', '-z', 'HEAD'),
+                    ('ls-files', '--others', '--exclude-standard', '-z'),
+                    ('ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', 'tests'),
+                    ('rev-parse', 'origin/main^{tree}')]
+
+        def compare():
+            for args in commands:
+                self.assertEqual(cache.git(self.repo, *args), self.real_cache_git(self.repo, *args))
+
+        with patch.object(self.fixture_git, 'execute', wraps=self.real_cache_git) as execute:
+            compare()
+            execute.reset_mock()
+            compare()
+            execute.assert_not_called()
+            source = self.repo / 'crates/a/src/lib.rs'
+            stat = source.stat()
+            source.write_bytes(source.read_bytes().replace(b'changed', b'altered'))
+            os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+            compare()
+            self.assertTrue(execute.called, 'equal-sized edits with restored mtimes must invalidate')
+            source.chmod(0o755)
+            self.write('tests/fixtures/ignored.bin', 'ignored input')
+            compare()
+            self.commit('new fixture tree')
+            self.git('branch', '-f', 'origin/main', 'HEAD')
+            compare()
+            source.unlink()
+            compare()
 
     def run_spec(self):
         runs = self.scoped_runs()

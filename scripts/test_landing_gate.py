@@ -701,6 +701,65 @@ class LandingTests(unittest.TestCase):
                 time.sleep(0.1)
             self.assertFalse(process_alive(grandchild), "grandchild survived the timeout")
 
+    def test_timeout_report_precedes_sigterm_child_failure_and_keeps_raw_transcript(self):
+        # A nested gate may turn the deadline's SIGTERM into a test-looking
+        # assertion and exit 143.  The parent deadline remains authoritative.
+        with tempfile.TemporaryDirectory() as d, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            script = (
+                "import signal, sys, time\n"
+                "def on_term(_signum, _frame):\n"
+                "    print('assertion failed: child exit 143', file=sys.stderr, flush=True)\n"
+                "    sys.exit(143)\n"
+                "signal.signal(signal.SIGTERM, on_term)\n"
+                "print('child started', flush=True)\n"
+                "time.sleep(120)\n"
+            )
+            script_path = Path(d) / "nested_gate.py"
+            script_path.write_text(script)
+            receipt = Mock()
+            receipt.unchanged.return_value = True
+            receipt.reused.return_value = False
+            receipt.save.side_effect = AssertionError('timeout must not publish a receipt')
+            exit_, out, err, duration = landing_gate.run_check(
+                "nested", [sys.executable, "-u", str(script_path)], Path(d), 1, passed=receipt)
+            tail = (out + err).rstrip().splitlines()[-20:]
+            landing_gate.print_result("nested", "FAIL", duration, tail)
+            report = output.getvalue()
+            self.assertEqual(exit_, -1)
+            self.assertGreaterEqual(report.count("[FAIL] nested timed out at configured 1 seconds"), 2)
+            self.assertIn("TIMEOUT: timed out at configured 1 seconds", report)
+            self.assertIn("rerun: ", report)
+            self.assertNotIn("assertion failed", report)
+            self.assertNotIn("[FAIL] nested (", report)
+            logs = list((Path(d) / "target/landing-logs").glob("*.log"))
+            self.assertEqual(len(logs), 1)
+            self.assertIn("assertion failed", logs[0].read_text())
+            self.assertNotIn("TIMEOUT:", logs[0].read_text())
+            receipt.save.assert_not_called()
+            self.assertLess(duration, 10)
+
+    def test_gpu_timeout_preserves_raw_transcript_and_timeout_only_tail(self):
+        raw = 'AssertionError: child caught SIGTERM and returned 143\n'
+
+        def timeout(cmd, cwd, seconds, live_log=None):
+            live_log.write_text(raw)
+            return -1, raw, '', seconds + 2
+
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(landing_gate, 'run_cmd', side_effect=timeout), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code, out, err, _ = landing_gate.run_check(
+                'gpu-proofs', ['python3', 'scripts/gpu_proofs_gate.py'], Path(d), 120)
+            self.assertEqual(code, -1)
+            self.assertEqual(out, '')
+            self.assertNotIn('AssertionError', err)
+            self.assertIn('timed out at configured 120 seconds', err)
+            self.assertIn('rerun: ', err)
+            logs = list((Path(d) / 'target/landing-logs').glob('*.log'))
+            self.assertEqual(len(logs), 1)
+            self.assertEqual(logs[0].read_text(), raw)
+
     def test_live_log_holds_lines_before_the_command_exits(self):
         with tempfile.TemporaryDirectory() as d:
             live = Path(d) / "live.log"

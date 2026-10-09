@@ -44,6 +44,10 @@ RAN_EVERY_CHECK = contextvars.ContextVar('ran_every_check', default=False)
 # leg needed it. Logged per run: queue time is landing time nobody saw before.
 GPU_WAIT = contextvars.ContextVar('gpu_wait', default=None)
 SLOW_TESTS = contextvars.ContextVar('slow_tests', default=None)
+# Set by run_check while its child is active so run_cmd can report the
+# deadline before asking a child to handle SIGTERM.  Keeping this in context
+# avoids changing run_cmd's established return shape or call signature.
+ACTIVE_CHECK = contextvars.ContextVar('active_check', default=None)
 
 # GPU-proofs scope (touched paths -> focused tests + smoke, time budget, no
 # run-everything fallback) lives in scripts/gpu_scope.py; the full suite runs
@@ -229,6 +233,11 @@ def run_cmd(cmd, cwd, timeout, live_log=None):
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
+        active_check = ACTIVE_CHECK.get()
+        if active_check is not None:
+            label, configured_timeout = active_check
+            print(f"[FAIL] {label} timed out at configured "
+                  f"{configured_timeout:g} seconds", flush=True)
         stop_child(proc, graceful=True)
     except BaseException:
         stop_child(proc, graceful=True)
@@ -244,7 +253,9 @@ def run_cmd(cmd, cwd, timeout, live_log=None):
     duration = time.time() - start
     out, err = "".join(streams["out"]), "".join(streams["err"])
     if timed_out:
-        return -1, out, err + f"\nTIMEOUT after {duration:.0f}s: {' '.join(cmd)}", duration
+        return -1, out, err + (
+            f"\nTIMEOUT after {duration:.0f}s: {' '.join(cmd)}"
+            f"\nTIMEOUT: timed out at configured {timeout:g} seconds"), duration
     return proc.returncode, out, err, duration
 
 
@@ -311,8 +322,13 @@ def run_check(label, cmd, cwd, timeout, passed=None):
         return 0, '[REUSED] ' + label, '', 0.0
     live = landing_log_path(cwd, label.replace("/", "-"))
     print(f"[RUN] {label}  (live transcript: {live})", flush=True)
-    result = run_cmd(cmd, cwd, timeout, live_log=live)
+    token = ACTIVE_CHECK.set((label, timeout))
+    try:
+        result = run_cmd(cmd, cwd, timeout, live_log=live)
+    finally:
+        ACTIVE_CHECK.reset(token)
     exit_, out, err, seconds = result
+    timed_out = exit_ == -1
     proof_refusal = (exit_ == PROOF_INPUTS_CHANGED and len(cmd) > 1
                      and Path(cmd[1]).name == 'gpu_proofs_gate.py')
     if exit_ == -1 or proof_refusal or any(marker in out + err for marker in (
@@ -322,6 +338,13 @@ def run_check(label, cmd, cwd, timeout, passed=None):
         RAN_EVERY_CHECK.set(False)
     if nextest and slow_tests is not None:
         slow_tests[label] = parse_slow_tests(out + '\n' + err)
+    if timed_out:
+        # The child output remains available in `live`.  Do not return it as
+        # the leg diagnostic: a nested test may print an assertion while
+        # handling our SIGTERM, which must not look like the timeout's cause.
+        out = ''
+        err = (f"TIMEOUT: timed out at configured {timeout:g} seconds\n"
+               f"raw transcript: {live}")
     if label == 'docs-index' and exit_ == 0:
         stale = run_cmd(['git', 'diff', '--name-only', '--', 'docs/README.md'],
                         cwd=cwd, timeout=300)[1].strip()
@@ -329,16 +352,20 @@ def run_check(label, cmd, cwd, timeout, passed=None):
             exit_ = 1
             err += '\ndocs index was stale — commit the regenerated index'
             result = exit_, out, err, seconds
-    if passed:
+    if passed and not timed_out:
         if passed.save(exit_, seconds) is False:
             RAN_EVERY_CHECK.set(False)
             exit_ = 1
             err += '\ninputs changed during receipt publication; rerun the gate'
             result = exit_, out, err, seconds
-    if exit_ and label != "gpu-proofs":
+    if exit_ and (label != "gpu-proofs" or timed_out):
         # Rewritten as stdout then stderr, the layout every landing log has.
         # GPU proofs retain their transcript on both success and failure below.
-        live.write_text(out + err)
+        # A timeout's live file was written incrementally by run_cmd and is
+        # deliberately kept as the raw child transcript; the timeout marker
+        # remains in the returned diagnostic tail.
+        if exit_ != -1:
+            live.write_text(out + err)
         print(f"[{label}] complete transcript: {live}", flush=True)
     else:
         with contextlib.suppress(OSError):
@@ -420,13 +447,25 @@ def skip(results, label, reason):
 
 def print_result(label, status, duration=None, tail=None):
     """Print [PASS]/[FAIL]/[SKIP] with optional tail."""
-    if duration is not None:
+    timeout = timeout_detail(tail)
+    if timeout is not None:
+        print(f"[FAIL] {label} timed out at configured {timeout} seconds", flush=True)
+    elif duration is not None:
         print(f"[{status}] {label} ({duration:.0f}s)", flush=True)
     else:
         print(f"[{status}] {label}", flush=True)
     if tail:
         for line in tail[-20:]:
             print(f"    {line}")
+
+
+def timeout_detail(tail):
+    """Return configured timeout seconds from a run_check diagnostic tail."""
+    for line in tail or ():
+        match = re.match(r'^TIMEOUT: timed out at configured ([0-9]+(?:\.[0-9]+)?) seconds$', line)
+        if match:
+            return match[1]
+    return None
 
 
 def main():
@@ -917,7 +956,10 @@ def finish(repo, base_sha, results):
     failed = sum(1 for s, _, _, _ in results if s == "FAIL")
     skipped = sum(1 for s, _, _, _ in results if s == "SKIP")
     for status, label, duration, tail in results:
-        if duration:
+        timeout = timeout_detail(tail)
+        if timeout is not None:
+            print(f"{status} {label} timed out at configured {timeout} seconds")
+        elif duration:
             print(f"{status} {label} ({duration:.0f}s)")
         elif status == "SKIP" and tail:
             print(f"{status} {label} ({tail[0]})")
