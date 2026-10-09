@@ -13,7 +13,8 @@ TEMPORAL_WINDOW_S = 0.020
 
 
 def detect_v5(envelopes, sample_rate, hop, *, eligibility_window_s=0.0,
-              eligible_mask=None, rearm_mask=None, confirmation_mask=None):
+              eligible_mask=None, rearm_mask=None, confirmation_mask=None,
+              require_low_rise=True):
     if sample_rate <= 0 or hop <= 0 or eligibility_window_s < 0:
         raise ValueError('invalid sample grid or evidence window')
     env = np.asarray(envelopes)
@@ -56,7 +57,8 @@ def detect_v5(envelopes, sample_rate, hop, *, eligibility_window_s=0.0,
             last_evidence = [-math.inf] * 4
         if pending is not None:
             confirmation = (low[0] > max(1e-6, peak * .15)
-                            and low[0] > low[1] * 1.2 and power > mid[0] * .8)
+                            and (not require_low_rise or low[0] > low[1] * 1.2)
+                            and power > mid[0] * .8)
             if confirmation_mask is not None:
                 confirmation = confirmation and bool(confirmation_mask[i])
             if confirmation:

@@ -223,9 +223,45 @@ The reproducible summary, frozen parameters, per-passage errors, controls and
 source hashes are in `scoreboard/kick_dsp_experiments_2026-10-09.json` relative
 to `tools/audio_analysis/eval/`. Raw reports and feature caches are under
 `~/.cache/manifold/kick-dsp-experiments-2026-10-09/`.
-The next useful experiment is a steadier energy representation that preserves
-attack timing before applying adaptive normalization. Miracle and Heavy On
-Mind remain untouched by detector evaluation.
+The follow-up below tests steadier energy representations. Miracle and Heavy
+On Mind remain untouched by detector evaluation.
+
+**Hybrid DSP follow-up, 2026-10-09 — no successful replacement:** causal
+frequency-dependent RMS and quadrature power were combined with fast raw
+attack evidence. Initial PCEN controls lost rapid kicks. An attack-led rule
+then retained the original low-energy rise requirement; a final diagnostic
+removed that requirement while retaining energy presence. These were sequential
+development experiments, with unchanged labels and no per-song settings.
+
+| Rule | Matched within 50 ms | Missed | Extra fires |
+|---|---:|---:|---:|
+| Fixed v5 reference | 103 | 27 | 50 |
+| RMS with low rise | 94 | 36 | 80 |
+| Quadrature with low rise | 107 | 23 | 162 |
+| RMS with low presence | 111 | 19 | 192 |
+| Quadrature with low presence | 113 | 17 | 190 |
+
+Removing the rise requirement recovered all eight rapid synthetic kicks at
+48 kHz, but both presence variants fired 49 times in Late Night's reviewed
+kick-free bass passage. Steadier energy alone does not distinguish kicks from
+bass renewal. Quadrature presence also misses three of four isolated synthetic
+kicks; this implementation has unresolved filter/confirmation timing behaviour.
+Strict extras include late associated kicks; the kick-free passages establish
+actual unwanted firing. No live integration is justified by these results.
+
+Sixteen focused tests pass, covering causal prefixes, envelope calibration,
+ripple, silence and detector decisions. All 110 synthetic event lists replay
+after adding CLI rule selection; each mix run exactly reproduces all seven
+native v5 references. Python batch CPU/audio ratios were 0.26–0.30% for RMS
+and 0.38–0.42% for quadrature, not native callback deadline measurements.
+
+Reproduce using `PYTHONPATH=tools/audio_analysis python3 -m
+eval.kick_hybrid_experiment --rule presence --phase controls --out PATH`.
+Rules are `pcen`, `rise`, and `presence`; `--phase mixes` additionally requires
+`--audio-root PATH`. PCEN was evaluated on controls only. Results, per-passage
+counts, limitations and source hashes are in
+`tools/audio_analysis/eval/scoreboard/kick_hybrid_2026-10-09.json`; raw reports
+remain under `~/.cache/manifold/kick-hybrid-2026-10-09/`.
 
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
