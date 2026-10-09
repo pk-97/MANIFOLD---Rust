@@ -32,6 +32,7 @@ def load(name, path):
 
 
 storage_budget = load("codex_storage_budget", ROOT / "scripts/storage_budget.py")
+tool_inventory = load("codex_tool_inventory", ROOT / "scripts/dev.py")
 
 
 def git(cwd, *args):
@@ -124,7 +125,7 @@ def check_shell(event, command, cwd, shell_guard):
     # Reuse established detection; a Codex hook never returns CC's allow/ask.
     for tokens in execution_segments(command):
         for program, args in _command_targets(tokens):
-            if program == "cargo" and _cargo_subcommand(args) == "fmt" and "--check" not in args:
+            if Path(program).name == "cargo" and _cargo_subcommand(args) == "fmt" and "--check" not in args:
                 return "cargo fmt can rewrite the workspace even with a file after --. Use rustfmt on exact owned files with --config skip_children=true; never blanket-format MANIFOLD."
     for check in (shell_guard.worktree_add_guard, shell_guard.destructive_outward_guard):
         if check(command, cwd):
@@ -211,10 +212,11 @@ def budget_key(command, cwd):
     return hashlib.sha256((str(Path(cwd).resolve()) + "\n" + command.strip()).encode()).hexdigest()
 
 
-def expensive_checks(command):
+def expensive_checks(command, cwd=None):
     """Recognize the executed program, rather than words in its arguments."""
     for tokens in execution_segments(command):
-        for exe, args in _command_targets(tokens):
+        for target, args in _command_targets(tokens):
+            exe = Path(target).name
             if exe == "cargo":
                 # Cargo's first command is the only meaningful subcommand;
                 # feature names such as ``perf-soak`` are not runtime probes.
@@ -228,12 +230,25 @@ def expensive_checks(command):
                 elif sub == "run" and "--" in args and any(
                         a in {"perf-soak", "rt-capture"} for a in args[args.index("--") + 1:]):
                     yield "broad"
-            elif exe in {"trunk_health.py", "feature_matrix.py", "launch_live_ui.py"}:
-                yield "broad"
-            elif exe == "gpu_proofs_gate.py":
-                yield "focused"
-            elif re.search(r"(?:render|snapshot|rt_matrix|gpu_proofs|ui_flows).*\.py$", exe):
-                yield "broad"
+                if sub == "run":
+                    # Only Cargo options before -- select the executable.
+                    cargo_args = args[:args.index("--")] if "--" in args else args
+                    for i, arg in enumerate(cargo_args):
+                        name = None
+                        if arg in {"--bin", "--example"} and i + 1 < len(cargo_args):
+                            name = cargo_args[i + 1]
+                        elif arg.startswith(("--bin=", "--example=")):
+                            name = arg.split("=", 1)[1]
+                        if name in tool_inventory.COST_CLASSES:
+                            yield tool_inventory.COST_CLASSES[name]
+            elif exe in tool_inventory.COST_CLASSES or Path(target).suffix in {".py", ".sh"}:
+                path = Path(target)
+                if cwd is not None and not path.is_absolute():
+                    path = Path(cwd) / path
+                cost = tool_inventory.script_cost(path, args)
+                if cost != "unit":
+                    yield cost
+
 
 
 def execution_segments(command):
@@ -329,9 +344,19 @@ def _command_targets(tokens):
                 return  # Python source/module is not a script pathname.
             j += 2 if flag in {"-W", "-X"} else 1
         if j < len(args):
-            yield Path(args[j]).name, args[j + 1:]
+            yield from _command_targets(args[j:])
         return
-    yield program, args
+    if program == "dev.py":
+        if not args or args[0] in {"-h", "--help", "help", "--write-index"}:
+            return
+        command = tool_inventory.command_for(args[0], args[1:])
+        if command is not None:
+            yield from _command_targets(command)
+        return
+    if program == "gpu_queue.py" and "--" in args:
+        yield from _command_targets(args[args.index("--") + 1:])
+        return
+    yield tokens[i], args
 
 
 _BUILD_CARGO_SUBCOMMANDS = {"build", "check", "test", "clippy", "bench", "run", "nextest", "xtask"}
@@ -621,7 +646,7 @@ def consume_permit(command, cwd, allow_cwd_fallback=False):
 
 
 def check_budget(event, command, cwd, allow_cwd_fallback=False):
-    kinds = list(expensive_checks(command))
+    kinds = list(expensive_checks(command, cwd))
     if "broad" in kinds and not consume_permit(command, cwd, allow_cwd_fallback):
         return ("Execution budget stopped this check. Broad/visual probes need a named, bounded exception. "
                 "Focused checks remain available while each retry has changed code, new evidence, or explicit "

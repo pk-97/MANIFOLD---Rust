@@ -67,13 +67,27 @@ file-scope checked. Keep task ownership and review responsibilities in briefs.
 
 ## Execution budget
 
-Recognized direct Cargo checks and the required `gpu_proofs_gate.py` remain
-available as focused checks without a per-command attempt cap. Retries still
-need changed code, new evidence, or explicit user direction. Broad Cargo
-checks, nightly/feature sweeps, perf soaks and other recognized visual/GPU probe
-scripts need a bounded exception. Common env/build-lock wrappers are
-recognized. Required checks run inside `land_branch.py` and `landing_gate.py`
-remain unchanged.
+Script costs come from `scripts/dev.py`'s `COST_CLASSES` table, checked by
+`scripts/test_dev.py` and displayed in `scripts/TOOLS.md`. `unit` means cheap
+local work; `focused` covers bounded checks and required landing orchestration;
+`broad` requires a bounded exception. Filenames containing render, snapshot or
+gpu_proofs do not determine cost. Python `test_*.py` scripts default to unit;
+explicit entries take precedence (`test_census.py` runs Cargo and is focused).
+
+Unknown scripts under a `scripts/` directory fail closed as broad until their
+cost is declared. Unknown scripts outside it, including lane drafts such as
+`crate-move-drafts/snapshot_stage.py`, default to unit. Known script names retain
+their declared cost wherever invoked. The hook does not inspect arbitrary
+script bodies or observe their subprocesses: drafts that invoke Cargo or probes
+must still obey the budget. Visible shell chains and supported env/build-lock,
+`dev.py` and `gpu_queue.py --` wrappers preserve the inner command's cost.
+
+Focused Cargo checks and scoped `gpu_proofs_gate.py` runs remain available
+without an attempt cap; `gpu_proofs_gate.py --all` is broad. Workspace-wide or
+unscoped Cargo checks, nightly/feature sweeps, perf soaks, app renders and
+declared GPU/visual probes need a bounded exception. Retries still need changed
+code, new evidence, or explicit user direction. Required checks run inside
+`land_branch.py` and `landing_gate.py` remain unchanged.
 
 The lead can register an exact broad or visual command for 1–3 attempts (default
 one), expiring after 30 minutes. Permits are project-scoped so the desktop hook
