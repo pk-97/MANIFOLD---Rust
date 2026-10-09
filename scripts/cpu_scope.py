@@ -105,6 +105,27 @@ def test_module_prefixes(source, prefixes):
     return prefixes
 
 
+def testless_binary_root(source):
+    """Recognize a self-contained CLI with no possible unit-test declarations.
+
+    External modules, macros and attributed items remain conservative:
+    their compiled test inventory still has to validate the selection.
+    """
+    from crate_move_replay import code_mask, module_items
+    text = source.read_text()
+    masked = code_mask(text)
+    # module_items expands this macro's production arm; its test arm may differ.
+    if re.search(r'\btestkit_visible\s*!', masked):
+        return False
+    for start, end, head, _ in module_items(text):
+        item = masked[head:end]
+        if ('#[' in masked[start:head]
+                or re.match(r'(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*;', item)
+                or re.match(r'[\w:]+\s*!', item)):
+            return False
+    return True
+
+
 def plan_for_paths(paths, repo, workspace=None, base=None):
     repo, plan, cache = Path(repo).resolve(), Plan(), {}
     workspace = workspace or Workspace(repo)
@@ -210,6 +231,11 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
                 binary_filter = f" & binary(={target})"
                 root = (crate / target_path).parent.resolve()
                 modules = [module_parts(source.relative_to(root)) if source != (crate / target_path).resolve() else []]
+                if (owning_target and 'bin' in owning_target['kind']
+                        and testless_binary_root(source)):
+                    modules = []
+                    plan.widening_reasons.add(
+                        f'{target} has no unit tests: compile/clippy only')
             elif gpu_proofs_only(source):
                 # Its tests run in the gpu-proofs leg (gpu_scope); a CPU
                 # filter here would select nothing and fail ownership.

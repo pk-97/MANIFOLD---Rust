@@ -14,3 +14,7 @@ pub mod relight;
 pub mod scene_modifier_authoring;
 pub mod scene_modifier_legacy_migration;
 pub mod scene_vm;
+
+mod scene_graph;
+mod cinematic_tail;
+pub mod scene_camera;

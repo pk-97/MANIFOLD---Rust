@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 use crate::freeze::markers::Marker;
+use crate::parameters::ParamType;
 use crate::ports::ChannelSpec;
 
 use super::types::{InputSource, channel_wgsl_ty, FusionRegion};
@@ -25,46 +26,17 @@ pub(super) fn emit_buffer_struct(specs: &[ChannelSpec], name: &str) -> String {
     s
 }
 
-/// Buffer-domain multi-atom fusion: chain a region of per-element (particle /
-/// instance / curve-point) atom bodies into ONE `var<storage>` kernel. The
-/// buffer analogue of [`generate_fused`]: pre-read each external array element
-/// `[idx]` once, thread each body's output element as a register to the next,
-/// write the region output array once. A 1D dispatch over the output array's
-/// `arrayLength` (the convention `node.wgsl_compute` keys its buffer dispatch on
-/// — NO `dispatch_count` uniform, unlike the standalone buffer path).
-///
-/// v1 scope — anything outside it returns `Err` so the card renders unfused
-/// (always correct; the install pass also naga-parses the result as a final
-/// guard): every member is a coincident per-element atom (no `BufferGather` —
-/// those stay boundaries), each writes exactly ONE Array output, and its scalar
-/// params are port-shadow uniforms. TEXTURE inputs fuse as gathered externals:
-/// the kernel binds each as `src_<e>: texture_2d<f32>` plus one shared `samp`,
-/// and the consuming body samples it at an element-computed coord — the same
-/// `tex + samp` ABI the standalone buffer kernel passes, so the sample is
-/// bit-identical (the `*_at_particles` force samplers, anti_clump's modulator).
-/// Emit the D7/P0 side-channel markers a fused region's derived-uniform members
-/// need (`docs/CINEMATIC_POST_DESIGN.md`, `docs/FREEZE_COMPILER_MAP.md` section 5 marker
-/// ABI): one `// @camera_external: camera_ext_N` per distinct Camera external the
-/// region routes (`FusionRegion::camera_externals`), then one
-/// `// @derived_uniform_member: <first_field> words=<n> <type_id> [<camera_port>]`
-/// per member with non-empty `derived_uniforms`. `node.wgsl_compute`'s
-/// introspection (`primitives/wgsl_compute.rs`) is the sole consumer: the first
-/// marker synthesizes a DECLARED, non-introspected Camera-typed input port (no
-/// WGSL binding exists for Camera, so naga can't discover it — this comment is
-/// the only channel); the second tells `evaluate()`, every frame, which
-/// contiguous uniform-field block to skip in the generic port-shadow pack and
-/// instead fill via `derived_uniform_registry::recompute(type_id, ctx)`, plus —
-/// when `buffer_domain` (only the buffer path's array ports lead `inputs`, so
-/// the member-position lookup is exact there) — the member→fused-port map for
-/// array inputs the recompute consults. Shared
-/// by both fused paths (buffer and texture) so a member's derived-uniform
-/// contract is identical regardless of which domain fuses it. Emits nothing for
-/// a region with no derived-uniform members — byte-identical to prior codegen.
+/// Emit the shared marker ABI for texture and buffer fusion: Bool field types,
+/// camera inputs and derived-uniform blocks. WgslCompute uses these facts to
+/// restore types that WGSL cannot express and recompute camera/array-derived
+/// values. Buffer members additionally map their declared array inputs to the
+/// fused port names. See FREEZE_COMPILER_MAP.md, marker ABI.
 pub(super) fn emit_derived_uniform_markers(
     out: &mut String,
     region: &FusionRegion<'_>,
     buffer_domain: bool,
 ) {
+    emit_bool_uniform_markers(out, region);
     for e in 0..region.camera_externals {
         writeln!(out, "{}", Marker::CameraExternal { name: format!("camera_ext_{e}") }.emit())
             .unwrap();
@@ -135,5 +107,26 @@ pub(super) fn emit_derived_uniform_markers(
             array_ports,
         };
         writeln!(out, "{}", marker.emit()).unwrap();
+    }
+}
+
+/// Emit the typed side-channel for Bool fields in either fused uniform path.
+/// The ABI has one helper for both texture and buffer kernels so marker order
+/// and field naming cannot drift between the two code generators.
+fn emit_bool_uniform_markers(out: &mut String, region: &FusionRegion<'_>) {
+    // Bool params lower to `u32` in WGSL, which naga cannot distinguish from
+    // Int during host introspection. Keep the authored type on the marker ABI
+    // so fused WgslCompute nodes retain BoolThreshold-compatible packing.
+    for (i, node) in region.nodes.iter().enumerate() {
+        for param in node.params {
+            if param.ty == ParamType::Bool {
+                writeln!(
+                    out,
+                    "{}",
+                    Marker::BoolUniform { field: format!("n{i}_{}", param.name) }.emit()
+                )
+                .unwrap();
+            }
+        }
     }
 }

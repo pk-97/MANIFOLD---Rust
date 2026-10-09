@@ -788,8 +788,8 @@ mod tests {
         use crate::load::expand::PreparedGraphValueWrites;
         for prepared in [false, true] {
             let mut graph = Graph::new();
-            // A scalar destination stands in for the numeric field emitted by
-            // fusion. The authored enum/toggle still retains its typed value.
+            // Enum/int uniforms use numeric storage; Bool uniforms retain
+            // their type so live writes agree with the compiler's Bool marker.
             let fused = graph.add_node_named("fused", Box::new(GraphFixture::binding()));
             graph.set_node_id(fused, NodeId::new("fused_region_0"));
             let node_map = vec![(NodeId::new("fused_region_0"), fused)];
@@ -806,15 +806,15 @@ mod tests {
                 ).unwrap());
             }
             for (value, expected) in [
-                (SerializedParamValue::Enum { value: 4 }, 4.0),
-                (SerializedParamValue::Bool { value: true }, 1.0),
-                (SerializedParamValue::Bool { value: false }, 0.0),
-                (SerializedParamValue::Int { value: 3 }, 3.0),
-                (SerializedParamValue::Float { value: 0.75 }, 0.75),
+                (SerializedParamValue::Enum { value: 4 }, ParamValue::Float(4.0)),
+                (SerializedParamValue::Bool { value: true }, ParamValue::Bool(true)),
+                (SerializedParamValue::Bool { value: false }, ParamValue::Bool(false)),
+                (SerializedParamValue::Int { value: 3 }, ParamValue::Float(3.0)),
+                (SerializedParamValue::Float { value: 0.75 }, ParamValue::Float(0.75)),
             ] {
                 def.nodes[0].params.insert("scale".into(), value);
                 bound.apply_inner_overrides(&mut graph, &node_map, Some(&def));
-                assert_eq!(scale_of(&graph, fused), ParamValue::Float(expected),
+                assert_eq!(scale_of(&graph, fused), expected,
                     "prepared={prepared}: live uniforms must match compiler storage");
             }
         }

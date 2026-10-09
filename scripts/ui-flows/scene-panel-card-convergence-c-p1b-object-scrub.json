@@ -47,6 +47,7 @@
       "selector": {
         "Query": {
           "name": "scene_setup.properties.name_value",
+          "under_name": "scene_setup",
           "text": "QS1694-W02-1-1"
         }
       },
@@ -57,7 +58,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_roughness.value"
+          "name": "param_row.10_roughness.value",
+          "under_name": "scene_setup"
         }
       },
       "check": "Exists"
@@ -67,14 +69,16 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.10_roughness.slider"
+          "name": "param_row.10_roughness.slider",
+          "under_name": "scene_setup"
         }
       },
       "gesture": {
         "Drag": {
           "to": {
             "Query": {
-              "text": "Roughness"
+              "text": "Roughness",
+              "under_name": "scene_setup"
             }
           },
           "steps": 8
@@ -87,6 +91,7 @@
       "selector": {
         "Query": {
           "name": "param_row.10_roughness.value",
+          "under_name": "scene_setup",
           "text": "1.00"
         }
       },
@@ -107,7 +112,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_roughness.value"
+          "name": "param_row.10_roughness.value",
+          "under_name": "scene_setup"
         }
       },
       "check": {
@@ -120,7 +126,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.10_roughness.driver_btn"
+          "name": "param_row.10_roughness.driver_btn",
+          "under_name": "scene_setup"
         }
       },
       "check": "Exists"
@@ -130,7 +137,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.10_roughness.driver_btn"
+          "name": "param_row.10_roughness.driver_btn",
+          "under_name": "scene_setup"
         }
       },
       "gesture": {
@@ -146,7 +154,7 @@
       "selector": {
         "Query": {
           "name": "param_row.23_pos_x.value",
-          "nth": 1
+          "under_name": "scene_setup"
         }
       },
       "check": {
@@ -159,7 +167,7 @@
       "target": {
         "Query": {
           "name": "param_row.23_pos_x.slider",
-          "nth": 1
+          "under_name": "scene_setup"
         }
       }
     }
@@ -169,7 +177,7 @@
       "target": {
         "Query": {
           "name": "param_row.23_pos_x.slider",
-          "nth": 1
+          "under_name": "scene_setup"
         }
       },
       "gesture": {
@@ -177,7 +185,7 @@
           "to": {
             "Query": {
               "name": "param_row.23_pos_x.value",
-              "nth": 1
+              "under_name": "scene_setup"
             }
           },
           "steps": 8
@@ -190,7 +198,7 @@
       "selector": {
         "Query": {
           "name": "param_row.23_pos_x.value",
-          "nth": 1,
+          "under_name": "scene_setup",
           "text": "0.00"
         }
       },
@@ -212,7 +220,7 @@
       "selector": {
         "Query": {
           "name": "param_row.23_pos_x.value",
-          "nth": 1
+          "under_name": "scene_setup"
         }
       },
       "check": {

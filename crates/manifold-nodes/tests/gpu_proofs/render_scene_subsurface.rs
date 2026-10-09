@@ -69,6 +69,8 @@ impl CurvedSphereSource {
 }
 
 impl EffectNode for CurvedSphereSource {
+    fn is_pure(&self) -> bool { true }
+
     fn depth_rule(&self) -> DepthRule {
         DepthRule::Terminal
     }
@@ -113,6 +115,74 @@ impl EffectNode for CurvedSphereSource {
     ) -> Option<u32> {
         Some(self.vertices.len() as u32)
     }
+}
+
+/// Immutable copies isolate renderer history from procedural producer revisions.
+struct StaticCopiesSource {
+    type_id: EffectNodeType,
+    outputs: Vec<NodeOutput>,
+    staging: Option<GpuBuffer>,
+}
+
+impl StaticCopiesSource {
+    fn new() -> Self {
+        Self {
+            type_id: EffectNodeType::new("test.sss_static_copies"),
+            outputs: vec![NodePort {
+                name: std::borrow::Cow::Borrowed("instances"),
+                ty: PortType::Array(ArrayType::of_known::<manifold_node_engine::mesh::InstanceTransform>()),
+                kind: PortKind::Output,
+                required: false,
+            }],
+            staging: None,
+        }
+    }
+}
+
+impl EffectNode for StaticCopiesSource {
+    fn is_pure(&self) -> bool { true }
+    fn depth_rule(&self) -> DepthRule { DepthRule::Terminal }
+    fn type_id(&self) -> &EffectNodeType { &self.type_id }
+    fn inputs(&self) -> &[NodeInput] { &[] }
+    fn outputs(&self) -> &[NodeOutput] { &self.outputs }
+    fn parameters(&self) -> &[ParamDef] { &[] }
+    fn array_output_capacity(&self, _: &str, _: &ParamValues, _: &[(&str, u32)]) -> Option<u32> {
+        Some(2)
+    }
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        use manifold_node_engine::mesh::InstanceTransform;
+        let Some(dst) = ctx.outputs.array("instances") else { return };
+        let copies = [-0.275, 0.275].map(|x| InstanceTransform {
+            pos_scale: [x, 0.0, 0.0, 0.55], rot_pad: [0.0; 4],
+        });
+        let bytes = bytemuck::cast_slice(&copies);
+        let staging = self.staging.get_or_insert_with(|| {
+            ctx.gpu_encoder().device.create_buffer_shared(bytes.len() as u64)
+        });
+        unsafe { staging.write(0, bytes) };
+        ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(staging, dst, bytes.len() as u64);
+    }
+}
+
+fn tilted_normal_cube_source() -> CurvedSphereSource {
+    let mut source = CurvedSphereSource::new();
+    source.type_id = EffectNodeType::new("test.sss_tilted_normal_cube");
+    source.vertices.clear();
+    for normal in [glam::Vec3::X, -glam::Vec3::X, glam::Vec3::Y,
+        -glam::Vec3::Y, glam::Vec3::Z, -glam::Vec3::Z] {
+        let tangent = if normal.x.abs() > 0.5 { glam::Vec3::Y } else { glam::Vec3::X };
+        let bitangent = normal.cross(tangent);
+        let shading_normal = (normal + 0.8 * tangent).normalize().to_array();
+        for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0),
+            (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            source.vertices.push(MeshVertex {
+                position: ((normal + tangent * x + bitangent * y) * 0.5).to_array(),
+                _pad0: 0.0, normal: shading_normal, _pad1: 0.0,
+                uv: [0.0; 2], _pad2: [0.0; 2], tangent: [0.0; 4], color: [1.0; 4],
+            });
+        }
+    }
+    source
 }
 
 fn curved_uv_sphere() -> Vec<MeshVertex> {
@@ -1049,4 +1119,237 @@ fn subsurface_backlit_radius_and_quality_cost() {
             .expect("SSS capture PNG");
         }
     }
+}
+
+fn read_sss_channel(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
+    let (stride, channels, half) = match texture.format {
+        GpuTextureFormat::Rgba16Float => (8, 4, true),
+        GpuTextureFormat::Rgba32Float => (16, 4, false),
+        GpuTextureFormat::R32Float => (4, 1, false),
+        GpuTextureFormat::R16Float => (2, 1, true),
+        format => panic!("unexpected SSS capture format: {format:?}"),
+    };
+    let row_bytes = texture.width * stride;
+    let size = u64::from(row_bytes * texture.height);
+    let buffer = device.create_buffer_shared(size);
+    let mut encoder = device.create_encoder("SSS history proof readback");
+    encoder.copy_texture_to_buffer(texture, &buffer, texture.width, texture.height, row_bytes);
+    encoder.commit_and_wait_completed();
+    let bytes = unsafe { std::slice::from_raw_parts(buffer.mapped_ptr().expect("SSS channel readback").cast::<u8>(), size as usize) };
+    bytes.chunks_exact(stride as usize).map(|pixel| {
+        std::array::from_fn(|channel| {
+            if channel >= channels { return 0.0; }
+            if half {
+                f16::from_le_bytes(pixel[channel*2..channel*2+2].try_into().unwrap()).to_f32()
+            } else {
+                f32::from_le_bytes(pixel[channel*4..channel*4+4].try_into().unwrap())
+            }
+        })
+    }).collect()
+}
+
+/// A full production temporal-upscale graph, including two touching copies
+/// sharing ONE material/object ID. The guides must keep their TLAS identities
+/// separate even though alpha alone cannot distinguish the copies.
+#[test]
+fn temporal_upscale_sss_reprojects_history_and_rejects_instance_edges_and_scene_changes() {
+    prove_temporal_sss_history(false);
+}
+
+#[test]
+fn temporal_upscale_sss_preserves_history_with_tilted_vertex_normals() {
+    prove_temporal_sss_history(true);
+}
+
+fn prove_temporal_sss_history(tilted_normals: bool) {
+    use manifold_nodes_scene::node_graph::primitives::render_scene::{
+        arm_rt_capture, disarm_rt_capture, take_rt_captures,
+    };
+    use manifold_node_engine::scene::camera::Camera;
+    use manifold_nodes_scene::metalfx_temporal_upscaler::jitter_offset;
+
+    let mut scene: serde_json::Value = serde_json::from_str(
+        &scene_json(true, 1.0, [0.15; 3], [0.8; 3], 0, 1),
+    ).unwrap();
+    let nodes = scene["nodes"].as_array_mut().unwrap();
+    for node in nodes.iter_mut() {
+        match node["nodeId"].as_str().unwrap_or("") {
+            "cube" if tilted_normals => {
+                node["typeId"] = "test.sss_tilted_normal_cube".into();
+                node["params"] = serde_json::json!({});
+            }
+            "slab_scale" => {
+                for name in ["scale_x", "scale_y", "scale_z"] {
+                    node["params"][name]["value"] = 1.0.into();
+                }
+                node["params"]["pos_z"] = serde_json::json!({"type":"Float","value":1.6});
+            }
+            "cam" => {
+                node["params"]["near"] = serde_json::json!({"type":"Float","value":0.05});
+                node["params"]["far"] = serde_json::json!({"type":"Float","value":100.0});
+            }
+            "scene" => {
+                node["params"]["temporal_upscale"] = serde_json::json!({"type":"Bool","value":true});
+                node["params"]["lights"]["value"] = 1.into();
+            }
+            _ => {}
+        }
+    }
+    // Both sources carry stable content versions; jitter is the only static-frame change.
+    nodes.retain(|node| node["nodeId"] != "env_src");
+    let environment = nodes.iter_mut().find(|node| node["nodeId"] == "env").unwrap();
+    environment["typeId"] = "node.gradient".into();
+    environment["params"] = serde_json::json!({
+        "stops":{"type":"Table","rows":[[0.0,1.0,1.0,1.0],[1.0,1.0,1.0,1.0]]}
+    });
+    nodes.push(serde_json::json!({"id":30,"typeId":"test.sss_static_copies","nodeId":"copies","params":{}}));
+    nodes.push(serde_json::json!({"id":31,"typeId":"node.light","nodeId":"light","params":{
+        "intensity":{"type":"Float","value":0.2},"cast_shadows":{"type":"Float","value":0.0}
+    }}));
+    let wires = scene["wires"].as_array_mut().unwrap();
+    wires.retain(|wire| wire["fromNode"] != 700);
+    wires.push(serde_json::json!({"fromNode":30,"fromPort":"instances","toNode":20,"toPort":"instances_0"}));
+    wires.push(serde_json::json!({"fromNode":31,"fromPort":"out","toNode":20,"toPort":"light_0"}));
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("test.sss_tilted_normal_cube", || Box::new(tilted_normal_cube_source()));
+    registry.register("test.sss_static_copies", || Box::new(StaticCopiesSource::new()));
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        &scene.to_string(), &registry, std::sync::Arc::clone(&h.device),
+        PROOF_WIDTH, PROOF_HEIGHT, GpuTextureFormat::Rgba16Float, None,
+    ).expect("temporal SSS graph");
+    let target = RenderTarget::new(&h.device, PROOF_WIDTH, PROOF_HEIGHT,
+        GpuTextureFormat::Rgba16Float, "temporal SSS proof");
+    let camera = Camera::orbit_perspective(std::f32::consts::FRAC_PI_2, 0.0, 3.0, 0.9,
+        0.0, 0.0, 0.05, 100.0);
+    struct Snapshot {
+        matrix: glam::Mat4,
+        guide: Vec<[f32; 4]>,
+        history: Vec<[f32; 4]>,
+        count: Vec<[f32; 4]>,
+    }
+    let mut previous: Option<Snapshot> = None;
+    let mut largest_count = 0.0f32;
+    let mut accepted = 0usize;
+    let mut rejected_instance_edges = 0usize;
+    let mut identities = std::collections::BTreeSet::new();
+    for frame in 0..if tilted_normals { 8 } else { 13 } {
+        let mutation = match frame {
+            8 => Some(("mat", "subsurface_color_r", ParamValue::Float(0.4))),
+            9 => Some(("cam", "orbit", ParamValue::Float(1.6))),
+            10 => Some(("light", "intensity", ParamValue::Float(0.4))),
+            11 => Some(("slab_scale", "pos_y", ParamValue::Float(0.05))),
+            12 => Some(("env", "stops", ParamValue::Table(std::sync::Arc::new(
+                manifold_node_engine::parameters::TableData::new(vec![
+                    vec![0.0, 0.5, 0.5, 0.5], vec![1.0, 0.5, 0.5, 0.5],
+                ]).unwrap(),
+            )))),
+            _ => None,
+        };
+        if let Some((node, param, value)) = mutation {
+            let instance = runtime.graph.instance_by_node_id(&NodeId::new(node)).unwrap();
+            runtime.graph.set_param(instance, param, value).unwrap();
+        }
+        arm_rt_capture(false);
+        let mut encoder = h.device.create_encoder("temporal SSS proof");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut encoder, &h.device);
+            runtime.render(&mut gpu, &target.texture, &context_at(frame, PROOF_WIDTH, PROOF_HEIGHT),
+                &manifold_core::params::ParamManifest::default());
+        }
+        encoder.commit_and_wait_completed();
+        disarm_rt_capture();
+        let captures = take_rt_captures();
+        if captures.is_empty() {
+            assert!(frame < 3, "SSS failed to become ready");
+            continue;
+        }
+        let get = |name| &captures.iter().find(|slot| slot.label == name).unwrap().tex;
+        let width = get("sss_count").width;
+        let height = get("sss_count").height;
+        assert_eq!((width, height), (PROOF_WIDTH * 2 / 3, PROOF_HEIGHT * 2 / 3),
+            "proof must exercise the reduced-resolution temporal-upscale path");
+        let raw = read_sss_channel(&h.device, get("sss_raw"));
+        let guide = read_sss_channel(&h.device, get("sss_guide"));
+        let depth = read_sss_channel(&h.device, get("sss_depth"));
+        let history = read_sss_channel(&h.device, get("sss_history"));
+        let count = read_sss_channel(&h.device, get("sss_count"));
+        let mut matrix = camera.view_proj(1.0);
+        let (jx, jy) = jitter_offset(frame as u32 + 1, 8);
+        let wz = matrix[2][3];
+        matrix[2][0] += jx * 2.0 / width as f32 * wz;
+        matrix[2][1] += jy * 2.0 / height as f32 * wz;
+        let matrix = glam::Mat4::from_cols_array_2d(&matrix);
+        for (index, current) in raw.iter().enumerate() {
+            assert!(current.iter().all(|value| value.is_finite()));
+            assert!(current[3] >= 0.0, "closed cubes produced invalid transport");
+            assert_eq!(history[index][3], current[3]);
+            if current[3] == 0.0 {
+                assert_eq!(count[index][0], 0.0, "background acquired SSS history");
+                continue;
+            }
+            identities.insert((guide[index][2] as u32, guide[index][3] as u32));
+            if frame >= 8 {
+                assert_eq!(count[index][0], 1.0, "semantic mutation did not reset on frame {frame}");
+            } else {
+                largest_count = largest_count.max(count[index][0]);
+                if let Some(Snapshot { matrix: previous_matrix, guide: previous_guide, history: previous_history, count: previous_count }) = &previous {
+                    let x = index as u32 % width;
+                    let y = index as u32 / width;
+                    let world_h = matrix.inverse() * glam::vec4(
+                        (x as f32 + 0.5) / width as f32 * 2.0 - 1.0,
+                        1.0 - (y as f32 + 0.5) / height as f32 * 2.0,
+                        depth[index][0], 1.0,
+                    );
+                    let clip = *previous_matrix * (world_h / world_h.w);
+                    let ndc = clip / clip.w;
+                    let px = (ndc.x * 0.5 + 0.5) * width as f32;
+                    let py = (0.5 - ndc.y * 0.5) * height as f32;
+                    if px >= 0.0 && py >= 0.0 && px < width as f32 && py < height as f32 {
+                        let q = py as usize * width as usize + px as usize;
+                        let same_instance = guide[index][2..] == previous_guide[q][2..];
+                        if previous_history[q][3] > 0.0 && !same_instance {
+                            rejected_instance_edges += 1;
+                            assert_eq!(count[index][0], 1.0, "history crossed a same-object instance edge");
+                        }
+                        if count[index][0] > 1.0 {
+                            accepted += 1;
+                            assert!(same_instance, "accepted a different TLAS instance");
+                            assert_eq!(previous_history[q][3], current[3]);
+                            assert_eq!(count[index][0], previous_count[q][0] + 1.0);
+                            for channel in 0..3 {
+                                let expected = previous_history[q][channel]
+                                    + (current[channel] - previous_history[q][channel]) / count[index][0];
+                                assert!((history[index][channel] - expected).abs() <= 0.002 * expected.abs().max(1.0),
+                                    "history did not use reprojected radiance at frame {frame}, pixel {index}");
+                            }
+                        }
+                    } else {
+                        assert_eq!(count[index][0], 1.0, "offscreen history was clamped");
+                    }
+                }
+            }
+        }
+        if frame == 7 && tilted_normals {
+            let surface_pixels = raw.iter().filter(|p| p[3] > 0.0).count();
+            let mature_pixels = count.iter().filter(|p| p[0] >= 6.0).count();
+            assert!(mature_pixels * 2 > surface_pixels,
+                "tilted shading normals rejected coplanar history: {mature_pixels}/{surface_pixels}");
+        }
+        previous = Some(Snapshot { matrix, guide, history, count });
+        if frame == 7 && let Some(directory) = std::env::var_os("MANIFOLD_SSS_CAPTURE_DIR") {
+            let directory = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            let bytes = readback(&h.device, &target.texture);
+            let rgb: Vec<u8> = bytes.chunks_exact(8).flat_map(|p| [0, 2, 4].map(|i| {
+                let value = f16::from_le_bytes([p[i], p[i+1]]).to_f32().max(0.0);
+                ((value / (1.0 + value)).powf(1.0/2.2) * 255.0).round() as u8
+            })).collect();
+            image::save_buffer(directory.join(if tilted_normals { "temporal-sss-tilted-normals.png" } else { "temporal-sss-instance-edges.png" }), &rgb,
+                PROOF_WIDTH, PROOF_HEIGHT, image::ExtendedColorType::Rgb8).unwrap();
+        }
+    }
+    assert_eq!(identities.len(), 2, "both copies must be visible");
+    assert!(largest_count >= 6.0 && accepted > 100, "static jitter reset history: max={largest_count}, accepted={accepted}");
+    assert!(rejected_instance_edges > 0, "fixture never exercised an instance-edge rejection");
 }

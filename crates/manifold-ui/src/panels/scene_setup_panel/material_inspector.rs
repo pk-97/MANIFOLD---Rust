@@ -956,6 +956,12 @@ impl ScenePanel {
             }
             SceneSelection::Camera => self.build_camera_section(tree, inner_x, inner_w, cy, vm),
             SceneSelection::World => self.build_world_properties(tree, inner_x, inner_w, cy, vm),
+            SceneSelection::Physics => self.build_world_category_properties(
+                tree, inner_x, inner_w, cy, vm, &["Physics"],
+            ),
+            SceneSelection::Rendering => self.build_world_category_properties(
+                tree, inner_x, inner_w, cy, vm, &["Rendering"],
+            ),
             SceneSelection::Force(id) => self.build_force_card(tree, inner_x, inner_w, cy, &id),
             SceneSelection::OutlinerFold(_) => cy, // Fold headers don't have properties
         }
@@ -1072,18 +1078,28 @@ impl ScenePanel {
                 self.object_remove_ids.push((remove_id, row.index));
             }
         }
-        let mut next_cy = cy + ROW_H + ROW_GAP;
+        cy + ROW_H + ROW_GAP
+    }
+
+    fn build_object_physics_properties(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        row: &ObjectKnownRow,
+    ) -> f32 {
         if (row.physics_available || row.physics_unavailable_reason.is_some())
             && (row.parent_group_id.is_none() || row.is_group)
         {
             let toggle_w = crate::slider::VALUE_BOX_W.max(64.0);
             tree.add_label(
-                Some(self.content_parent), inner_x, next_cy,
+                Some(self.content_parent), inner_x, cy,
                 inner_w - toggle_w - GAP, ROW_H, "Physics", label_style(),
             );
             if row.physics_available {
                 let physics_id = tree.add_button_keyed(
-                    Some(self.content_parent), inner_x + inner_w - toggle_w, next_cy,
+                    Some(self.content_parent), inner_x + inner_w - toggle_w, cy,
                     toggle_w, ROW_H, toggle_btn_style(row.physics_enabled),
                     if row.physics_enabled { "Disable" } else { "Enable" },
                     obj_key(row.object_node_id as usize, OBJ_OFF_PHYSICS),
@@ -1094,23 +1110,23 @@ impl ScenePanel {
                 } else {
                     self.object_enable_physics_ids.push((physics_id, row.index));
                 }
-                next_cy += ROW_H;
+                cy += ROW_H;
             } else if let Some(reason) = row.physics_unavailable_reason.as_deref() {
-                next_cy += ROW_H;
+                cy += ROW_H;
                 let max_chars = ((inner_w / 6.5).floor() as usize).max(8);
                 for line in crate::graph_canvas::wrap_text(reason, max_chars) {
-                    tree.add_label(Some(self.content_parent), inner_x, next_cy,
+                    tree.add_label(Some(self.content_parent), inner_x, cy,
                         inner_w, ROW_H, &line, label_style());
-                    next_cy += ROW_H;
+                    cy += ROW_H;
                 }
             }
         }
         if let Some(lattice) = &row.lattice {
-            tree.add_label(Some(self.content_parent), inner_x, next_cy,
+            tree.add_label(Some(self.content_parent), inner_x, cy,
                 inner_w, ROW_H, &lattice.line(), label_style());
-            next_cy += ROW_H;
+            cy += ROW_H;
         }
-        self.build_fluid_role_action(tree, inner_x, inner_w, next_cy + ROW_GAP, row)
+        self.build_fluid_role_action(tree, inner_x, inner_w, cy + ROW_GAP, row)
     }
 
     /// Object properties body: transform/material rows followed by the
@@ -1131,13 +1147,14 @@ impl ScenePanel {
     ) -> f32 {
         if row.is_group && row.material_inspector.is_none() {
             self.active_material_info = None;
-            return self.build_filtered_properties_parameter_ids(
+            cy = self.build_filtered_properties_parameter_ids(
                 tree,
                 inner_x,
                 inner_w,
                 cy,
                 (&row.sections, &row.parameter_ids, &[]),
             );
+            return self.build_object_physics_properties(tree, inner_x, inner_w, cy, row);
         }
         // Modifier rows are rendered only inside their retained shared cards;
         // keep transform/object/material rows in the ordinary properties
@@ -1232,7 +1249,7 @@ impl ScenePanel {
             );
             cy += ROW_H;
         }
-        cy + ROW_GAP
+        self.build_object_physics_properties(tree, inner_x, inner_w, cy + ROW_GAP, row)
     }
 
     /// Material-specific structural affordances that sit beside the ordinary

@@ -758,6 +758,12 @@ impl Runner {
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
                 }
+                ContentCommand::SceneCameraSetup(layer_id) => {
+                    match crate::scene_camera_edit::build_action(&data.project, layer_id) {
+                        Ok(command) => ContentCommand::ExecuteOnContent(command),
+                        Err(message) => ContentCommand::GraphEditRejected(message),
+                    }
+                }
                 ContentCommand::SceneItem(action) => {
                     let selection = action.selection_request();
                     match crate::scene_item_transfer::build_action(&data.project, action) {
@@ -1041,7 +1047,7 @@ impl Runner {
             if container_is_inspector {
                 ui.layout.inspector()
             } else {
-                ui.layout.scene_setup()
+                ui.scene_setup_panel.content_viewport()
             }
         };
 

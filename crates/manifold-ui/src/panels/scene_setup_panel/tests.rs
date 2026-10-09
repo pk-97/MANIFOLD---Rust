@@ -76,6 +76,7 @@
             forces: Vec::new(),
             force_picker: Vec::new(),
             camera: CameraRowVm::None,
+            camera_setup_needed: false,
             camera_sections: Vec::new(), camera_parameter_ids: None, world_sections: Vec::new(),
             scene_bounds: None,
         })));
@@ -187,6 +188,7 @@
                     exposure_ev: mrow(RowValue { addr: RowAddr::root(71, "exposure_ev"), value: 0.0, min: -8.0, max: 8.0, driven: false, exposed: false }),
                 }),
             })),
+            camera_setup_needed: false,
             camera_sections: Vec::new(), camera_parameter_ids: None, world_sections: Vec::new(),
             scene_bounds: None,
         }
@@ -199,11 +201,13 @@
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Outliner rows: Scene fold + Camera + World + Lights fold + 1 Known light + Objects fold + 1 Known object are
+        // Outliner rows: Camera + Lighting & Environment fold + World + 1
+        // Known light + Objects fold + 1 Known object + Motion & Physics
+        // fold + Physics + Rendering are
         // selectable (`outliner_row_ids`); the Custom object/light are
         // listed too but as plain labels (D3: never hidden, but no
         // addressable node id to select by, D12).
-        assert_eq!(panel.outliner_row_ids.len(), 8, "Scene/Camera/World fold rows + Lights fold + Forces fold + Objects fold + 1 known light + 1 known object");
+        assert_eq!(panel.outliner_row_ids.len(), 9, "Camera, lighting/environment, objects, motion/physics, and rendering rows");
         // Default selection (D7): the first Known object — Azalea — so its
         // properties header + body render without any click.
         assert_eq!(panel.object_name_ids.len(), 1, "the properties header shows the selected object's name");
@@ -836,14 +840,14 @@
 
     // ── P3: Lights + Camera sections ──
 
-    /// A World-selected scene with one real "Transform" section plus the
+    /// A World-selected scene with one real "Environment" section plus the
     /// matching generator `ParamSurface` (one ±100 translate row) — the
     /// fixture the scene type-in / fine-scrub tests need. `azalea_shaped_vm`'s
     /// `world_sections` is empty, so it can't exercise the unified properties
     /// card's rows.
     pub(super) fn world_transform_vm() -> (SceneSetupVm, ParamSurface) {
         let mut vm = azalea_shaped_vm();
-        vm.world_sections = vec!["Transform".to_string()];
+        vm.world_sections = vec!["Environment".to_string()];
         let surface = ParamSurface {
             kind: crate::panels::param_card::ParamCardKind::Generator,
             title: "Scene".to_string(),
@@ -868,7 +872,7 @@
                     is_trigger: false,
                     is_trigger_gate: false,
                     value_labels: None,
-                    section: Some("Transform".to_string()),
+                    section: Some("Environment".to_string()),
                     disabled: None,
                     material_role: None,
                     inactive_reason: None,
@@ -897,6 +901,107 @@
             relight: crate::panels::param_card::RelightCardConfig::default(),
         };
         (vm, surface)
+    }
+
+    #[test]
+    fn outliner_uses_scene_setup_order_and_keeps_world_lighting_split() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
+        let selections: Vec<_> = panel
+            .outliner_row_ids
+            .iter()
+            .map(|(_, selection)| selection.clone())
+            .collect();
+        assert_eq!(
+            selections,
+            vec![
+                SceneSelection::Camera,
+                SceneSelection::OutlinerFold("Lighting & Environment"),
+                SceneSelection::World,
+                SceneSelection::Light(60),
+                SceneSelection::OutlinerFold("Objects"),
+                SceneSelection::Object(40),
+                SceneSelection::OutlinerFold("Motion & Physics"),
+                SceneSelection::Physics,
+                SceneSelection::Rendering,
+            ],
+        );
+    }
+
+    #[test]
+    fn world_physics_and_rendering_selections_filter_existing_sections() {
+        let (mut vm, mut surface) = world_transform_vm();
+        vm.world_sections = vec!["Environment".into(), "Physics World — Physics".into(), "Rendering".into()];
+        let mut rows = Vec::new();
+        for (id, name, section) in [
+            ("env", "Environment Intensity", "Environment"),
+            ("physics", "Physics Steps", "Physics World — Physics"),
+            ("render", "Render Quality", "Rendering"),
+        ] {
+            let mut row = surface.rows[0].clone();
+            row.id = id.into();
+            row.spec.name = name.into();
+            row.spec.section = Some(section.into());
+            rows.push(row);
+        }
+        surface.rows = rows;
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.configure_params(Some(surface));
+        let mut tree = UITree::new();
+        for (selection, expected) in [
+            (SceneSelection::World, vec!["env"]),
+            (SceneSelection::Physics, vec!["physics"]),
+            (SceneSelection::Rendering, vec!["render"]),
+        ] {
+            panel.selection.insert(LayerId::new("layer-1"), selection);
+            tree.clear();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
+            assert_eq!(
+                panel.properties_card.rows.iter().map(|row| row.id.as_ref()).collect::<Vec<_>>(),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn camera_setup_button_dispatches_only_when_needed() {
+        for (camera, label) in [
+            (CameraRowVm::None, "+ Add Camera & Effects"),
+            (CameraRowVm::Custom, "Set Up Camera Effects"),
+        ] {
+            let (mut vm, surface) = world_transform_vm();
+            vm.camera = camera;
+            vm.camera_setup_needed = true;
+            vm.camera_sections = vec!["Camera".into()];
+            let mut panel = ScenePanel::new();
+            panel.open();
+            panel.configure(SceneSetupState::Live(Box::new(vm.clone())));
+            panel.configure_params(Some(surface));
+            panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Camera);
+            let mut tree = UITree::new();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
+            let button = panel.camera_setup_id.expect("camera setup affordance");
+            assert_eq!(tree.get_node(button).unwrap().text.as_deref(), Some(label));
+            let (consumed, actions) = panel.handle_event(
+                &UIEvent::Click { node_id: button, pos: Vec2::ZERO, modifiers: Modifiers::default() },
+                &mut tree,
+            );
+            assert!(consumed);
+            assert!(matches!(actions.as_slice(),
+                [PanelAction::Project(ProjectAction::SceneSetupPrepareCamera(layer))]
+                    if *layer == LayerId::new("layer-1")
+            ));
+            vm.camera_setup_needed = false;
+            panel.configure(SceneSetupState::Live(Box::new(vm)));
+            tree.clear();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
+            assert!(panel.camera_setup_id.is_none(), "no duplicate setup action for a complete camera");
+        }
     }
 
     #[test]
@@ -1185,14 +1290,14 @@
 
         // Set fold states
         panel.section_folded.insert("Material".to_string(), true);
-        panel.outliner_folded.insert("Lights", true);
+        panel.outliner_folded.insert("Lighting & Environment", true);
 
         let mut tree = UITree::new();
 
         // First build
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(panel.section_folded.get("Material").copied().unwrap_or(false), "Material folded after first build");
-        assert!(panel.outliner_folded.get("Lights").copied().unwrap_or(false), "Lights folded after first build");
+        assert!(panel.outliner_folded.get("Lighting & Environment").copied().unwrap_or(false), "Lighting & Environment folded after first build");
 
         // Reconfigure (simulating a layer change or sync)
         let vm = azalea_shaped_vm();
@@ -1200,12 +1305,12 @@
 
         // Fold states should survive configure
         assert!(panel.section_folded.get("Material").copied().unwrap_or(false), "Material folded after reconfigure");
-        assert!(panel.outliner_folded.get("Lights").copied().unwrap_or(false), "Lights folded after reconfigure");
+        assert!(panel.outliner_folded.get("Lighting & Environment").copied().unwrap_or(false), "Lighting & Environment folded after reconfigure");
 
         // Second build
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         assert!(panel.section_folded.get("Material").copied().unwrap_or(false), "Material folded after second build");
-        assert!(panel.outliner_folded.get("Lights").copied().unwrap_or(false), "Lights folded after second build");
+        assert!(panel.outliner_folded.get("Lighting & Environment").copied().unwrap_or(false), "Lighting & Environment folded after second build");
 
         // Verify the folded state still affects rendering
         // (folded sections should have fewer rows than expanded)
