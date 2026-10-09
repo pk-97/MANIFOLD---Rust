@@ -46,8 +46,8 @@ mod tests {
         let mut checked = 0;
         for id in bundled_preset_type_ids(PresetKind::Generator) {
             let def = bundled_preset_def(&id).unwrap();
-            let Some(vm) = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def) else { continue; };
-            assert!(!needs_setup(def, vm.scene_root_node_id), "{id} has incomplete camera infrastructure");
+            let Some(vm) = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def) else { continue; };
+            assert!(!needs_setup(&def, vm.scene_root_node_id), "{id} has incomplete camera infrastructure");
             checked += 1;
         }
         assert!(checked >= 12, "expected the bundled 3D scene family");

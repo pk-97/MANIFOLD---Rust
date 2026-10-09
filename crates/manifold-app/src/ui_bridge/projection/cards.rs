@@ -411,8 +411,11 @@ fn param_surface(
     // hands the FULL manifest as an id-keyed channel and the card JOINS by id
     // (BUG-313), so a hidden param simply finds no row — there is no second
     // filter to drift out of alignment.
-    let scene_graph = (visibility == SurfaceVisibility::CuratedCard && kind == PresetKind::Generator)
-        .then(|| inst.graph.as_ref().or_else(|| manifold_nodes::bundled_presets::bundled_preset_def(preset_type)))
+    let is_scene_card_candidate = visibility == SurfaceVisibility::CuratedCard && kind == PresetKind::Generator;
+    let catalog_graph = (is_scene_card_candidate && inst.graph.is_none())
+        .then(|| manifold_nodes::bundled_presets::bundled_preset_def(preset_type)).flatten();
+    let scene_graph = is_scene_card_candidate
+        .then(|| inst.graph.as_ref().or(catalog_graph.as_deref()))
         .flatten()
         .filter(|def| manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).is_some());
     let visible_params: Vec<&manifold_core::params::Param> = match visibility {
