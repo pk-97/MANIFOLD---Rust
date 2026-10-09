@@ -84,6 +84,21 @@ def synthetic_workspace(root, paths):
     return Workspace(root, metadata=metadata)
 
 
+def add_test_target(root, workspace, package, name, relative):
+    """Add a conventional integration target to a synthetic Cargo inventory."""
+    root = Path(root).resolve()
+    source = root / workspace.roots[package] / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.touch(exist_ok=True)
+    workspace.packages[package]["targets"].append({
+        "name": name,
+        "kind": ["test"],
+        "src_path": str(source),
+        "required-features": [],
+    })
+    return source
+
+
 def process_alive(pid):
     """True while `pid` runs; a reaped or zombie process counts as gone."""
     try:
@@ -1241,6 +1256,115 @@ class DiffScopeTests(unittest.TestCase):
             self.assertIn("test(/^water::fluid::checks::/)", plan.filterset)
             self.assertIn("binary(=gpu_proofs)", plan.filterset)
 
+    def test_private_folded_test_selects_every_actual_mount(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-nodes/tests/support/private_folded.rs"
+            workspace = synthetic_workspace(d, [path, "crates/manifold-nodes/tests/catalog.rs"])
+            catalog = add_test_target(d, workspace, "manifold-nodes", "catalog", "tests/catalog.rs")
+            catalog.write_text(
+                '#[path = "support/private_folded.rs"] mod first_mount;\n'
+                '#[path = "support/private_folded.rs"] mod second_mount;\n')
+            (Path(d) / path).write_text("#[test]\nfn folded_private_test() {}\n")
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertEqual(plan.filters, {
+                "(package(=manifold-nodes) & binary(=catalog) & test(/^first_mount::/))",
+                "(package(=manifold-nodes) & binary(=catalog) & test(/^second_mount::/))",
+            })
+            self.assertNotIn("manifold-nodes", plan.whole)
+
+    def test_pub_super_folded_source_selects_parent_prefix(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-nodes/tests/parent/family.rs"
+            workspace = synthetic_workspace(d, [path, "crates/manifold-nodes/tests/catalog.rs"])
+            catalog = add_test_target(d, workspace, "manifold-nodes", "catalog", "tests/catalog.rs")
+            catalog.write_text(
+                'mod parent {\n'
+                '    #[path = "family.rs"]\n'
+                '    pub(super) mod family;\n'
+                '}\n')
+            (Path(d) / path).write_text(
+                "pub(super) mod tests { #[test] fn family_test() {} }\n")
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertEqual(plan.filters, {
+                "(package(=manifold-nodes) & binary(=catalog) & test(/^parent::/))",
+            })
+
+    def test_exported_shared_and_root_sources_keep_whole_binary(self):
+        cases = [
+            ("fn helper() {}", "helper.rs"),
+            ("pub mod exported { #[test] fn exported_test() {} }", "exported.rs"),
+            ("pub(crate) mod exported { #[test] fn exported_test() {} }", "exported.rs"),
+            ("pub(in crate) mod exported { #[test] fn exported_test() {} }", "exported.rs"),
+            ("#[macro_export] macro_rules! exported { () => {}; } #[test] fn exported_test() {}",
+             "exported_macro.rs"),
+            ("macro_rules! helper { () => {}; } #[test] fn local_test() {}", "macro.rs"),
+            ("include!(\"included.rs\"); #[test] fn included_test() {}", "included.rs"),
+        ]
+        for source_text, relative in cases:
+            with self.subTest(source=source_text), tempfile.TemporaryDirectory() as d:
+                path = "crates/manifold-nodes/tests/support/" + relative
+                workspace = synthetic_workspace(d, [path, "crates/manifold-nodes/tests/catalog.rs"])
+                catalog = add_test_target(d, workspace, "manifold-nodes", "catalog", "tests/catalog.rs")
+                catalog.write_text(f'#[path = "support/{relative}"] mod private;\n')
+                (Path(d) / path).write_text(source_text)
+                plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+                self.assertEqual(plan.filters, {
+                    "(package(=manifold-nodes) & binary(=catalog))",
+                })
+
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-nodes/tests/catalog.rs"
+            workspace = synthetic_workspace(d, [path])
+            catalog = add_test_target(d, workspace, "manifold-nodes", "catalog", "tests/catalog.rs")
+            catalog.write_text("#[test] fn root() {}\n")
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertEqual(plan.filters, {
+                "(package(=manifold-nodes) & binary(=catalog))",
+            })
+
+    def test_gpu_only_source_forwards_module_without_whole_binary(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-nodes/tests/gpu_proofs/support/gpu_only.rs"
+            workspace = synthetic_workspace(d, [path])
+            (Path(d) / "crates/manifold-nodes/tests/gpu_proofs/main.rs").write_text(
+                '#[path = "support/gpu_only.rs"] mod gpu_only;\n')
+            (Path(d) / path).write_text(
+                '#[cfg(all(test, feature = "gpu-proofs"))]\n'
+                'mod tests { #[test] fn gpu_only() {} }\n')
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertIn("gpu_only::", plan.gpu_filters)
+            self.assertFalse(plan.gpu_binaries)
+            self.assertNotIn("gpu_only::", plan.filterset)
+            with patch("gpu_scope.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")):
+                gpu = gpu_scope.plan_for_paths([path], d, workspace=workspace, cpu_plan=plan)
+            self.assertIn("gpu_only::", gpu.filters)
+            self.assertFalse(gpu.required_binaries)
+
+            # A root edit still selects the entire feature-gated binary.
+            root_path = "crates/manifold-nodes/tests/gpu_proofs/main.rs"
+            root_plan = cpu_scope.plan_for_paths([root_path], d, workspace=workspace)
+            self.assertEqual(root_plan.gpu_binaries, {("manifold-nodes", "gpu_proofs")})
+            # Unresolved mounts keep the previous whole-target fallback.
+            (Path(d) / root_path).write_text("")
+            unresolved = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertEqual(unresolved.gpu_binaries, {("manifold-nodes", "gpu_proofs")})
+
+    def test_missing_folded_module_widens_owning_binary_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-nodes/tests/support/folded.rs"
+            workspace = synthetic_workspace(d, [path, "crates/manifold-nodes/tests/catalog.rs"])
+            catalog = add_test_target(d, workspace, "manifold-nodes", "catalog", "tests/catalog.rs")
+            catalog.write_text('#[path = "support/folded.rs"] mod folded;\n')
+            (Path(d) / path).write_text("#[test]\nfn folded_test() {}\n")
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            listing = {"rust-suites": {
+                "catalog": {"binary-name": "catalog", "testcases": ["catalog::other_test"]},
+                "gpu_proofs": {"binary-name": "gpu_proofs", "testcases": ["gpu_proofs::other_test"]},
+            }}
+            cpu_scope.validate_inventory(plan, "manifold-nodes", listing)
+            self.assertNotIn("manifold-nodes", plan.whole)
+            self.assertIn("(package(=manifold-nodes) & binary(=catalog))", plan.filters)
+
     def test_gpu_proofs_only_module_gets_no_cpu_filter(self):
         with tempfile.TemporaryDirectory() as d:
             crate = Path(d) / "crates/manifold-ui-paint"
@@ -1248,7 +1372,7 @@ class DiffScopeTests(unittest.TestCase):
             src.mkdir(parents=True)
             (crate / "Cargo.toml").write_text('[package]\nname = "manifold-ui-paint"\n')
             (src / "ui_renderer.rs").write_text(
-                '#[cfg(all(test, feature = "gpu-proofs"))]\nmod tests {}\n')
+                '#[cfg(all(test, feature = "gpu-proofs"))]\nmod tests { #[test] fn pixel() {} }\n')
             (src / "native_text.rs").write_text('#[cfg(test)]\nmod tests {}\n')
             paths = ["crates/manifold-ui-paint/src/ui_renderer.rs",
                      "crates/manifold-ui-paint/src/native_text.rs"]
@@ -1256,6 +1380,20 @@ class DiffScopeTests(unittest.TestCase):
             plan = cpu_scope.plan_for_paths(paths, d, workspace=workspace)
             self.assertNotIn("test(/^ui_renderer::/)", plan.filterset)
             self.assertIn("test(/^native_text::/)", plan.filterset)
+
+    def test_gpu_test_modules_ignore_cpu_helpers_but_keep_cpu_tests(self):
+        with tempfile.TemporaryDirectory() as d:
+            source = Path(d) / "source.rs"
+            gpu = '#[cfg(all(test, feature = "gpu-proofs"))] mod pixels { #[test] fn pixel() {} }\n'
+            source.write_text('#[cfg(test)] fn readback_helper() {}\n' + gpu)
+            self.assertTrue(cpu_scope.gpu_proofs_only(source))
+            for cpu in ('#[cfg(test)] mod tests { #[test] fn cpu() {} }',
+                        '#[test] fn cpu() {}', '#[cfg(test)] mod tests;',
+                        '#[cfg(test)] make_tests!();',
+                        '#[cfg(test)] // #[cfg(all(test, feature = "gpu-proofs"))]\nmod tests { #[test] fn cpu() {} }'):
+                with self.subTest(cpu=cpu):
+                    source.write_text(gpu + cpu)
+                    self.assertFalse(cpu_scope.gpu_proofs_only(source))
 
     def test_deleted_integration_test_selects_no_binary(self):
         with tempfile.TemporaryDirectory() as d:

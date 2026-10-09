@@ -5,7 +5,7 @@ use manifold_core::{PresetTypeId, effect_graph_def::EffectGraphDef, preset_def::
 pub struct PresetCatalogSource {
     pub name: &'static str,
     pub json: fn(&PresetTypeId) -> Option<Arc<str>>,
-    pub def: fn(&PresetTypeId) -> Option<&'static EffectGraphDef>,
+    pub def: fn(&PresetTypeId) -> Option<Arc<EffectGraphDef>>,
     pub visit: fn(PresetKind, &mut dyn FnMut(PresetTypeId)),
 }
 inventory::collect!(PresetCatalogSource);
@@ -24,7 +24,7 @@ pub fn preset_json(id: &PresetTypeId) -> Option<Arc<str>> {
     sources().iter().find_map(|source| (source.json)(id))
 }
 
-pub fn preset_def(id: &PresetTypeId) -> Option<&'static EffectGraphDef> {
+pub fn preset_def(id: &PresetTypeId) -> Option<Arc<EffectGraphDef>> {
     sources().iter().find_map(|source| (source.def)(id))
 }
 

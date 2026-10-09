@@ -162,8 +162,8 @@ use manifold_node_engine::runtime::*;
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def.as_ref(), view1),
-            (view2.canonical_def.as_ref(), view2),
+            (view1.canonical_def.as_ref(), view1.as_ref()),
+            (view2.canonical_def.as_ref(), view2.as_ref()),
         ];
         freeze_install::seed_segment_cache_for_test(&cards, &primitives)
             .expect("two pointwise ColorGrades fuse across the seam");
@@ -265,7 +265,7 @@ use manifold_node_engine::runtime::*;
 
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
-        let cards = [(view1.canonical_def.as_ref(), view1), (view2.canonical_def.as_ref(), view2)];
+        let cards = [(view1.canonical_def.as_ref(), view1.as_ref()), (view2.canonical_def.as_ref(), view2.as_ref())];
         freeze_install::seed_segment_cache_for_test(&cards, &primitives)
             .expect("two pointwise ColorGrades fuse across the seam");
 
@@ -539,8 +539,8 @@ use manifold_node_engine::runtime::*;
         // Seed the segment cache so the chain builds fused (tests don't enqueue
         // the background worker).
         let cards = build_segment_cards(&[0, 1], &[(0, &effects[0]), (1, &effects[1])], &primitives);
-        let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
-            cards.iter().map(|(d, v)| (d, *v)).collect();
+        let card_refs: Vec<(&EffectGraphDef, &LoadedPresetView)> =
+            cards.iter().map(|(d, v)| (d, v.as_ref())).collect();
         freeze_install::seed_segment_cache_for_test(&card_refs, &primitives)
             .expect("mixed ColorGrade segment fuses");
 
@@ -694,8 +694,8 @@ use manifold_node_engine::runtime::*;
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def.as_ref(), view1),
-            (view2.canonical_def.as_ref(), view2),
+            (view1.canonical_def.as_ref(), view1.as_ref()),
+            (view2.canonical_def.as_ref(), view2.as_ref()),
         ];
         let seeded = freeze_install::seed_segment_cache_for_test(&cards, &primitives);
         if seeded.is_none() {
@@ -750,8 +750,8 @@ use manifold_node_engine::runtime::*;
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def.as_ref(), view1),
-            (view2.canonical_def.as_ref(), view2),
+            (view1.canonical_def.as_ref(), view1.as_ref()),
+            (view2.canonical_def.as_ref(), view2.as_ref()),
         ];
         let seeded = freeze_install::seed_segment_cache_for_test(&cards, &primitives);
         if seeded.is_none() {
@@ -889,8 +889,8 @@ use manifold_node_engine::runtime::*;
             let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
             let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
             let cards = [
-                (view1.canonical_def.as_ref(), view1),
-                (view2.canonical_def.as_ref(), view2),
+                (view1.canonical_def.as_ref(), view1.as_ref()),
+                (view2.canonical_def.as_ref(), view2.as_ref()),
             ];
             if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
                 continue;
@@ -965,8 +965,8 @@ use manifold_node_engine::runtime::*;
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def.as_ref(), view1),
-            (view2.canonical_def.as_ref(), view2),
+            (view1.canonical_def.as_ref(), view1.as_ref()),
+            (view2.canonical_def.as_ref(), view2.as_ref()),
         ];
         if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
             return;
@@ -1022,8 +1022,8 @@ use manifold_node_engine::runtime::*;
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[2].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def.as_ref(), view1),
-            (view2.canonical_def.as_ref(), view2),
+            (view1.canonical_def.as_ref(), view1.as_ref()),
+            (view2.canonical_def.as_ref(), view2.as_ref()),
         ];
         if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
             return;
@@ -1080,8 +1080,8 @@ use manifold_node_engine::runtime::*;
         let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
         let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
         let cards = [
-            (view1.canonical_def.as_ref(), view1),
-            (view2.canonical_def.as_ref(), view2),
+            (view1.canonical_def.as_ref(), view1.as_ref()),
+            (view2.canonical_def.as_ref(), view2.as_ref()),
         ];
         if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
             return;

@@ -21,8 +21,13 @@ impl EffectSlot {
         }) {
             return;
         }
+        let catalog_view = if instance.graph.is_none() {
+            loaded_preset_view_by_id(instance.effect_type())
+        } else {
+            None
+        };
         let owner = instance.graph.as_ref().or_else(|| {
-            loaded_preset_view_by_id(instance.effect_type()).map(|view| view.canonical_def.as_ref())
+            catalog_view.as_ref().map(|view| view.canonical_def.as_ref())
         });
         let Some(owner) = owner else {
             self.physics_sources.apply_prepared(

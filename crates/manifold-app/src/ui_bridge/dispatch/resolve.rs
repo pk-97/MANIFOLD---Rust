@@ -251,7 +251,12 @@ pub(crate) fn resolve_mod_target(
     if let Some(editor_target) = editor_target
         && matches!(editor_target, manifold_core::GraphTarget::SceneModifier { .. })
     {
-        crate::graph_target::modifier_host_binding(project, editor_target, param_id.as_ref())?;
+        crate::graph_target::modifier_host_binding(
+            project,
+            editor_target,
+            param_id.as_ref(),
+            |_| (),
+        )?;
     }
     Some((target, param_id.clone()))
 }

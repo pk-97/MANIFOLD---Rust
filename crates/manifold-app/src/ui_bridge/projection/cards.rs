@@ -240,7 +240,7 @@ fn graph_string_param_value(
     let Some(catalog_def) = manifold_nodes::bundled_presets::bundled_preset_def(inst.effect_type()) else {
         return (sp_def.default_value.to_string(), None);
     };
-    let graph = inst.graph.as_ref().unwrap_or(catalog_def);
+    let graph = inst.graph.as_ref().unwrap_or(catalog_def.as_ref());
     let metadata = graph
         .preset_metadata
         .as_ref()
@@ -1155,8 +1155,7 @@ mod audio_send_projection_tests {
         );
         generator.init_defaults();
         let mut graph = manifold_nodes::bundled_presets::bundled_preset_def(generator.effect_type())
-            .expect("Oscilloscope generator preset is bundled")
-            .clone();
+            .expect("Oscilloscope generator preset is bundled").as_ref().clone();
         let first = AudioSend::new("Music");
         let second = AudioSend::new("Music");
         let selected_id = second.id.to_string();
@@ -1206,7 +1205,7 @@ mod modifier_audio_projection_tests {
     fn scene_force_projection_preserves_audio_and_uses_separate_picker() {
         let mut graph: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON).unwrap();
         let recipe = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
-        let modifier = prepare_new_scene_modifier(&graph, recipe, "force".into(),
+        let modifier = prepare_new_scene_modifier(&graph, recipe.as_ref(), "force".into(),
             SceneNodeRef { scope: vec![], node: "scan_render".into() }, SceneTargetSelection::AllObjects).unwrap();
         graph = manifold_core::scene_modifier_edit::insert_scene_modifier(&graph, 0, modifier).unwrap().graph;
         let mut host = PresetInstance::new_generator(manifold_core::PresetTypeId::new("PhotoscanBaseline"));
@@ -1254,7 +1253,7 @@ mod modifier_audio_projection_tests {
         use manifold_core::audio_trigger::{FireMeterCapture, fire_meter_key_for_param};
         let mut graph: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON).unwrap();
         let recipe = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
-        let modifier = prepare_new_scene_modifier(&graph, recipe, "force".into(),
+        let modifier = prepare_new_scene_modifier(&graph, recipe.as_ref(), "force".into(),
             SceneNodeRef { scope: vec![], node: "scan_render".into() }, SceneTargetSelection::AllObjects).unwrap();
         graph = manifold_core::scene_modifier_edit::insert_scene_modifier(&graph, 0, modifier).unwrap().graph;
         let mut host = PresetInstance::new_generator(manifold_core::PresetTypeId::new("PhotoscanBaseline"));
@@ -1325,7 +1324,7 @@ mod modifier_audio_projection_tests {
                 &manifold_core::PresetTypeId::new(preset),
             ).unwrap();
             let modifier = prepare_new_scene_modifier(
-                &graph, recipe, preset.into(),
+                &graph, recipe.as_ref(), preset.into(),
                 SceneNodeRef { scope: vec![], node: "scan_render".into() },
                 SceneTargetSelection::AllObjects,
             ).unwrap();
@@ -1553,8 +1552,7 @@ mod modifier_audio_projection_tests {
         let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
             &manifold_core::PresetTypeId::new("Shatter"),
         )
-        .unwrap()
-        .clone();
+        .unwrap().as_ref().clone();
         let mut instance = manifold_core::scene_modifier_preset::SceneModifierInstanceDef {
             id: "shatter".into(),
             scene: SceneNodeRef { scope: vec![], node: "scene".into() },
@@ -1763,7 +1761,7 @@ mod consolidation_tests {
         .unwrap();
         let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
             &modified,
-            recipe,
+            recipe.as_ref(),
             "existing-fog".into(),
             manifold_core::scene_modifier_preset::SceneNodeRef {
                 scope: vec![],
@@ -1825,7 +1823,7 @@ mod consolidation_tests {
             .unwrap();
             let instance = manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
                 &graph,
-                recipe,
+                recipe.as_ref(),
                 preset_id.into(),
                 manifold_core::scene_modifier_preset::SceneNodeRef {
                     scope: vec![],

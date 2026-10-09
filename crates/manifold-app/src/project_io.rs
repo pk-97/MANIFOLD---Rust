@@ -118,7 +118,7 @@ pub(crate) fn snapshot_and_prune_embedded_presets(project: &mut Project) {
         };
         project.upsert_embedded_preset(EmbeddedPreset {
             kind: *kind,
-            def: def.clone(),
+            def: def.as_ref().clone(),
             origin: EmbeddedOrigin::Snapshot,
         });
     }
@@ -351,7 +351,7 @@ fn migrate_legacy_math_views(
                     ));
                     None
                 } else {
-                    append_legacy_math_view(graph, &scene, carrier_id, recipe, notices)
+                    append_legacy_math_view(graph, &scene, carrier_id, recipe.as_deref(), notices)
                 }
             } else {
                 None
@@ -1756,8 +1756,7 @@ mod tests {
         // is deliberate (Save to Project / fork / import) and must never be
         // downgraded or overwritten by the auto-captured snapshot pass.
         let saved_def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::BLOOM)
-            .expect("Bloom resolves")
-            .clone();
+            .expect("Bloom resolves").as_ref().clone();
         project.upsert_embedded_preset(EmbeddedPreset {
             kind: PresetKind::Effect,
             def: saved_def,

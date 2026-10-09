@@ -139,6 +139,7 @@ fn def_for(id: &str) -> EffectGraphDef {
     let type_id = PresetTypeId::from_string(id.to_owned());
     bundled_preset_def(&type_id)
         .unwrap_or_else(|| panic!("{id}: bundled preset is missing"))
+        .as_ref()
         .clone()
 }
 

@@ -7,6 +7,36 @@ import subprocess
 import re
 
 
+def module_mounts(root):
+    """Resolve source files to their module paths in one Rust target."""
+    from crate_move_replay import module_items
+    found = {}
+
+    def walk(source, prefix, ancestors):
+        source = source.resolve()
+        if source in ancestors or not source.is_file():
+            return
+        found.setdefault(source, set()).add(prefix)
+        text = source.read_text()
+        for start, end, head, scope in module_items(text):
+            declaration = re.match(r"(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", text[head:end])
+            if not declaration:
+                continue
+            name = declaration[1]
+            attrs = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', text[start:head])
+            if attrs:
+                child = source.parent.joinpath(*scope, attrs[-1])
+            else:
+                base = source.parent if not ancestors or source.stem in ("lib", "mod", "main") else source.with_suffix("")
+                child = base.joinpath(*scope, name + ".rs")
+                if not child.is_file():
+                    child = base.joinpath(*scope, name, "mod.rs")
+            walk(child, prefix + scope + (name,), ancestors | {source})
+
+    walk(Path(root), (), set())
+    return found
+
+
 class Workspace:
     def __init__(self, repo, metadata=None):
         self.repo = Path(repo).resolve()

@@ -6,13 +6,11 @@
 //! [`crate::load::chain_spec::splice_def_into_chain`], while editor routing
 //! uses the same bindings.
 //!
-//! Views are rebuilt when the catalog generation changes. The cache returns
-//! process-lifetime references, so each generation retains its view and any
-//! leaked binding labels.
+//! Views are rebuilt when the catalog generation changes. Callers retain owned
+//! snapshots, so replaced views are released when no longer in use.
 
 use std::borrow::Cow;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use ahash::AHashMap;
 use arc_swap::ArcSwap;
@@ -46,39 +44,43 @@ pub struct LoadedPresetView {
     pub mesh_rules: PreparedMeshRules,
 }
 
-/// Generation-stamped cache of leaked `&'static LoadedPresetView`s. Rebuilding
-/// after a catalog reload replaces the lookup map, but old views and binding
-/// labels remain allocated for the process lifetime because callers retain the
-/// static references.
+/// The generation and its views are published together as one snapshot.
 struct ViewCache {
-    generation: AtomicU64,
-    map: ArcSwap<AHashMap<PresetTypeId, &'static LoadedPresetView>>,
+    generation: u64,
+    map: AHashMap<PresetTypeId, Arc<LoadedPresetView>>,
 }
 
-static VIEW_CACHE: std::sync::LazyLock<ViewCache> = std::sync::LazyLock::new(|| ViewCache {
-    generation: AtomicU64::new(u64::MAX),
-    map: ArcSwap::from_pointee(AHashMap::default()),
+static VIEW_CACHE: std::sync::LazyLock<ArcSwap<ViewCache>> = std::sync::LazyLock::new(|| {
+    ArcSwap::from_pointee(ViewCache {
+        generation: u64::MAX,
+        map: AHashMap::default(),
+    })
 });
 
-/// Look up a [`LoadedPresetView`] by type id, rebuilding the generation cache
-/// after a catalog reload. Returns `None` when the catalog definition lacks
-/// `presetMetadata` or cannot be prepared.
-pub fn loaded_preset_view_by_id(id: &PresetTypeId) -> Option<&'static LoadedPresetView> {
+/// Look up a view in the current catalog generation. Returns `None` when the
+/// definition lacks `presetMetadata` or cannot be prepared.
+pub fn loaded_preset_view_by_id(id: &PresetTypeId) -> Option<Arc<LoadedPresetView>> {
     let generation = crate::load::preset_loader::catalog_generation();
-    if VIEW_CACHE.generation.load(Ordering::Acquire) != generation {
-        rebuild_view_cache(generation);
+    let cache = VIEW_CACHE.load();
+    if cache.generation == generation {
+        cache.map.get(id).cloned()
+    } else {
+        rebuild_view_cache(generation).map.get(id).cloned()
     }
-    VIEW_CACHE.map.load().get(id).copied()
 }
 
 #[cold]
-fn rebuild_view_cache(generation: u64) {
-    VIEW_CACHE.map.store(Arc::new(build_view_map()));
-    VIEW_CACHE.generation.store(generation, Ordering::Release);
+fn rebuild_view_cache(generation: u64) -> Arc<ViewCache> {
+    let cache = Arc::new(ViewCache {
+        generation,
+        map: build_view_map(),
+    });
+    VIEW_CACHE.store(Arc::clone(&cache));
+    cache
 }
 
-fn build_view_map() -> AHashMap<PresetTypeId, &'static LoadedPresetView> {
-    let mut m: AHashMap<PresetTypeId, &'static LoadedPresetView> = AHashMap::default();
+fn build_view_map() -> AHashMap<PresetTypeId, Arc<LoadedPresetView>> {
+    let mut m: AHashMap<PresetTypeId, Arc<LoadedPresetView>> = AHashMap::default();
     // Effect and generator ids share one map because their type ids are
     // globally disjoint. Definitions without `presetMetadata` have no view.
     use crate::load::catalog_source::preset_type_ids as bundled_preset_type_ids;
@@ -87,7 +89,7 @@ fn build_view_map() -> AHashMap<PresetTypeId, &'static LoadedPresetView> {
         .chain(bundled_preset_type_ids(PresetKind::Generator))
     {
         if let Some(view) = build_view(&type_id) {
-            m.insert(type_id, Box::leak(Box::new(view)));
+            m.insert(type_id, Arc::new(view));
         }
     }
     m
@@ -96,9 +98,9 @@ fn build_view_map() -> AHashMap<PresetTypeId, &'static LoadedPresetView> {
 fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
     let def = bundled_preset_def(type_id)?;
     let prepared;
-    let metadata = if manifold_core::scene_modifier_preset::has_scene_modifier_data(def) {
+    let metadata = if manifold_core::scene_modifier_preset::has_scene_modifier_data(&def) {
         prepared = match crate::load::expand::prepare_scene_modifiers(
-            def, &crate::persistence::PrimitiveRegistry::with_builtin(),
+            &def, &crate::persistence::PrimitiveRegistry::with_builtin(),
         ) {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -108,12 +110,11 @@ fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
         };
         prepared.def.preset_metadata.as_ref()?
     } else { def.preset_metadata.as_ref()? };
+    let bindings = owned_bindings(metadata)?;
     Some(LoadedPresetView {
         type_id: type_id.clone(),
-        // Clone the catalog definition into the view so it remains valid
-        // across catalog snapshot swaps.
-        canonical_def: Arc::new(def.clone()),
-        bindings: owned_bindings(metadata)?,
+        canonical_def: def,
+        bindings,
         // Canonical view: user bindings resolve directly against inner nodes.
         fused_retarget: AHashMap::default(),
         mesh_rules: PreparedMeshRules::default(),
@@ -132,7 +133,6 @@ fn binding_def_to_runtime(
     param: Option<&manifold_core::effect_graph_def::ParamSpecDef>,
 ) -> Option<ParamBinding> {
     let target = target_def_to_runtime(&def.target)?;
-    let label: &'static str = Box::leak(def.label.clone().into_boxed_str());
     // Slider response and range come from the owning card parameter. Composite
     // bindings without a matching parameter use the identity response.
     let (min, max, curve, invert) = param
@@ -140,7 +140,7 @@ fn binding_def_to_runtime(
         .unwrap_or((0.0, 1.0, Default::default(), false));
     Some(ParamBinding {
         id: ParamId::Owned(def.id.clone()),
-        label,
+        label: Cow::Owned(def.label.clone()),
         default_value: def.default_value,
         target,
         convert: def.convert,

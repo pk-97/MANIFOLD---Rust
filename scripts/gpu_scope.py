@@ -39,9 +39,9 @@ from gate_policy import (
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
     GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, CATALOG_PACKAGE, GPU_CONTRACT_TARGETS,
-    GPU_FILTER_TARGETS, is_inert_plan_path,
+    GPU_FILTER_TARGETS, UI_PROJECTION_PATHS, is_inert_plan_path,
 )
-from gate_workspace import Workspace
+from gate_workspace import Workspace, module_mounts
 
 def learned_times_path():
     repo = TIMES_PATH.parent.parent
@@ -108,6 +108,10 @@ _CPU_PLAN_UNSET = object()
 def is_gpu_path(path, workspace=None):
     """Paths that trigger the GPU-proofs leg (mirrors the context-nudge triggers)."""
     if is_inert_plan_path(path):
+        return False
+    if path.endswith('.rs') and any(
+            path == prefix or (prefix.endswith('/') and path.startswith(prefix))
+            for prefix in UI_PROJECTION_PATHS):
         return False
     if workspace:
         owner = workspace.owner(path)
@@ -278,9 +282,9 @@ class Plan:
         return "\n".join(lines)
 
 
-def module_filters(path):
-    """Lib/proof test-path filters for a renderer source file, or None for root."""
-    root = ENGINE_SRC if path.startswith(ENGINE_SRC) else RENDERER_SRC
+def module_filters(path, root=None):
+    """Test module filters for a source file relative to its Cargo source root."""
+    root = root or (ENGINE_SRC if path.startswith(ENGINE_SRC) else RENDERER_SRC)
     parts = path[len(root):].split("/")
     name = parts[-1]
     if not name.endswith(".rs"):
@@ -300,38 +304,13 @@ def module_filters(path):
 
 def contract_module_filters(path, repo):
     """Resolve relocated contracts through their real Rust module mounts."""
-    from crate_move_replay import module_items
     repo = Path(repo)
     target = (repo / path).resolve()
-    found = set()
-
-    def walk(source, prefix, ancestors):
-        source = source.resolve()
-        if source in ancestors or not source.is_file():
-            return
-        if source == target:
-            found.add("::".join(prefix) + "::")
-            return
-        text = source.read_text()
-        for start, end, head, scope in module_items(text):
-            declaration = re.match(r"(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", text[head:end])
-            if not declaration:
-                continue
-            name = declaration[1]
-            attrs = re.findall(r'#\[path\s*=\s*"([^"\n]+)"\]', text[start:head])
-            if attrs:
-                child = source.parent.joinpath(*scope, attrs[-1])
-            else:
-                base = source.parent if not ancestors or source.stem in ("lib", "mod", "main") else source.with_suffix("")
-                child = base.joinpath(*scope, name + ".rs")
-                if not child.is_file():
-                    child = base.joinpath(*scope, name, "mod.rs")
-            walk(child, prefix + scope + (name,), ancestors | {source})
-
-    walk(repo / RENDERER_SRC / "lib.rs", (), set())
-    walk(repo / "crates/manifold-nodes/tests/main.rs", (), set())
-    walk(repo / "crates/manifold-app/tests/renderer_contracts.rs", (), set())
-    return sorted(found)
+    roots = (repo / RENDERER_SRC / "lib.rs",
+             repo / "crates/manifold-nodes/tests/main.rs",
+             repo / "crates/manifold-app/tests/renderer_contracts.rs")
+    return sorted({"::".join(prefix) + "::" for root in roots
+                   for prefix in module_mounts(root).get(target, ())})
 
 
 def path_attr_filters(path, repo):
@@ -510,6 +489,8 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
             continue
         if not is_gpu_path(path, workspace):
             continue
+        catalog_mapped = path.endswith(".rs") and any(
+            path.startswith(prefix) for prefix, _, _ in CATALOG_TEST_ROWS)
         plan.filters.update("node_graph::catalog_tests::" + module + "::"
                             for prefix, module, _ in CATALOG_TEST_ROWS
                             if path.startswith(prefix) and path.endswith(".rs"))
@@ -598,6 +579,9 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
         if owner and path.endswith('.rs'):
             root = workspace.roots[owner] + '/src/'
             if path.startswith(root):
+                if catalog_mapped:
+                    plan.filters.update(module_filters(path, root))
+                    continue
                 plan.whole_packages.add(owner)
                 continue
         plan.unmapped.append((path, "no GPU test mapping rule for this file type"))
@@ -610,6 +594,7 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
             paths, repo, workspace, base=base if (Path(repo) / '.git').exists() else None)
     if cpu_plan is not None:
         plan.required_binaries.update(cpu_plan.gpu_binaries)
+        plan.filters.update(cpu_plan.gpu_filters)
     return plan
 
 

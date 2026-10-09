@@ -439,7 +439,7 @@ use ahash::AHashMap;
         let mut planned = 0;
         for kind in [PresetKind::Generator, PresetKind::Effect] {
             for id in bundled_preset_type_ids(kind) {
-                let def = bundled_preset_def(&id).expect("bundled def").clone();
+                let def = bundled_preset_def(&id).expect("bundled def").as_ref().clone();
                 let Ok(graph) = def.into_graph(&registry, &Default::default()) else { continue };
                 let Ok(plan) = compile(&graph) else { continue };
                 let Ok(allocation) = plan_array_allocations(&graph, &plan, (1920, 1080), &AHashMap::default()) else {

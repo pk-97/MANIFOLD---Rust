@@ -172,7 +172,7 @@
             for type_id in manifold_nodes::bundled_presets::bundled_preset_type_ids(kind) {
                 let def = bundled_preset_def(&type_id)
                     .unwrap_or_else(|| panic!("bundled preset {type_id:?} has no parsed def"));
-                let augmented = relight_augment(def, &reg, &RelightParams::default());
+                let augmented = relight_augment(def.as_ref(), &reg, &RelightParams::default());
                 let report = validate_def(&augmented, &reg, validate_kind, &device_arc);
                 assert!(
                     report.errors.is_empty(),
@@ -247,7 +247,7 @@
             // Path A: the production wrapper, relight OFF.
             let mut graph_a = Graph::new();
             let src_a = graph_a.add_node(Box::new(Source::new()));
-            let Some(result_a) = splice_def_into_chain(&mut graph_a, (src_a, "out"), def, &reg, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) else {
+            let Some(result_a) = splice_def_into_chain(&mut graph_a, (src_a, "out"), def.as_ref(), &reg, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()) else {
                 continue; // a preset that fails to splice fails identically on both paths; skip rather than false-fail
             };
             let final_a = graph_a.add_node(Box::new(FinalOutput::new()));
@@ -259,7 +259,7 @@
             let src_b = graph_b.add_node(Box::new(Source::new()));
             let inst_b = instantiate_def(
                 &mut graph_b,
-                def,
+                def.as_ref(),
                 &reg,
                 HandleScope::PerSplice,
                 BoundaryHandling::Splice {

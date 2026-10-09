@@ -2485,7 +2485,7 @@ fn liquid_thumbnail_ignores_contention() {
             continue;
         }
         let render = || {
-            render_preset_thumbnail(device, PresetKind::Generator, def, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, false)
+            render_preset_thumbnail(device, PresetKind::Generator, def.as_ref(), THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, false)
                 .unwrap_or_else(|error| panic!("{id}: {error}"))
         };
         let start = Instant::now();

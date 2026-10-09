@@ -47,6 +47,14 @@ ENGINE_SRC = "crates/manifold-node-engine/src/"
 CONTRACT_TESTS_DIR = ("crates/manifold-nodes/tests/contracts/",
                       "crates/manifold-app/tests/contracts/")
 GPU_CONTRACT_TARGETS = {"manifold-nodes": "main", "manifold-app": "renderer_contracts"}
+# These app surfaces translate project snapshots into UI state. Their CPU
+# contracts and UI flows own coverage; renderer proof harnesses do not mount
+# them. Keep content commands, render loops and GPU paint on their GPU routes.
+UI_PROJECTION_PATHS = (
+    "crates/manifold-app/src/ui_bridge/projection/",
+    "crates/manifold-app/src/ui_bridge/state_sync.rs",
+    "crates/manifold-app/src/ui_translate.rs",
+)
 UI_PAINT_DIR = "crates/manifold-ui-paint/"
 UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::", "contracts::"]
 PROOFS_DIR = "crates/manifold-nodes/tests/gpu_proofs/"
