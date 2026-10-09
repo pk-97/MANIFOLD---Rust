@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-song oracle frontier on v2 truth: could any cutoff rule reach 90/90?
 
-Usage: run_kick_goal_frontier.py FEATS  (features | f30 | f15n | f31)
+Usage: run_kick_goal_frontier.py FEATS  (features, f30, f15n, f31, f21; f53, f47, f68, f69 once prof caches exist)
 
 Diagnostic only. Fits the 13 outer whole-song models (gbt, as C1), saves each
 song's held-out probabilities to outer_{FEATS}.npz for cheap cutoff-rule
@@ -24,7 +24,7 @@ import numpy as np  # noqa: E402
 
 from tools.audio_analysis.eval.kick_goal_eval import (  # noqa: E402
     GOAL, NEW_SONGS, TRACKS, Goal, add_whole_song_truth, counts, score)
-from tools.audio_analysis.eval.kick_goal_songnorm import add_normalised  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_featsets import build  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_data import ALL, gbt  # noqa: E402
 
 
@@ -73,8 +73,7 @@ def main():
     feats = sys.argv[1]
     g = Goal(mode='strict')
     add_whole_song_truth(g)
-    if feats != 'features':
-        add_normalised(g, TRACKS, NEW_SONGS, GOAL)
+    build(g, feats)
     fit, pred = gbt(g, True, feats)
     probs = {o: pred(fit([u for u in ALL if u != o]), o) for o in ALL}
     np.savez(GOAL / f'outer_{feats}.npz', **probs)
