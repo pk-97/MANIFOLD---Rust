@@ -1713,5 +1713,126 @@
       ]
     }
   ],
-  "diagnosis_method": "Read-only features from the same chronological masters. For each original missed label, inspect completed hops in [-15,+70] ms. All 31 misses have no simultaneous eligibility. In 30, each individual predicate passes somewhere in the window; one Heavy On Mind miss never exceeds body ratio 2. This locates a bottleneck, not proof that retaining independent predicates would solve classification. That broader change previously increased false fires. Persistence rejects the real 209.240 s kick because no consecutive body-ratio >2 pair occurs within the fixed validation bounds. No tuning performed."
+  "diagnosis_method": "Read-only features from the same chronological masters. For each original missed label, inspect completed hops in [-15,+70] ms. All 31 misses have no simultaneous eligibility. In 30, each individual predicate passes somewhere in the window; one Heavy On Mind miss never exceeds body ratio 2. This locates a bottleneck, not proof that retaining independent predicates would solve classification. That broader change previously increased false fires. Persistence rejects the real 209.240 s kick because no consecutive body-ratio >2 pair occurs within the fixed validation bounds. No tuning performed.",
+  "heavy_on_mind_followup_audit": {
+    "scope": "Audit of fixed 200\u2013212s core, not whole-song recall. Channels and isolated stem are diagnostic controls, not candidate changes.",
+    "master_sha256": "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36",
+    "independent_decoders_agree_exactly": true,
+    "rust_full_song_replay_exact": true,
+    "rust_binary_sha256": "b80623d7db0a467ad64e954fb26000f769bfb061cd6f2ef86f5eec363a2c1afa",
+    "raw_native_path": "/Users/peterkiemann/.cache/manifold/kick-heldout-2026-10-09/heavy_native_audit.txt",
+    "source_results": [
+      {
+        "source": "master_mono",
+        "rate": 44100,
+        "hop": 235,
+        "full_song_fires": 72,
+        "core_fires_s": [
+          201.284693877551,
+          208.87290249433107,
+          209.26190476190476,
+          211.92097505668934
+        ],
+        "score": {
+          "matched": 4,
+          "missed": 28,
+          "extra": 0
+        },
+        "frozen_replay_exact": true
+      },
+      {
+        "source": "master_left",
+        "rate": 44100,
+        "hop": 235,
+        "full_song_fires": 80,
+        "core_fires_s": [
+          201.284693877551,
+          205.84081632653061,
+          206.61349206349206,
+          208.87290249433107,
+          209.26190476190476,
+          210.79126984126984
+        ],
+        "score": {
+          "matched": 6,
+          "missed": 26,
+          "extra": 0
+        }
+      },
+      {
+        "source": "master_right",
+        "rate": 44100,
+        "hop": 235,
+        "full_song_fires": 79,
+        "core_fires_s": [
+          201.284693877551,
+          204.62052154195013,
+          205.8514739229025,
+          206.51757369614512,
+          208.87290249433107,
+          209.26190476190476,
+          211.92097505668934
+        ],
+        "score": {
+          "matched": 5,
+          "missed": 27,
+          "extra": 2
+        }
+      },
+      {
+        "source": "kick_stem",
+        "rate": 48000,
+        "hop": 256,
+        "full_song_fires": 241,
+        "core_fires_s": [
+          200.15466666666666,
+          200.53866666666667,
+          200.912,
+          201.29066666666668,
+          201.67466666666667,
+          202.05333333333334,
+          202.432,
+          202.81066666666666,
+          203.18933333333334,
+          203.57333333333332,
+          203.952,
+          204.336,
+          204.71466666666666,
+          205.088,
+          205.472,
+          205.85066666666665,
+          206.23466666666667,
+          206.61333333333334,
+          206.98666666666668,
+          207.37066666666666,
+          207.74933333333334,
+          208.13333333333333,
+          208.512,
+          208.88533333333334,
+          209.26933333333332,
+          209.648,
+          210.02133333333333,
+          210.41066666666666,
+          210.784,
+          211.16266666666667,
+          211.54133333333334,
+          211.92
+        ],
+        "score": {
+          "matched": 32,
+          "missed": 0,
+          "extra": 0
+        }
+      }
+    ],
+    "same_rate_stem_control": {
+      "sample_rate": 44100,
+      "hop": 235,
+      "score": {
+        "matched": 32,
+        "missed": 0,
+        "extra": 0
+      }
+    }
+  }
 }
