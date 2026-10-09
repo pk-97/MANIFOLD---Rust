@@ -727,6 +727,7 @@ Failure of these methods does not establish a physical limit.
 | H13: tree + signed timing / + concordance / + concentration | 274+92 / 272+89 / 268+92 | Compact timing suppresses some bass fires, but also penalises legitimate Apricots and Inhale shapes. |
 | H14: covered interaction/linear blend, interaction weight .25 / .5 / .75 | 238+90 / 249+91 / 253+93 | All nine negative cores remain clear. Blending repairs several old losses, but retains the shared Bad Guy false-trigger problem. |
 | H15: add the next 32 reviewed labels, linear / tree / interaction | 228+89 / 278+93 / 245+88 | More contexts are not a monotonic improvement. The unchanged scorers still fail the full target. |
+| H16: RBF support-vector margin, gamma 1/60 / 1/30 / 1/15 | 234+92 / 264+94 / **285+90** | Local nonlinear relationships recover more kicks. The strongest setting still has one negative-core fire and loses five old baseline events. |
 
 H9 is a weighted logistic score over the original 15 fold-standardised values
 and 120 bounded pair products. It tests smooth conditional relationships rather
@@ -782,6 +783,60 @@ reproduce native-hop features and events with maximum feature error below
 one core. Retained feature arrays occupy about 44–45 KB. These Python throughput
 probes do not establish an allocation-free native callback or device latency.
 Receipt: `h10/smooth_benchmark.json` under the evening cache root.
+
+H16 uses the same 15 measurements, fold standardisation and H10 training
+coverage. It is a classical, non-neural RBF SVM with fixed C=100, three declared
+kernel widths and unchanged nested cutoff selection. The sigmoid-transformed
+margin is a ranking score, not a calibrated probability. All 135 fits converged
+within the 240 CPU-second protected budget (189 CPU seconds including export
+checks). Gamma 1/15 reaches 146+66 on the original 174 labels and 139+24 on the
+expanded 207. It recovers 67 original-linear misses while losing five previously
+caught events: three Inhale, one Tears and one Miracle. Only Miracle's previously
+reviewed bass transition fires in the nine original negative cores.
+
+Kernel and interaction errors overlap only partially: kernel catches 39 labels
+missed by interaction; interaction catches four kernel misses. Both lose two
+baseline Inhale events. The kernel's Miracle bass fire has logit margin +0.050;
+interaction assigns the same candidate margin -0.686. Complementary errors
+justify a bounded blend experiment but do not establish that a blend will work.
+The kernel uses 0.84–1.47 MB of retained arrays across the measured outer models
+and about 0.12–0.21 ms per candidate in short decision probes. This adds cost
+without approaching GPU inference; native callback timing remains unverified.
+Full cached scalar scoring subsequently reproduced all nine emitted-event lists.
+Combined sample-zero probes used 3.35%, 3.55% and 3.76% of one core on Bad Guy,
+Late Night and Heavy, with maximum feature error below 3.1e-14. Their retained
+feature/model arrays total 0.88–1.19 MB. These short Python probes establish
+throughput and replay parity, not a hard callback deadline.
+
+D3 fixes three 12-second Pattern cores before inspection. The named drums could
+not be aligned reliably, so their timing never enters the truth. Independent
+review of 16 master-only sheets accepts 39 provisional core onsets, one margin
+onset and two explicit unknown intervals. Nine-family model fits and cutoff
+selection were frozen before lead label inspection: linear gives 23+0, tree
+14+3 and covered interaction 26+0. All three keep the scored opening clear.
+Linear and interaction each emit a raw 48 ms startup trigger inside the
+unchanged uncertain-response region; this is disclosed rather than called a
+verified correct rejection. Whole-family exclusions, cutoff trials, feature
+parity and scores passed independent replay. Pattern remains additional
+development material; neither reserved family was accessed.
+
+All three already-frozen H16 settings were then evaluated on D2 and Pattern,
+with that follow-up explicitly declared after seeing the other methods' results.
+No new kernel configuration or Pattern/D2 training was allowed. On D2 the three
+settings give 25+0 / 27+0 / 28+1 of 32; on Pattern they give 28+0 / 28+0 / 30+2
+of 39. This supports some transfer of the nonlinear gain, but is not untouched
+validation or success under the full safeguards. The accepted Pattern evidence
+is `tests/fixtures/audio_labels/evening_pattern_passages_2026-10-09.json`.
+Independent audit verified all model, normalisation, cutoff and event records.
+Gamma 1/15's D2 extra occurs in the Late Night sustained-bass negative core.
+All three kernels have no raw opening emissions on Pattern.
+
+`listening/continuation_manifest.json` preserves the same nine eight-second
+excerpts used earlier. A is original linear15, C is H10 interaction, and D is
+H16 gamma 1/15; every short high click marks the actual emission time. Source
+identity, PCM quantisation, clipping and click alignment were checked. These
+include Inhale regressions as well as Heavy and Late improvements. No human
+listening verdict has been claimed.
 
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
