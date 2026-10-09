@@ -729,6 +729,7 @@ Failure of these methods does not establish a physical limit.
 | H15: add the next 32 reviewed labels, linear / tree / interaction | 228+89 / 278+93 / 245+88 | More contexts are not a monotonic improvement. The unchanged scorers still fail the full target. |
 | H16: RBF support-vector margin, gamma 1/60 / 1/30 / 1/15 | 234+92 / 264+94 / **285+90** | Local nonlinear relationships recover more kicks. The strongest setting still has one negative-core fire and loses five old baseline events. |
 | H17: kernel/covered-linear blend, kernel weight .25 / .5 / .75 | 239+93 / **251+91** / 262+93 | All retain the baseline within the per-song safeguard; .25/.5 keep nine cores clear, but extras remain above target. |
+| H18: interaction weight .10 / .25 / .50 into H17's 75/25 blend | 261+92 / **262+89** / 260+92 | The middle setting meets counts and clears all nine negative cores, but loses two baseline Inhale events; the full safeguard still fails. |
 
 H9 is a weighted logistic score over the original 15 fold-standardised values
 and 120 bounded pair products. It tests smooth conditional relationships rather
@@ -867,6 +868,92 @@ refractory selection is held fixed, and jointly missed events are absent from
 this particular diagnostic. The reusable lesson for other detectors is to
 measure growth, spectral change and temporal relations together, then test their
 conditional meaning across whole songs and explicit negative passages.
+
+**H18 comparison at the end of exploration.** Counts below are matches/extras
+at ±70 ms on the same provisional 381 labels. The original linear model remains
+unchanged. H18 .25 is the closest candidate to all safeguards, not a promoted
+replacement; H16 gamma 1/15 retains the highest recall among these comparisons.
+
+| Track (labels) | Original linear15 | H16 kernel | H18 .25 blend |
+|---|---:|---:|---:|
+| Apricots (14) | 9 / 0 | 13 / 0 | 10 / 0 |
+| Bad Guy (15) | 15 / 45 | 15 / 42 | 15 / 42 |
+| Feel the Vibration (15) | 15 / 0 | 15 / 0 | 15 / 0 |
+| Inhale Exhale (12) | 11 / 6 | 9 / 4 | 9 / 4 |
+| Tears (10) | 10 / 11 | 9 / 4 | 10 / 8 |
+| Late Night (77) | 53 / 0 | 71 / 2 | 67 / 0 |
+| Midnight Patience (88) | 44 / 20 | 56 / 34 | 49 / 29 |
+| Miracle (32) | 21 / 0 | 25 / 2 | 26 / 0 |
+| Heavy on Mind (118) | 45 / 7 | 72 / 2 | 61 / 6 |
+| **Total (381)** | **223 / 89** | **285 / 90** | **262 / 89** |
+
+H18 .25 has 68.8% recall and 74.6% precision, versus 58.5% and 71.5% for
+original linear15. It recovers 41 baseline misses while losing Inhale's 5.38-
+and 6.62-second labels. Both have available candidates below the cutoff. Its
+original-174 result is 138+68 (baseline 121+76), and expanded-207 result is
+124+21 (baseline 102+13). Four possible duplicates remain, versus three for the
+baseline. These are proximity diagnostics, not confirmed acoustic duplicates.
+
+The candidate observes 42.63–42.67 ms of audio and emits at the completed
+availability hop; it never backdates. Wider temporal associations have median
+45.33 ms and p90 55.70 ms. Three Midnight associations exceed 70 ms; those late
+associations do not become timely matches merely because their likely source is
+nearby. Counts at ±35/50 ms are 42/186, respectively. Neither offline throughput
+nor these annotation-relative delays measure hardware or display latency.
+
+H18's Miracle improvement is a score/calibration interaction: at the later bass
+candidate, adding the interaction scorer raises the raw score, but the nested
+cutoff rises further. Full replay has zero fires in the core. Calling this a
+simple acoustic veto would misdescribe the result. Bad Guy and Midnight still
+account for 71 of its 89 extras. No result demonstrates a physical DSP limit,
+and the 95% accuracy target remains unmet.
+
+The final frozen H18 .25 evaluation scores 26/32+0 on D2 and 26/39+0 on
+Pattern. All three predeclared H18 settings have those same counts. The strongest
+kernel scores 28/32+1 and 30/39+2, respectively: the blend buys rejection by
+giving up some recovery. These are further development comparisons, not reserved
+confirmation. D2's four negative cores stay silent. Pattern has a raw 47.96 ms
+startup emission inside its unchanged uncertainty exclusion; zero scored opening
+extras must not be presented as verified cold-start rejection. One missing
+covered-linear global component was fitted with the original 73-label coverage
+only, after an explicit recorded amendment. Every global model and cutoff was
+frozen before Pattern prediction. No Pattern or D2 labels entered that fit.
+
+H18 scalar inference reproduces all 43,585 cached candidate scores to 2.73e-15
+and all nine emission sequences exactly. Three 15–16 second cold-start probes
+with feature extraction use 3.56–3.85% of one CPU core, retaining 0.89–1.20 MB
+of numeric state; scalar decisions cost 0.121–0.162 ms per candidate. Observed
+hop p99 is 0.544–0.641 ms and maximum 1.685 ms. These are short Python reference
+measurements on this Mac, excluding audio decoding, not a hard native callback
+deadline guarantee. Python still allocates bounded temporaries. The scalar
+benchmark lives in the research cache; the frozen experiment source was restored
+byte-for-byte after an appended runtime helper was moved out. Both snapshots and
+the relocation receipt are preserved.
+
+Listening files now include `E_threeway` beside the unchanged A/C/D renders in
+`kick-research-2026-10-09-evening/listening/h18_manifest.json`. All nine fixed
+excerpts use the same mix level and clicks at actual emitted times; the files
+are verified renders, not a human listening verdict. In particular, compare the
+Heavy on Mind recovery and the Inhale regression, rather than judging only a
+favourable excerpt.
+
+Research stopped when the reported Codex allowance reached 95% used (5%
+remaining), after 18 hypotheses and 54 predeclared configurations. The time
+ceiling was explicitly removed. No candidate passed every intermediate safeguard;
+reserved recordings remain untouched and no detector was promoted. Local cache
+receipts, frozen models, focused tests and source snapshots preserve the result.
+
+The reusable finding is that band measurements need conditional interpretation.
+Positive body-energy growth consistently helps the kernel's recovered kicks;
+flux and centroid changes depend on the surrounding feature values. Merely
+adding measurements, reducing scores during sustained bass, or demanding one
+universal kick shape loses legitimate attacks. Kernel curvature recovers useful
+cases that the linear score misses, while conservative blending reduces some
+false fires. Its remaining shared misses and concentrated Bad Guy/Midnight
+extras require diagnosis of failure mechanisms across tracks and verified labels before more
+complexity. No rhythm-only predictions, neural models or external datasets were
+used. This is a useful mechanism to test for other detectors, not evidence that
+the same fitted weights classify snares, hats or synths.
 
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
