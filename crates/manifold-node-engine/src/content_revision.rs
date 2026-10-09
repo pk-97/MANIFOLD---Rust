@@ -14,7 +14,7 @@ pub struct StorageRevision(pub(crate) u64);
 /// Physical write counters cannot be used as logical content versions:
 ///
 /// ```compile_fail
-/// use manifold_nodes::node_graph::{ContentVersion, StorageRevision};
+/// use manifold_node_engine::content_revision::{ContentVersion, StorageRevision};
 /// fn appearance_version(storage: StorageRevision) -> ContentVersion { storage }
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

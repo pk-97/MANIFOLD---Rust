@@ -65,8 +65,7 @@ pub struct FrameTime {
 }
 
 /// Resolved per-frame RT quality values — samples per pixel for each
-/// RT term plus ray-tracing dispatch resolution. Lives in manifold-nodes
-/// (next to FrameTime) and is set per-frame by the compositor via
+/// RT term plus ray-tracing dispatch resolution. Set per-frame by the compositor via
 /// Executor::set_rt_quality.
 ///
 /// Default = live constants: shadows=1, ao/gi=4, reflections=8, ray=1/2.
