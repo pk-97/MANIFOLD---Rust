@@ -1450,6 +1450,75 @@ class CancellationTests(unittest.TestCase):
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_verified_slot_cleanup_detaches_and_never_reports_a_landing_red(self):
+        import watch_land
+
+        for failure in (None, 'release', 'release-error', 'delete', 'detach', 'unlanded'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as d:
+                repo = Path(d).resolve()
+
+                def git(cwd, *args):
+                    return subprocess.run(['git', *args], cwd=cwd, check=True,
+                                          capture_output=True, text=True).stdout.strip()
+
+                git(repo, 'init', '-b', 'main')
+                git(repo, 'config', 'user.name', 'Test')
+                git(repo, 'config', 'user.email', 'test@example.invalid')
+                git(repo, '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'base')
+                git(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+                wt = repo / '.claude/worktrees/slot-0'
+                git(repo, 'worktree', 'add', '-b', 'lane/landed', str(wt))
+                if failure == 'unlanded':
+                    git(wt, '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'unlanded')
+                commands = []
+                real_run = land_branch.run_cmd
+
+                def run(cmd, cwd, timeout, live_log=None):
+                    commands.append(cmd)
+                    if 'release' in cmd:
+                        self.assertEqual(git(wt, 'branch', '--show-current'), '')
+                        if failure == 'release-error':
+                            raise OSError('cleanup command unavailable')
+                        return (1, '', 'worktree pool is busy', 0) if failure == 'release' else (0, '', '', 0)
+                    if cmd[:3] == ['git', 'switch', '--detach'] and failure == 'detach':
+                        return 1, '', 'detach refused', 0
+                    if cmd[:3] == ['git', 'branch', '-d'] and failure == 'delete':
+                        return 1, '', 'cannot delete branch used by worktree', 0
+                    if cmd[0] == 'git' and cmd[1] in ('merge-base', 'switch', 'branch', 'rev-parse'):
+                        return real_run(cmd, cwd, timeout, live_log=live_log)
+                    return 0, '', '', 0
+
+                with patch.object(land_branch, 'MAIN', repo), \
+                        patch.object(land_branch, 'run_cmd', side_effect=run), \
+                        patch.object(land_branch, 'run_landing_gate', return_value=0), \
+                        patch.object(land_branch, 'merge_gated_tree'), \
+                        patch.object(sys, 'argv', ['land_branch.py', 'lane/landed',
+                            '--worktree', str(wt), '--message', 'test']), \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertIsNone(land_branch.main())
+                transcript = output.getvalue()
+                self.assertNotIn('[FAIL]', transcript)
+                self.assertIn('[land] DONE:', transcript)
+                if failure:
+                    self.assertIn('NOTE', transcript)
+                if failure == 'unlanded':
+                    self.assertFalse(any('switch' in cmd or 'release' in cmd or '-d' in cmd
+                                         for cmd in commands))
+                else:
+                    ancestry = commands.index(['git', 'merge-base', '--is-ancestor',
+                                               'lane/landed', 'origin/main'])
+                    detach = commands.index(['git', 'switch', '--detach'])
+                    self.assertLess(ancestry, detach)
+                branches = git(repo, 'branch', '--list', 'lane/landed')
+                self.assertEqual(bool(branches), failure in ('delete', 'detach', 'unlanded'))
+                if failure == 'detach':
+                    self.assertFalse(any('release' in cmd for cmd in commands))
+                outer = repo / 'outer.log'
+                outer.write_text(transcript)
+                with contextlib.redirect_stdout(io.StringIO()) as watched:
+                    code = watch_land.watch(123, outer, kind='land', alive=lambda _: False)
+                self.assertEqual(code, 0, watched.getvalue())
+
     def test_delivery_requests_complete_run_only_for_named_red(self):
         # Ordinary landings retain the cheap-first default. A named red asks
         # for complete coverage; missing reason/coverage still cannot land.
