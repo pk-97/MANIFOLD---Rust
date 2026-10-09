@@ -1,10 +1,141 @@
 use crate::command::Command;
+use crate::service::EditingService;
 use manifold_core::audio_clip_detection::AudioClipDetection;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::OverlapAction;
 use manifold_core::project::Project;
+use manifold_core::tempo::SourceClock;
 use manifold_core::{Beats, ClipId, LayerId, Seconds};
 use std::collections::HashSet;
+
+/// Build undoable edits that keep detection-generated children anchored to a
+/// source clip's media time after the source clip changes. The caller supplies
+/// both clocks because the source tempo itself may be part of the edit.
+pub fn build_audio_dependent_edits(
+    project: &Project,
+    old_source: &TimelineClip,
+    new_source: &TimelineClip,
+    old_clock: &SourceClock<'_>,
+    new_clock: &SourceClock<'_>,
+) -> Vec<Box<dyn Command>> {
+    if !old_source.is_audio() || !new_source.is_audio() {
+        return Vec::new();
+    }
+    let old_window_start = old_clock.source_position(old_source, old_source.start_beat);
+    let old_window_end = old_clock.source_position(old_source, old_source.end_beat());
+    let new_window_start = new_clock.source_position(new_source, new_source.start_beat);
+    let new_window_end = new_clock.source_position(new_source, new_source.end_beat());
+    let mut commands: Vec<Box<dyn Command>> = Vec::new();
+    let mut moved_ids = Vec::new();
+
+    for layer in &project.timeline.layers {
+        for child in &layer.clips {
+            if child.detection_source.as_ref() != Some(&old_source.id) {
+                continue;
+            }
+
+            let child_source_start = old_clock.source_position(old_source, child.start_beat);
+            let child_source_end = old_clock.source_position(old_source, child.end_beat());
+            let source_start = child_source_start.max(old_window_start).max(new_window_start);
+            let source_end = child_source_end.min(old_window_end).min(new_window_end);
+            let layer_id = layer.layer_id.clone();
+
+            if source_end <= source_start || new_window_end <= new_window_start {
+                commands.push(Box::new(DeleteClipCommand::new(
+                    child.clone(),
+                    layer_id,
+                )));
+                continue;
+            }
+
+            let mut new_start = new_clock.beat_at_source(new_source, source_start);
+            let mut new_end = new_clock.beat_at_source(new_source, source_end);
+            new_start = new_start.max(new_source.start_beat);
+            new_end = new_end.min(new_source.end_beat());
+            if new_end <= new_start {
+                commands.push(Box::new(DeleteClipCommand::new(
+                    child.clone(),
+                    layer_id,
+                )));
+                continue;
+            }
+
+            let new_duration = new_end - new_start;
+            moved_ids.push(child.id.clone());
+            let old_child_start = old_clock.beat_at_source(old_source, source_start);
+            let new_in_point = if child.is_source_media() && old_child_start > child.start_beat {
+                child.in_point
+                    + old_clock.source_seconds(child, child.start_beat, old_child_start)
+            } else {
+                child.in_point
+            };
+            if child.is_audio() {
+                commands.push(Box::new(RetimeAudioDependentCommand::new(
+                    child,
+                    new_start,
+                    new_duration,
+                    new_in_point,
+                    layer_id,
+                    new_source,
+                )));
+            } else {
+                commands.push(Box::new(TrimClipCommand::new(
+                    child.id.clone(),
+                    child.start_beat,
+                    new_start,
+                    child.duration_beats,
+                    new_duration,
+                    child.in_point,
+                    new_in_point,
+                )));
+            }
+        }
+    }
+    if !moved_ids.is_empty() {
+        commands.push(Box::new(ResolveDependentOverlaps {
+            moved_ids,
+            commands: None,
+        }));
+    }
+    commands
+}
+
+/// Resolve collisions after every child has reached its new position. Protect
+/// siblings in this edit, as the ordinary multi-clip move command does.
+#[derive(Debug)]
+struct ResolveDependentOverlaps {
+    moved_ids: Vec<ClipId>,
+    commands: Option<Vec<Box<dyn Command>>>,
+}
+
+impl Command for ResolveDependentOverlaps {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(commands) = &mut self.commands {
+            for command in commands { command.execute(project); }
+            return;
+        }
+        let protected = self.moved_ids.iter().cloned().collect();
+        let mut commands = Vec::new();
+        for id in &self.moved_ids {
+            let Some((index, clip)) = project.timeline.layers.iter().enumerate()
+                .find_map(|(index, layer)| layer.clips.iter().find(|clip| &clip.id == id)
+                    .map(|clip| (index, clip.clone()))) else { continue; };
+            for mut command in EditingService::enforce_non_overlap(project, &clip, index, &protected) {
+                command.execute(project);
+                commands.push(command);
+            }
+        }
+        self.commands = Some(commands);
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(commands) = &mut self.commands {
+            for command in commands.iter_mut().rev() { command.undo(project); }
+        }
+    }
+
+    fn description(&self) -> &str { "Resolve Linked Clip Overlaps" }
+}
 
 /// Move a clip to a new beat position and/or layer.
 /// Matches Unity MoveClipCommand: cross-layer transfer removes from source and adds to target,
@@ -16,6 +147,8 @@ pub struct MoveClipCommand {
     new_start_beat: Beats,
     old_layer_id: LayerId,
     new_layer_id: LayerId,
+    dependent_commands: Vec<Box<dyn Command>>,
+    dependent_prepared: bool,
 }
 
 impl MoveClipCommand {
@@ -32,12 +165,19 @@ impl MoveClipCommand {
             new_start_beat,
             old_layer_id,
             new_layer_id,
+            dependent_commands: Vec::new(),
+            dependent_prepared: false,
         }
     }
 }
 
 impl Command for MoveClipCommand {
     fn execute(&mut self, project: &mut Project) {
+        let old_source = if !self.dependent_prepared {
+            project.timeline.find_clip_by_id(&self.clip_id).cloned()
+        } else {
+            None
+        };
         if self.old_layer_id != self.new_layer_id {
             let src = project.timeline.layer_index_for_id(&self.old_layer_id);
             let dst = project.timeline.layer_index_for_id(&self.new_layer_id);
@@ -58,34 +198,44 @@ impl Command for MoveClipCommand {
             {
                 layer.restore_clip(c);
             }
-        } else {
-            // Same-layer move: just update start_beat.
-            if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
-                clip.start_beat = self.new_start_beat;
-            }
-            if let Some(dst_idx) = project.timeline.layer_index_for_id(&self.new_layer_id)
-                && let Some(layer) = project.timeline.layers.get_mut(dst_idx)
-            {
-                layer.mark_clips_unsorted();
-            }
-            project.timeline.mark_clip_lookup_dirty();
-            return;
         }
 
-        // Update start_beat on the (now in target layer) clip.
+        // Update start_beat on the (now in target layer) clip for both
+        // same-layer moves and cross-layer transfers.
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.start_beat = self.new_start_beat;
         }
-
         if let Some(dst_idx) = project.timeline.layer_index_for_id(&self.new_layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(dst_idx)
         {
             layer.mark_clips_unsorted();
         }
         project.timeline.mark_clip_lookup_dirty();
+
+        if !self.dependent_prepared {
+            if let Some(old_source) = old_source
+                && let Some(new_source) = project.timeline.find_clip_by_id(&self.clip_id).cloned()
+            {
+                let clock = project.source_clock();
+                self.dependent_commands = build_audio_dependent_edits(
+                    project,
+                    &old_source,
+                    &new_source,
+                    &clock,
+                    &clock,
+                );
+            }
+            self.dependent_prepared = true;
+        }
+        for command in &mut self.dependent_commands {
+            command.execute(project);
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
+        for command in self.dependent_commands.iter_mut().rev() {
+            command.undo(project);
+        }
         if self.old_layer_id != self.new_layer_id {
             let src = project.timeline.layer_index_for_id(&self.new_layer_id);
             let dst = project.timeline.layer_index_for_id(&self.old_layer_id);
@@ -138,6 +288,9 @@ pub struct TrimClipCommand {
     new_duration_beats: Beats,
     old_in_point: Seconds,
     new_in_point: Seconds,
+    retime_dependents: bool,
+    dependent_commands: Vec<Box<dyn Command>>,
+    dependent_prepared: bool,
 }
 
 impl TrimClipCommand {
@@ -159,12 +312,44 @@ impl TrimClipCommand {
             new_duration_beats,
             old_in_point,
             new_in_point,
+            retime_dependents: true,
+            dependent_commands: Vec::new(),
+            dependent_prepared: false,
         }
+    }
+
+    /// Geometry-only trim for callers that prepare dependent edits with an
+    /// explicit old/new source clock, such as project master-tempo changes.
+    pub fn new_geometry_only(
+        clip_id: ClipId,
+        old_start_beat: Beats,
+        new_start_beat: Beats,
+        old_duration_beats: Beats,
+        new_duration_beats: Beats,
+        old_in_point: Seconds,
+        new_in_point: Seconds,
+    ) -> Self {
+        let mut command = Self::new(
+            clip_id,
+            old_start_beat,
+            new_start_beat,
+            old_duration_beats,
+            new_duration_beats,
+            old_in_point,
+            new_in_point,
+        );
+        command.retime_dependents = false;
+        command
     }
 }
 
 impl Command for TrimClipCommand {
     fn execute(&mut self, project: &mut Project) {
+        let old_source = if self.retime_dependents && !self.dependent_prepared {
+            project.timeline.find_clip_by_id(&self.clip_id).cloned()
+        } else {
+            None
+        };
         // Capture layer_id on first execute for mark_clips_unsorted.
         if self.layer_id.is_none() {
             for layer in &project.timeline.layers {
@@ -188,9 +373,35 @@ impl Command for TrimClipCommand {
         {
             layer.mark_clips_unsorted();
         }
+
+        if self.retime_dependents && !self.dependent_prepared {
+            if let Some(old_source) = old_source
+                && let Some(new_source) = project.timeline.find_clip_by_id(&self.clip_id).cloned()
+            {
+                let clock = project.source_clock();
+                self.dependent_commands = build_audio_dependent_edits(
+                    project,
+                    &old_source,
+                    &new_source,
+                    &clock,
+                    &clock,
+                );
+            }
+            self.dependent_prepared = true;
+        }
+        if self.retime_dependents {
+            for command in &mut self.dependent_commands {
+                command.execute(project);
+            }
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if self.retime_dependents {
+            for command in self.dependent_commands.iter_mut().rev() {
+                command.undo(project);
+            }
+        }
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.start_beat = self.old_start_beat;
             clip.duration_beats = self.old_duration_beats;
@@ -208,6 +419,95 @@ impl Command for TrimClipCommand {
 
     fn description(&self) -> &str {
         "Trim Clip"
+    }
+}
+
+/// Retimed audio child state. Audio stems keep their own source-file offset;
+/// only timeline geometry and the inherited source-tempo metadata change.
+#[derive(Debug, Clone, Copy)]
+struct RetimeAudioState {
+    start_beat: Beats,
+    duration_beats: Beats,
+    in_point: Seconds,
+    recorded_bpm: f32,
+    audio_warp_enabled: Option<bool>,
+    audio_bpm_automatic: bool,
+}
+
+#[derive(Debug)]
+struct RetimeAudioDependentCommand {
+    clip_id: ClipId,
+    layer_id: LayerId,
+    old_state: RetimeAudioState,
+    new_state: RetimeAudioState,
+}
+
+impl RetimeAudioDependentCommand {
+    fn new(
+        child: &TimelineClip,
+        new_start: Beats,
+        new_duration: Beats,
+        new_in_point: Seconds,
+        layer_id: LayerId,
+        new_source: &TimelineClip,
+    ) -> Self {
+        Self {
+            clip_id: child.id.clone(),
+            layer_id,
+            old_state: RetimeAudioState {
+                start_beat: child.start_beat,
+                duration_beats: child.duration_beats,
+                in_point: child.in_point,
+                recorded_bpm: child.recorded_bpm,
+                audio_warp_enabled: child.audio_warp_enabled,
+                audio_bpm_automatic: child.audio_bpm_automatic,
+            },
+            new_state: RetimeAudioState {
+                start_beat: new_start,
+                duration_beats: new_duration,
+                in_point: new_in_point,
+                recorded_bpm: new_source.recorded_bpm,
+                audio_warp_enabled: new_source.audio_warp_enabled,
+                audio_bpm_automatic: new_source.audio_bpm_automatic,
+            },
+        }
+    }
+
+    fn apply(project: &mut Project, clip_id: &ClipId, state: RetimeAudioState) {
+        if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
+            clip.start_beat = state.start_beat;
+            clip.duration_beats = state.duration_beats;
+            clip.in_point = state.in_point;
+            clip.recorded_bpm = state.recorded_bpm;
+            clip.audio_warp_enabled = state.audio_warp_enabled;
+            clip.audio_bpm_automatic = state.audio_bpm_automatic;
+        }
+    }
+}
+
+impl Command for RetimeAudioDependentCommand {
+    fn execute(&mut self, project: &mut Project) {
+        Self::apply(project, &self.clip_id, self.new_state);
+        if let Some(layer_index) = project.timeline.layer_index_for_id(&self.layer_id)
+            && let Some(layer) = project.timeline.layers.get_mut(layer_index)
+        {
+            layer.mark_clips_unsorted();
+        }
+        project.timeline.mark_clip_lookup_dirty();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        Self::apply(project, &self.clip_id, self.old_state);
+        if let Some(layer_index) = project.timeline.layer_index_for_id(&self.layer_id)
+            && let Some(layer) = project.timeline.layers.get_mut(layer_index)
+        {
+            layer.mark_clips_unsorted();
+        }
+        project.timeline.mark_clip_lookup_dirty();
+    }
+
+    fn description(&self) -> &str {
+        "Retime Audio Dependent"
     }
 }
 
@@ -423,8 +723,9 @@ impl Command for SwapVideoCommand {
 
 /// Replace an audio clip's source file. Shaped like `SwapVideoCommand` above, but
 /// for audio: swaps `audio_file_path` + `source_duration`, resets `in_point` to
-/// zero and clears `recorded_bpm` (the old song's BPM is a lie about the new
-/// file), keeps `start_beat`/`duration_beats` untouched, and keeps the
+/// zero and clears the source BPM, Warp, and detection metadata (the old
+/// song's tempo is a lie about the new file), keeps `start_beat`/`duration_beats`
+/// untouched, and keeps the
 /// detection **config** (sensitivities/routing/quantize — the user's tuning)
 /// while clearing the cached analysis + per-instrument counts (they describe
 /// the old audio). Never touches other clips or invokes detection — pairing
@@ -440,6 +741,8 @@ pub struct ReplaceAudioFileCommand {
     old_in_point: Seconds,
     old_recorded_bpm: f32,
     old_detection: Option<AudioClipDetection>,
+    old_audio_warp_enabled: Option<Option<bool>>,
+    old_audio_bpm_automatic: Option<bool>,
 }
 
 impl ReplaceAudioFileCommand {
@@ -462,6 +765,8 @@ impl ReplaceAudioFileCommand {
             old_in_point,
             old_recorded_bpm,
             old_detection,
+            old_audio_warp_enabled: None,
+            old_audio_bpm_automatic: None,
         }
     }
 }
@@ -469,10 +774,16 @@ impl ReplaceAudioFileCommand {
 impl Command for ReplaceAudioFileCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
+            if self.old_audio_warp_enabled.is_none() {
+                self.old_audio_warp_enabled = Some(clip.audio_warp_enabled);
+                self.old_audio_bpm_automatic = Some(clip.audio_bpm_automatic);
+            }
             clip.audio_file_path = self.new_path.clone();
             clip.source_duration = self.new_source_duration;
             clip.in_point = Seconds::ZERO;
             clip.recorded_bpm = 0.0;
+            clip.audio_warp_enabled = None;
+            clip.audio_bpm_automatic = false;
             // Keep the config (the user's tuning), clear the analysis + counts
             // (they describe the old file). No config yet ⇒ stays None; the
             // next Detect creates one from scratch, same as a fresh clip.
@@ -489,6 +800,8 @@ impl Command for ReplaceAudioFileCommand {
             clip.source_duration = self.old_source_duration;
             clip.in_point = self.old_in_point;
             clip.recorded_bpm = self.old_recorded_bpm;
+            clip.audio_warp_enabled = self.old_audio_warp_enabled.flatten();
+            clip.audio_bpm_automatic = self.old_audio_bpm_automatic.unwrap_or(false);
             clip.audio_detection = self.old_detection.clone();
         }
     }
@@ -633,86 +946,210 @@ impl Command for ChangeClipLoopCommand {
     }
 }
 
-/// Change clip recorded BPM.
+/// The semantic form of an audio tempo edit. Manual BPM edits control warp and
+/// preserve the source BPM when turning Warp off; detection only fills an
+/// unknown/non-manual source BPM; Warp toggles preserve or seed the source BPM.
+#[derive(Debug, Clone, Copy)]
+enum RecordedBpmEdit {
+    Manual(f32),
+    Warp(bool),
+    Detected(f32),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ClipTempoState {
+    recorded_bpm: f32,
+    audio_warp_enabled: Option<bool>,
+    audio_bpm_automatic: bool,
+    duration_beats: Beats,
+}
+
+/// Change clip recorded BPM or audio Warp state.
 #[derive(Debug)]
 pub struct ChangeClipRecordedBpmCommand {
     clip_id: ClipId,
-    old_bpm: f32,
-    new_bpm: f32,
-    /// Audio clips rescale their timeline length when the clip BPM (warp)
-    /// changes, holding the played source span constant (Ableton model). Captured
-    /// on the first execute and restored on undo. Untouched for non-audio clips.
-    old_duration: Option<Beats>,
-    new_duration: Option<Beats>,
-    /// Whether to rescale duration for audio clips. Detection path must not rescale.
-    rescale: bool,
+    edit: RecordedBpmEdit,
+    old_state: Option<ClipTempoState>,
+    new_state: Option<ClipTempoState>,
+    dependent_commands: Vec<Box<dyn Command>>,
+    overlap_commands: Vec<Box<dyn Command>>,
 }
 
 impl ChangeClipRecordedBpmCommand {
-    /// Constructor for the normal rescaling behavior (Ableton model).
-    pub fn new(clip_id: ClipId, old_bpm: f32, new_bpm: f32) -> Self {
+    /// Manual BPM edit. Positive audio BPM enables Warp; zero disables Warp
+    /// while retaining any known source BPM.
+    pub fn new(clip_id: ClipId, _old_bpm: f32, new_bpm: f32) -> Self {
         Self {
             clip_id,
-            old_bpm,
-            new_bpm,
-            old_duration: None,
-            new_duration: None,
-            rescale: true,
+            edit: RecordedBpmEdit::Manual(new_bpm),
+            old_state: None,
+            new_state: None,
+            dependent_commands: Vec::new(),
+            overlap_commands: Vec::new(),
         }
     }
 
-    /// Constructor for BPM detection: set the recorded BPM without rescaling duration.
-    /// Detection deliberately does not rescale because the clip's timeline length
-    /// was already set at import time; we're just correcting the BPM metadata.
-    pub fn new_no_rescale(clip_id: ClipId, old_bpm: f32, new_bpm: f32) -> Self {
+    /// Toggle audio Warp. Enabling an audio clip with no known source BPM uses
+    /// the project BPM as an assumed source tempo that analysis may replace.
+    pub fn new_warp(clip_id: ClipId, enabled: bool) -> Self {
         Self {
             clip_id,
-            old_bpm,
-            new_bpm,
-            old_duration: None,
-            new_duration: None,
-            rescale: false,
+            edit: RecordedBpmEdit::Warp(enabled),
+            old_state: None,
+            new_state: None,
+            dependent_commands: Vec::new(),
+            overlap_commands: Vec::new(),
         }
+    }
+
+    /// Apply a detected source BPM while preserving the clip's effective Warp
+    /// state. Known manual BPM values are left untouched.
+    pub fn new_detected(clip_id: ClipId, bpm: f32) -> Self {
+        Self {
+            clip_id,
+            edit: RecordedBpmEdit::Detected(bpm),
+            old_state: None,
+            new_state: None,
+            dependent_commands: Vec::new(),
+            overlap_commands: Vec::new(),
+        }
+    }
+
+    fn apply_edit(clip: &mut TimelineClip, edit: RecordedBpmEdit, project_bpm: f32) {
+        match edit {
+            RecordedBpmEdit::Manual(bpm) => {
+                if clip.is_audio() {
+                    if bpm.is_finite() && bpm > 0.0 {
+                        clip.set_recorded_bpm(bpm);
+                        clip.audio_warp_enabled = Some(true);
+                        clip.audio_bpm_automatic = false;
+                    } else {
+                        clip.audio_warp_enabled = Some(false);
+                    }
+                } else {
+                    clip.set_recorded_bpm(bpm);
+                }
+            }
+            RecordedBpmEdit::Warp(enabled) => {
+                if !clip.is_audio() {
+                    return;
+                }
+                if enabled && clip.source_bpm_resolved() <= 0.0 {
+                    clip.set_recorded_bpm(project_bpm);
+                    clip.audio_bpm_automatic = true;
+                }
+                clip.audio_warp_enabled = Some(enabled);
+            }
+            RecordedBpmEdit::Detected(bpm) => {
+                if !clip.is_audio() {
+                    clip.set_recorded_bpm(bpm);
+                    return;
+                }
+                let was_warp_enabled = clip.is_audio_warp_enabled();
+                if clip.source_bpm_resolved() > 0.0 && !clip.audio_bpm_automatic {
+                    return;
+                }
+                clip.set_recorded_bpm(bpm);
+                clip.audio_bpm_automatic = clip.source_bpm_resolved() > 0.0;
+                clip.audio_warp_enabled = Some(was_warp_enabled);
+            }
+        }
+    }
+
+    fn apply_state(project: &mut Project, clip_id: &ClipId, state: ClipTempoState) -> bool {
+        let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) else {
+            return false;
+        };
+        clip.recorded_bpm = state.recorded_bpm;
+        clip.audio_warp_enabled = state.audio_warp_enabled;
+        clip.audio_bpm_automatic = state.audio_bpm_automatic;
+        clip.duration_beats = state.duration_beats;
+        true
     }
 }
 
 impl Command for ChangeClipRecordedBpmCommand {
     fn execute(&mut self, project: &mut Project) {
-        // Effective tempo a clip plays at: its own BPM when warp is on, else the
-        // project tempo (warp off). The played source span is duration * 60/eff,
-        // so to hold that span constant the duration scales by eff_new / eff_old.
-        let project_bpm = project.settings.bpm.0;
-        if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
-            let is_audio = clip.is_audio();
-            if self.rescale && is_audio {
-                if self.old_duration.is_none() {
-                    self.old_duration = Some(clip.duration_beats);
-                }
-                let eff = |bpm: f32| if bpm > 0.0 { bpm } else { project_bpm };
-                let (old_eff, new_eff) = (eff(self.old_bpm), eff(self.new_bpm));
-                if let Some(old_dur) = self.old_duration
-                    && old_eff > 0.0
-                    && new_eff > 0.0
-                {
-                    let scaled = Beats(old_dur.0 * (new_eff / old_eff) as f64);
-                    clip.set_duration_beats(scaled);
-                    self.new_duration = Some(scaled);
-                }
+        if self.old_state.is_none() {
+            let Some(old_clip) = project.timeline.find_clip_by_id(&self.clip_id).cloned() else {
+                return;
+            };
+            let old_state = ClipTempoState {
+                recorded_bpm: old_clip.recorded_bpm,
+                audio_warp_enabled: old_clip.audio_warp_enabled,
+                audio_bpm_automatic: old_clip.audio_bpm_automatic,
+                duration_beats: old_clip.duration_beats,
+            };
+            let mut new_clip = old_clip.clone();
+            Self::apply_edit(&mut new_clip, self.edit, project.settings.bpm.0);
+
+            // Preserve the exact source span across a tempo-map boundary. The
+            // old and new clip states each get their own SourceClock resolution.
+            if old_clip.is_audio() {
+                let clock = project.source_clock();
+                let source_seconds =
+                    clock.source_seconds(&old_clip, old_clip.start_beat, old_clip.end_beat());
+                let new_duration = clock.beats_for_source(
+                    &new_clip,
+                    new_clip.start_beat,
+                    source_seconds,
+                );
+                new_clip.set_duration_beats(new_duration);
             }
-            clip.recorded_bpm = self.new_bpm;
+
+            let new_state = ClipTempoState {
+                recorded_bpm: new_clip.recorded_bpm,
+                audio_warp_enabled: new_clip.audio_warp_enabled,
+                audio_bpm_automatic: new_clip.audio_bpm_automatic,
+                duration_beats: new_clip.duration_beats,
+            };
+            self.old_state = Some(old_state);
+            self.new_state = Some(new_state);
+
+            Self::apply_state(project, &self.clip_id, new_state);
+            let clock = project.source_clock();
+            self.dependent_commands = build_audio_dependent_edits(
+                project,
+                &old_clip,
+                &new_clip,
+                &clock,
+                &clock,
+            );
+            if old_clip.is_audio()
+                && let Some(layer_index) = project.timeline.layer_index_for_id(&old_clip.layer_id)
+                && let Some(placed_clip) = project.timeline.find_clip_by_id(&self.clip_id).cloned()
+            {
+                self.overlap_commands = EditingService::enforce_non_overlap(
+                    project,
+                    &placed_clip,
+                    layer_index,
+                    &HashSet::new(),
+                );
+            }
+        } else if let Some(new_state) = self.new_state {
+            Self::apply_state(project, &self.clip_id, new_state);
         }
+
+        for command in &mut self.dependent_commands {
+            command.execute(project);
+        }
+        for command in &mut self.overlap_commands {
+            command.execute(project);
+        }
+        project.timeline.mark_clip_lookup_dirty();
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
-            clip.recorded_bpm = self.old_bpm;
-            if self.rescale
-                && clip.is_audio()
-                && let Some(old_dur) = self.old_duration
-            {
-                clip.set_duration_beats(old_dur);
-            }
+        for command in self.overlap_commands.iter_mut().rev() {
+            command.undo(project);
         }
+        for command in self.dependent_commands.iter_mut().rev() {
+            command.undo(project);
+        }
+        if let Some(old_state) = self.old_state {
+            Self::apply_state(project, &self.clip_id, old_state);
+        }
+        project.timeline.mark_clip_lookup_dirty();
     }
 
     fn description(&self) -> &str {
@@ -880,5 +1317,88 @@ impl Command for SetClipStringParamCommand {
 
     fn description(&self) -> &str {
         "Set String Param"
+    }
+}
+
+#[cfg(test)]
+mod dependent_edit_tests {
+    use super::*;
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+    use manifold_core::units::Seconds;
+
+    fn project_with_source_and_child() -> (Project, ClipId, ClipId, LayerId) {
+        let mut project = Project::default();
+        project.settings.bpm = manifold_core::units::Bpm(120.0);
+        project
+            .timeline
+            .insert_layer(0, Layer::new("Source".into(), LayerType::Audio, 0));
+        project
+            .timeline
+            .insert_layer(1, Layer::new("Triggers".into(), LayerType::Generator, 1));
+
+        let source = TimelineClip::new_audio(
+            "/source.wav".into(),
+            Beats::ZERO,
+            Beats(4.0),
+            Seconds::ZERO,
+            Seconds(10.0),
+        );
+        let source_id = source.id.clone();
+        let mut child = TimelineClip::new_generator(Beats(1.0), Beats(1.0));
+        child.detection_source = Some(source_id.clone());
+        let child_id = child.id.clone();
+        let layer_id = project.timeline.layers[0].layer_id.clone();
+        project.timeline.layers[0].restore_clip(source);
+        project.timeline.layers[1].restore_clip(child);
+        project.timeline.rebuild_clip_lookup();
+        (project, source_id, child_id, layer_id)
+    }
+
+    #[test]
+    fn move_retimes_detection_child_and_undo_restores() {
+        let (mut project, source_id, child_id, layer_id) = project_with_source_and_child();
+        let mut command = MoveClipCommand::new(
+            source_id.clone(),
+            Beats::ZERO,
+            Beats(4.0),
+            layer_id.clone(),
+            layer_id,
+        );
+        command.execute(&mut project);
+        let child = project.timeline.find_clip_by_id(&child_id).unwrap();
+        assert_eq!(child.start_beat, Beats(5.0));
+        assert_eq!(child.duration_beats, Beats(1.0));
+
+        command.undo(&mut project);
+        let child = project.timeline.find_clip_by_id(&child_id).unwrap();
+        assert_eq!(child.start_beat, Beats(1.0));
+        assert_eq!(child.duration_beats, Beats(1.0));
+    }
+
+    #[test]
+    fn helper_removes_out_of_window_child_and_undo_restores_it() {
+        let (mut project, source_id, child_id, _) = project_with_source_and_child();
+        let old_source = project.timeline.find_clip_by_id(&source_id).unwrap().clone();
+        let mut new_source = old_source.clone();
+        new_source.in_point = Seconds(2.0);
+        new_source.start_beat = Beats(2.0);
+        new_source.duration_beats = Beats(2.0);
+        let clock = project.source_clock();
+        let mut commands = build_audio_dependent_edits(
+            &project,
+            &old_source,
+            &new_source,
+            &clock,
+            &clock,
+        );
+        for command in &mut commands {
+            command.execute(&mut project);
+        }
+        assert!(project.timeline.find_clip_by_id(&child_id).is_none());
+        for command in commands.iter_mut().rev() {
+            command.undo(&mut project);
+        }
+        assert!(project.timeline.find_clip_by_id(&child_id).is_some());
     }
 }
