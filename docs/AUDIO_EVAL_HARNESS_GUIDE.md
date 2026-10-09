@@ -728,6 +728,7 @@ Failure of these methods does not establish a physical limit.
 | H14: covered interaction/linear blend, interaction weight .25 / .5 / .75 | 238+90 / 249+91 / 253+93 | All nine negative cores remain clear. Blending repairs several old losses, but retains the shared Bad Guy false-trigger problem. |
 | H15: add the next 32 reviewed labels, linear / tree / interaction | 228+89 / 278+93 / 245+88 | More contexts are not a monotonic improvement. The unchanged scorers still fail the full target. |
 | H16: RBF support-vector margin, gamma 1/60 / 1/30 / 1/15 | 234+92 / 264+94 / **285+90** | Local nonlinear relationships recover more kicks. The strongest setting still has one negative-core fire and loses five old baseline events. |
+| H17: kernel/covered-linear blend, kernel weight .25 / .5 / .75 | 239+93 / **251+91** / 262+93 | All retain the baseline within the per-song safeguard; .25/.5 keep nine cores clear, but extras remain above target. |
 
 H9 is a weighted logistic score over the original 15 fold-standardised values
 and 120 bounded pair products. It tests smooth conditional relationships rather
@@ -837,6 +838,35 @@ H16 gamma 1/15; every short high click marks the actual emission time. Source
 identity, PCM quantisation, clipping and click alignment were checked. These
 include Inhale regressions as well as Heavy and Late improvements. No human
 listening verdict has been claimed.
+
+H17 uses unchanged gamma 1/15 kernel and H10 covered-linear models, with no new
+fits. At equal weights it loses only the baseline Inhale 6.62-second event and
+gives 132+73 on the original 174 labels; all nine original negative cores stay
+clear. At kernel weight .75 the earlier Miracle bass candidate falls below the
+cutoff, but a later candidate at 220.602 seconds fires instead. Inspect the full
+candidate/refractory sequence: suppressing one previously observed false event
+does not establish that its acoustic passage is safe. The three variants lose
+51, 38 and 27 kernel-caught labels, respectively, while repairing baseline
+retention. This is a measured tradeoff, not a completed detector target.
+
+A fixed analytic RBF-gradient diagnostic covers 380 actual event rows across
+all nine songs: 67 recovered labels, 218 shared matches, five lost baseline
+events and 90 extras. Twelve deterministic rows pass finite-difference checks
+across all 15 coordinates (maximum absolute error 3.02e-10). In song-balanced
+summaries, body-band log rise is among the top five sensitivities in all nine
+songs and has positive mean sensitivity in all nine. Low-band rise and low
+energy evolution also have positive song means throughout. Flux, peak lag and
+centroid cues change sign across contexts; even low-band centroid drop has a
+negative mean derivative in eight songs. This argues against treating a falling
+centroid as universal kick evidence.
+
+These are local derivatives of the learned score in fold-standardised feature
+coordinates. They do not establish acoustic causation, source separation or an
+event-recovery guarantee: real measurements are correlated, clipping matters,
+refractory selection is held fixed, and jointly missed events are absent from
+this particular diagnostic. The reusable lesson for other detectors is to
+measure growth, spectral change and temporal relations together, then test their
+conditional meaning across whole songs and explicit negative passages.
 
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
