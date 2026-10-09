@@ -54,6 +54,12 @@ pub(super) struct ParamEntryWire {
     calibration: Option<CalibrationWire>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     spec: Option<crate::effect_graph_def::ParamSpecDef>,
+    #[serde(
+        default,
+        rename = "clipTriggerSource",
+        skip_serializing_if = "crate::params::ClipTriggerSource::is_own_layer"
+    )]
+    clip_trigger_source: crate::params::ClipTriggerSource,
 }
 
 impl ParamEntryWire {
@@ -76,6 +82,7 @@ impl ParamEntryWire {
             spec: (inline_graph_spec
                 || matches!(p.origin, crate::params::ParamOrigin::UserAdded))
                 .then(|| p.spec.clone()),
+            clip_trigger_source: p.clip_trigger_source.clone(),
         }
     }
 
@@ -91,6 +98,7 @@ impl ParamEntryWire {
         p.value = self.value;
         p.base = self.base.unwrap_or(self.value);
         p.exposed = self.exposed;
+        p.clip_trigger_source = self.clip_trigger_source.clone();
         if let Some(c) = &self.calibration {
             p.spec.min = c.min;
             p.spec.max = c.max;
@@ -971,6 +979,141 @@ mod tests {
         let b = back.params.get("beta").unwrap();
         assert_eq!(b.value, 0.2);
         assert!(!b.exposed);
+    }
+
+    #[test]
+    fn trigger_source_effect_roundtrip_reconcile_preserves_disabled_and_missing_lane() {
+        let missing_layer = crate::LayerId::new("layer-that-is-not-present");
+        let own = slot("own", 0.1, true);
+        let mut disabled = slot("disabled", 0.2, true);
+        let mut lane = slot("lane", 0.3, true);
+        disabled.clip_trigger_source = crate::params::ClipTriggerSource::Disabled;
+        lane.clip_trigger_source = crate::params::ClipTriggerSource::Lane {
+            layer_id: missing_layer.clone(),
+        };
+
+        let mut fx = PresetInstance::new(PresetTypeId::from_string(
+            "UnregisteredTriggerSourceEffect".to_string(),
+        ));
+        fx.params = crate::params::ParamManifest::from_params(vec![own, disabled, lane]);
+        let json = serde_json::to_string(&fx).unwrap();
+        let wire: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(wire["params"]["own"]["clipTriggerSource"].is_null());
+        assert_eq!(
+            wire["params"]["disabled"]["clipTriggerSource"]["kind"],
+            "disabled"
+        );
+        assert_eq!(
+            wire["params"]["lane"]["clipTriggerSource"],
+            serde_json::json!({"kind": "lane", "layerId": "layer-that-is-not-present"})
+        );
+
+        let mut back: PresetInstance = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.params.get("own").unwrap().clip_trigger_source,
+            crate::params::ClipTriggerSource::OwnLayer
+        );
+        assert_eq!(
+            back.params.get("disabled").unwrap().clip_trigger_source,
+            crate::params::ClipTriggerSource::Disabled
+        );
+        assert_eq!(
+            back.params.get("lane").unwrap().clip_trigger_source,
+            crate::params::ClipTriggerSource::Lane {
+                layer_id: missing_layer.clone()
+            }
+        );
+
+        back.reconcile_manifest();
+        assert_eq!(
+            back.params.get("lane").unwrap().clip_trigger_source,
+            crate::params::ClipTriggerSource::Lane {
+                layer_id: missing_layer
+            }
+        );
+    }
+
+    #[test]
+    fn trigger_source_generator_roundtrip_preserves_disabled_and_missing_lane() {
+        let missing_layer = crate::LayerId::new("missing-generator-lane");
+        let own = slot("own", 0.1, true);
+        let mut disabled = slot("disabled", 0.2, true);
+        let mut lane = slot("lane", 0.3, true);
+        disabled.clip_trigger_source = crate::params::ClipTriggerSource::Disabled;
+        lane.clip_trigger_source = crate::params::ClipTriggerSource::Lane {
+            layer_id: missing_layer.clone(),
+        };
+
+        let mut generator = PresetInstance::new_generator(PresetTypeId::from_string(
+            "UnregisteredTriggerSourceGenerator".to_string(),
+        ));
+        generator.params = crate::params::ParamManifest::from_params(vec![own, disabled, lane]);
+        let json = serde_json::to_string(&generator).unwrap();
+        let wire: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(wire["params"]["own"]["clipTriggerSource"].is_null());
+        assert_eq!(
+            wire["params"]["disabled"]["clipTriggerSource"]["kind"],
+            "disabled"
+        );
+        assert_eq!(
+            wire["params"]["lane"]["clipTriggerSource"],
+            serde_json::json!({"kind": "lane", "layerId": "missing-generator-lane"})
+        );
+
+        let mut deserializer = serde_json::Deserializer::from_str(&json);
+        let mut back = deserialize_generator_instance(&mut deserializer).unwrap();
+        assert_eq!(
+            back.params.get("own").unwrap().clip_trigger_source,
+            crate::params::ClipTriggerSource::OwnLayer
+        );
+        assert_eq!(
+            back.params.get("disabled").unwrap().clip_trigger_source,
+            crate::params::ClipTriggerSource::Disabled
+        );
+        assert_eq!(
+            back.params.get("lane").unwrap().clip_trigger_source,
+            crate::params::ClipTriggerSource::Lane {
+                layer_id: missing_layer.clone()
+            }
+        );
+
+        back.reconcile_manifest();
+        assert_eq!(
+            back.params.get("lane").unwrap().clip_trigger_source,
+            crate::params::ClipTriggerSource::Lane {
+                layer_id: missing_layer
+            }
+        );
+    }
+
+    #[test]
+    fn trigger_source_survives_graph_manifest_refresh() {
+        use crate::params::ClipTriggerSource;
+
+        let mut generator = PresetInstance::new_generator(PresetTypeId::new("TriggerSourceGraph"));
+        let mut param = slot("force", 0.4, true);
+        param.clip_trigger_source = ClipTriggerSource::Lane {
+            layer_id: crate::LayerId::new("force-pattern"),
+        };
+        generator.graph = Some(serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "nodes": [],
+            "wires": [],
+            "presetMetadata": {
+                "id": "TriggerSourceGraph", "displayName": "Test", "category": "Test",
+                "oscPrefix": "test", "params": [param.spec.clone()], "bindings": []
+            }
+        })).unwrap());
+        generator.params = crate::params::ParamManifest::from_params(vec![param.clone()]);
+
+        generator.refresh_manifest_from_graph();
+        assert_eq!(generator.params.get("force").unwrap().clip_trigger_source, param.clip_trigger_source);
+        let json = serde_json::to_string(&generator).unwrap();
+        let mut deserializer = serde_json::Deserializer::from_str(&json);
+        let mut loaded = deserialize_generator_instance(&mut deserializer).unwrap();
+        loaded.reconcile_manifest();
+        assert!(!loaded.template_unresolved());
+        assert_eq!(loaded.params.get("force").unwrap().clip_trigger_source, param.clip_trigger_source);
     }
 
     /// `docs/DEPTH_RELIGHT_DESIGN.md` P5: a pre-P5 project file — no
