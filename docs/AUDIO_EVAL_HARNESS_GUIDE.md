@@ -390,6 +390,21 @@ Six numerical/causality tests pass. Offline CPU processing takes 0.16–0.18% of
 audio duration; native callback latency remains untested. No tuning or live
 change. See `tools/audio_analysis/eval/scoreboard/kick_mixture_2026-10-09.json`.
 
+**Upper/low cue diagnostic, 2026-10-09 — mixed evidence, not adopted:** native
+causal envelopes measure 1–2, 2–4 and 4–8 kHz attacks, a fresh 45–140 Hz rise
+within -10/+35 ms, and upper half-power decay at a 50 ms deadline. Fixed
+label-centred ±50 ms queries find the complete cue near 14/28 previously missed
+Heavy On Mind kicks, but also 15 cue edges in its 12 s kick-free core. None of
+the five known Late Night bass false fires has the cue nearby, yet nine other
+cue edges occur in that same core. Across all recordings, coverage is 91/174
+kick labels and 17/52 original unmatched fires; these are diagnostic coverage
+counts, not detector recall/precision. Synthetic hats over stationary bass and
+hats with new bass notes pass 4/4 at both sample rates; hats alone fail linkage.
+Thus cross-band evidence may contribute to a future confidence score but cannot
+identify a kick by itself. No fusion weights were fitted. Seven timing/causality
+tests pass; no live change. See
+`tools/audio_analysis/eval/scoreboard/kick_upper_cue_2026-10-09.json`.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
