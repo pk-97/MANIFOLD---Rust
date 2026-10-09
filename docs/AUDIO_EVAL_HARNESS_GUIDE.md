@@ -263,6 +263,27 @@ counts, limitations and source hashes are in
 `tools/audio_analysis/eval/scoreboard/kick_hybrid_2026-10-09.json`; raw reports
 remain under `~/.cache/manifold/kick-hybrid-2026-10-09/`.
 
+**Failure audit, 2026-10-09:** `eval.kick_failure_casebook` compares 24 selected
+cases across six recordings without changing the detector. It separates late
+hits, masked/rolling kicks, persistent-bass ghost fires and abrupt non-kick
+attacks. Six simple scalar measurements overlap across the full set. Spectral
+continuity distinguishes the four sampled kick-free master fires at the 50 ms
+window size, but not all abrupt non-kick attacks; timing uncertainty weakens the
+shorter-window distinction. This is descriptive evidence, not a fitted rule or
+validation result. Positive windows end after provisional labels, negative
+windows at recorded fires, so acoustic onsets are not assumed aligned. See
+`tools/audio_analysis/eval/scoreboard/kick_failure_casebook_2026-10-09.json` for
+case identities, evidence, endpoint sensitivity and reproduction instructions.
+
+Generalisation is required: case studies identify mechanisms, not song-specific
+thresholds. The seven previously evaluated recordings are development material.
+Use one shared configuration and report every track's misses, extras and timing;
+pooled gains must not conceal regressions. Freeze the candidate and evaluation
+criteria before scoring untouched Miracle and Heavy On Mind. Split by whole
+recording, not random windows of the same song. If held-out results influence
+another revision, those recordings become development data and fresh material
+is needed for an independent generalisation claim.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png

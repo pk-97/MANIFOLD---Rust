@@ -1,0 +1,1350 @@
+{
+  "date": "2026-10-09",
+  "status": "Diagnosis only; no detector change or proposed threshold.",
+  "scope": "24 cases across six development recordings: eight caught kicks, eight strict misses (one is a 53.33 ms late hit), four v5 extras with prior stem-ablation evidence and four hybrid fires in reviewed kick-free master passages.",
+  "method": "Small descriptive kick failure audit. No detector, fitting or threshold sweep.\n\nPositive observations end 20/35/50 ms after a provisional label. Negative\nobservations end at an actual unwanted firing, whose acoustic onset is unknown.\nAll measurements use past samples only at that endpoint. This asymmetry is\nintentional: compare available evidence, not purportedly aligned source onsets.\n",
+  "feature_order": [
+    "growth_db",
+    "low_fraction",
+    "high_fraction",
+    "spectral_change",
+    "crest",
+    "tail_head_db"
+  ],
+  "feature_definitions": {
+    "growth_db": "10 log10 mean-square power ratio of current window to preceding equal window.",
+    "low_fraction": "Hann FFT power from 45 to below 140 Hz divided by power from 45 to 8000 Hz.",
+    "high_fraction": "Hann FFT power from 2000 to 8000 Hz divided by power from 45 to 8000 Hz.",
+    "spectral_change": "1 minus cosine similarity of magnitude spectra over 45-8000 Hz in adjacent equal windows; amplitude-scale invariant.",
+    "crest": "Peak absolute waveform divided by RMS in current window.",
+    "tail_head_db": "10 log10 power ratio of second half to first half of current window."
+  },
+  "findings": [
+    "All six nominal scalar feature ranges overlap between positives and negatives at each of 20, 35 and 50 ms. No one-cutoff solution is demonstrated; multivariate separation is not ruled out.",
+    "The two sampled Late Night roll misses at 204.450 and 204.725 s have 50 ms average energy changes of -1.45 and -1.55 dB despite visible source/master attacks. Their existence cannot be inferred from a mandatory overall loudness increase.",
+    "Inhale at 12.620 s has only +0.85 dB full-mix growth over 50 ms. The existing, hash-verified no-bass counterfactual has +14.99 dB growth and a recorded fire at 12.640 s. This supports interference/masking as a failure mechanism; subtraction changes detector state and does not prove instrument identity.",
+    "The four kick-free master examples have 50 ms spectral-change values 0.008-0.067, compared with 0.260-0.743 for the 16 labelled kicks at nominal endpoints. Even with +/-20 ms positive endpoint shifts, the lowest kick value is 0.106. This narrow selected-case gap is a hypothesis for persistent-bass ghost rejection, not a validated threshold or 50 ms latency guarantee.",
+    "That spectral distinction does not cover abrupt bass/drum extras: their 50 ms values span 0.188-0.633. Separate persistent-bass ghost triggers, genuine non-kick attacks, masked kicks and late decisions in subsequent diagnosis.",
+    "At 20/35 ms, positive endpoint uncertainty removes the clean gap against kick-free examples. Nominal alignment alone would overstate separability."
+  ],
+  "visual_review": {
+    "path": "/Users/peterkiemann/.cache/manifold/master-kick-comparison-2026-10-09/late_night/kick_details_2.png",
+    "observation": "Existing panels 16 and 18 show kick-stem renewals within an ongoing tail and corresponding changes in the master around 204.45 and 204.725 s. These support event presence, not exact onset latency."
+  },
+  "next_question": "Can a causal description of spectral continuity distinguish persistent-bass modulation from a new event while preserving masked/rolling kicks? First test that limited separation on the full development passages with actual hop timing; it will not by itself classify abrupt bass notes or other drums.",
+  "sources": [
+    {
+      "track": "apricots_128bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/apricots_128bpm/mix.wav",
+      "sha256": "fde3593f372875579a15b95d80cb1d4408971ba62dd80b84110623eecbba28c4",
+      "sample_rate": 48000
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/bad_guy_128bpm/mix.wav",
+      "sha256": "351ad2f07dc5778690b8f04c0af12c1acc8f83fdb3c253fc988e26a433cff7a8",
+      "sample_rate": 44100
+    },
+    {
+      "track": "feel_the_vibration_174bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/feel_the_vibration_174bpm/mix.wav",
+      "sha256": "57458b322198b9c12ac821180874466a6636c15dda56d33bc29d616f46f80533",
+      "sample_rate": 48000
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/inhale_exhale_145bpm/mix.wav",
+      "sha256": "26163ae92e4b7aaf74cafc6a5fff3b6bad2a566a60474bb8b8b53386add18514",
+      "sample_rate": 48000
+    },
+    {
+      "track": "late_night",
+      "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav",
+      "sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+      "sample_rate": 48000
+    },
+    {
+      "track": "midnight_patience",
+      "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav",
+      "sha256": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2",
+      "sample_rate": 48000
+    }
+  ],
+  "source_sha256": {
+    "kick_failure_casebook.py": "7d50017647f2b4f7bd03e17988cbddc52fb0a6007a1cbb98f49b281ae13833e4",
+    "kick_attack_rejection.py": "cb5e8ad261f64ae5b6e3bafce2f232e14ec99bb3fc54c0599f113dcfaed6a144",
+    "run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615",
+    "live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2",
+    "master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145"
+  },
+  "reference_sha256": {
+    "kick_rejection_trial_2026-10-09.json": "9b3de072ed16af97fe1dc6be350fd67e12c857296f289cf9b5ab1f946dc300c4",
+    "kick_attack_trial_2026-10-09.json": "461709621dbd1c5601e19f4dbcdf8332e77c1e0d5ae282db388d9b601d8d1d4e",
+    "master_kick_runs_2026-10-09.json": "1b37ad4a5f9492c9fae515a16b42d0b4ef877506014181291d38fed298d9ae4a"
+  },
+  "labels_sha256": {
+    "inhale_exhale_145bpm.csv": "a29b9892456588294efbf6f506da912d4f2d996fc105f9551b1b9d6db4077f4e",
+    "bad_guy_128bpm.csv": "d657d298ad98bee09e048922b465de4b4a69386a1482d8327be3207a37444ef7",
+    "attack_review.csv": "b29e872c8a8ec9d05902c7f76bc68b5a16399fc9cf0fd1ef669c598c8711a9ae",
+    "feel_the_vibration_174bpm.csv": "922be87c9a6a9eb03002b68ce5f87915e1fec4652921795c20cf6975a2bc21e8",
+    "apricots_128bpm.csv": "fa38b535e88b55580df3f90956935420070d95fb89441b30e625b1cdce45b163",
+    "tears_140bpm.csv": "f3ce02e72f191bd53bc86c611fce2efe56a55db4cb19b6f1434bdba80ce28576",
+    "bad_guy_128bpm.repair.json": "0d9f007d02da46f93dff1168ff321379a57310ab97397626812080389d955f11",
+    "master_passages_2026-10-09.json": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c"
+  },
+  "hybrid_report_sha256": "4c7d9b54e1595479e4d6e942d253ef8961402fee3ee912cf23185bcb7bbe4616",
+  "raw_report": {
+    "path": "/Users/peterkiemann/.cache/manifold/kick-failure-casebook-2026-10-09/cases.json",
+    "sha256": "3bac6fd7914a327dd521e5646d74936159300e35dd14885e0ea9c3d5f2983047"
+  },
+  "validation": {
+    "focused_tests": 3,
+    "case_label_and_recorded_fire_checks": 24,
+    "audio_hashes_verified": true
+  },
+  "limitations": [
+    "Selected diagnostic cases, not a representative accuracy benchmark or held-out test.",
+    "Positive windows end after label; negative windows end at firing. No claim of identical acoustic onset alignment. Positive +/-20 ms endpoint sensitivity is retained.",
+    "No classifier, fitted threshold, feature combination or prediction accuracy. Range overlap does not rule out multivariate separation.",
+    "20/35/50 ms FFT windows have approximately 50/29/20 Hz bin spacing; short low-frequency spectra are coarse and Hann windows emphasize window centres.",
+    "Features are causal at their endpoint; label-relative endpoints are offline oracle probes, not a proposed online onset detector.",
+    "Ablation establishes dependence, not instrument identity. Labels are not independently listened ground truth."
+  ],
+  "cases": [
+    {
+      "track": "apricots_128bpm",
+      "kind": "caught",
+      "time_s": 1.65,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": 19.333
+      },
+      "nominal_features": {
+        "20": [
+          4.483799,
+          0.026346,
+          0.031204,
+          0.150708,
+          2.824899,
+          4.617412
+        ],
+        "35": [
+          4.525724,
+          0.072754,
+          0.007188,
+          0.30817,
+          3.151481,
+          1.840727
+        ],
+        "50": [
+          5.961491,
+          0.138438,
+          0.005552,
+          0.316881,
+          2.784538,
+          0.916757
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.07335488790449751,
+          0.27011072843659134
+        ],
+        "35": [
+          0.06381922033291287,
+          0.33745424152086856
+        ],
+        "50": [
+          0.16382079137678374,
+          0.3940754347994886
+        ]
+      }
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "kind": "caught",
+      "time_s": 0.935,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": 13.526
+      },
+      "nominal_features": {
+        "20": [
+          8.927954,
+          0.551782,
+          0.010373,
+          0.280278,
+          1.45154,
+          1.745895
+        ],
+        "35": [
+          9.030096,
+          0.953922,
+          0.004364,
+          0.39148,
+          1.400419,
+          0.656938
+        ],
+        "50": [
+          8.483894,
+          0.976453,
+          0.00235,
+          0.553183,
+          1.381813,
+          0.208015
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.029394781658852898,
+          0.2802775339867867
+        ],
+        "35": [
+          0.1670054649743895,
+          0.4948287294264273
+        ],
+        "50": [
+          0.21004175790275814,
+          0.5531832543333135
+        ]
+      }
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "kind": "caught",
+      "time_s": 4.685,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": 9.671
+      },
+      "nominal_features": {
+        "20": [
+          8.152559,
+          0.54472,
+          0.010344,
+          0.272743,
+          1.451967,
+          1.879321
+        ],
+        "35": [
+          8.61473,
+          0.953253,
+          0.004424,
+          0.386059,
+          1.40316,
+          0.65995
+        ],
+        "50": [
+          8.684509,
+          0.97627,
+          0.002442,
+          0.578284,
+          1.390753,
+          0.108979
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.04739918079410799,
+          0.272742549358283
+        ],
+        "35": [
+          0.22260266974272203,
+          0.5981324182472808
+        ],
+        "50": [
+          0.18281355774056174,
+          0.6697495737460243
+        ]
+      }
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "kind": "extra_v5",
+      "time_s": 0.4849206349206349,
+      "evidence": {
+        "label_status": "extra against provisional reviewed labels",
+        "ablations_removing_event_within_30ms": [
+          "drums"
+        ],
+        "stem_power_proportions": {
+          "bass": 0.003157578004084075,
+          "drums": 0.9964781486483844,
+          "vocals": 7.49682569084026e-11,
+          "others": 0.00036427327256330626
+        }
+      },
+      "nominal_features": {
+        "20": [
+          9.389087,
+          0.15368,
+          0.066763,
+          0.654838,
+          1.703281,
+          3.64228
+        ],
+        "35": [
+          6.820389,
+          0.12354,
+          0.156692,
+          0.610087,
+          2.167221,
+          10.775774
+        ],
+        "50": [
+          5.651691,
+          0.206286,
+          0.161358,
+          0.259154,
+          2.48548,
+          8.365554
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.6548384148216999,
+          0.6548384148216999
+        ],
+        "35": [
+          0.6100869333871597,
+          0.6100869333871597
+        ],
+        "50": [
+          0.2591541713944173,
+          0.2591541713944173
+        ]
+      }
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "kind": "extra_v5",
+      "time_s": 4.231065759637188,
+      "evidence": {
+        "label_status": "extra against provisional reviewed labels",
+        "ablations_removing_event_within_30ms": [
+          "drums"
+        ],
+        "stem_power_proportions": {
+          "bass": 0.009424913447143036,
+          "drums": 0.9903794419814611,
+          "vocals": 3.1056305583689227e-11,
+          "others": 0.00019564454033954532
+        }
+      },
+      "nominal_features": {
+        "20": [
+          9.115388,
+          0.077633,
+          0.173843,
+          0.819084,
+          1.88244,
+          6.729327
+        ],
+        "35": [
+          6.387291,
+          0.247501,
+          0.182895,
+          0.384404,
+          2.364692,
+          8.242369
+        ],
+        "50": [
+          4.848041,
+          0.41379,
+          0.150077,
+          0.18807,
+          2.704267,
+          7.194543
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.8190838927124687,
+          0.8190838927124687
+        ],
+        "35": [
+          0.3844039409015031,
+          0.3844039409015031
+        ],
+        "50": [
+          0.18806957061668161,
+          0.18806957061668161
+        ]
+      }
+    },
+    {
+      "track": "feel_the_vibration_174bpm",
+      "kind": "caught",
+      "time_s": 3.305,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": 39.0
+      },
+      "nominal_features": {
+        "20": [
+          0.564902,
+          0.015006,
+          0.349618,
+          0.53595,
+          3.62757,
+          0.524124
+        ],
+        "35": [
+          0.803778,
+          0.02176,
+          0.257372,
+          0.485805,
+          3.554628,
+          0.630766
+        ],
+        "50": [
+          0.344634,
+          0.070209,
+          0.158811,
+          0.438892,
+          3.577615,
+          0.670393
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.06840111646792157,
+          0.535949941101749
+        ],
+        "35": [
+          0.17936943588306575,
+          0.4858050048895617
+        ],
+        "50": [
+          0.34129474390162773,
+          0.4388918159037519
+        ]
+      }
+    },
+    {
+      "track": "feel_the_vibration_174bpm",
+      "kind": "missed_50ms",
+      "time_s": 4.96,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": 53.333
+      },
+      "nominal_features": {
+        "20": [
+          -0.825769,
+          0.075893,
+          0.43996,
+          0.497554,
+          3.490082,
+          2.065225
+        ],
+        "35": [
+          -1.159683,
+          0.041172,
+          0.233961,
+          0.587215,
+          3.658176,
+          -1.336964
+        ],
+        "50": [
+          0.17871,
+          0.01605,
+          0.20767,
+          0.418536,
+          3.525753,
+          1.850574
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.02688249467463877,
+          0.497553692212666
+        ],
+        "35": [
+          0.07184967043711665,
+          0.5872147396340281
+        ],
+        "50": [
+          0.2584291470036747,
+          0.5381030238901283
+        ]
+      }
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "kind": "caught",
+      "time_s": 2.07,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": 15.333
+      },
+      "nominal_features": {
+        "20": [
+          8.399291,
+          0.173735,
+          0.007535,
+          0.215512,
+          1.252331,
+          1.048687
+        ],
+        "35": [
+          6.209856,
+          0.706832,
+          0.002497,
+          0.28832,
+          1.210648,
+          0.367472
+        ],
+        "50": [
+          4.797436,
+          0.890807,
+          0.001408,
+          0.359613,
+          1.273151,
+          -0.42108
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.006885881278890449,
+          0.43319691066408017
+        ],
+        "35": [
+          0.28831961344445056,
+          0.6344313776647064
+        ],
+        "50": [
+          0.3596133313364326,
+          0.5887974414170609
+        ]
+      }
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "kind": "missed_50ms",
+      "time_s": 12.62,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": null,
+        "without_bass_counterfactual": {
+          "audio_path": "/Users/peterkiemann/.cache/manifold/kick-rejection-trial-2026-10-09/inhale_exhale_145bpm__without_bass.wav",
+          "sha256": "35fcc23c263a182cd390a6dd39cb7c9ccc2cf3bb3505c8ca47b1d73baa4889f3",
+          "nearby_recorded_fires_s": [
+            12.64
+          ],
+          "features_at_label_plus_50ms": {
+            "growth_db": 14.991769959148932,
+            "low_fraction": 0.9096628170253108,
+            "high_fraction": 0.014418285832582457,
+            "spectral_change": 0.8648265122702126,
+            "crest": 2.05161810287371,
+            "tail_head_db": 0.2854015584020974
+          },
+          "limit": "Offline stem subtraction, not live separation or proof that the nearby fire identifies this kick."
+        }
+      },
+      "nominal_features": {
+        "20": [
+          2.450633,
+          0.551255,
+          0.080862,
+          0.247399,
+          1.748436,
+          2.482948
+        ],
+        "35": [
+          2.267593,
+          0.864698,
+          0.022484,
+          0.326236,
+          1.705495,
+          0.726195
+        ],
+        "50": [
+          0.852549,
+          0.924078,
+          0.013127,
+          0.365683,
+          1.904597,
+          -1.834881
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.007675971592387643,
+          0.24739877681241873
+        ],
+        "35": [
+          0.16448517764206727,
+          0.3554138054889111
+        ],
+        "50": [
+          0.10644163169257781,
+          0.6162633655778145
+        ]
+      }
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "kind": "extra_v5",
+      "time_s": 1.2906666666666666,
+      "evidence": {
+        "label_status": "extra against provisional reviewed labels",
+        "ablations_removing_event_within_30ms": [
+          "bass"
+        ],
+        "stem_power_proportions": {
+          "bass": 0.9983602973429742,
+          "drums": 1.032634506332539e-09,
+          "vocals": 0.0014734817819130502,
+          "others": 0.000166219842478193
+        }
+      },
+      "nominal_features": {
+        "20": [
+          5.894206,
+          0.597186,
+          0.048946,
+          0.227332,
+          2.179248,
+          5.127746
+        ],
+        "35": [
+          6.654067,
+          0.261007,
+          0.112575,
+          0.373564,
+          2.660162,
+          5.459381
+        ],
+        "50": [
+          9.847216,
+          0.16282,
+          0.266023,
+          0.632939,
+          2.927631,
+          5.009754
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.22733225290048364,
+          0.22733225290048364
+        ],
+        "35": [
+          0.37356398057758655,
+          0.37356398057758655
+        ],
+        "50": [
+          0.632938511566816,
+          0.632938511566816
+        ]
+      }
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "kind": "extra_v5",
+      "time_s": 7.9093333333333335,
+      "evidence": {
+        "label_status": "extra against provisional reviewed labels",
+        "ablations_removing_event_within_30ms": [
+          "bass"
+        ],
+        "stem_power_proportions": {
+          "bass": 0.9987173363052404,
+          "drums": 1.3939255875095796e-09,
+          "vocals": 0.0007797275210244377,
+          "others": 0.0005029347798095789
+        }
+      },
+      "nominal_features": {
+        "20": [
+          4.396907,
+          0.467728,
+          0.115116,
+          0.239788,
+          2.488908,
+          6.753175
+        ],
+        "35": [
+          7.268692,
+          0.306826,
+          0.237774,
+          0.52029,
+          2.962535,
+          5.367393
+        ],
+        "50": [
+          23.135833,
+          0.185785,
+          0.458098,
+          0.627843,
+          3.250381,
+          4.101965
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.23978795136799647,
+          0.23978795136799647
+        ],
+        "35": [
+          0.5202900120896039,
+          0.5202900120896039
+        ],
+        "50": [
+          0.627842713366867,
+          0.627842713366867
+        ]
+      }
+    },
+    {
+      "track": "late_night",
+      "kind": "caught",
+      "time_s": 199.585,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": 25.667
+      },
+      "nominal_features": {
+        "20": [
+          0.657076,
+          0.510471,
+          0.019963,
+          0.151046,
+          1.883937,
+          0.162737
+        ],
+        "35": [
+          0.884748,
+          0.309151,
+          0.011368,
+          0.427031,
+          1.928773,
+          -0.406121
+        ],
+        "50": [
+          0.383077,
+          0.392765,
+          0.00934,
+          0.612842,
+          1.846393,
+          0.301162
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.042075555327051095,
+          0.47472503273290234
+        ],
+        "35": [
+          0.2921002533514948,
+          0.6582530050069411
+        ],
+        "50": [
+          0.47077901717628345,
+          0.6128424917300583
+        ]
+      }
+    },
+    {
+      "track": "late_night",
+      "kind": "caught",
+      "time_s": 205.56,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": 13.333
+      },
+      "nominal_features": {
+        "20": [
+          0.541114,
+          0.409992,
+          0.020626,
+          0.277811,
+          2.067758,
+          0.488731
+        ],
+        "35": [
+          -0.339792,
+          0.18849,
+          0.031128,
+          0.537258,
+          2.106175,
+          0.422865
+        ],
+        "50": [
+          0.166793,
+          0.491866,
+          0.028487,
+          0.581316,
+          1.968737,
+          1.377486
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.04433206380047516,
+          0.27781131935803816
+        ],
+        "35": [
+          0.05756466023053808,
+          0.5372578357077649
+        ],
+        "50": [
+          0.24342588790388264,
+          0.5813163882677885
+        ]
+      }
+    },
+    {
+      "track": "late_night",
+      "kind": "missed_50ms",
+      "time_s": 204.45,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": null
+      },
+      "nominal_features": {
+        "20": [
+          -0.626459,
+          0.169437,
+          0.044807,
+          0.476084,
+          2.390681,
+          0.944758
+        ],
+        "35": [
+          -1.420449,
+          0.195093,
+          0.045163,
+          0.650265,
+          2.289073,
+          1.42938
+        ],
+        "50": [
+          -1.453062,
+          0.549511,
+          0.034476,
+          0.712176,
+          2.279844,
+          2.220829
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.126964438474097,
+          0.47608410942383683
+        ],
+        "35": [
+          0.24332885844634644,
+          0.6502649457346086
+        ],
+        "50": [
+          0.5037850034479439,
+          0.7121761012061737
+        ]
+      }
+    },
+    {
+      "track": "late_night",
+      "kind": "missed_50ms",
+      "time_s": 204.725,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": null
+      },
+      "nominal_features": {
+        "20": [
+          -0.285385,
+          0.140982,
+          0.018104,
+          0.497351,
+          2.435619,
+          2.258215
+        ],
+        "35": [
+          -1.864953,
+          0.123782,
+          0.009247,
+          0.68891,
+          2.252668,
+          1.230914
+        ],
+        "50": [
+          -1.552559,
+          0.430299,
+          0.007176,
+          0.743483,
+          2.238936,
+          3.235755
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.030987615405438595,
+          0.49735129544524315
+        ],
+        "35": [
+          0.13213499274547458,
+          0.6889098940577044
+        ],
+        "50": [
+          0.4279503716041021,
+          0.7434827855517688
+        ]
+      }
+    },
+    {
+      "track": "late_night",
+      "kind": "missed_50ms",
+      "time_s": 210.975,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": null
+      },
+      "nominal_features": {
+        "20": [
+          1.547132,
+          0.496492,
+          0.01017,
+          0.142494,
+          1.975663,
+          0.29187
+        ],
+        "35": [
+          0.303798,
+          0.321396,
+          0.008837,
+          0.352378,
+          2.184002,
+          -1.217537
+        ],
+        "50": [
+          0.736132,
+          0.410493,
+          0.00842,
+          0.347872,
+          2.062371,
+          0.18484
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.1263292148176426,
+          0.3033170689243615
+        ],
+        "35": [
+          0.18299503345406698,
+          0.5290857109417457
+        ],
+        "50": [
+          0.30540555547816095,
+          0.5986362577513002
+        ]
+      }
+    },
+    {
+      "track": "late_night",
+      "kind": "extra_hybrid_kick_free",
+      "time_s": 128.07466666666667,
+      "evidence": {
+        "label_status": "reviewed kick-free master passage",
+        "passage": "late_night_bass_heavy"
+      },
+      "nominal_features": {
+        "20": [
+          1.087505,
+          0.451266,
+          0.010147,
+          0.129672,
+          2.606718,
+          -5.297417
+        ],
+        "35": [
+          -0.198133,
+          0.739784,
+          0.00643,
+          0.05978,
+          2.743877,
+          -0.844406
+        ],
+        "50": [
+          0.381885,
+          0.607702,
+          0.010829,
+          0.065193,
+          2.602825,
+          -0.29962
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.1296717148933405,
+          0.1296717148933405
+        ],
+        "35": [
+          0.05977996061049684,
+          0.05977996061049684
+        ],
+        "50": [
+          0.06519279000407319,
+          0.06519279000407319
+        ]
+      }
+    },
+    {
+      "track": "late_night",
+      "kind": "extra_hybrid_kick_free",
+      "time_s": 132.78933333333333,
+      "evidence": {
+        "label_status": "reviewed kick-free master passage",
+        "passage": "late_night_bass_heavy"
+      },
+      "nominal_features": {
+        "20": [
+          0.576511,
+          0.748076,
+          0.006042,
+          0.048153,
+          2.29135,
+          1.471155
+        ],
+        "35": [
+          0.806103,
+          0.500818,
+          0.013033,
+          0.06054,
+          2.794861,
+          1.06775
+        ],
+        "50": [
+          0.640424,
+          0.48239,
+          0.01119,
+          0.066749,
+          2.886506,
+          -0.691025
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.04815253980657308,
+          0.04815253980657308
+        ],
+        "35": [
+          0.060539839191565914,
+          0.060539839191565914
+        ],
+        "50": [
+          0.06674873972482731,
+          0.06674873972482731
+        ]
+      }
+    },
+    {
+      "track": "midnight_patience",
+      "kind": "caught",
+      "time_s": 116.5,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": 22.667
+      },
+      "nominal_features": {
+        "20": [
+          5.632689,
+          0.261821,
+          0.013941,
+          0.454381,
+          1.820233,
+          2.165267
+        ],
+        "35": [
+          6.138976,
+          0.569978,
+          0.004279,
+          0.530217,
+          1.800368,
+          0.815951
+        ],
+        "50": [
+          7.416507,
+          0.854378,
+          0.002208,
+          0.550082,
+          1.647186,
+          1.898814
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.034478347657980746,
+          0.4543807759970244
+        ],
+        "35": [
+          0.12557574275780414,
+          0.5302169976709158
+        ],
+        "50": [
+          0.28274923141206676,
+          0.5500822899850695
+        ]
+      }
+    },
+    {
+      "track": "midnight_patience",
+      "kind": "missed_50ms",
+      "time_s": 116.96,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": null
+      },
+      "nominal_features": {
+        "20": [
+          0.226287,
+          0.62063,
+          0.173794,
+          0.140048,
+          2.514269,
+          0.665899
+        ],
+        "35": [
+          0.34351,
+          0.658605,
+          0.137545,
+          0.196131,
+          2.687745,
+          -1.508088
+        ],
+        "50": [
+          0.397662,
+          0.666811,
+          0.166785,
+          0.260123,
+          2.78521,
+          -0.440245
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.05426538880360554,
+          0.14004782807324345
+        ],
+        "35": [
+          0.19613120882271684,
+          0.4538893682570091
+        ],
+        "50": [
+          0.2601225266846937,
+          0.3828815835029433
+        ]
+      }
+    },
+    {
+      "track": "midnight_patience",
+      "kind": "missed_50ms",
+      "time_s": 121.845,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": null
+      },
+      "nominal_features": {
+        "20": [
+          -3.491804,
+          0.089849,
+          0.069012,
+          0.45724,
+          2.797468,
+          1.831019
+        ],
+        "35": [
+          -3.450268,
+          0.213115,
+          0.046459,
+          0.648677,
+          2.858575,
+          1.444726
+        ],
+        "50": [
+          -4.652975,
+          0.516539,
+          0.034588,
+          0.355056,
+          2.603219,
+          2.277037
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.10223365363940895,
+          0.45724041521917225
+        ],
+        "35": [
+          0.3398910364188753,
+          0.6486768424246576
+        ],
+        "50": [
+          0.2803045621065806,
+          0.5611022326175285
+        ]
+      }
+    },
+    {
+      "track": "midnight_patience",
+      "kind": "missed_50ms",
+      "time_s": 126.96,
+      "evidence": {
+        "label_status": "provisional visual",
+        "associated_v5_delay_ms": null
+      },
+      "nominal_features": {
+        "20": [
+          2.763298,
+          0.228772,
+          0.374319,
+          0.231311,
+          3.263631,
+          -2.422623
+        ],
+        "35": [
+          2.69985,
+          0.188671,
+          0.361284,
+          0.289671,
+          3.725572,
+          -3.353792
+        ],
+        "50": [
+          2.631866,
+          0.204197,
+          0.264642,
+          0.292336,
+          3.89854,
+          -2.318047
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.12969376586338843,
+          0.33551470515781145
+        ],
+        "35": [
+          0.28967090345039803,
+          0.6007090299648679
+        ],
+        "50": [
+          0.29233596615877055,
+          0.6325686542217283
+        ]
+      }
+    },
+    {
+      "track": "midnight_patience",
+      "kind": "extra_hybrid_kick_free",
+      "time_s": 28.256,
+      "evidence": {
+        "label_status": "reviewed kick-free master passage",
+        "passage": "midnight_patience_bass_heavy"
+      },
+      "nominal_features": {
+        "20": [
+          0.461057,
+          0.73908,
+          0.000723,
+          0.010906,
+          1.916816,
+          -0.128364
+        ],
+        "35": [
+          -1.034683,
+          0.975451,
+          0.000178,
+          0.044917,
+          1.979711,
+          -1.789574
+        ],
+        "50": [
+          0.812727,
+          0.96152,
+          0.000769,
+          0.008225,
+          1.926602,
+          -0.236193
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.010905773943181152,
+          0.010905773943181152
+        ],
+        "35": [
+          0.04491747211809949,
+          0.04491747211809949
+        ],
+        "50": [
+          0.008225197704569975,
+          0.008225197704569975
+        ]
+      }
+    },
+    {
+      "track": "midnight_patience",
+      "kind": "extra_hybrid_kick_free",
+      "time_s": 32.688,
+      "evidence": {
+        "label_status": "reviewed kick-free master passage",
+        "passage": "midnight_patience_bass_heavy"
+      },
+      "nominal_features": {
+        "20": [
+          1.575192,
+          0.769903,
+          0.000845,
+          0.006106,
+          1.990611,
+          -4.530596
+        ],
+        "35": [
+          -0.476901,
+          0.910594,
+          0.000211,
+          0.015298,
+          2.085931,
+          -0.547909
+        ],
+        "50": [
+          0.746036,
+          0.818263,
+          0.00032,
+          0.016202,
+          2.012522,
+          0.445605
+        ]
+      },
+      "spectral_change_endpoint_sensitivity": {
+        "20": [
+          0.0061064276715091514,
+          0.0061064276715091514
+        ],
+        "35": [
+          0.015297584792813956,
+          0.015297584792813956
+        ],
+        "50": [
+          0.016202026296446292,
+          0.016202026296446292
+        ]
+      }
+    }
+  ],
+  "reproduce": "PYTHONPATH=tools/audio_analysis python3 -m eval.kick_failure_casebook --audio-root PATH --hybrid-report ~/.cache/manifold/kick-hybrid-2026-10-09/mixes-presence.json --out PATH. Requires original full mixes, masters and hash-verified prior Inhale no-bass diagnostic WAV. No held-out audio used.",
+  "generalisation_requirement": {
+    "scope": "Case studies diagnose mechanisms; no song-specific rules or thresholds.",
+    "development": "All seven previously evaluated recordings; casebook samples six. These cannot be presented as unseen validation.",
+    "candidate": "One shared configuration. Report misses, extras and timing per track; pooled scores must not conceal regressions. Freeze settings and evaluation criteria before held-out scoring.",
+    "held_out": [
+      "Miracle",
+      "Heavy On Mind"
+    ],
+    "split": "Whole recordings, never random windows from an already-used track. If held-out outcomes influence revisions, treat those tracks as development and obtain fresh independent material."
+  }
+}
