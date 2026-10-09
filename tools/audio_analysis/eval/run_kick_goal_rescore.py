@@ -70,7 +70,8 @@ def show(s):
 
 
 def main():
-    g = Goal()
+    mode = sys.argv[1] if len(sys.argv) > 1 else "strict"
+    g = Goal(mode=mode)
     out = {}
     for name, fn in (('frozen_baseline', baseline_logit), ('frozen_h18', lambda d, o, t: h18_logit(d, o, t))):
         out[name] = frozen(g, fn, name)
@@ -82,7 +83,7 @@ def main():
         h, _ = heldout(g, fit, pred, cache, name=name + '_new')
         out[name + '_new'] = h
         show(h)
-    (GOAL / 'results_rescore.json').write_text(json.dumps(out, indent=1, default=float))
+    (GOAL / f'results_rescore_{mode}.json').write_text(json.dumps(out, indent=1, default=float))
 
 
 if __name__ == '__main__':

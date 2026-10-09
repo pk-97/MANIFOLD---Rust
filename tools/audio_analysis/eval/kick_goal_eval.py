@@ -152,15 +152,47 @@ class Goal:
         return spans
 
 
-def training_set(g, tracks):
+def training_set(g, tracks, whole=False, feats='features'):
+    """Song-equal, class-balanced rows. whole=True uses whole-song kick-stem truth
+    where the song has a kick stem (add_whole_song_truth), else the scored truth."""
     xs, ys, ws = [], [], []
     for t in tracks:
         r = g.records[t]
-        m = r['training_mask']
-        y = r['labels'][m]
+        m, y_all = (r['train_mask'], r['train_y']) if whole and 'train_mask' in r else (r['training_mask'], r['labels'])
+        y = y_all[m]
         w = np.where(y == 1, .5 / max(1, y.sum()), .5 / max(1, (1 - y).sum()))
-        xs.append(r['features'][m]); ys.append(y); ws.append(w)
+        xs.append(r[feats][m]); ys.append(y); ws.append(w)
     return np.concatenate(xs), np.concatenate(ys), np.concatenate(ws)
+
+
+def add_whole_song_truth(g):
+    """Training-only truth over whole dev own-stem songs, by the new-song rule:
+    fresh kick-stem attacks (with the level floor), drum-bus kicks without one
+    are uncertain, first and last 1.2 s excluded. Scoring still uses v2."""
+    from tools.audio_analysis.eval.kick_goal_labels import drum_kicks
+    for t in TRACKS:
+        if t not in DEV_STEMS:
+            continue
+        r = g.records[t]
+        sr, hop = r['sample_rate'], r['hop']
+        dur = len(read_audio(r['source']['audio_path'])[1]) / sr
+        bus = drum_kicks(load(DEV_STEMS[t]['drums'][0], sr), sr) + r['lag']
+        kicks = r['stem_kicks']
+        regions = [(0.0, 1.2), (dur - 1.2, dur + 1.0)] + [(u - .07, u + .2) for u in bus if not np.any(np.abs(kicks - u) <= .07)]
+        regions.sort()
+        merged = []
+        for a, b in regions:
+            if merged and a <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
+            else:
+                merged.append((a, b))
+        truth = [float(k) for k in kicks if 1.2 < k < dur - 1.2 and not any(a <= k <= b for a, b in merged)]
+        src = dict(track=t, group='original_five', truth=truth, regions=[dict(start_s=a, end_s=b) for a, b in merged])
+        m, y, _ = training_labels(src, None, r['candidates'], r['available'], sr, hop, dur)
+        r['train_mask'], r['train_y'] = m, y
+    for t, r in g.records.items():
+        if 'train_mask' not in r:
+            r['train_mask'], r['train_y'] = r['training_mask'], r['labels']
 
 
 def score(g, t, p, th):
