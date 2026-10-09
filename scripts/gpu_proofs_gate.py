@@ -169,16 +169,21 @@ def build_tests(manifest_path: Path, runs: list[dict]) -> int:
     """Compile every run's test binaries with no GPU lock held, so the hold
     covers test time only: the run that follows re-checks fingerprints and
     starts testing. Returns the first nonzero cargo exit, else 0."""
-    built: list[list[str]] = []
+    packages = {}
     for run in runs:
         package = run.get("package")
         if not package:
             raise ValueError("GPU proof run has no Cargo package owner")
-        cmd = cargo_test_cmd(manifest_path, run["targets"], run["full"], run["lib"],
-                             package) + ["--no-run"]
-        if cmd in built:
-            continue
-        built.append(cmd)
+        build = packages.setdefault(package, {"targets": set(), "full": False, "lib": False})
+        build["full"] |= run["full"]
+        build["lib"] |= run["lib"]
+        build["targets"].update(run["targets"] or ([] if run["lib"] else ["gpu_proofs"]))
+    for package, build in packages.items():
+        # Cargo can build a package's selected library and integration tests
+        # together; execution and pass receipts remain scoped to each run.
+        cmd = cargo_test_cmd(manifest_path,
+                             None if build["full"] else sorted(build["targets"]),
+                             build["full"], build["lib"], package) + ["--no-run"]
         print(f"$ {' '.join(cmd)}", flush=True)
         code = subprocess.run(cmd, env=build_environment()).returncode
         if code:
@@ -1035,7 +1040,11 @@ def _main() -> int:
               flush=True)
         for note in plan.notes:
             print(f"  note: {note}")
-        runs = [dict(r, full=False) for r in plan.runs()]
+        try:
+            runs = [dict(r, full=False) for r in plan.runs()]
+        except ValueError as error:
+            print(f"GPU-PROOFS SCOPE: FAIL - {error}")
+            return 2
 
     try:
         runs = normalize_runs(workspace, runs)
@@ -1084,6 +1093,16 @@ def _main() -> int:
             if (hung or parse_failed_tests(output) or parse_golden_mismatches(output)
                     or any(status == "FAILED" for _, status, _, _ in parse_binaries(output))
                     or any(timing_fields(t)[4] == "FAILED" for t in run_timings)):
+                code = code or 1
+            # A moved or disabled owned proof must not become an empty green
+            # run after the other harnesses have been pruned.
+            names = [timing_fields(t)[2] for t in run_timings if timing_fields(t)[4] == "ok"]
+            missing = [f for f in run["filters"]
+                       if gpu_scope.GPU_FILTER_TARGETS.get(f) == (run["package"], run["target"])
+                       and not any(f in name for name in names)]
+            if missing:
+                print(f"GPU-PROOFS SCOPE: FAIL - {run['package']}/{run['target']} "
+                      f"did not pass owned filters: {', '.join(missing)}")
                 code = code or 1
             exit_code = exit_code or code
             outputs.append(output)

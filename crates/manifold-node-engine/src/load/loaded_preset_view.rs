@@ -1,32 +1,14 @@
-//! Runtime view of a JSON-loaded preset — the section 11 replacement for
-//! [`crate::node_graph::chain_spec::ChainSpec`].
+//! Runtime view of a catalog preset.
 //!
-//! A [`LoadedPresetView`] pairs the canonical [`EffectGraphDef`] (from
-//! `assets/effect-presets/<TypeId>.json`) with the renderer-side
-//! runtime type [`ParamBinding`] reconstructed from
-//! the JSON's `presetMetadata` block. It carries everything the chain
-//! builder needs to graft an effect's worker subgraph into a chain
-//! and to wire up parameter routing — exactly the same surface
-//! [`ChainSpec`] provides, sourced from JSON instead of an inventory
-//! submission.
+//! A [`LoadedPresetView`] pairs the canonical [`EffectGraphDef`] loaded from
+//! the current catalog with its renderer-side [`ParamBinding`] values. The
+//! effect chain consumes the graph through
+//! [`crate::load::chain_spec::splice_def_into_chain`], while editor routing
+//! uses the same bindings.
 //!
-//! Today this module is **parallel infrastructure**: views are built
-//! lazily on demand and cached, but the chain runtime
-//! ([`crate::effect_chain_graph`]) still consults [`chain_spec_by_id`]
-//! for bindings. Block 6b/6c rewires the chain build loop to
-//! use [`loaded_preset_view_by_id`] instead; block 8 deletes the
-//! inventory `ChainSpec` submissions once that switch is complete.
-//!
-//! ## Lifecycle
-//!
-//! Views are built once on first lookup per effect id, leaking owned
-//! `String`s into `&'static str` so the resulting [`ParamBinding`]
-//! matches the lifetime contract the renderer-side types
-//! already use. The leak is bounded — at most one view per shipping
-//! effect, ~30 strings each — and amortised over the process lifetime.
-//! Same pattern as
-//! [`crate::node_graph::persistence::PrimitiveRegistry`] builds its
-//! constructor map.
+//! Views are rebuilt when the catalog generation changes. The cache returns
+//! process-lifetime references, so each generation retains its view and any
+//! leaked binding labels.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -45,57 +27,29 @@ use crate::scene::mesh_change::PreparedMeshRules;
 use crate::param_binding::{ParamBinding, ParamId, ParamTarget};
 use crate::snapshot::{GraphSnapshot, OuterParamRouting, OuterParamSource};
 
-/// Runtime view assembled from a JSON-loaded preset. Replaces the
-/// inventory-submitted `ChainSpec` that used to ship as a static
-/// `splice` fn plus a canonical graph builder; this view keeps the
-/// same effective shape but sources `canonical_def` and `bindings`
-/// from JSON. The chain builder uses
-/// [`crate::node_graph::splice_def_into_chain`] with `canonical_def`
-/// to produce equivalent worker nodes.
+/// Runtime view assembled from a catalog preset. The chain builder splices
+/// `canonical_def` into the active graph and uses `bindings` for parameter
+/// routing.
 pub struct LoadedPresetView {
     pub type_id: PresetTypeId,
-    /// The canonical default graph for this effect, loaded from
-    /// `assets/effect-presets/<id>.json`. Identical to what the
-    /// existing `ChainSpec::build_canonical_graph()` produces today —
-    /// drift would be caught by the
-    /// `bundled_presets_match_canonical_splices` test.
-    ///
-    /// `Arc`, not `&'static`, since [`LoadedPresetView`] is the same struct
-    /// the FUSED cache uses (FUSION_SOTA_DESIGN D5): a canonical view builds
-    /// this once at startup (`Arc::new`, genuinely session-lived — no
-    /// per-edit leak) while a fused view builds a fresh `Arc` per fuse, owned
-    /// and evictable by the cache's LRU rather than `Box::leak`'d.
+    /// Canonical graph loaded from the current catalog. The `Arc` shares this
+    /// graph between consumers of one view.
     pub canonical_def: Arc<EffectGraphDef>,
-    /// Outer-card slider bindings. Owned (not leaked): same D5 rationale as
-    /// [`Self::canonical_def`] — the canonical build owns this once at
-    /// startup, a fused build owns a freshly retargeted copy per fuse.
+    /// Outer-card slider bindings reconstructed from `presetMetadata`.
     pub bindings: Vec<ParamBinding>,
-    /// Fusion binding-retarget map, populated only on **fused** views
-    /// (empty for the plain JSON-loaded view). `(original stable
-    /// node_id, original param) → (fused node id, fused uniform field
-    /// `n{idx}_<param>`)`. Static card bindings on this view are already
-    /// retargeted; this map exists so the chain builder can retarget a
-    /// *per-instance* user binding (`PresetInstance.user_param_bindings`,
-    /// which lives off the def and so is invisible to content-keyed
-    /// fusion) onto the fused node, exactly as the static bindings were.
-    /// Without it a user-exposed slider resolves against a node the fuse
-    /// collapsed away and silently goes inert once the effect re-fuses.
+    /// Fusion binding-retarget map, populated only on fused views. It maps
+    /// original node parameters to their fused uniform fields so per-instance
+    /// user bindings continue to resolve after fusion.
     pub fused_retarget: AHashMap<(String, String), (NodeId, String)>,
-    /// Mesh-revision rules for this view's graph, keyed by generated node id
-    /// (design §3.3). Empty on canonical/unfused views; populated on fused
-    /// views by the freeze compiler (composition lands in P2b). Not
-    /// serialized — regenerated from canonical graphs after reload.
+    /// Mesh-revision rules keyed by generated node id. Empty on canonical
+    /// views and regenerated for fused views; never serialized.
     pub mesh_rules: PreparedMeshRules,
 }
 
-/// Generation-stamped cache of leaked `&'static LoadedPresetView`s. Keeps
-/// the `&'static` return (the render path stores `view.canonical_def:
-/// &'static EffectGraphDef` and `view.bindings: &'static [_]`) while
-/// allowing a hot-reload (step 10) to rebuild the map from the new catalog.
-///
-/// At rest the generation never moves, so [`loaded_preset_view_by_id`] is
-/// one relaxed atomic compare + an `ArcSwap` pointer load + an
-/// `AHashMap::get` — the same cost class as the old `OnceLock`.
+/// Generation-stamped cache of leaked `&'static LoadedPresetView`s. Rebuilding
+/// after a catalog reload replaces the lookup map, but old views and binding
+/// labels remain allocated for the process lifetime because callers retain the
+/// static references.
 struct ViewCache {
     generation: AtomicU64,
     map: ArcSwap<AHashMap<PresetTypeId, &'static LoadedPresetView>>,
@@ -106,11 +60,9 @@ static VIEW_CACHE: std::sync::LazyLock<ViewCache> = std::sync::LazyLock::new(|| 
     map: ArcSwap::from_pointee(AHashMap::default()),
 });
 
-/// Lookup a [`LoadedPresetView`] by effect type id, building it on
-/// first call (and after each hot-reload generation bump) and caching for
-/// the process lifetime. Returns `None` for effects whose JSON file doesn't
-/// carry `presetMetadata` (i.e., v1 entries — not yet migrated by section 11
-/// block 4).
+/// Look up a [`LoadedPresetView`] by type id, rebuilding the generation cache
+/// after a catalog reload. Returns `None` when the catalog definition lacks
+/// `presetMetadata` or cannot be prepared.
 pub fn loaded_preset_view_by_id(id: &PresetTypeId) -> Option<&'static LoadedPresetView> {
     let generation = crate::load::preset_loader::catalog_generation();
     if VIEW_CACHE.generation.load(Ordering::Acquire) != generation {
@@ -127,10 +79,8 @@ fn rebuild_view_cache(generation: u64) {
 
 fn build_view_map() -> AHashMap<PresetTypeId, &'static LoadedPresetView> {
     let mut m: AHashMap<PresetTypeId, &'static LoadedPresetView> = AHashMap::default();
-    // Both kinds — effect and generator ids are globally disjoint, so one
-    // id-keyed view map serves both. Generators gain editor snapshot +
-    // reshape views here (#4); `bundled_preset_def` is kind-agnostic (A3),
-    // and a generator without `presetMetadata` simply yields no view.
+    // Effect and generator ids share one map because their type ids are
+    // globally disjoint. Definitions without `presetMetadata` have no view.
     use crate::load::catalog_source::preset_type_ids as bundled_preset_type_ids;
     use manifold_core::preset_def::PresetKind;
     for type_id in bundled_preset_type_ids(PresetKind::Effect)
@@ -160,13 +110,11 @@ fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
     } else { def.preset_metadata.as_ref()? };
     Some(LoadedPresetView {
         type_id: type_id.clone(),
-        // `bundled_preset_def` stays `&'static` (bundled-preset parsing is
-        // out of D5's scope) — one clone into the view's own `Arc`, at
-        // startup, per shipped preset. Bounded, not a per-edit leak.
+        // Clone the catalog definition into the view so it remains valid
+        // across catalog snapshot swaps.
         canonical_def: Arc::new(def.clone()),
         bindings: owned_bindings(metadata)?,
-        // Unfused view — no retargeting; user bindings resolve directly
-        // against the canonical inner nodes.
+        // Canonical view: user bindings resolve directly against inner nodes.
         fused_retarget: AHashMap::default(),
         mesh_rules: PreparedMeshRules::default(),
     })
@@ -185,9 +133,8 @@ fn binding_def_to_runtime(
 ) -> Option<ParamBinding> {
     let target = target_def_to_runtime(&def.target)?;
     let label: &'static str = Box::leak(def.label.clone().into_boxed_str());
-    // Slider response + range come from the owning card param (Phase 2's
-    // `ParamSpecDef.curve`/`.invert` + min/max). Composite/fan-out bindings with
-    // no matching param fall back to identity (0..1, Linear, no invert).
+    // Slider response and range come from the owning card parameter. Composite
+    // bindings without a matching parameter use the identity response.
     let (min, max, curve, invert) = param
         .map(|p| (p.min, p.max, p.curve, p.invert))
         .unwrap_or((0.0, 1.0, Default::default(), false));
@@ -211,9 +158,7 @@ fn target_def_to_runtime(def: &BindingTarget) -> Option<ParamTarget> {
     Some(match def {
         BindingTarget::Node { node_id, param } => ParamTarget::Node {
             node_id: node_id.clone(),
-            // Owned, not leaked: `ParamTarget::Node::param` is `Cow` now
-            // (D5) — a canonical binding's param name is a one-time owned
-            // allocation at startup instead of a `Box::leak`.
+            // Names from the catalog are owned by this binding.
             param: Cow::Owned(param.clone()),
         },
         BindingTarget::Composite { outer_name } => ParamTarget::Composite {
@@ -226,26 +171,18 @@ fn target_def_to_runtime(def: &BindingTarget) -> Option<ParamTarget> {
     })
 }
 
-/// Build the editor-canvas snapshot for a loaded preset. Reconstructs
-/// a temporary `Graph` from the JSON's canonical def via
-/// [`GraphSnapshot::from_def`] (same path the per-card-override
-/// snapshot already uses) and overlays the outer→inner routings the
-/// inspector needs to gray out driven rows. Returns `None` if the
-/// canonical def fails to materialize (mismatched primitives,
-/// unsupported version) — caller treats that as "no active graph".
+/// Build the editor-canvas snapshot for a catalog preset and overlay the
+/// outer-to-inner routings used to mark driven rows. Returns `None` if the
+/// canonical definition cannot materialize.
 pub fn snapshot_for_view(view: &LoadedPresetView) -> Option<GraphSnapshot> {
     let mut snap = GraphSnapshot::from_def(&view.canonical_def)?;
     snap.outer_routings = outer_routings_from_view(view);
     Some(snap)
 }
 
-/// Collect `node_id → handle` for every node in `nodes`, descending into
-/// group bodies so a binding targeting a node inside a group still resolves
-/// (BUG-103). Handles are unique within a display def (the flattener's
-/// group-name prefixing is a runtime-build step, not applied to this def), so
-/// keying by the raw `node_id` and reading the raw `handle` matches how the
-/// editor's grouped snapshot names its inner rows. Boundary nodes (empty
-/// `node_id`, `handle: None`) are skipped by the `handle.as_deref()` filter.
+/// Collect `node_id → handle` for every node in `nodes`, including group
+/// bodies. Handles are read from the display definition; boundary nodes with
+/// no handle are skipped.
 pub fn collect_node_handles<'a>(
     nodes: &'a [manifold_core::effect_graph_def::EffectGraphNode],
     out: &mut std::collections::HashMap<&'a str, &'a str>,
@@ -261,29 +198,12 @@ pub fn collect_node_handles<'a>(
 }
 
 /// Translate a [`LoadedPresetView`]'s bindings into editor
-/// [`OuterParamRouting`]s — same projection
-/// `EffectRegistry::outer_routings_for` used to perform off a
-/// `ChainSpec`, sourced from the JSON-loaded bindings instead. One
-/// entry per binding whose target is a named-handle inner node
-/// (composite/custom variants don't surface a handle and are
-/// skipped).
+/// [`OuterParamRouting`]s. Bindings whose target has no named inner handle are
+/// skipped.
 pub fn outer_routings_from_view(view: &LoadedPresetView) -> Vec<OuterParamRouting> {
-    // node_id → display handle. The routing carries the *handle* because
-    // the editor keys its per-node rows by handle within a single
-    // snapshot (where handles are unique); the binding addresses by id,
-    // resolved here against the canonical def's nodes.
-    //
-    // Recurses into group bodies (BUG-103): a binding whose target lives
-    // INSIDE a group — the glTF importer's per-object Metallic/Roughness
-    // knobs target `mat_k` nodes that sit inside each object's group box —
-    // is dropped by a top-level-only handle map, so the outer→inner routing
-    // never reaches the editor and the group face shows no D6 mirror row for
-    // exactly the imported-scene case the feature exists for. Inner handles
-    // stay unprefixed in the grouped canonical def (the flattener's
-    // group-name prefixing happens only when the runtime graph is built, not
-    // on this display def), so the recursive map keys them the same way the
-    // UI snapshot's group bodies do — the routing's `node_handle` then
-    // matches the group-face row join (`find_node_by_handle`) exactly.
+    // The editor keys rows by handle while bindings address nodes by id.
+    // Group bodies use the same raw handles in the display definition, so the
+    // recursive map resolves grouped targets too.
     let mut handle_by_id: std::collections::HashMap<&str, &str> =
         std::collections::HashMap::new();
     collect_node_handles(&view.canonical_def.nodes, &mut handle_by_id);
