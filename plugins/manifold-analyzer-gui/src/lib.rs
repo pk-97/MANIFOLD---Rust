@@ -21,7 +21,6 @@
 mod cqt;
 mod gl_paint;
 mod gpu_bridge;
-mod gpu_cqt;
 mod loudness_worker;
 mod sample_ring;
 mod spectrum_gpu;
@@ -29,10 +28,10 @@ mod spectrum_worker;
 
 pub use loudness_worker::LoudnessWorker;
 
+use manifold_analyzer_dsp::{SpectrumBandwidth, SpectrumSmoothingPlan};
 use gl_paint::{PainterState, QuadPainter, SharedPainterState};
 use manifold_analyzer_dsp::{
-    LoudnessSnapshot, MIN_DB, REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis,
-    analyze_ref_file,
+    LoudnessSnapshot, MIN_DB, REF_FREQ_MAX, REF_FREQ_MIN, RefAnalysis, analyze_ref_file,
 };
 use manifold_gpu::GpuDevice;
 use nih_plug::prelude::*;
@@ -91,27 +90,6 @@ const REF_SLOT_COLORS: [[u8; 3]; REF_SLOT_COUNT] = [
     [240, 240, 240],  // near-white  — neutral, maximum contrast vs every fill
 ];
 
-/// Gaussian smoothing sigma (in log-grid points) per `FreqSmoothing`
-/// mode. Bigger σ widens the effective bandwidth. Fixed-mode values
-/// are tuned so adjacent grid points fall inside the kernel's main
-/// lobe, killing the straight-line-segment artefacts that egui's
-/// polyline rendering shows at low freq when σ is too small. ERB
-/// mode returns `None` — the smoother computes σ per point from
-/// the ERB critical-band curve.
-fn ref_smooth_sigma_points(smoothing: FreqSmoothing) -> Option<f32> {
-    match smoothing {
-        FreqSmoothing::None => Some(0.0),
-        FreqSmoothing::TwentyFourth => Some(3.0),
-        FreqSmoothing::Twelfth => Some(10.0),
-        FreqSmoothing::Sixth => Some(18.0),
-        FreqSmoothing::Third => Some(30.0),
-        FreqSmoothing::Erb => None,
-    }
-}
-/// Truncation radius in σ multiples. 2.5 σ covers > 98 % of the
-/// Gaussian energy; beyond that contributions don't change the
-/// output meaningfully.
-const REF_SMOOTH_RADIUS_SIGMAS: f32 = 2.5;
 /// Reference frequency for the Flat/Pink/Tilted weighting slopes.
 /// LUFS modes ignore this (the biquad response has its own pivot).
 const SLOPE_REF_FREQ: f32 = 1000.0;
@@ -135,7 +113,7 @@ struct WeightingStats {
 
 /// Returns mean/max of `weighting_db(f)` over a log-uniform grid in
 /// [freq_min, freq_max]. Mean is used for align-offset (DC bias
-/// removal on the shader side). Max is used by the reference-curve
+/// removal before projection). Max is used by the reference-curve
 /// overlay to pin the peak of the adjustment curve to 0 dB so the
 /// positive half doesn't clip off the top of the MS plot.
 fn weighting_stats(weighting: Weighting, freq_min: f32, freq_max: f32) -> WeightingStats {
@@ -175,8 +153,8 @@ fn weighting_stats(weighting: Weighting, freq_min: f32, freq_max: f32) -> Weight
     }
 }
 
-/// Weighting curve value at a single frequency, matching the shader's
-/// `weighting_db(freq)` function. Used by the reference-curve overlay
+/// Weighting curve value at a single frequency, matching the shared
+/// projection weighting curve. Used by the reference-curve overlay
 /// and the align-offset integration.
 fn weighting_db_at(weighting: Weighting, freq: f32) -> f32 {
     match weighting {
@@ -190,11 +168,11 @@ fn weighting_db_at(weighting: Weighting, freq: f32) -> f32 {
 fn lufs_weighting_db(weighting: Weighting, freq: f32) -> f32 {
     let pre = biquad_mag_db_48k(
         freq,
-        1.535_124_8,
-        -2.691_696_2,
-        1.198_392_8,
-        -1.690_659_3,
-        0.732_480_8,
+        1.535_124_859_586_97,
+        -2.691_696_189_406_38,
+        1.198_392_810_852_85,
+        -1.690_659_293_182_41,
+        0.732_480_774_215_85,
     );
     match weighting {
         Weighting::Lufs => {
@@ -203,8 +181,8 @@ fn lufs_weighting_db(weighting: Weighting, freq: f32) -> f32 {
                 1.0,
                 -2.0,
                 1.0,
-                -1.990_047_4,
-                0.990_072_3,
+                -1.990_047_454_833_98,
+                0.990_072_250_366_21,
             );
             pre + rlb
         }
@@ -213,8 +191,8 @@ fn lufs_weighting_db(weighting: Weighting, freq: f32) -> f32 {
     }
 }
 
-fn biquad_mag_db_48k(freq: f32, b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> f32 {
-    let w = std::f32::consts::TAU * freq / 48_000.0;
+fn biquad_mag_db_48k(freq: f32, b0: f64, b1: f64, b2: f64, a1: f64, a2: f64) -> f32 {
+    let w = std::f64::consts::TAU * freq as f64 / 48_000.0;
     let (sw, cw) = w.sin_cos();
     let (s2w, c2w) = (2.0 * w).sin_cos();
     let num_re = b0 + b1 * cw + b2 * c2w;
@@ -223,7 +201,7 @@ fn biquad_mag_db_48k(freq: f32, b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> 
     let den_im = -a1 * sw - a2 * s2w;
     let num_mag2 = num_re * num_re + num_im * num_im;
     let den_mag2 = den_re * den_re + den_im * den_im;
-    10.0 * (num_mag2.max(1e-30) / den_mag2.max(1e-30)).log10()
+    (10.0 * (num_mag2.max(1e-30) / den_mag2.max(1e-30)).log10()) as f32
 }
 const FILL_ALPHA: f32 = 0.45;
 // Colourmap dB range. Synchrosqueezing concentrates a main-lobe's worth
@@ -376,7 +354,7 @@ pub enum Weighting {
 
 impl Weighting {
     /// Linear slope (dB/octave) used for Flat/Pink/Tilted modes. The
-    /// LUFS modes ignore this; the shader picks them up via `mode_id`.
+    /// LUFS modes ignore this; the projection applies their biquad curves.
     fn slope_db_per_oct(self) -> f32 {
         match self {
             Weighting::Flat => 0.0,
@@ -486,25 +464,6 @@ impl FreqSmoothing {
         }
     }
 
-}
-
-/// ERB-rate bandwidth (Moore & Glasberg 1983) at frequency `f` Hz.
-/// Monotonic, always positive. At 20 Hz ≈ 27 Hz (2+ octaves symmetric),
-/// at 1 kHz ≈ 133 Hz (~1/5 oct), at 10 kHz ≈ 1104 Hz (~1/9 oct).
-fn erb_hz_at(f: f32) -> f32 {
-    24.7 * (4.37 * f.max(0.0) * 1e-3 + 1.0)
-}
-
-/// Convert an ERB bandwidth at `f` Hz into a half-width in octaves.
-/// `log2((f + erb/2) / f)` — the positive-side log distance. Used by
-/// the CPU-side LR / ref smoothers in ERB mode. Shader does the same
-/// math in WGSL.
-fn erb_half_octaves_at(f: f32) -> f32 {
-    if f <= 1e-3 {
-        return 0.0;
-    }
-    let half_bw = erb_hz_at(f) * 0.5;
-    (1.0 + half_bw / f).log2()
 }
 
 /// Chosen FFT size for the front-of-pipeline stereo analyser. Bigger
@@ -1284,10 +1243,7 @@ impl AnalyzerGuiShared {
 struct EditorState {
     shared: Arc<AnalyzerGuiShared>,
     params: Arc<AnalyzerParams>,
-    /// Shared GPU device. `Arc` so the CQT worker thread can hold its
-    /// own reference and issue its own command buffers against the
-    /// same underlying MTLDevice + command queue (both thread-safe
-    /// per Apple's Metal docs).
+    /// Shared GPU device used by the renderer and paint callbacks.
     device: Option<Arc<GpuDevice>>,
     spectrum: Option<SpectrumGpuRenderer>,
     /// CQT worker thread — spawned lazily on first paint so the ~500 ms
@@ -1310,8 +1266,12 @@ struct EditorState {
     /// and is also slightly more correct: weighting is applied per-bin
     /// before smoothing, so the smoothed value reflects the true
     /// weighted energy across the window.
-    mid_tilted_scratch: Vec<f32>,
-    side_tilted_scratch: Vec<f32>,
+    curve_projection: CurveProjection,
+    median_smoothed_columns: Vec<f32>,
+    lr_projection: CurveProjection,
+    lr_left_columns: Vec<f32>,
+    lr_right_columns: Vec<f32>,
+    lr_correlation_columns: Vec<f32>,
     /// Per-screen-column smoothed dB values uploaded to the GPU each
     /// frame. Replaces the per-FFT-bin upload + per-pixel BH smoothing
     /// the shader used to do — same final shape, but the smoothing
@@ -1324,12 +1284,7 @@ struct EditorState {
     /// Streaming per-bin median estimates produced at audio-analysis hops.
     live_mid_median_db: Vec<f32>,
     last_paint: std::time::Instant,
-    /// Cache of Gaussian-smoothed reference envelopes, keyed by
-    /// (analysis fingerprint, smoothing mode). Rebuilt only when a slot
-    /// gets a new analysis or the user switches smoothing mode — the raw
-    /// `smooth_envelope` call is O(REF_POINTS × kernel_radius) with `exp`
-    /// and `powf` in the inner loop, so recomputing it 60× per second was
-    /// burning serious CPU on the GUI thread.
+    /// Projected reference curves, rebuilt when analysis or display geometry changes.
     ref_envelope_cache: RefEnvelopeCache,
 }
 
@@ -1340,93 +1295,70 @@ struct RefEnvelopeCache {
 
 struct RefCacheEntry {
     fingerprint: u64,
-    smoothing: FreqSmoothing,
-    fft_size: usize,
-    /// Smoothed `[lo, mid, hi]` triples on the REF_POINTS log grid.
+    key: ProjectionKey,
     smoothed: Vec<[f32; 3]>,
-    /// EMA-smoothed auto-gain offset in dB. Each frame we compute the
-    /// power-mean dB difference between the live Mid curve and this
-    /// slot's median across the visible band and roll it into this
-    /// value with a ~1 s time constant. Avoids per-frame jitter while
-    /// still tracking real loudness moves over a few seconds.
     auto_gain_db: f32,
-    /// Set to `false` until the first valid auto-gain measurement; on
-    /// that first sample we snap the EMA to it instead of fading from
-    /// 0 dB so the ref overlays cleanly on the very first frame after
-    /// a load instead of sliding into place over the EMA window.
     auto_gain_warm: bool,
 }
-
-/// Compact fingerprint of a reference analysis. Changes when a new file
-/// is loaded; stable across frames and across visibility toggles. Samples
-/// a handful of envelope points rather than hashing all 1024 — the
-/// probability that two distinct real audio files produce identical values
-/// at every sampled index AND the same integrated LUFS is negligible.
-/// Uses the first available per-FFT envelope (all sizes are derived from
-/// the same source so they fingerprint together).
-fn ref_analysis_fingerprint(a: &RefAnalysis) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
-    let mut mix = |x: u32| {
-        h ^= x as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    };
-    mix(a.integrated_lufs.to_bits());
-    mix(a.lowpass_hz.map(f32::to_bits).unwrap_or(0));
-    mix(a.source_sample_rate.to_bits());
-    let Some(first) = a.mid.per_fft.first() else {
-        return h;
-    };
-    let bounds = first.bounds.as_slice();
-    let n = bounds.len();
-    let pick = |i: usize| -> [f32; 3] {
-        bounds.get(i).copied().unwrap_or([MIN_DB, MIN_DB, MIN_DB])
-    };
-    for &i in &[0, n / 4, n / 2, (3 * n) / 4, n.saturating_sub(1)] {
-        let triple = pick(i);
-        mix(triple[0].to_bits());
-        mix(triple[1].to_bits());
-        mix(triple[2].to_bits());
-        mix(i as u32);
-    }
-    mix(first.fft_size as u32);
-    h
+#[derive(Clone, Copy, PartialEq)]
+struct ProjectionKey {
+    sample_rate: f32, fft_size: usize, min: f32, max: f32, columns: usize,
+    smoothing: FreqSmoothing, weighting: Weighting,
 }
-
-/// Apply per-bin frequency weighting to a linear-spaced FFT scratch
-/// buffer in place. `dst` and `src` must be the same length;
-/// `dst[i] = src[i] + weighting_db_at(i·sr/N) + align`. Cheap (~2 K
-/// adds + one log2 per bin); runs every frame on the GUI thread.
-///
-/// Replaces the old GPU-side LUT path: weighting is now baked into the
-/// per-bin dB before upload, so the shader can stay completely tilt-
-/// agnostic. The math is also a touch more correct — we apply tilt
-/// to each bin then smooth, instead of smoothing first and tilting at
-/// the window centre.
-fn apply_weighting_to_bins(
-    dst: &mut [f32],
-    src: &[f32],
-    sample_rate: f32,
-    fft_size: usize,
-    weighting: Weighting,
-    weight_align_db: f32,
-) {
-    if dst.len() != src.len() || fft_size == 0 || sample_rate <= 0.0 {
-        if dst.len() == src.len() {
-            dst.copy_from_slice(src);
+#[derive(Default)]
+struct CurveProjection {
+    key: Option<ProjectionKey>,
+    plan: Option<SpectrumSmoothingPlan>,
+    gains: Vec<f32>,
+    powers: Vec<f32>,
+}
+impl CurveProjection {
+    fn prepare(&mut self, key: ProjectionKey) {
+        if self.key == Some(key) { return; }
+        let bandwidth = match key.smoothing {
+            FreqSmoothing::None => SpectrumBandwidth::None,
+            FreqSmoothing::Erb => SpectrumBandwidth::Erb,
+            mode => SpectrumBandwidth::FixedHalfOctaves(mode.fixed_half_octaves().unwrap()),
+        };
+        let plan = SpectrumSmoothingPlan::new(key.sample_rate, key.fft_size,
+            key.min, key.max, key.columns, bandwidth);
+        let align = weighting_align_offset(key.weighting, key.min, key.max);
+        self.gains.resize(plan.num_bins(), 0.0);
+        for (i,g) in self.gains.iter_mut().enumerate() {
+            let freq = (i as f32 * key.sample_rate / key.fft_size as f32).max(1e-3);
+            *g = weighting_db_at(key.weighting, freq) + align;
         }
-        return;
+        self.powers.resize(plan.num_bins(), 0.0);
+        self.plan = Some(plan); self.key = Some(key);
     }
-    let bin_hz = sample_rate / fft_size as f32;
-    for (i, (d, s)) in dst.iter_mut().zip(src.iter()).enumerate() {
-        let freq = (i as f32 * bin_hz).max(1e-3);
-        *d = *s + weighting_db_at(weighting, freq) + weight_align_db;
+    fn project(&mut self, bins: &[f32], out: &mut [f32]) {
+        assert_eq!(bins.len(),self.powers.len());
+        for ((p,db),gain) in self.powers.iter_mut().zip(bins).zip(&self.gains) {
+            *p = 10.0_f32.powf((*db + *gain) * 0.1);
+        }
+        self.plan.as_ref().expect("projection prepared").apply_powers(&self.powers, out);
     }
+}
+fn curve_mean_db(values: impl Iterator<Item=f32>) -> Option<f32> {
+    let mut sum=0.0_f64; let mut count=0usize; let mut peak=MIN_DB;
+    for db in values { sum+=10.0_f64.powf(db as f64*0.1);count+=1;peak=peak.max(db); }
+    (count>0 && peak>MIN_DB+1.0).then(||(10.0*(sum/count as f64).log10()) as f32)
+}
+/// Fingerprint includes all retained bins so replacing a reference invalidates its cache.
+fn ref_analysis_fingerprint(a: &RefAnalysis) -> u64 {
+    let mut h=0xcbf29ce484222325_u64;
+    let mut mix=|x:u32| { h^=x as u64; h=h.wrapping_mul(0x100000001b3); };
+    mix(a.source_sample_rate.to_bits());mix(a.integrated_lufs.to_bits());
+    for e in &a.mid.per_fft {
+        mix(e.fft_size as u32);
+        for v in e.bin_bounds.iter().chain(&e.bounds).flatten() { mix(v.to_bits()); }
+    }
+    h
 }
 
 /// Apply per-bin weighting to a CQT (log-spaced) column in place. Bin
 /// `i` corresponds to `freq = fmin · 2^(i · log_scale)` where
-/// `log_scale = 1 / bins_per_octave`. Same role as
-/// `apply_weighting_to_bins` but for the spectrogram path.
+/// `log_scale = 1 / bins_per_octave`.
 fn tilt_cqt_column(
     col: &mut [f32],
     weighting: Weighting,
@@ -1462,8 +1394,12 @@ pub fn create_editor(
         left_scratch: vec![MIN_DB; num_bins],
         right_scratch: vec![MIN_DB; num_bins],
         correlation_scratch: vec![0.0; num_bins],
-        mid_tilted_scratch: vec![MIN_DB; num_bins],
-        side_tilted_scratch: vec![MIN_DB; num_bins],
+        curve_projection: CurveProjection::default(),
+        median_smoothed_columns: vec![MIN_DB; MAX_SPECTRUM_W as usize],
+        lr_projection: CurveProjection::default(),
+        lr_left_columns: Vec::new(),
+        lr_right_columns: Vec::new(),
+        lr_correlation_columns: Vec::new(),
         mid_smoothed_columns: vec![MIN_DB; MAX_SPECTRUM_W as usize],
         side_smoothed_columns: vec![MIN_DB; MAX_SPECTRUM_W as usize],
         live_mid_median_db: vec![MIN_DB; num_bins],
@@ -1584,20 +1520,17 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
             other => other,
         };
     }
-    // Spawn the CQT worker the first time we know the sample rate. The
-    // worker owns the ~500 ms kernel construction + GPU FFT plan setup;
-    // subsequent redraws just drain its output ring.
+    // Spawn the CQT worker the first time we know the sample rate. Kernel
+    // construction happens once here, and subsequent redraws drain its
+    // preallocated CPU analysis output ring.
     if state.worker.is_none() && sr > 0.0 {
-        if let Some(device) = state.device.as_ref() {
-            let build = spectrum_gpu::cqt_build_params(sr);
-            state.worker = Some(CqtWorker::spawn(
-                sr,
-                state.shared.clone(),
-                device.clone(),
-                state.params.editor_state.clone(),
-                build,
-            ));
-        }
+        let build = spectrum_gpu::cqt_build_params(sr);
+        state.worker = Some(CqtWorker::spawn(
+            sr,
+            state.shared.clone(),
+            state.params.editor_state.clone(),
+            build,
+        ));
     }
     if state.spectrum.is_none() {
         if let (Some(device), Some(worker)) = (state.device.as_ref(), state.worker.as_ref()) {
@@ -1665,35 +1598,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         state.live_mid_median_db.resize(num_bins, MIN_DB);
         state.shared.try_read_median_db(&mut state.live_mid_median_db);
 
-        // Apply the user's frequency weighting (Pink / Tilted / LUFS / etc.)
-        // to the per-bin Mid + Side scratch CPU-side, then upload the
-        // tilted values. Cheap (~2 K adds + log2 per bin per frame) and
-        // strictly more correct than the prior shader-side LUT approach,
-        // which applied tilt at the smoothing-window centre frequency
-        // instead of per-bin before smoothing.
         let weight_align = weighting_align_offset(weighting, freq_min_for_lut, freq_max_for_lut);
-        if state.mid_tilted_scratch.len() != state.mid_scratch.len() {
-            state.mid_tilted_scratch.resize(state.mid_scratch.len(), MIN_DB);
-        }
-        if state.side_tilted_scratch.len() != state.side_scratch.len() {
-            state.side_tilted_scratch.resize(state.side_scratch.len(), MIN_DB);
-        }
-        apply_weighting_to_bins(
-            &mut state.mid_tilted_scratch,
-            &state.mid_scratch,
-            sr,
-            fft_size,
-            weighting,
-            weight_align,
-        );
-        apply_weighting_to_bins(
-            &mut state.side_tilted_scratch,
-            &state.side_scratch,
-            sr,
-            fft_size,
-            weighting,
-            weight_align,
-        );
 
         // Resolve sync state for display + worker.
         let (bpm_opt, beat_opt, _playing) = state.shared.transport();
@@ -1766,11 +1671,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         let freq_max = freq_max_user.min(nyquist).max(freq_min_user * 2.0);
         let freq_min = freq_min_user.min(freq_max * 0.5).max(1.0);
 
-        // CPU per-column smoothing — runs once per output column instead
-        // of once per pixel. ~2 K columns × 24 BH taps × 2 channels =
-        // ~100 K powf/frame at 60 FPS = trivial CPU work, eliminates
-        // billions of GPU powf/frame on retina. The fragment shader
-        // becomes a pure column lookup.
+        // Cached power-domain projection includes every contributing FFT bin.
         let cols = phys_w as usize;
         if state.mid_smoothed_columns.len() < cols {
             state.mid_smoothed_columns.resize(cols, MIN_DB);
@@ -1778,23 +1679,13 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         if state.side_smoothed_columns.len() < cols {
             state.side_smoothed_columns.resize(cols, MIN_DB);
         }
-        let log_min_d = freq_min.ln();
-        let log_max_d = freq_max.ln();
-        let log_span_d = log_max_d - log_min_d;
-        let smoothing_param = state.params.freq_smoothing.value();
-        let fixed_half = smoothing_param.fixed_half_octaves();
-        let denom = (cols.saturating_sub(1)).max(1) as f32;
-        for col in 0..cols {
-            let t = col as f32 / denom;
-            let freq = (log_min_d + t * log_span_d).exp();
-            let half = fixed_half.unwrap_or_else(|| erb_half_octaves_at(freq));
-            state.mid_smoothed_columns[col] = sample_bh_smoothed_db(
-                &state.mid_tilted_scratch, freq, sr, fft_size, half,
-            );
-            state.side_smoothed_columns[col] = sample_bh_smoothed_db(
-                &state.side_tilted_scratch, freq, sr, fft_size, half,
-            );
-        }
+        state.median_smoothed_columns.resize(cols, MIN_DB);
+        state.curve_projection.prepare(ProjectionKey { sample_rate: sr, fft_size,
+            min: freq_min, max: freq_max, columns: cols,
+            smoothing: state.params.freq_smoothing.value(), weighting });
+        state.curve_projection.project(&state.mid_scratch, &mut state.mid_smoothed_columns[..cols]);
+        state.curve_projection.project(&state.side_scratch, &mut state.side_smoothed_columns[..cols]);
+        state.curve_projection.project(&state.live_mid_median_db, &mut state.median_smoothed_columns[..cols]);
 
         spec.render(
             device,
@@ -1970,7 +1861,7 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
         &state.params.ref_slots.read(),
         state.shared.fft_size(),
         sr,
-        &state.mid_scratch,
+        &state.mid_smoothed_columns[..state.curve_projection.key.map_or(0, |k| k.columns)],
         state.params.weighting.value(),
         state.params.freq_smoothing.value(),
         &mut state.ref_envelope_cache,
@@ -1982,17 +1873,8 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     //     signal. Drawn after the ref bands so it sits on top, giving
     //     the user a direct "where is my mix vs where the ref sits"
     //     side-by-side.
-    draw_live_median(
-        &painter,
-        spectrum_rect,
-        freq_min,
-        freq_max,
-        &state.live_mid_median_db,
-        sr,
-        state.shared.fft_size(),
-        state.params.weighting.value(),
-        state.params.freq_smoothing.value(),
-    );
+    draw_live_median(&painter, spectrum_rect,
+        &state.median_smoothed_columns[..state.curve_projection.key.map_or(0, |k| k.columns)]);
 
     // 3. Spectrum-region labels. Transparent shader lets these sit on
     //    top of the curves for readability.
@@ -2047,17 +1929,13 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
     //    actual Mid/Side dB at that freq; spectrogram shows freq +
     //    beat (sync mode) + channel (stacked L+R mode).
     if let Some(cursor) = response.hover_pos() {
-        let weighting = state.params.weighting.value();
-        let weighting_align = weighting_align_offset(weighting, freq_min, freq_max);
-        let fft_size = state.shared.fft_size();
         if spectrum_rect.contains(cursor) {
             let freq = x_to_freq(cursor.x, freq_min, freq_max, spectrum_rect);
             let cursor_db = y_to_db(cursor.y, DB_MIN, DB_MAX, spectrum_rect);
-            let w_db = weighting_db_at(weighting, freq) + weighting_align;
-            let mid_raw = sample_bin_db(&state.mid_scratch, freq, sr, fft_size);
-            let side_raw = sample_bin_db(&state.side_scratch, freq, sr, fft_size);
-            let mid_db = mid_raw + w_db;
-            let side_db = side_raw + w_db;
+            let columns = state.curve_projection.key.map_or(0, |key| key.columns);
+            let position = (cursor.x-spectrum_rect.left())/spectrum_rect.width();
+            let mid_db = projected_readout(&state.mid_smoothed_columns[..columns],position);
+            let side_db = projected_readout(&state.side_smoothed_columns[..columns],position);
             let lines = vec![
                 format_hz_readout(freq),
                 format!("y: {:>6.1} dB", cursor_db),
@@ -2152,8 +2030,8 @@ fn draw_spectrum(ui: &mut egui::Ui, state: &mut EditorState) {
                     // showing a "level" for those — display "—" instead
                     // so the user can tell empty cells from real signal.
                     if raw_db > -130.0 {
-                        let weighted = raw_db + weighting_db_at(weighting, freq);
-                        lines.push(format!("z: {:>6.1} dB", weighted));
+                        // History already contains the weighting used for its colour.
+                        lines.push(format!("z: {:>6.1} dB", raw_db));
                     } else {
                         lines.push("z:     —".to_string());
                     }
@@ -2179,7 +2057,7 @@ fn draw_reference_curve(
     }
     // Shape of the adjustment applied by the analyser, pinned so the
     // peak touches 0 dB (= the freq the weighting boosts MOST). The
-    // shader's actual adjustment is mean-zero thanks to the align
+    // projected adjustment is mean-zero thanks to the align
     // offset, but for modes like Pink that span ±20 dB the positive
     // half would clip off the top of the MS plot — pinning to the
     // peak keeps the shape faithful without losing the upper half.
@@ -2213,93 +2091,6 @@ fn draw_reference_curve(
 /// Time constant for reference shape alignment, applied using elapsed time.
 const REF_AUTO_GAIN_TAU_SECS: f32 = 1.0;
 
-/// Number of log-spaced sample points we use to compute the live ↔ ref
-/// power-mean difference. 64 is dense enough that no narrow peak
-/// dominates the average; small enough that the per-frame cost is
-/// trivial (the inner loop is two `powf` per point per slot).
-const REF_AUTO_GAIN_SAMPLES: usize = 64;
-
-/// Compute the broadband power-mean dB of an arbitrary per-bin scratch
-/// buffer over `[freq_min, freq_max]`, sampled at `REF_AUTO_GAIN_SAMPLES`
-/// log-spaced points. Returns `None` if too few samples land on real
-/// signal (e.g. silence) — caller should hold the existing auto-gain.
-fn power_mean_db_from_scratch(
-    scratch: &[f32],
-    sr: f32,
-    fft_size: usize,
-    freq_min: f32,
-    freq_max: f32,
-) -> Option<f32> {
-    if scratch.is_empty() || sr <= 0.0 || fft_size == 0 || freq_max <= freq_min {
-        return None;
-    }
-    let log_min = freq_min.ln();
-    let log_max = freq_max.ln();
-    let log_span = log_max - log_min;
-    let mut pow_sum = 0.0_f32;
-    let mut n = 0;
-    for i in 0..REF_AUTO_GAIN_SAMPLES {
-        let t = (i as f32 + 0.5) / REF_AUTO_GAIN_SAMPLES as f32;
-        let freq = (log_min + t * log_span).exp();
-        let db = sample_bin_db(scratch, freq, sr, fft_size);
-        if db > MIN_DB + 1.0 {
-            pow_sum += 10.0_f32.powf(db * 0.1);
-            n += 1;
-        }
-    }
-    if n < 8 {
-        return None;
-    }
-    Some(10.0 * (pow_sum / n as f32).log10())
-}
-
-/// Same broadband power-mean computation against the ref's smoothed
-/// `[lo, mid, hi]` triple, picking out one column index. Used to align
-/// the ref median with the live curve, but works for any percentile.
-fn power_mean_db_from_envelope(
-    smoothed: &[[f32; 3]],
-    column: usize,
-    freq_min: f32,
-    freq_max: f32,
-) -> Option<f32> {
-    if smoothed.is_empty() || column > 2 || freq_max <= freq_min {
-        return None;
-    }
-    let log_grid_min = REF_FREQ_MIN.ln();
-    let log_grid_max = REF_FREQ_MAX.ln();
-    let grid_span = log_grid_max - log_grid_min;
-    let log_min = freq_min.ln();
-    let log_max = freq_max.ln();
-    let log_span = log_max - log_min;
-    let denom = (smoothed.len() - 1) as f32;
-    let mut pow_sum = 0.0_f32;
-    let mut n = 0;
-    for i in 0..REF_AUTO_GAIN_SAMPLES {
-        let t = (i as f32 + 0.5) / REF_AUTO_GAIN_SAMPLES as f32;
-        let freq = (log_min + t * log_span).exp();
-        let grid_t = (freq.ln() - log_grid_min) / grid_span;
-        if !grid_t.is_finite() || !(0.0..=1.0).contains(&grid_t) {
-            continue;
-        }
-        let idx_f = grid_t * denom;
-        let lo_idx = idx_f.floor() as usize;
-        let hi_idx = (lo_idx + 1).min(smoothed.len() - 1);
-        let frac = idx_f - lo_idx as f32;
-        let lo_db = smoothed[lo_idx][column];
-        let hi_db = smoothed[hi_idx][column];
-        if lo_db <= MIN_DB + 1.0 || hi_db <= MIN_DB + 1.0 {
-            continue;
-        }
-        let db = lo_db * (1.0 - frac) + hi_db * frac;
-        pow_sum += 10.0_f32.powf(db * 0.1);
-        n += 1;
-    }
-    if n < 8 {
-        return None;
-    }
-    Some(10.0 * (pow_sum / n as f32).log10())
-}
-
 /// Draw the loaded reference slots as percentile lines on the MS plot.
 /// Each visible slot contributes three curves — 10th and 90th percentile
 /// in slot colour, 50th percentile (median) in slot colour but bolder
@@ -2313,424 +2104,204 @@ fn power_mean_db_from_envelope(
 /// MP3 codec lowpass (if detected) clips the curves at the brickwall
 /// so they don't misleadingly fall off above the codec cutoff.
 fn draw_ref_bands(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    freq_min: f32,
-    freq_max: f32,
-    slots: &RefSlots,
-    live_fft_size: usize,
-    live_sample_rate: f32,
-    live_mid_scratch: &[f32],
-    weighting: Weighting,
-    smoothing_mode: FreqSmoothing,
-    cache: &mut RefEnvelopeCache,
-    frame_dt: f32,
+    painter: &egui::Painter, rect: egui::Rect, freq_min: f32, freq_max: f32,
+    slots: &RefSlots, live_fft_size: usize, _live_sample_rate: f32,
+    live_columns: &[f32], weighting: Weighting, smoothing_mode: FreqSmoothing,
+    cache: &mut RefEnvelopeCache, frame_dt: f32,
 ) {
-    if rect.width() <= 0.0 || rect.height() <= 0.0 {
-        return;
-    }
-    let log_min = REF_FREQ_MIN.ln();
-    let log_max = REF_FREQ_MAX.ln();
-    let grid_span = log_max - log_min;
-    if !grid_span.is_finite() || grid_span <= 0.0 {
-        return;
-    }
-
-    // Match the live curves' weighting transform so the ref reshapes
-    // along with them when the user toggles Pink / Tilted / LUFS. Align
-    // offset cancels the curve's DC bias over the visible range — same
-    // normalisation the shader's weighting LUT applies to Mid/Side.
-    let weight_align = weighting_align_offset(weighting, freq_min, freq_max);
-
-    // Live broadband power-mean for the auto-gain-match. Computed once
-    // per frame and reused across every slot. `None` means "live too
-    // quiet to measure" — slots hold their existing EMA value.
-    let live_pow_mean_db =
-        power_mean_db_from_scratch(live_mid_scratch, live_sample_rate, live_fft_size,
-                                   freq_min, freq_max);
-    // EMA alpha for a 1 s time constant at any redraw rate. Slow enough to
-    // ignore single-frame jitter, fast enough to track real moves.
-    let alpha = 1.0 - (-frame_dt / REF_AUTO_GAIN_TAU_SECS).exp();
-
-    for (slot_idx, slot) in slots.slots.iter().enumerate() {
-        if !slot.visible {
-            continue;
-        }
-        let Some(analysis) = &slot.analysis else {
-            continue;
-        };
-        // Pick the per-FFT envelope matching the live FFT size so per-bin
-        // dB values are directly comparable. `for_fft` returns the nearest
-        // available size if no exact match (legacy save with fewer sizes).
-        let Some(envelope_at) = analysis.mid.for_fft(live_fft_size) else {
-            continue;
-        };
-        if envelope_at.bounds.len() != REF_POINTS {
-            continue;
-        }
-
-        // Upper cutoff: the band is meaningful only up to min(source
-        // Nyquist, LAME lowpass if set). Beyond that the percentile
-        // is computed from codec-filtered silence and would misread.
-        let source_nyquist = analysis.source_sample_rate * 0.5;
-        let upper_cutoff_hz = analysis
-            .lowpass_hz
-            .map(|lp| lp.min(source_nyquist))
-            .unwrap_or(source_nyquist);
-
-        let c = REF_SLOT_COLORS[slot_idx];
-        let line_color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 220);
-
-        // Gaussian-smoothed percentile curves. Width follows the
-        // toolbar smoothing mode; ERB mode varies σ per grid point to
-        // match the ear's critical-band curve (wide low-end smoothing,
-        // tight above 5 kHz). Cached per slot — the result only changes
-        // when the user loads a new file, switches smoothing mode, or
-        // changes live FFT size, so reusing it saves ~60–120 K
-        // exp/powf calls per frame per slot.
-        let fp = ref_analysis_fingerprint(analysis);
-        let need_rebuild = match &cache.entries[slot_idx] {
-            Some(e) => {
-                e.fingerprint != fp
-                    || e.smoothing != smoothing_mode
-                    || e.fft_size != envelope_at.fft_size
+    if live_columns.len()<2 || rect.width()<=0.0 || rect.height()<=0.0 { return; }
+    let alpha=1.0-(-frame_dt/REF_AUTO_GAIN_TAU_SECS).exp();
+    for (slot_idx,slot) in slots.slots.iter().enumerate() {
+        if !slot.visible { continue; }
+        let Some(analysis)=&slot.analysis else { continue; };
+        let Some(envelope)=analysis.mid.for_fft(live_fft_size) else { continue; };
+        let key=ProjectionKey { sample_rate:analysis.source_sample_rate,fft_size:envelope.fft_size,
+            min:freq_min,max:freq_max,columns:live_columns.len(),smoothing:smoothing_mode,weighting };
+        let fp=ref_analysis_fingerprint(analysis);
+        if cache.entries[slot_idx].as_ref().is_none_or(|e|e.fingerprint!=fp || e.key!=key) {
+            let bins=reference_bins(envelope,analysis.source_sample_rate);
+            let mut project=CurveProjection::default();project.prepare(key);
+            let mut src=vec![MIN_DB;bins.len()];let mut output=vec![MIN_DB;key.columns];
+            let mut smoothed=vec![[MIN_DB;3];key.columns];
+            for channel in 0..3 {
+                for (dst,bin) in src.iter_mut().zip(&bins) { *dst=bin[channel]; }
+                project.project(&src,&mut output);
+                for (dst,&db) in smoothed.iter_mut().zip(&output) { dst[channel]=db; }
             }
-            None => true,
-        };
-        if need_rebuild {
-            let smoothed = smooth_envelope(&envelope_at.bounds, smoothing_mode);
-            cache.entries[slot_idx] = Some(RefCacheEntry {
-                fingerprint: fp,
-                smoothing: smoothing_mode,
-                fft_size: envelope_at.fft_size,
-                smoothed,
-                auto_gain_db: 0.0,
-                auto_gain_warm: false,
-            });
+            cache.entries[slot_idx]=Some(RefCacheEntry{fingerprint:fp,key,smoothed,auto_gain_db:0.0,auto_gain_warm:false});
         }
-        let entry = cache.entries[slot_idx]
-            .as_mut()
-            .expect("cache entry populated above");
+        let cutoff=analysis.lowpass_hz.unwrap_or(analysis.source_sample_rate*0.5).min(analysis.source_sample_rate*0.5);
+        let common_columns=(((cutoff.min(freq_max)/freq_min).ln()/(freq_max/freq_min).ln()
+            *(key.columns-1) as f32).floor()+1.0).clamp(0.0,key.columns as f32) as usize;
+        let live_mean=curve_mean_db(live_columns[..common_columns].iter().copied());
+        let entry=cache.entries[slot_idx].as_mut().unwrap();
+        if let (Some(live),Some(reference))=(live_mean,curve_mean_db(entry.smoothed[..common_columns].iter().map(|v|v[1]))) {
+            let target=live-reference;
+            entry.auto_gain_db=if entry.auto_gain_warm {entry.auto_gain_db+alpha*(target-entry.auto_gain_db)}else{target};
+            entry.auto_gain_warm=true;
+        }
 
-        // Auto-gain-match: align this slot's median with live Mid by
-        // computing both their broadband power-mean dB across the
-        // visible band, taking the difference, and rolling it into the
-        // EMA. First valid measurement snaps the EMA so the ref
-        // overlays cleanly on the very first drawn frame instead of
-        // sliding into place over a 1 s fade.
-        if let Some(live_db) = live_pow_mean_db {
-            if let Some(ref_mid_db) =
-                power_mean_db_from_envelope(&entry.smoothed, 1, freq_min, freq_max)
-            {
-                let target = live_db - ref_mid_db;
-                if !entry.auto_gain_warm {
-                    entry.auto_gain_db = target;
-                    entry.auto_gain_warm = true;
-                } else {
-                    entry.auto_gain_db = (1.0 - alpha) * entry.auto_gain_db + alpha * target;
-                }
+        let c=REF_SLOT_COLORS[slot_idx];let color=egui::Color32::from_rgba_unmultiplied(c[0],c[1],c[2],220);
+        for channel in 0..3 {
+            let mut pts=Vec::with_capacity(key.columns);
+            for (i,bin) in entry.smoothed.iter().enumerate() {
+                let t=i as f32/(key.columns-1) as f32;let freq=freq_min*(freq_max/freq_min).powf(t);
+                if freq>cutoff { break; }
+                pts.push(egui::pos2(rect.left()+t*rect.width(),db_to_y(bin[channel]+entry.auto_gain_db,DB_MIN,DB_MAX,rect)));
             }
-        }
-        let shift_db = entry.auto_gain_db;
-        let smoothed: Vec<[f32; 3]> = entry.smoothed.clone();
-        // Drop the &mut to `entry` before the render loop below uses
-        // borrows into the cache entry; clone is REF_POINTS × 12 bytes,
-        // ~12 KB, cheap once per slot per frame and avoids needing
-        // RefCell-style aliasing dance.
-
-        // Sub-sample the smoothed envelope with a Catmull-Rom cubic
-        // spline between adjacent grid points. 4× linear upsample left
-        // visible knot kinks at heavy zoom + wide smoothing — the
-        // segments between two smoothed values read as horizontal
-        // stairs when both values are close, producing a stepped look
-        // on what should be a smooth curve. Catmull-Rom uses four
-        // neighbours to compute each render point with C1 continuity,
-        // indistinguishable from the smooth curves commercial
-        // analysers draw.
-        //
-        // Break each curve into disjoint segments wherever we hit an
-        // invalid render point (off-screen, past the codec cutoff, or
-        // either flanking source grid value sitting at the silence
-        // floor). Otherwise the single-Shape::line approach draws a
-        // straight line across the gap, producing misleading descents
-        // into noise-floor regions at the low end when Smooth=None.
-        const REF_RENDER_UPSAMPLE: usize = 8;
-        // Catmull-Rom cubic interpolation at fractional position t in
-        // [0,1] between p1 and p2, using neighbours p0 and p3.
-        fn catmull_rom(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
-            let t2 = t * t;
-            let t3 = t2 * t;
-            0.5 * ((2.0 * p1)
-                + (-p0 + p2) * t
-                + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-                + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
-        }
-        let render_points = REF_POINTS * REF_RENDER_UPSAMPLE;
-        let render_denom = (render_points - 1) as f32;
-        let src_denom = (REF_POINTS - 1) as f32;
-        let floor_threshold = MIN_DB + 1.0;
-        // Three independent segment lists — lo / mid / hi can break
-        // independently so a sparse low-end where p10 bottoms out
-        // doesn't hide the median's real content.
-        let mut lo_segments: Vec<Vec<egui::Pos2>> = Vec::new();
-        let mut mid_segments: Vec<Vec<egui::Pos2>> = Vec::new();
-        let mut hi_segments: Vec<Vec<egui::Pos2>> = Vec::new();
-        let mut cur_lo: Vec<egui::Pos2> = Vec::new();
-        let mut cur_mid: Vec<egui::Pos2> = Vec::new();
-        let mut cur_hi: Vec<egui::Pos2> = Vec::new();
-        let flush_one = |cur: &mut Vec<egui::Pos2>,
-                         segs: &mut Vec<Vec<egui::Pos2>>| {
-            if cur.len() >= 2 {
-                segs.push(std::mem::take(cur));
-            } else {
-                cur.clear();
-            }
-        };
-        for render_i in 0..render_points {
-            let t = render_i as f32 / render_denom;
-            let freq = (log_min + t * grid_span).exp();
-            if freq < freq_min || freq > freq_max || freq > upper_cutoff_hz {
-                flush_one(&mut cur_lo, &mut lo_segments);
-                flush_one(&mut cur_mid, &mut mid_segments);
-                flush_one(&mut cur_hi, &mut hi_segments);
-                continue;
-            }
-            let src_f = t * src_denom;
-            let src_1 = (src_f.floor() as usize).min(REF_POINTS - 1);
-            let src_2 = (src_1 + 1).min(REF_POINTS - 1);
-            let src_0 = src_1.saturating_sub(1);
-            let src_3 = (src_1 + 2).min(REF_POINTS - 1);
-            let frac = src_f - src_1 as f32;
-            let p0 = smoothed[src_0];
-            let p1 = smoothed[src_1];
-            let p2 = smoothed[src_2];
-            let p3 = smoothed[src_3];
-            // Per-curve validity: check the two nearest knots (the
-            // bracketing source points). If either is at floor, the
-            // interp segment is inside a silent region — break it.
-            let lo_valid = p1[0] > floor_threshold && p2[0] > floor_threshold;
-            let mid_valid = p1[1] > floor_threshold && p2[1] > floor_threshold;
-            let hi_valid = p1[2] > floor_threshold && p2[2] > floor_threshold;
-            let weight_db = weighting_db_at(weighting, freq) + weight_align;
-            let x = freq_to_x(freq, freq_min, freq_max, rect);
-            let push = |valid: bool,
-                        col: usize,
-                        cur: &mut Vec<egui::Pos2>,
-                        segs: &mut Vec<Vec<egui::Pos2>>| {
-                if valid {
-                    let v = catmull_rom(p0[col], p1[col], p2[col], p3[col], frac)
-                        + shift_db
-                        + weight_db;
-                    cur.push(egui::pos2(x, db_to_y(v, DB_MIN, DB_MAX, rect)));
-                } else if cur.len() >= 2 {
-                    segs.push(std::mem::take(cur));
-                } else {
-                    cur.clear();
-                }
-            };
-            push(lo_valid, 0, &mut cur_lo, &mut lo_segments);
-            push(mid_valid, 1, &mut cur_mid, &mut mid_segments);
-            push(hi_valid, 2, &mut cur_hi, &mut hi_segments);
-        }
-        flush_one(&mut cur_lo, &mut lo_segments);
-        flush_one(&mut cur_mid, &mut mid_segments);
-        flush_one(&mut cur_hi, &mut hi_segments);
-
-        // Render: thin lines for lo/hi, bold line for the median.
-        // Same colour for all three so the slot still reads as a
-        // single envelope; the median's extra weight makes it the
-        // visual "this is the centre of the distribution" reference.
-        let thin = egui::Stroke::new(1.0, line_color);
-        let bold = egui::Stroke::new(2.25, line_color);
-        for seg in lo_segments {
-            painter.add(egui::Shape::line(seg, thin));
-        }
-        for seg in hi_segments {
-            painter.add(egui::Shape::line(seg, thin));
-        }
-        for seg in mid_segments {
-            painter.add(egui::Shape::line(seg, bold));
+            if pts.len()>=2 {painter.add(egui::Shape::line(pts,egui::Stroke::new(if channel==1 {2.25}else{1.0},color)));}
         }
     }
 }
 
-/// BH-tapered weighted power average across a half-octave window —
-/// matches what the live MS shader does per-pixel, but on CPU. Used by
-/// the live-median draw to sample a per-bin scratch buffer at an
-/// arbitrary frequency with the same smoothing the main curves get,
-/// so the median line and the live MS share a visual style.
-fn sample_bh_smoothed_db(
-    scratch: &[f32],
-    freq: f32,
-    sample_rate: f32,
-    fft_size: usize,
-    half_octaves: f32,
-) -> f32 {
-    if scratch.is_empty() || sample_rate <= 0.0 || fft_size == 0 {
-        return MIN_DB;
+/// Legacy saved references contain only the old log envelope. It remains readable,
+/// but recovering discarded detail requires reloading the original audio file.
+fn reference_bins(e: &manifold_analyzer_dsp::RefEnvelopeAtFft, sr: f32) -> Vec<[f32;3]> {
+    if e.bin_bounds.len()==e.fft_size/2+1 { return e.bin_bounds.clone(); }
+    let mut bins=vec![[MIN_DB;3];e.fft_size/2+1];
+    if e.bounds.len()<2 { return bins; }
+    for (i,dst) in bins.iter_mut().enumerate() {
+        let freq=i as f32*sr/e.fft_size as f32;
+        if !(REF_FREQ_MIN..=REF_FREQ_MAX).contains(&freq) {continue;}
+        let pos=(freq/REF_FREQ_MIN).ln()/(REF_FREQ_MAX/REF_FREQ_MIN).ln()*(e.bounds.len()-1) as f32;
+        let lo=(pos.floor() as usize).min(e.bounds.len()-1);let hi=(lo+1).min(e.bounds.len()-1);let t=pos-lo as f32;
+        for (c,v) in dst.iter_mut().enumerate() {*v=e.bounds[lo][c]*(1.0-t)+e.bounds[hi][c]*t;}
     }
-    let bin_per_hz = fft_size as f32 / sample_rate;
-    let max_bin = (scratch.len() - 1) as f32;
-    if half_octaves <= 0.0 {
-        return sample_bin_db(scratch, freq, sample_rate, fft_size);
+    bins
+}
+
+#[cfg(test)]
+mod precision_tests {
+    use super::*;
+    use manifold_analyzer_dsp::{REF_POINTS, RefEnvelope, RefEnvelopeAtFft};
+
+    const TEST_SR: f32 = 48_000.0;
+    const TEST_FFT: usize = 32_768;
+    const TEST_MIN: f32 = 20.0;
+    const TEST_MAX: f32 = 20_000.0;
+    const TEST_COLUMNS: usize = 257;
+
+    fn key(smoothing: FreqSmoothing, weighting: Weighting) -> ProjectionKey {
+        ProjectionKey {
+            sample_rate: TEST_SR,
+            fft_size: TEST_FFT,
+            min: TEST_MIN,
+            max: TEST_MAX,
+            columns: TEST_COLUMNS,
+            smoothing,
+            weighting,
+        }
     }
-    let bin_lo_f = (freq * (-half_octaves).exp2() * bin_per_hz).clamp(0.0, max_bin);
-    let bin_hi_f = (freq * half_octaves.exp2() * bin_per_hz).clamp(0.0, max_bin);
-    let span_bins = (bin_hi_f - bin_lo_f).max(1e-6);
-    const N_TAPS: usize = 32;
-    let step = span_bins / N_TAPS as f32;
-    let two_pi = std::f32::consts::TAU;
-    let mut p_sum = 0.0_f32;
-    let mut w_sum = 0.0_f32;
-    for i in 0..N_TAPS {
-        let phase = (i as f32 + 0.5) * (two_pi / N_TAPS as f32);
-        let w = 0.35875 - 0.48829 * phase.cos() + 0.14128 * (2.0 * phase).cos()
-            - 0.01168 * (3.0 * phase).cos();
-        let b_f = (bin_lo_f + (i as f32 + 0.5) * step).clamp(0.0, max_bin);
-        let b0 = b_f.floor() as usize;
-        let b1 = (b0 + 1).min(scratch.len() - 1);
-        let frac = b_f - b0 as f32;
-        let db_samp = scratch[b0] * (1.0 - frac) + scratch[b1] * frac;
-        p_sum += 10.0_f32.powf(db_samp * 0.1) * w;
-        w_sum += w;
+
+    fn project(bins: &[f32], smoothing: FreqSmoothing, weighting: Weighting) -> Vec<f32> {
+        let mut projection = CurveProjection::default();
+        projection.prepare(key(smoothing, weighting));
+        let mut output = vec![MIN_DB; TEST_COLUMNS];
+        projection.project(bins, &mut output);
+        output
     }
-    10.0 * (p_sum / w_sum).max(1e-30).log10()
+
+    fn narrow_18khz_bins() -> Vec<f32> {
+        let mut bins = vec![MIN_DB; TEST_FFT / 2 + 1];
+        bins[18_000usize * TEST_FFT / TEST_SR as usize] = -12.0412;
+        bins
+    }
+
+    fn analysis_with_bins(bin_bounds: Vec<[f32; 3]>) -> RefAnalysis {
+        RefAnalysis {
+            mid: RefEnvelope {
+                per_fft: vec![RefEnvelopeAtFft {
+                    fft_size: TEST_FFT,
+                    bounds: vec![[MIN_DB; 3]; REF_POINTS],
+                    bin_bounds,
+                }],
+            },
+            side: RefEnvelope::empty(),
+            integrated_lufs: MIN_DB,
+            lra_lu: 0.0,
+            short_term_max_lufs: MIN_DB,
+            true_peak_max_dbtp: MIN_DB,
+            sample_peak_max_db: MIN_DB,
+            rms_max_db: MIN_DB,
+            lowpass_hz: None,
+            source_sample_rate: TEST_SR,
+            duration_secs: 1.0,
+        }
+    }
+
+    #[test]
+    fn weighting_modes_apply_flat_pink_and_lufs_curves() {
+        let bins = vec![-24.0; TEST_FFT / 2 + 1];
+        let flat = project(&bins, FreqSmoothing::None, Weighting::Flat);
+        let pink = project(&bins, FreqSmoothing::None, Weighting::Pink);
+        let lufs = project(&bins, FreqSmoothing::None, Weighting::Lufs);
+        let flat_span = flat.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+            - flat.iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(flat_span < 0.01, "flat weighting span {flat_span} dB");
+        assert!(*pink.last().unwrap() > *pink.first().unwrap() + 20.0);
+        assert!(*lufs.last().unwrap() > *lufs.first().unwrap() + 8.0);
+    }
+
+    #[test]
+    fn smoothing_modes_preserve_an_isolated_18khz_bin() {
+        let bins = narrow_18khz_bins();
+        let none = project(&bins, FreqSmoothing::None, Weighting::Flat);
+        let none_peak = none.iter().copied().fold(MIN_DB, f32::max);
+        assert!((none_peak + 12.0412).abs() < 0.01, "None peak {none_peak} dB");
+        for mode in [
+            FreqSmoothing::TwentyFourth,
+            FreqSmoothing::Twelfth,
+            FreqSmoothing::Sixth,
+            FreqSmoothing::Third,
+            FreqSmoothing::Erb,
+        ] {
+            let output = project(&bins, mode, Weighting::Flat);
+            assert!(output.iter().all(|value| value.is_finite()));
+            assert!(
+                output.iter().copied().fold(MIN_DB, f32::max) > -60.0,
+                "{mode:?} erased the retained bin"
+            );
+        }
+    }
+
+    #[test]
+    fn identical_live_and_full_bin_reference_inputs_project_identically() {
+        let live = narrow_18khz_bins();
+        let analysis = analysis_with_bins(
+            live.iter()
+                .map(|&value| [value, value, value])
+                .collect(),
+        );
+        let reference = reference_bins(&analysis.mid.per_fft[0], TEST_SR);
+        let reference_mid: Vec<f32> = reference.iter().map(|bounds| bounds[1]).collect();
+        assert_eq!(live, reference_mid);
+        assert_eq!(
+            project(&live, FreqSmoothing::None, Weighting::Flat),
+            project(&reference_mid, FreqSmoothing::None, Weighting::Flat)
+        );
+    }
+
+    #[test]
+    fn distinct_retained_bins_change_reference_fingerprint() {
+        let bins = narrow_18khz_bins();
+        let original = analysis_with_bins(
+            bins.iter()
+                .map(|&value| [value, value, value])
+                .collect(),
+        );
+        let mut changed = original.clone();
+        changed.mid.per_fft[0].bin_bounds[18_000usize * TEST_FFT / TEST_SR as usize][1] += 0.01;
+        assert_ne!(ref_analysis_fingerprint(&original), ref_analysis_fingerprint(&changed));
+    }
 }
 
 /// Draw the streaming median estimate published by the analyzer. The estimate
 /// advances with analysis frames, independently of editor refresh frequency.
-fn draw_live_median(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    freq_min: f32,
-    freq_max: f32,
-    live_median_db: &[f32],
-    sample_rate: f32,
-    fft_size: usize,
-    weighting: Weighting,
-    smoothing: FreqSmoothing,
-) {
-    if rect.width() <= 1.0
-        || rect.height() <= 1.0
-        || live_median_db.is_empty()
-        || sample_rate <= 0.0
-        || fft_size == 0
-        || freq_max <= freq_min
-    {
-        return;
-    }
-    let weight_align = weighting_align_offset(weighting, freq_min, freq_max);
-    let log_min = freq_min.ln();
-    let log_max = freq_max.ln();
-    let log_span = log_max - log_min;
-    // One sample per ~1 px column. Catmull-Rom would be overkill — the
-    // EMA already smooths temporally, BH window smooths spatially, and
-    // egui's polyline antialias hides the segment joints.
-    let n = (rect.width().ceil() as usize).max(2);
-    let fixed_half = smoothing.fixed_half_octaves();
-    let mut pts: Vec<egui::Pos2> = Vec::with_capacity(n);
-    for i in 0..n {
-        let t = i as f32 / (n - 1) as f32;
-        let freq = (log_min + t * log_span).exp();
-        let half = fixed_half.unwrap_or_else(|| erb_half_octaves_at(freq));
-        let smoothed_raw =
-            sample_bh_smoothed_db(live_median_db, freq, sample_rate, fft_size, half);
-        if smoothed_raw <= MIN_DB + 1.0 {
-            continue;
-        }
-        let weighted = smoothed_raw + weighting_db_at(weighting, freq) + weight_align;
-        let x = rect.left() + t * rect.width();
-        let y = db_to_y(weighted, DB_MIN, DB_MAX, rect);
-        pts.push(egui::pos2(x, y));
-    }
-    if pts.len() >= 2 {
-        painter.add(egui::Shape::line(
-            pts,
-            egui::Stroke::new(2.5, egui::Color32::WHITE),
-        ));
-    }
-}
-
-/// Gaussian-smooth both percentile curves of a reference envelope,
-/// skipping `MIN_DB` slots so out-of-range / silent bins don't drag
-/// neighbouring samples down. Fixed modes use one σ across the grid.
-/// ERB mode computes σ per-point from Moore & Glasberg's critical-band
-/// curve (grid points per octave × ERB half-width at that grid point's
-/// frequency) — wide at the low end, tight at the high end, matching
-/// the main MS curves' shader behaviour in ERB mode.
-fn smooth_envelope(bounds: &[[f32; 3]], smoothing: FreqSmoothing) -> Vec<[f32; 3]> {
-    let n = bounds.len();
-    let mut out = vec![[MIN_DB, MIN_DB, MIN_DB]; n];
-    if n == 0 {
-        return out;
-    }
-    if matches!(smoothing, FreqSmoothing::None) {
-        out.copy_from_slice(bounds);
-        return out;
-    }
-
-    let log_min = REF_FREQ_MIN.ln();
-    let log_max = REF_FREQ_MAX.ln();
-    let log_span = (log_max - log_min).max(1e-6);
-    let points_per_octave = (n.saturating_sub(1)) as f32
-        / (log_span / std::f32::consts::LN_2);
-
-    let fixed_sigma = ref_smooth_sigma_points(smoothing);
-
-    let threshold = MIN_DB + 1.0;
-    for (i, slot) in out.iter_mut().enumerate() {
-        // Per-point σ. Fixed modes use one value; ERB scales σ with the
-        // ERB half-width at this grid point's frequency.
-        let sigma = match fixed_sigma {
-            Some(s) => s.max(0.5),
-            None => {
-                let t = i as f32 / (n - 1) as f32;
-                let freq = (log_min + t * log_span).exp();
-                (erb_half_octaves_at(freq) * points_per_octave).max(0.5)
-            }
-        };
-        let radius = (sigma * REF_SMOOTH_RADIUS_SIGMAS).ceil() as usize;
-        let radius = radius.min(n.saturating_sub(1));
-        let lo_i = i.saturating_sub(radius);
-        let hi_i = (i + radius + 1).min(n);
-        let inv_sigma_sq = 1.0 / (sigma * sigma);
-        let mut lo_pow_sum = 0.0f32;
-        let mut lo_wsum = 0.0f32;
-        let mut mid_pow_sum = 0.0f32;
-        let mut mid_wsum = 0.0f32;
-        let mut hi_pow_sum = 0.0f32;
-        let mut hi_wsum = 0.0f32;
-        for (offset, triple) in bounds[lo_i..hi_i].iter().enumerate() {
-            let j = lo_i + offset;
-            let d = j as f32 - i as f32;
-            let w = (-0.5 * d * d * inv_sigma_sq).exp();
-            if triple[0] > threshold {
-                lo_pow_sum += 10.0_f32.powf(triple[0] * 0.1) * w;
-                lo_wsum += w;
-            }
-            if triple[1] > threshold {
-                mid_pow_sum += 10.0_f32.powf(triple[1] * 0.1) * w;
-                mid_wsum += w;
-            }
-            if triple[2] > threshold {
-                hi_pow_sum += 10.0_f32.powf(triple[2] * 0.1) * w;
-                hi_wsum += w;
-            }
-        }
-        let to_db = |p: f32, w: f32| -> f32 {
-            if w > 0.0 {
-                10.0 * (p / w).max(1e-30).log10()
-            } else {
-                MIN_DB
-            }
-        };
-        *slot = [
-            to_db(lo_pow_sum, lo_wsum),
-            to_db(mid_pow_sum, mid_wsum),
-            to_db(hi_pow_sum, hi_wsum),
-        ];
-    }
-    out
+fn draw_live_median(painter: &egui::Painter, rect: egui::Rect, columns: &[f32]) {
+    if columns.len()<2 { return; }
+    let pts: Vec<_> = columns.iter().enumerate().map(|(i,&db)| egui::pos2(
+        rect.left()+i as f32/(columns.len()-1) as f32*rect.width(), db_to_y(db,DB_MIN,DB_MAX,rect))).collect();
+    painter.add(egui::Shape::line(pts,egui::Stroke::new(2.5,egui::Color32::WHITE)));
 }
 
 fn draw_spectrogram_chrome(
@@ -2964,7 +2535,6 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     // tracks the MS plot above it through mode changes. ERB returns
     // `None` here — we compute the half-width per-row inside the loop.
     let smoothing = state.params.freq_smoothing.value();
-    let fixed_half = smoothing.fixed_half_octaves();
 
     let sr = state.shared.sample_rate();
     let available = ui.available_size();
@@ -2991,7 +2561,6 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     // L/R column would read raw FFT levels while the chart above shows
     // LUFS-weighted levels, and the eye can't line them up.
     let weighting = state.params.weighting.value();
-    let weighting_align = weighting_align_offset(weighting, freq_min, freq_max);
 
     let freq_to_y = |freq: f32| -> f32 {
         let t = (freq.ln() - log_min) / log_span;
@@ -3016,21 +2585,6 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     if num_bins < 2 {
         return;
     }
-    let bin_per_hz = fft_size as f32 / sr;
-    let max_bin = (num_bins - 1) as f32;
-
-    // Precompute Blackman-Harris weights once — same weights used for
-    // every row, same shape as the MS shader's tapered window so the
-    // LR column's peaks/valleys read the same way vs the curves above
-    // (and no rectangular plateaus around narrow peaks).
-    const LR_SMOOTH_N: usize = 32;
-    let mut bh_weights = [0.0f32; LR_SMOOTH_N];
-    for (i, w) in bh_weights.iter_mut().enumerate() {
-        let phase = (i as f32 + 0.5) * (std::f32::consts::TAU / LR_SMOOTH_N as f32);
-        *w = 0.35875 - 0.48829 * phase.cos() + 0.14128 * (2.0 * phase).cos()
-            - 0.01168 * (3.0 * phase).cos();
-    }
-
     // Walk one point per pixel row. Recomputed every frame so the UI
     // follows the audio publish cadence at display refresh rate — the
     // smoothed values do change once per audio hop, and tying the
@@ -3038,6 +2592,15 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
     // publishes. Packs the balance-line vertices and correlation-strip
     // mesh in a single pass.
     let rows = rect.height().ceil() as i32 + 1;
+    let count=rows as usize;
+    state.lr_projection.prepare(ProjectionKey{sample_rate:sr,fft_size,min:freq_min,max:freq_max,
+        columns:count,smoothing,weighting});
+    state.lr_left_columns.resize(count,MIN_DB);
+    state.lr_right_columns.resize(count,MIN_DB);
+    state.lr_correlation_columns.resize(count,0.0);
+    state.lr_projection.project(&state.left_scratch,&mut state.lr_left_columns);
+    state.lr_projection.project(&state.right_scratch,&mut state.lr_right_columns);
+    state.lr_projection.plan.as_ref().unwrap().apply_values(&state.correlation_scratch,&mut state.lr_correlation_columns);
     let mut pts = Vec::with_capacity(rows as usize);
     let mut strip_mesh = egui::epaint::Mesh::default();
     strip_mesh.vertices.reserve((rows as usize) * 2);
@@ -3050,61 +2613,9 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         if y < rect.top() {
             break;
         }
-        let t = (rect.bottom() - y) / rect.height().max(1.0);
-        let freq = (log_min + t * log_span).exp();
-        let half_oct = fixed_half.unwrap_or_else(|| erb_half_octaves_at(freq));
-        let (l_db_raw, r_db_raw, corr) = if half_oct <= 0.0 {
-            // No smoothing — single-bin linear interp lookup.
-            let bin_f = (freq * bin_per_hz).clamp(0.0, max_bin);
-            let b0 = bin_f.floor() as usize;
-            let b1 = (b0 + 1).min(num_bins - 1);
-            let frac = bin_f - b0 as f32;
-            let omf = 1.0 - frac;
-            let l_pow = 10.0_f32.powf(state.left_scratch[b0] * 0.1) * omf
-                + 10.0_f32.powf(state.left_scratch[b1] * 0.1) * frac;
-            let r_pow = 10.0_f32.powf(state.right_scratch[b0] * 0.1) * omf
-                + 10.0_f32.powf(state.right_scratch[b1] * 0.1) * frac;
-            (
-                10.0 * l_pow.max(1e-30).log10(),
-                10.0 * r_pow.max(1e-30).log10(),
-                state.correlation_scratch[b0] * omf + state.correlation_scratch[b1] * frac,
-            )
-        } else {
-            // BH-tapered weighted average across the window. Matches
-            // the MS shader's window shape so peaks read as bells
-            // here too instead of flat-topped plateaus.
-            let bin_lo_f = (freq * (-half_oct).exp2() * bin_per_hz).clamp(0.0, max_bin);
-            let bin_hi_f = (freq * half_oct.exp2() * bin_per_hz).clamp(0.0, max_bin);
-            let span_bins = (bin_hi_f - bin_lo_f).max(1e-6);
-            let step = span_bins / LR_SMOOTH_N as f32;
-            let mut l_pow_sum = 0.0f32;
-            let mut r_pow_sum = 0.0f32;
-            let mut c_sum = 0.0f32;
-            let mut w_sum = 0.0f32;
-            for (i, &w) in bh_weights.iter().enumerate() {
-                let b_f = (bin_lo_f + (i as f32 + 0.5) * step).clamp(0.0, max_bin);
-                let b0 = b_f.floor() as usize;
-                let b1 = (b0 + 1).min(num_bins - 1);
-                let frac = b_f - b0 as f32;
-                let omf = 1.0 - frac;
-                let l_db_samp = state.left_scratch[b0] * omf + state.left_scratch[b1] * frac;
-                let r_db_samp = state.right_scratch[b0] * omf + state.right_scratch[b1] * frac;
-                let c_samp = state.correlation_scratch[b0] * omf
-                    + state.correlation_scratch[b1] * frac;
-                l_pow_sum += 10.0_f32.powf(l_db_samp * 0.1) * w;
-                r_pow_sum += 10.0_f32.powf(r_db_samp * 0.1) * w;
-                c_sum += c_samp * w;
-                w_sum += w;
-            }
-            (
-                10.0 * (l_pow_sum / w_sum).max(1e-30).log10(),
-                10.0 * (r_pow_sum / w_sum).max(1e-30).log10(),
-                c_sum / w_sum,
-            )
-        };
-        let weighting_db = weighting_db_at(weighting, freq) + weighting_align;
-        let l_db = l_db_raw + weighting_db;
-        let r_db = r_db_raw + weighting_db;
+        let l_db=state.lr_left_columns[row as usize];
+        let r_db=state.lr_right_columns[row as usize];
+        let corr=state.lr_correlation_columns[row as usize].clamp(-1.0,1.0);
 
         // Soft silence gate: multiply the raw delta by a 0..1 fade
         // based on the louder channel's level. Below `LR_SILENCE_DB`
@@ -3249,12 +2760,10 @@ fn draw_lr_column(ui: &mut egui::Ui, state: &mut EditorState) {
         if rect.contains(cursor) {
             let freq = y_to_freq_log(cursor.y, freq_min, freq_max, rect);
             let delta_db = (center_x - cursor.x) / px_per_db.max(1e-6);
-            let l_raw = sample_bin_db(&state.left_scratch, freq, sr, fft_size);
-            let r_raw = sample_bin_db(&state.right_scratch, freq, sr, fft_size);
-            let w_db = weighting_db_at(weighting, freq) + weighting_align;
-            let l_db = (l_raw + w_db).max(MIN_DB);
-            let r_db = (r_raw + w_db).max(MIN_DB);
-            let corr = sample_bin_db(&state.correlation_scratch, freq, sr, fft_size);
+            let position=(rect.bottom()-cursor.y)/rect.height();
+            let l_db=projected_readout(&state.lr_left_columns,position);
+            let r_db=projected_readout(&state.lr_right_columns,position);
+            let corr=projected_readout(&state.lr_correlation_columns,position);
             let balance = if delta_db.abs() < 0.05 {
                 "0.0 dB (centred)".to_string()
             } else if delta_db > 0.0 {
@@ -4678,22 +4187,11 @@ fn y_to_freq_log(y: f32, fmin: f32, fmax: f32, rect: egui::Rect) -> f32 {
     fmin * (fmax / fmin).powf(t)
 }
 
-/// Look up a per-bin dB value at an arbitrary frequency with linear bin
-/// interpolation. Used by the cursor readout — fast, single-tap-per-call;
-/// no smoothing window, so the value is the raw averaged FFT level the
-/// audio thread published (the on-screen smoothing/weighting are layered
-/// on top in the shader).
-fn sample_bin_db(scratch: &[f32], freq: f32, sr: f32, fft_size: usize) -> f32 {
-    if scratch.is_empty() || sr <= 0.0 || fft_size == 0 {
-        return MIN_DB;
-    }
-    let bin_per_hz = fft_size as f32 / sr;
-    let max_bin = (scratch.len() - 1) as f32;
-    let bin_f = (freq * bin_per_hz).clamp(0.0, max_bin);
-    let b0 = bin_f.floor() as usize;
-    let b1 = (b0 + 1).min(scratch.len() - 1);
-    let frac = bin_f - b0 as f32;
-    scratch[b0] * (1.0 - frac) + scratch[b1] * frac
+/// Read the same projected values used to draw the curve, including weighting and smoothing.
+fn projected_readout(columns: &[f32], position: f32) -> f32 {
+    if columns.is_empty() { return MIN_DB; }
+    let index=(position.clamp(0.0,1.0)*(columns.len()-1) as f32).round() as usize;
+    columns[index]
 }
 
 /// Format a frequency for the cursor readout. Sub-1k uses Hz, ≥1k uses

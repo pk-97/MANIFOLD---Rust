@@ -679,10 +679,14 @@ impl LoudnessMeter {
         self.sample_ring_write = (write + 1) % ring_len;
         self.sample_count = self.sample_count.saturating_add(1);
 
-        let momentary_count = self.sample_count.min(self.momentary_window_samples) as f64;
-        let short_term_count = self.sample_count.min(self.short_term_window_samples) as f64;
-        let momentary_mean = (self.momentary_sum_power / momentary_count) as f32;
-        let short_term_mean = (self.short_term_sum_power / short_term_count) as f32;
+        // The measurement window starts at reset, so samples before the
+        // first callback are implicit silence. Keep the denominator fixed
+        // while the rings warm up; shortening it would make startup samples
+        // look louder than the same samples in a steady-state window.
+        let momentary_mean =
+            (self.momentary_sum_power / self.momentary_window_samples as f64) as f32;
+        let short_term_mean =
+            (self.short_term_sum_power / self.short_term_window_samples as f64) as f32;
         if momentary_mean > self.momentary_max_mean_sq {
             self.momentary_max_mean_sq = momentary_mean;
         }
@@ -714,8 +718,9 @@ impl LoudnessMeter {
 
 impl LoudnessMeter {
     /// Exact sample-based mean-square over the trailing 400 ms or 3 s
-    /// window. The ring contains the K-weighted per-sample power, so a
-    /// partial 100 ms block cannot shorten the requested window.
+    /// window. The ring contains the K-weighted per-sample power. Before a
+    /// ring fills, its zeroed slots represent the implicit leading silence
+    /// from reset, so the requested window's denominator stays fixed.
     fn windowed_mean_sq_with_partial(&self, blocks: usize) -> Option<f32> {
         if self.sample_count == 0 {
             return None;
@@ -727,8 +732,7 @@ impl LoudnessMeter {
         } else {
             return None;
         };
-        let count = self.sample_count.min(window) as f64;
-        Some((sum / count) as f32)
+        Some((sum / window as f64) as f32)
     }
 }
 
@@ -1006,6 +1010,100 @@ mod tests {
         meter.reset();
         assert_eq!(meter.snapshot().momentary_max_lufs, MIN_LUFS);
         assert_eq!(meter.snapshot().true_peak_max_dbtp, MIN_LUFS);
+    }
+
+    #[test]
+    fn startup_maxima_use_full_windows_for_zero_and_cosine_phase() {
+        let sr = 48_000.0;
+        let n = sr as usize * 5;
+        let signals = [
+            gen_sine(1000.0, 1.0, sr, n),
+            (0..n)
+                .map(|i| {
+                    (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr).cos()
+                })
+                .collect::<Vec<_>>(),
+        ];
+
+        for signal in signals {
+            let mut meter = LoudnessMeter::new(sr);
+            process_in_chunks(&mut meter, &signal, &signal);
+            let snapshot = meter.snapshot();
+            assert!(
+                snapshot.momentary_max_lufs <= snapshot.momentary_lufs + 0.1,
+                "startup M max {} exceeded settled M {}",
+                snapshot.momentary_max_lufs,
+                snapshot.momentary_lufs
+            );
+            assert!(
+                snapshot.short_term_max_lufs <= snapshot.short_term_lufs + 0.1,
+                "startup S max {} exceeded settled S {}",
+                snapshot.short_term_max_lufs,
+                snapshot.short_term_lufs
+            );
+        }
+    }
+
+    #[test]
+    fn reset_restarts_startup_window_denominator() {
+        let sr = 48_000.0;
+        let signal = (0..(sr as usize / 2))
+            .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr).cos())
+            .collect::<Vec<_>>();
+
+        let mut reset_meter = LoudnessMeter::new(sr);
+        reset_meter.process(&signal, &signal);
+        reset_meter.reset();
+        reset_meter.process(&signal, &signal);
+
+        let mut fresh_meter = LoudnessMeter::new(sr);
+        fresh_meter.process(&signal, &signal);
+
+        let reset_snapshot = reset_meter.snapshot();
+        let fresh_snapshot = fresh_meter.snapshot();
+        assert_eq!(reset_snapshot.momentary_lufs, fresh_snapshot.momentary_lufs);
+        assert_eq!(
+            reset_snapshot.momentary_max_lufs,
+            fresh_snapshot.momentary_max_lufs
+        );
+        assert_eq!(reset_snapshot.short_term_lufs, fresh_snapshot.short_term_lufs);
+        assert_eq!(
+            reset_snapshot.short_term_max_lufs,
+            fresh_snapshot.short_term_max_lufs
+        );
+    }
+
+    #[test]
+    fn startup_window_maxima_are_partition_invariant() {
+        let sr = 8_000.0;
+        let n = sr as usize * 4;
+        let signal = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 733.0 * i as f32 / sr).cos())
+            .collect::<Vec<_>>();
+
+        let mut whole = LoudnessMeter::new(sr);
+        whole.process(&signal, &signal);
+
+        let mut partitioned = LoudnessMeter::new(sr);
+        let mut start = 0;
+        for size in [1, 17, 113, 7, 251, 509, 71, 193] {
+            let end = (start + size).min(n);
+            partitioned.process(&signal[start..end], &signal[start..end]);
+            start = end;
+            if start == n {
+                break;
+            }
+        }
+        if start < n {
+            partitioned.process(&signal[start..], &signal[start..]);
+        }
+
+        let expected = whole.snapshot();
+        let actual = partitioned.snapshot();
+        assert!((actual.momentary_lufs - expected.momentary_lufs).abs() < 1e-5);
+        assert!((actual.short_term_lufs - expected.short_term_lufs).abs() < 1e-5);
+        assert!((actual.momentary_max_lufs - expected.momentary_max_lufs).abs() < 1e-5);
+        assert!((actual.short_term_max_lufs - expected.short_term_max_lufs).abs() < 1e-5);
     }
 
     #[test]
