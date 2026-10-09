@@ -1888,7 +1888,7 @@ pub(crate) fn fuse_canonical_def_masked(
         // pass 2 (below, once `node_keepalive` has no more pushes coming)
         // builds `region_nodes` borrowing straight off it.
         struct BuiltMember {
-            body: std::borrow::Cow<'static, str>,
+            body: String,
             derived_camera_ext: Option<usize>,
             effective_derived: Vec<&'static str>,
             node_inputs: Vec<crate::ports::NodeInput>,
@@ -1901,21 +1901,19 @@ pub(crate) fn fuse_canonical_def_masked(
         for member in &all_members {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
             let node = crate::freeze::region::configured_construct(registry, doc_node)?;
-            // `substituted_body` already returns `Cow<'static, str>` (the
-            // `Borrowed` arm is a compile-time WGSL const; the `Owned` arm is
-            // a per-fuse-formatted `String`) — own it, no leak needed.
+            // Own the body before moving its node into the keepalive vector.
             let dense = super::region::dense_buffer_fusion(node.as_ref());
             let (body, derived, includes) = if let Some(dense) = dense {
                 // Join before namespacing: shared element helpers reference the
                 // member's gathered buffers, so they cannot be global includes.
                 (
-                    std::borrow::Cow::Owned(dense.body_fragments.join("\n")),
+                    dense.body_fragments.join("\n"),
                     &[][..],
                     &[][..],
                 )
             } else {
                 (
-                    super::region::substituted_body(node.as_ref(), doc_node)?,
+                    super::region::substituted_body(node.as_ref(), doc_node)?.into_owned(),
                     node.derived_uniforms(),
                     node.wgsl_includes(),
                 )
