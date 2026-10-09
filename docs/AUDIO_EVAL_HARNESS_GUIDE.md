@@ -447,6 +447,29 @@ Twelve new tests pass; the audit's nearest-label context was repaired and tested
 without repeating DSP. See
 `tools/audio_analysis/eval/scoreboard/kick_fusion_refinement_audit_2026-10-09.json`.
 
+**Temporal trajectories and class subspaces, 2026-10-09 — no upgrade:** one
+shared immutable cache retains the frozen 15 features plus eight ordered power
+observations in each of low/body/upper bands, relative to pre-candidate background.
+The candidate grid and evidence deadline are unchanged. Linear scoring on these
+39 values gives 94/174 matches and 41 extras at ±70 ms; separate rank-2 weighted
+SVD class subspaces give 82/174 and 67. Both use the same nested calibration and
+one threshold refinement. Sixteen focused tests pass; stored base output replays
+exactly. SVD finds 20 labels missed by linear scoring, while linear finds 32 missed
+by SVD, but their independently matched sets cover only 114 labels. This does
+not establish a successful ensemble. See
+`tools/audio_analysis/eval/scoreboard/kick_trajectory_2026-10-09.json`.
+
+The local corpus inventory now locks Waypoints and Know You're There, including
+all versions/stems, as final-validation reserves. Their audio content has not
+been analysed for this work. Broader development starts with additional sections
+of the four isolated-kick/master pairs, then Pattern, All In For You and Integer.
+Existing liveshow labels are visual clip placements with detector-affinity class
+tags, not independently observed acoustic onsets: Pattern duplicates 30 kick
+timestamps across two layers, and All In For You has no kick-tagged visual events.
+Do not import those labels as acoustic ground truth or apply their show timebase
+to different masters. Inventory and source evidence:
+`tools/audio_analysis/eval/local_corpus_inventory_2026-10-09.json`.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
