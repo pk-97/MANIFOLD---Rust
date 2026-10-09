@@ -486,6 +486,32 @@ Twenty additional fixed 12-second cores are prepared, but their 370 source
 proposals contain decay-tail crossings and weak noise excursions. They are
 review material, not additional accepted labels or expanded validation.
 
+**Expanded review and compact shape test, 2026-10-09 — stop this experiment series:**
+raw master/source review now preserves all 20 fixed cores, with two Late Night
+cores unscorable and explicit bounded ambiguities elsewhere. The new provisional
+manifest adds 207 scored kicks to the unchanged 174, including weak attacks and
+rolls missed by the source proposer. Five additional complete kick-free cores
+increase reviewed kick-free coverage to 1.8 minutes. These remain the same nine
+development recordings, not untouched validation tracks.
+
+One fixed representation retains the original 15 values and adds nine normalised
+temporal moments, cross-band time differences and shape concordances. Candidates,
+evidence deadlines, linear fitting and nested song exclusions stay fixed. On the
+expanded pack, shape24 gives 209/381 matches plus 85 extras at 70 ms; the existing
+linear15 coarse comparison gives 211 plus 84, and its refined comparison gives
+223 plus 89. Shape also regresses on the original pack: 115/174 plus 74 versus
+v5's 118 plus 52. All nine complete kick-free cores remain clear. Of shape's 172
+misses, 166 are score rejections; only two lack a timely raw candidate. Added
+relationships do not resolve source confusion or transfer between songs.
+
+Eleven focused tests pass, cached output replays exactly, and no audio features
+were re-extracted. The third materially different hypothesis has not improved
+the best recall/error tradeoff; the agreed research stop condition is reached.
+The 95% targets are not met, no candidate is promoted, and reserved audio remains
+untouched. Labels and per-track results:
+`tests/fixtures/audio_labels/expanded_passages_2026-10-09.json` and
+`tools/audio_analysis/eval/scoreboard/kick_shape_2026-10-09.json`.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png

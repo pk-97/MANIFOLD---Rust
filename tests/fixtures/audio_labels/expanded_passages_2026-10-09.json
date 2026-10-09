@@ -1,0 +1,2281 @@
+{
+  "status": "lead_reviewed_visual_provisional",
+  "ground_truth": "Source-assisted manual visual review, not independent human listening truth.",
+  "method": "Twenty fixed 12s cores plus250ms margins, selected before inspecting detector output. All complete master overviews reviewed by worker and lead; lead additionally inspected four raw detail sheets, compared fixed bounds, manual onset brackets and source/cached-evidence hashes. Margins participate in matching. Ambiguities use the existing -70ms/+200ms exclusion rule. Two Late Night cores remain unscorable; their contents are not training negatives. Four Miracle/Heavy cores are accepted only with the explicitly listed bounded uncertainties, retaining sustained/modulated bass negatives elsewhere. All prior174 labels are unchanged.",
+  "timing": "Midpoints of visually bracketed raw waveform onsets; intervals25\u201350ms wide quantify localization uncertainty, not statistical confidence. Centred STFT corroborates identity but is not an onset clock. No BPM, detector output, lag fitting, warp or additional delay. Documented Midnight+0.136375s source offset only.",
+  "reviewed_before_model_run": true,
+  "reserved_audio_used": false,
+  "inputs": [
+    {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/expanded_review_proposals.json",
+      "sha256": "bf7df367bb40d6dcc168ac3228d866005de991fd03b86e5e5730c74ee44fb89c"
+    },
+    {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+      "sha256": "71b35b576966f040211996eae8c103b4887aa25561368af0cd3f3d10c1b14fdc"
+    },
+    {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/raw_review_proposals.json",
+      "sha256": "2b382a0d56de0a55c3aabd1b2405d968757fb5d4a497a7058b4826181c106380"
+    }
+  ],
+  "tracks": [
+    {
+      "track": "late_night",
+      "audio_sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav",
+      "kick_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/LATE NIGHT STEMS/Late Night - Kicks Stem.wav",
+      "kick_sha256": "5419436412a01e12c10f7124eccdd83c904c49b7af6cecb36c4c398f933f1b7f",
+      "stem_to_master_seconds": 0.0,
+      "cores": [
+        {
+          "id": "expanded_late_night_s1",
+          "start_s": 23.282588541666666,
+          "end_s": 35.28258854166667,
+          "review_start_s": 23.032588541666666,
+          "review_end_s": 35.53258854166667,
+          "scoring_ready": false,
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [
+            {
+              "start_s": 23.032588541666666,
+              "end_s": 35.53258854166667,
+              "reason": "Master contains repeated short low-frequency descents/attacks around23.7,24.8,26.0,27.1,28.1,29.2,30.3,31.45,32.57,33.7,34.8s. Source is only tiny broadband noise (overview mono peak about0.00051); no corresponding damped source kicks. Bass versus master-only kick cannot be resolved. Rejecting noise proposals does NOT establish negative master truth."
+            }
+          ],
+          "review_findings": "Master contains repeated short low-frequency descents/attacks around23.7,24.8,26.0,27.1,28.1,29.2,30.3,31.45,32.57,33.7,34.8s. Source is only tiny broadband noise (overview mono peak about0.00051); no corresponding damped source kicks. Bass versus master-only kick cannot be resolved. Rejecting noise proposals does NOT establish negative master truth.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/raw_review_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/late_night_s1_overview.png",
+            "sha256": "63f6e5b1259bcd68de2e11783f9999409bd9b74a076aec5148b88c8b6ebef1e8"
+          },
+          "reason": "Master contains repeated short low-frequency descents/attacks around23.7,24.8,26.0,27.1,28.1,29.2,30.3,31.45,32.57,33.7,34.8s. Source is only tiny broadband noise (overview mono peak about0.00051); no corresponding damped source kicks. Bass versus master-only kick cannot be resolved. Rejecting noise proposals does NOT establish negative master truth."
+        },
+        {
+          "id": "expanded_late_night_s2",
+          "start_s": 61.847765624999994,
+          "end_s": 73.847765625,
+          "review_start_s": 61.597765624999994,
+          "review_end_s": 74.097765625,
+          "scoring_ready": true,
+          "kick_times_s": [
+            71.395,
+            72.225,
+            72.505,
+            72.92,
+            73.337,
+            73.615
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                71.38,
+                71.41
+              ],
+              "midpoint_s": 71.395
+            },
+            {
+              "interval_s": [
+                72.21,
+                72.24
+              ],
+              "midpoint_s": 72.225
+            },
+            {
+              "interval_s": [
+                72.49,
+                72.52
+              ],
+              "midpoint_s": 72.505
+            },
+            {
+              "interval_s": [
+                72.905,
+                72.935
+              ],
+              "midpoint_s": 72.92
+            },
+            {
+              "interval_s": [
+                73.322,
+                73.352
+              ],
+              "midpoint_s": 73.337
+            },
+            {
+              "interval_s": [
+                73.6,
+                73.63
+              ],
+              "midpoint_s": 73.615
+            }
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 61.597765624999994,
+              "end_s": 71.375,
+              "reason": "Master-only bass/possible kick evidence; source absence is not a negative label."
+            }
+          ],
+          "review_findings": "Whole master inspected. Before71.38s, sustained/pulsing bass and low-frequency descents near62.5,67.0,70.85s lack source support, so this prefix remains ambiguous. Six strong source attacks agree with sharp master waveform/descending low-frequency attacks. Every second RMS crossing lies on a tail, not a new attack. No additional separable kick observed in the reviewed active ending.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/raw_review_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/late_night_s2_overview.png",
+            "sha256": "42519d51d46d9077804293d9efbb4071a493124d83315b05ffff123c33e92544"
+          }
+        },
+        {
+          "id": "expanded_late_night_s3",
+          "start_s": 100.41294270833333,
+          "end_s": 112.41294270833333,
+          "review_start_s": 100.16294270833333,
+          "review_end_s": 112.66294270833333,
+          "scoring_ready": true,
+          "kick_times_s": [
+            100.28,
+            101.115,
+            101.395,
+            101.81,
+            102.085,
+            102.225,
+            102.305,
+            102.375,
+            102.505,
+            103.2,
+            103.615,
+            104.035,
+            104.45,
+            104.73,
+            105.42,
+            105.837,
+            106.255
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                101.1,
+                101.13
+              ],
+              "midpoint_s": 101.115
+            },
+            {
+              "interval_s": [
+                101.38,
+                101.41
+              ],
+              "midpoint_s": 101.395
+            },
+            {
+              "interval_s": [
+                101.795,
+                101.825
+              ],
+              "midpoint_s": 101.81
+            },
+            {
+              "interval_s": [
+                102.07,
+                102.1
+              ],
+              "midpoint_s": 102.085
+            },
+            {
+              "interval_s": [
+                102.21,
+                102.24
+              ],
+              "midpoint_s": 102.225
+            },
+            {
+              "interval_s": [
+                102.29,
+                102.32
+              ],
+              "midpoint_s": 102.305
+            },
+            {
+              "interval_s": [
+                102.36,
+                102.39
+              ],
+              "midpoint_s": 102.375
+            },
+            {
+              "interval_s": [
+                102.49,
+                102.52
+              ],
+              "midpoint_s": 102.505
+            },
+            {
+              "interval_s": [
+                103.185,
+                103.215
+              ],
+              "midpoint_s": 103.2
+            },
+            {
+              "interval_s": [
+                103.6,
+                103.63
+              ],
+              "midpoint_s": 103.615
+            },
+            {
+              "interval_s": [
+                104.02,
+                104.05
+              ],
+              "midpoint_s": 104.035
+            },
+            {
+              "interval_s": [
+                104.435,
+                104.465
+              ],
+              "midpoint_s": 104.45
+            },
+            {
+              "interval_s": [
+                104.715,
+                104.745
+              ],
+              "midpoint_s": 104.73
+            },
+            {
+              "interval_s": [
+                105.405,
+                105.435
+              ],
+              "midpoint_s": 105.42
+            },
+            {
+              "interval_s": [
+                105.822,
+                105.852
+              ],
+              "midpoint_s": 105.837
+            },
+            {
+              "interval_s": [
+                106.24,
+                106.27
+              ],
+              "midpoint_s": 106.255
+            },
+            {
+              "interval_s": [
+                100.265,
+                100.295
+              ],
+              "midpoint_s": 100.28
+            }
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 104.88,
+              "end_s": 105.4,
+              "reason": "Weak/filtered source chirps or clicks not confidently separable as master kick onsets."
+            },
+            {
+              "start_s": 105.585,
+              "end_s": 105.815,
+              "reason": "Weak/filtered source chirps or clicks not confidently separable as master kick onsets."
+            },
+            {
+              "start_s": 106.0,
+              "end_s": 106.235,
+              "reason": "Weak/filtered source chirps or clicks not confidently separable as master kick onsets."
+            },
+            {
+              "start_s": 106.42,
+              "end_s": 112.66294270833333,
+              "reason": "Weak/filtered source chirps or clicks not confidently separable as master kick onsets."
+            }
+          ],
+          "review_findings": "Strong source/master attacks include a dense roll with four additional unproposed onsets. Leading-margin kick near100.28s decays through the core boundary; proposal2 is its tail. Weak downward source chirps near104.95,105.14,105.28,105.68,106.12s are not separately secure in master. After106.42s mostly tiny filtered clicks persist through the entire remaining core and margins; master has strong bass, so no negative inference there.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/raw_review_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/late_night_s3_overview.png",
+            "sha256": "706a95d39b53e8a1577da5e714d12b3b82da53a9940b1f3b01f09f290a1339b9"
+          }
+        },
+        {
+          "id": "expanded_late_night_s5",
+          "start_s": 177.54329687499998,
+          "end_s": 189.54329687499998,
+          "review_start_s": 177.29329687499998,
+          "review_end_s": 189.79329687499998,
+          "scoring_ready": true,
+          "kick_times_s": [
+            178.06,
+            178.895,
+            179.175,
+            179.59,
+            180.005,
+            180.285,
+            181.115,
+            181.395,
+            181.81,
+            182.085,
+            182.225,
+            182.305,
+            182.375,
+            182.505,
+            183.34,
+            183.615,
+            184.035,
+            184.45,
+            184.728,
+            185.56,
+            185.84,
+            186.255,
+            186.53,
+            186.67,
+            186.81,
+            186.95,
+            187.785,
+            188.065,
+            188.48,
+            188.895,
+            189.175
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                178.045,
+                178.075
+              ],
+              "midpoint_s": 178.06
+            },
+            {
+              "interval_s": [
+                178.88,
+                178.91
+              ],
+              "midpoint_s": 178.895
+            },
+            {
+              "interval_s": [
+                179.16,
+                179.19
+              ],
+              "midpoint_s": 179.175
+            },
+            {
+              "interval_s": [
+                179.575,
+                179.605
+              ],
+              "midpoint_s": 179.59
+            },
+            {
+              "interval_s": [
+                179.99,
+                180.02
+              ],
+              "midpoint_s": 180.005
+            },
+            {
+              "interval_s": [
+                180.27,
+                180.3
+              ],
+              "midpoint_s": 180.285
+            },
+            {
+              "interval_s": [
+                181.1,
+                181.13
+              ],
+              "midpoint_s": 181.115
+            },
+            {
+              "interval_s": [
+                181.38,
+                181.41
+              ],
+              "midpoint_s": 181.395
+            },
+            {
+              "interval_s": [
+                181.795,
+                181.825
+              ],
+              "midpoint_s": 181.81
+            },
+            {
+              "interval_s": [
+                182.07,
+                182.1
+              ],
+              "midpoint_s": 182.085
+            },
+            {
+              "interval_s": [
+                182.21,
+                182.24
+              ],
+              "midpoint_s": 182.225
+            },
+            {
+              "interval_s": [
+                182.29,
+                182.32
+              ],
+              "midpoint_s": 182.305
+            },
+            {
+              "interval_s": [
+                182.36,
+                182.39
+              ],
+              "midpoint_s": 182.375
+            },
+            {
+              "interval_s": [
+                182.49,
+                182.52
+              ],
+              "midpoint_s": 182.505
+            },
+            {
+              "interval_s": [
+                183.325,
+                183.355
+              ],
+              "midpoint_s": 183.34
+            },
+            {
+              "interval_s": [
+                183.6,
+                183.63
+              ],
+              "midpoint_s": 183.615
+            },
+            {
+              "interval_s": [
+                184.02,
+                184.05
+              ],
+              "midpoint_s": 184.035
+            },
+            {
+              "interval_s": [
+                184.435,
+                184.465
+              ],
+              "midpoint_s": 184.45
+            },
+            {
+              "interval_s": [
+                184.713,
+                184.743
+              ],
+              "midpoint_s": 184.728
+            },
+            {
+              "interval_s": [
+                185.545,
+                185.575
+              ],
+              "midpoint_s": 185.56
+            },
+            {
+              "interval_s": [
+                185.825,
+                185.855
+              ],
+              "midpoint_s": 185.84
+            },
+            {
+              "interval_s": [
+                186.24,
+                186.27
+              ],
+              "midpoint_s": 186.255
+            },
+            {
+              "interval_s": [
+                186.515,
+                186.545
+              ],
+              "midpoint_s": 186.53
+            },
+            {
+              "interval_s": [
+                186.655,
+                186.685
+              ],
+              "midpoint_s": 186.67
+            },
+            {
+              "interval_s": [
+                186.795,
+                186.825
+              ],
+              "midpoint_s": 186.81
+            },
+            {
+              "interval_s": [
+                186.935,
+                186.965
+              ],
+              "midpoint_s": 186.95
+            },
+            {
+              "interval_s": [
+                187.77,
+                187.8
+              ],
+              "midpoint_s": 187.785
+            },
+            {
+              "interval_s": [
+                188.05,
+                188.08
+              ],
+              "midpoint_s": 188.065
+            },
+            {
+              "interval_s": [
+                188.465,
+                188.495
+              ],
+              "midpoint_s": 188.48
+            },
+            {
+              "interval_s": [
+                188.88,
+                188.91
+              ],
+              "midpoint_s": 188.895
+            },
+            {
+              "interval_s": [
+                189.16,
+                189.19
+              ],
+              "midpoint_s": 189.175
+            }
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 177.29329687499998,
+              "end_s": 178.04,
+              "reason": "Master-only bass/possible kick evidence before first secure source/master attack."
+            }
+          ],
+          "review_findings": "Whole master inspected: strong source kicks and master downward attacks agree. Four additional attacks in the182.2\u2013182.51s roll and three in186.66\u2013186.96s roll are absent from RMS proposals. Paired late crossings are tails. Short leading region contains master bass/attack evidence without source support and remains ambiguous; all bounds retained.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/raw_review_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/late_night_s5_overview.png",
+            "sha256": "41cc83a7e473a1086d47f17a0e16d48c62134c93c163738d222bf90c234e78da"
+          }
+        },
+        {
+          "id": "expanded_late_night_s6",
+          "start_s": 216.10847395833332,
+          "end_s": 228.10847395833332,
+          "review_start_s": 215.85847395833332,
+          "review_end_s": 228.35847395833332,
+          "scoring_ready": false,
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [
+            {
+              "start_s": 215.85847395833332,
+              "end_s": 228.35847395833332,
+              "reason": "Source contains filtered short clicks dominated above roughly400Hz, fading from early mono peak about0.068. Master is dominated by continuous/pulsing bass; these source clicks cannot be confidently separated as master kicks. Source proposals are therefore ambiguous, not accepted onsets. Unproposed weak clicks remain after225.43s through the end, explicitly inspected. Neither source filtering nor missed proposals establishes negative master truth."
+            }
+          ],
+          "review_findings": "Source contains filtered short clicks dominated above roughly400Hz, fading from early mono peak about0.068. Master is dominated by continuous/pulsing bass; these source clicks cannot be confidently separated as master kicks. Source proposals are therefore ambiguous, not accepted onsets. Unproposed weak clicks remain after225.43s through the end, explicitly inspected. Neither source filtering nor missed proposals establishes negative master truth.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/raw_review_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/late_night_s6_overview.png",
+            "sha256": "c000dcf6c33158c2c9c3b8571fa643b87df967db3961035baaf5e55d10c104cc"
+          },
+          "reason": "Source contains filtered short clicks dominated above roughly400Hz, fading from early mono peak about0.068. Master is dominated by continuous/pulsing bass; these source clicks cannot be confidently separated as master kicks. Source proposals are therefore ambiguous, not accepted onsets. Unproposed weak clicks remain after225.43s through the end, explicitly inspected. Neither source filtering nor missed proposals establishes negative master truth."
+        }
+      ]
+    },
+    {
+      "track": "midnight_patience",
+      "audio_sha256": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav",
+      "kick_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIDNIGHT PATIENCE STEMS/Kick.wav",
+      "kick_sha256": "2b5daae4c64e83b47f0587f71b5f2ab389e47f8db0ae1aac4d31a76e268208a2",
+      "stem_to_master_seconds": 0.136375,
+      "cores": [
+        {
+          "id": "expanded_midnight_patience_s2",
+          "start_s": 64.488640625,
+          "end_s": 76.488640625,
+          "review_start_s": 64.238640625,
+          "review_end_s": 76.738640625,
+          "scoring_ready": true,
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [],
+          "review_findings": "Whole master waveform/spectrum inspected: sustained stable low-bass/harmonic bands and rapid fine waveform modulation, without a separately localized short descending kick attack. Low-bass texture changes around72.9s but does not show the source-supported kick morphology seen in active cores. Registered kick is stereo-exactly silent. The negative proposal rests on master inspection plus source evidence, not source silence alone; lead acceptance required.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/raw_review_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/midnight_patience_s2_overview.png",
+            "sha256": "544da24be30516ff57d99df784d77f12c38e66aa67c18520669a856ae9f5ce55"
+          }
+        },
+        {
+          "id": "expanded_midnight_patience_s4",
+          "start_s": 145.14016145833335,
+          "end_s": 157.14016145833335,
+          "review_start_s": 144.89016145833335,
+          "review_end_s": 157.39016145833335,
+          "scoring_ready": true,
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [],
+          "review_findings": "Whole master waveform/spectrum inspected: sustained low-frequency bass and regular fine waveform modulation; harmonic/bass change near145.6s, without a separately localized descending kick burst. Registered kick is stereo-exactly silent. The negative proposal rests on master inspection plus source evidence, not source silence alone; lead acceptance required.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/raw_review_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/midnight_patience_s4_overview.png",
+            "sha256": "a20c9c0bda55b2fb0fda07557e4845cdd049c9f43b2d862f62e7459fc2fb8227"
+          }
+        },
+        {
+          "id": "expanded_midnight_patience_s5",
+          "start_s": 185.465921875,
+          "end_s": 197.465921875,
+          "review_start_s": 185.215921875,
+          "review_end_s": 197.715921875,
+          "scoring_ready": true,
+          "kick_times_s": [
+            189.225,
+            189.455,
+            189.685,
+            189.8,
+            190.025,
+            190.365,
+            190.595,
+            190.935,
+            191.05,
+            191.275,
+            191.615,
+            192.18,
+            192.41,
+            192.635,
+            192.865,
+            193.095,
+            193.21,
+            193.435,
+            194.0,
+            194.225,
+            194.57,
+            194.68,
+            194.91,
+            195.25,
+            195.82,
+            196.05,
+            196.275,
+            196.39,
+            196.5,
+            196.73,
+            196.955,
+            197.07,
+            197.295,
+            197.64
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                189.21,
+                189.24
+              ],
+              "midpoint_s": 189.225
+            },
+            {
+              "interval_s": [
+                189.44,
+                189.47
+              ],
+              "midpoint_s": 189.455
+            },
+            {
+              "interval_s": [
+                189.67,
+                189.7
+              ],
+              "midpoint_s": 189.685
+            },
+            {
+              "interval_s": [
+                189.785,
+                189.815
+              ],
+              "midpoint_s": 189.8
+            },
+            {
+              "interval_s": [
+                190.01,
+                190.04
+              ],
+              "midpoint_s": 190.025
+            },
+            {
+              "interval_s": [
+                190.35,
+                190.38
+              ],
+              "midpoint_s": 190.365
+            },
+            {
+              "interval_s": [
+                190.58,
+                190.61
+              ],
+              "midpoint_s": 190.595
+            },
+            {
+              "interval_s": [
+                190.92,
+                190.95
+              ],
+              "midpoint_s": 190.935
+            },
+            {
+              "interval_s": [
+                191.035,
+                191.065
+              ],
+              "midpoint_s": 191.05
+            },
+            {
+              "interval_s": [
+                191.26,
+                191.29
+              ],
+              "midpoint_s": 191.275
+            },
+            {
+              "interval_s": [
+                191.6,
+                191.63
+              ],
+              "midpoint_s": 191.615
+            },
+            {
+              "interval_s": [
+                192.165,
+                192.195
+              ],
+              "midpoint_s": 192.18
+            },
+            {
+              "interval_s": [
+                192.395,
+                192.425
+              ],
+              "midpoint_s": 192.41
+            },
+            {
+              "interval_s": [
+                192.62,
+                192.65
+              ],
+              "midpoint_s": 192.635
+            },
+            {
+              "interval_s": [
+                192.85,
+                192.88
+              ],
+              "midpoint_s": 192.865
+            },
+            {
+              "interval_s": [
+                193.08,
+                193.11
+              ],
+              "midpoint_s": 193.095
+            },
+            {
+              "interval_s": [
+                193.195,
+                193.225
+              ],
+              "midpoint_s": 193.21
+            },
+            {
+              "interval_s": [
+                193.42,
+                193.45
+              ],
+              "midpoint_s": 193.435
+            },
+            {
+              "interval_s": [
+                193.985,
+                194.015
+              ],
+              "midpoint_s": 194.0
+            },
+            {
+              "interval_s": [
+                194.21,
+                194.24
+              ],
+              "midpoint_s": 194.225
+            },
+            {
+              "interval_s": [
+                194.555,
+                194.585
+              ],
+              "midpoint_s": 194.57
+            },
+            {
+              "interval_s": [
+                194.665,
+                194.695
+              ],
+              "midpoint_s": 194.68
+            },
+            {
+              "interval_s": [
+                194.895,
+                194.925
+              ],
+              "midpoint_s": 194.91
+            },
+            {
+              "interval_s": [
+                195.235,
+                195.265
+              ],
+              "midpoint_s": 195.25
+            },
+            {
+              "interval_s": [
+                195.805,
+                195.835
+              ],
+              "midpoint_s": 195.82
+            },
+            {
+              "interval_s": [
+                196.035,
+                196.065
+              ],
+              "midpoint_s": 196.05
+            },
+            {
+              "interval_s": [
+                196.26,
+                196.29
+              ],
+              "midpoint_s": 196.275
+            },
+            {
+              "interval_s": [
+                196.375,
+                196.405
+              ],
+              "midpoint_s": 196.39
+            },
+            {
+              "interval_s": [
+                196.485,
+                196.515
+              ],
+              "midpoint_s": 196.5
+            },
+            {
+              "interval_s": [
+                196.715,
+                196.745
+              ],
+              "midpoint_s": 196.73
+            },
+            {
+              "interval_s": [
+                196.94,
+                196.97
+              ],
+              "midpoint_s": 196.955
+            },
+            {
+              "interval_s": [
+                197.055,
+                197.085
+              ],
+              "midpoint_s": 197.07
+            },
+            {
+              "interval_s": [
+                197.28,
+                197.31
+              ],
+              "midpoint_s": 197.295
+            },
+            {
+              "interval_s": [
+                197.625,
+                197.655
+              ],
+              "midpoint_s": 197.64
+            }
+          ],
+          "uncertain_regions": [],
+          "review_findings": "Whole core/margins inspected. Before189.21s master has upper-bass/harmonic texture without isolated low kick bursts. From189.225s, source and master exhibit separately localized downward kick chirps, including many weaker attacks absent from RMS proposals. Strong-source RMS crossings are often tens of milliseconds after onset. Thirty-three in-core onsets proposed; one additional margin attack near197.64s is context only. No further separately localized kick observed between listed attacks.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/raw_review_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/midnight_patience_s5_overview.png",
+            "sha256": "5f23710110eb93524936cc4a896a26328fd8d40029c7842cb939cda5a9e57847"
+          }
+        },
+        {
+          "id": "expanded_midnight_patience_s6",
+          "start_s": 225.7916822916667,
+          "end_s": 237.7916822916667,
+          "review_start_s": 225.5416822916667,
+          "review_end_s": 238.0416822916667,
+          "scoring_ready": true,
+          "kick_times_s": [
+            225.585,
+            225.815,
+            226.04,
+            226.155,
+            226.385,
+            226.725,
+            226.955,
+            227.295,
+            227.41,
+            227.635,
+            227.975,
+            228.55,
+            228.78,
+            229.005,
+            229.235,
+            229.465,
+            229.575,
+            229.805,
+            230.37,
+            230.6,
+            230.94
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                225.8,
+                225.83
+              ],
+              "midpoint_s": 225.815
+            },
+            {
+              "interval_s": [
+                226.025,
+                226.055
+              ],
+              "midpoint_s": 226.04
+            },
+            {
+              "interval_s": [
+                226.14,
+                226.17
+              ],
+              "midpoint_s": 226.155
+            },
+            {
+              "interval_s": [
+                226.37,
+                226.4
+              ],
+              "midpoint_s": 226.385
+            },
+            {
+              "interval_s": [
+                226.71,
+                226.74
+              ],
+              "midpoint_s": 226.725
+            },
+            {
+              "interval_s": [
+                226.94,
+                226.97
+              ],
+              "midpoint_s": 226.955
+            },
+            {
+              "interval_s": [
+                227.28,
+                227.31
+              ],
+              "midpoint_s": 227.295
+            },
+            {
+              "interval_s": [
+                227.395,
+                227.425
+              ],
+              "midpoint_s": 227.41
+            },
+            {
+              "interval_s": [
+                227.62,
+                227.65
+              ],
+              "midpoint_s": 227.635
+            },
+            {
+              "interval_s": [
+                227.96,
+                227.99
+              ],
+              "midpoint_s": 227.975
+            },
+            {
+              "interval_s": [
+                228.535,
+                228.565
+              ],
+              "midpoint_s": 228.55
+            },
+            {
+              "interval_s": [
+                228.765,
+                228.795
+              ],
+              "midpoint_s": 228.78
+            },
+            {
+              "interval_s": [
+                228.99,
+                229.02
+              ],
+              "midpoint_s": 229.005
+            },
+            {
+              "interval_s": [
+                229.22,
+                229.25
+              ],
+              "midpoint_s": 229.235
+            },
+            {
+              "interval_s": [
+                229.45,
+                229.48
+              ],
+              "midpoint_s": 229.465
+            },
+            {
+              "interval_s": [
+                229.56,
+                229.59
+              ],
+              "midpoint_s": 229.575
+            },
+            {
+              "interval_s": [
+                229.79,
+                229.82
+              ],
+              "midpoint_s": 229.805
+            },
+            {
+              "interval_s": [
+                230.355,
+                230.385
+              ],
+              "midpoint_s": 230.37
+            },
+            {
+              "interval_s": [
+                230.585,
+                230.615
+              ],
+              "midpoint_s": 230.6
+            },
+            {
+              "interval_s": [
+                230.925,
+                230.955
+              ],
+              "midpoint_s": 230.94
+            },
+            {
+              "interval_s": [
+                225.56,
+                225.61
+              ],
+              "midpoint_s": 225.585
+            }
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 231.2,
+              "end_s": 238.0416822916667,
+              "reason": "Master bass texture and low-frequency changes continue after source decays; absence of source is insufficient to label the master negative."
+            }
+          ],
+          "review_findings": "Whole core/margins inspected. Twenty localized source/master attacks through230.94s, including eleven without an onset-associated RMS proposal; several proposed ticks cross tails. After the last decay, master returns to bass-dominated texture with low-frequency changes; this tail is retained as ambiguous rather than inferred negative from flat kick source. Leading margin includes a prior source/master kick; not an in-core label.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/raw_review_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-late-midnight/midnight_patience_s6_overview.png",
+            "sha256": "041d95986a61b8df7ec0eff479548351f204b8293096b466e78b281fd73ebaab"
+          }
+        }
+      ]
+    },
+    {
+      "track": "miracle",
+      "audio_sha256": "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav",
+      "kick_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIRACLE STEMS/Kick.wav",
+      "kick_sha256": "7ca8181a9967b5ace955ba9e31294f1587c14fc238332dc56efe5e9ad7b38778",
+      "stem_to_master_seconds": 0.0,
+      "cores": [
+        {
+          "id": "expanded_miracle_s1",
+          "start_s": 23.414416099773245,
+          "end_s": 35.41441609977325,
+          "review_start_s": 23.164416099773245,
+          "review_end_s": 35.66441609977325,
+          "scoring_ready": true,
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [],
+          "review_findings": "All four continuous segments show sustained/pulsating low-frequency and harmonic ridges, with no isolated descending kick sweep or damped master pulse. Zero Kick samples corroborate but do not determine this provisional negative review.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/miracle_s1_overview.png",
+            "sha256": "f240556952af245a606fd108eefb9e20e7b5d0a84babc60aacd9d04ef87d0344"
+          }
+        },
+        {
+          "id": "expanded_miracle_s2",
+          "start_s": 62.24324829931973,
+          "end_s": 74.24324829931973,
+          "review_start_s": 61.99324829931973,
+          "review_end_s": 74.49324829931973,
+          "scoring_ready": true,
+          "kick_times_s": [
+            62.8575,
+            64.6725,
+            64.8675,
+            66.505,
+            67.92,
+            68.11,
+            69.345,
+            71.16,
+            71.365,
+            72.995,
+            74.405
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                62.845,
+                62.87
+              ],
+              "midpoint_s": 62.8575
+            },
+            {
+              "interval_s": [
+                64.655,
+                64.69
+              ],
+              "midpoint_s": 64.6725
+            },
+            {
+              "interval_s": [
+                64.85,
+                64.885
+              ],
+              "midpoint_s": 64.8675
+            },
+            {
+              "interval_s": [
+                66.485,
+                66.525
+              ],
+              "midpoint_s": 66.505
+            },
+            {
+              "interval_s": [
+                67.9,
+                67.94
+              ],
+              "midpoint_s": 67.92
+            },
+            {
+              "interval_s": [
+                68.09,
+                68.13
+              ],
+              "midpoint_s": 68.11
+            },
+            {
+              "interval_s": [
+                69.325,
+                69.365
+              ],
+              "midpoint_s": 69.345
+            },
+            {
+              "interval_s": [
+                71.14,
+                71.18
+              ],
+              "midpoint_s": 71.16
+            },
+            {
+              "interval_s": [
+                71.345,
+                71.385
+              ],
+              "midpoint_s": 71.365
+            },
+            {
+              "interval_s": [
+                72.975,
+                73.015
+              ],
+              "midpoint_s": 72.995
+            },
+            {
+              "interval_s": [
+                74.385,
+                74.425
+              ],
+              "midpoint_s": 74.405
+            }
+          ],
+          "uncertain_regions": [],
+          "review_findings": "Distinct source-supported master sweeps, including close double pulses, are retained. Tail recrossings do not produce renewed raw master attacks. Between events the low-frequency ridge continues as pulsating harmonic bass; no additional kick identified in the full review. Final event is in the trailing margin only.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/miracle_s2_overview.png",
+            "sha256": "1f49a4f97e49e6fbce5d25d713bed569c7bd0de369a6a4b599540a2ffa825437"
+          }
+        },
+        {
+          "id": "expanded_miracle_s3",
+          "start_s": 101.07208049886623,
+          "end_s": 113.07208049886623,
+          "review_start_s": 100.82208049886623,
+          "review_end_s": 113.32208049886623,
+          "scoring_ready": true,
+          "kick_times_s": [
+            101.7775
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                101.765,
+                101.79
+              ],
+              "midpoint_s": 101.7775
+            }
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 103.765,
+              "end_s": 103.835,
+              "reason": "A renewed master low-frequency attack begins a sustained/modulated bass passage. Its first attack resembles a kick sweep, but the silent source and continuing bass cannot establish whether a separate kick is present. Later sustained modulation is retained as non-kick material."
+            }
+          ],
+          "review_findings": "One distinct source-supported master sweep. The 101.971080 crossing lies on its continuous damped tail. A master-only attack near 103.78 remains ambiguous; subsequent 103.835\u2013113.322080 sustained/modulated harmonic bass has no separately resolved kick and is retained as provisional negative material.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/miracle_s3_overview.png",
+            "sha256": "46b01c616b63114502b73030f4d46218b239825729b71dbab2c6c7398ce65a33"
+          }
+        },
+        {
+          "id": "expanded_miracle_s4",
+          "start_s": 139.90091269841272,
+          "end_s": 151.90091269841272,
+          "review_start_s": 139.65091269841272,
+          "review_end_s": 152.15091269841272,
+          "scoring_ready": true,
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [],
+          "review_findings": "No isolated damped kick pulse in the master. The change near 142.72 increases a sustained low ridge rather than producing a separate decaying kick; near 149.2 onward the bass changes and fades. All source-zero regions were checked against the master waveform and spectrum.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/miracle_s4_overview.png",
+            "sha256": "5274a0d645888b47d30e656ff04bbdc99929a1fee5e08c09d22f82ec27127789"
+          }
+        },
+        {
+          "id": "expanded_miracle_s5",
+          "start_s": 178.7297448979592,
+          "end_s": 190.7297448979592,
+          "review_start_s": 178.4797448979592,
+          "review_end_s": 190.9797448979592,
+          "scoring_ready": true,
+          "kick_times_s": [
+            179.6125,
+            181.6325,
+            183.2625,
+            184.675,
+            184.87,
+            186.1,
+            187.915,
+            188.11,
+            189.745
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                179.595,
+                179.63
+              ],
+              "midpoint_s": 179.6125
+            },
+            {
+              "interval_s": [
+                181.615,
+                181.65
+              ],
+              "midpoint_s": 181.6325
+            },
+            {
+              "interval_s": [
+                183.245,
+                183.28
+              ],
+              "midpoint_s": 183.2625
+            },
+            {
+              "interval_s": [
+                184.655,
+                184.695
+              ],
+              "midpoint_s": 184.675
+            },
+            {
+              "interval_s": [
+                184.85,
+                184.89
+              ],
+              "midpoint_s": 184.87
+            },
+            {
+              "interval_s": [
+                186.08,
+                186.12
+              ],
+              "midpoint_s": 186.1
+            },
+            {
+              "interval_s": [
+                187.895,
+                187.935
+              ],
+              "midpoint_s": 187.915
+            },
+            {
+              "interval_s": [
+                188.09,
+                188.13
+              ],
+              "midpoint_s": 188.11
+            },
+            {
+              "interval_s": [
+                189.725,
+                189.765
+              ],
+              "midpoint_s": 189.745
+            }
+          ],
+          "uncertain_regions": [],
+          "review_findings": "Nine core sweeps. Two leading-margin proposals lie on a pulse already in decay at excerpt start. Low-band withdrawal at 180.85 is a bass transition, not an onset. A separate source-supported master sweep returns near 181.63. All gaps inspected; no additional kick identified.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/miracle_s5_overview.png",
+            "sha256": "ba19f80c141c7efd7bfa4d1ffcdf60ebb2fc3f0fa1458a38edc876b493e5d92a"
+          }
+        },
+        {
+          "id": "expanded_miracle_s6",
+          "start_s": 217.5585770975057,
+          "end_s": 229.5585770975057,
+          "review_start_s": 217.3085770975057,
+          "review_end_s": 229.8085770975057,
+          "scoring_ready": true,
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [],
+          "review_findings": "All four segments show continuous harmonic bass and upper harmonic changes, including the low-ridge change near 220.58. No isolated damped low-frequency master pulse identified. Source silence is supporting evidence only.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/miracle_s6_overview.png",
+            "sha256": "81cdc5b5779588bc4bc4278584f04647aa8c61be720e153cef29246c8be869b8"
+          }
+        }
+      ]
+    },
+    {
+      "track": "heavy_on_mind",
+      "audio_sha256": "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav",
+      "kick_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/HEAVY ON MIND STEMS/KICK.wav",
+      "kick_sha256": "87a3b45750e7c4da2343b78a54ee911a406dd597be43f02380ef3165c315d23a",
+      "stem_to_master_seconds": 0.0,
+      "cores": [
+        {
+          "id": "expanded_heavy_on_mind_s2",
+          "start_s": 61.088611111111106,
+          "end_s": 73.0886111111111,
+          "review_start_s": 60.838611111111106,
+          "review_end_s": 73.3386111111111,
+          "scoring_ready": true,
+          "kick_times_s": [
+            61.34,
+            61.54,
+            62.77,
+            62.86,
+            63.2325,
+            64.3775,
+            64.565,
+            65.8075,
+            65.8975,
+            66.2775,
+            67.42,
+            67.61,
+            68.85,
+            68.94,
+            69.32
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                61.325,
+                61.355
+              ],
+              "midpoint_s": 61.34
+            },
+            {
+              "interval_s": [
+                61.525,
+                61.555
+              ],
+              "midpoint_s": 61.54
+            },
+            {
+              "interval_s": [
+                62.755,
+                62.785
+              ],
+              "midpoint_s": 62.77
+            },
+            {
+              "interval_s": [
+                62.845,
+                62.875
+              ],
+              "midpoint_s": 62.86
+            },
+            {
+              "interval_s": [
+                63.215,
+                63.25
+              ],
+              "midpoint_s": 63.2325
+            },
+            {
+              "interval_s": [
+                64.36,
+                64.395
+              ],
+              "midpoint_s": 64.3775
+            },
+            {
+              "interval_s": [
+                64.55,
+                64.58
+              ],
+              "midpoint_s": 64.565
+            },
+            {
+              "interval_s": [
+                65.79,
+                65.825
+              ],
+              "midpoint_s": 65.8075
+            },
+            {
+              "interval_s": [
+                65.88,
+                65.915
+              ],
+              "midpoint_s": 65.8975
+            },
+            {
+              "interval_s": [
+                66.26,
+                66.295
+              ],
+              "midpoint_s": 66.2775
+            },
+            {
+              "interval_s": [
+                67.405,
+                67.435
+              ],
+              "midpoint_s": 67.42
+            },
+            {
+              "interval_s": [
+                67.595,
+                67.625
+              ],
+              "midpoint_s": 67.61
+            },
+            {
+              "interval_s": [
+                68.835,
+                68.865
+              ],
+              "midpoint_s": 68.85
+            },
+            {
+              "interval_s": [
+                68.925,
+                68.955
+              ],
+              "midpoint_s": 68.94
+            },
+            {
+              "interval_s": [
+                69.305,
+                69.335
+              ],
+              "midpoint_s": 69.32
+            }
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 69.72,
+              "end_s": 69.8,
+              "reason": "Very weak unproposed source excursion during fade; no independently separable master kick attack is established."
+            },
+            {
+              "start_s": 70.435,
+              "end_s": 70.495,
+              "reason": "Unproposed high-passed source pulse; the master remains dominated by sustained upper harmonics and no clear low-frequency kick renewal. Presence and timing unresolved."
+            }
+          ],
+          "review_findings": "Fifteen source-supported master sweeps, including overlapping pairs and three faint low-frequency sweeps at 68.85, 68.94, 69.32 omitted by the proposer. Much later source clicks become too filtered to establish master kick identity. Bass/upper harmonic continuation and the transition near 70.65\u201370.95 are retained as provisional non-kick regions outside explicit ambiguities.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/heavy_on_mind_s2_overview.png",
+            "sha256": "681227d70dae275bfd2d37fc72562b77ef9a656d2c72ad81de4496d4541ac37c"
+          }
+        },
+        {
+          "id": "expanded_heavy_on_mind_s3",
+          "start_s": 99.1476851851852,
+          "end_s": 111.1476851851852,
+          "review_start_s": 98.8976851851852,
+          "review_end_s": 111.3976851851852,
+          "scoring_ready": true,
+          "kick_times_s": [
+            99.5,
+            100.07,
+            101.02,
+            101.59,
+            102.54,
+            103.11,
+            103.675,
+            104.055,
+            104.625,
+            105.575,
+            106.145,
+            107.095,
+            107.665,
+            108.805,
+            109.09,
+            109.37
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                99.48,
+                99.52
+              ],
+              "midpoint_s": 99.5
+            },
+            {
+              "interval_s": [
+                100.05,
+                100.09
+              ],
+              "midpoint_s": 100.07
+            },
+            {
+              "interval_s": [
+                101.0,
+                101.04
+              ],
+              "midpoint_s": 101.02
+            },
+            {
+              "interval_s": [
+                101.57,
+                101.61
+              ],
+              "midpoint_s": 101.59
+            },
+            {
+              "interval_s": [
+                102.52,
+                102.56
+              ],
+              "midpoint_s": 102.54
+            },
+            {
+              "interval_s": [
+                103.09,
+                103.13
+              ],
+              "midpoint_s": 103.11
+            },
+            {
+              "interval_s": [
+                103.655,
+                103.695
+              ],
+              "midpoint_s": 103.675
+            },
+            {
+              "interval_s": [
+                104.035,
+                104.075
+              ],
+              "midpoint_s": 104.055
+            },
+            {
+              "interval_s": [
+                104.605,
+                104.645
+              ],
+              "midpoint_s": 104.625
+            },
+            {
+              "interval_s": [
+                105.555,
+                105.595
+              ],
+              "midpoint_s": 105.575
+            },
+            {
+              "interval_s": [
+                106.125,
+                106.165
+              ],
+              "midpoint_s": 106.145
+            },
+            {
+              "interval_s": [
+                107.075,
+                107.115
+              ],
+              "midpoint_s": 107.095
+            },
+            {
+              "interval_s": [
+                107.645,
+                107.685
+              ],
+              "midpoint_s": 107.665
+            },
+            {
+              "interval_s": [
+                108.785,
+                108.825
+              ],
+              "midpoint_s": 108.805
+            },
+            {
+              "interval_s": [
+                109.07,
+                109.11
+              ],
+              "midpoint_s": 109.09
+            },
+            {
+              "interval_s": [
+                109.35,
+                109.39
+              ],
+              "midpoint_s": 109.37
+            }
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 99.095,
+              "end_s": 99.17,
+              "reason": "Weak source pulse starts before the core boundary; strong master broadband transient and bass change overlap, with no independently attributable low-frequency kick attack. Source crossing 99.150685 is late and cannot establish an inside-core kick."
+            },
+            {
+              "start_s": 102.14,
+              "end_s": 102.205,
+              "reason": "Unproposed weak source pulse coincides with broadband master transient over continuing bass; kick-specific presence/timing unresolved."
+            },
+            {
+              "start_s": 105.175,
+              "end_s": 105.245,
+              "reason": "Weak source pulse under a broadband transient and bass change; crossing 105.224685 is late. Kick-specific master attack unresolved."
+            }
+          ],
+          "review_findings": "Sixteen clear damped master sweeps. Three weak source cases remain ambiguous. The master-only activity after about 110.05 consists of sustained, irregularly modulated low ridges and continuing oscillation, not isolated damped kick renewals; retain that difficult bass-negative material. All gaps and trailing margin inspected.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/heavy_on_mind_s3_overview.png",
+            "sha256": "c7786a6f7e89f34b5f466773ddcc116c63382c71abbcf19b54007ed599dab16d"
+          }
+        },
+        {
+          "id": "expanded_heavy_on_mind_s4",
+          "start_s": 137.20675925925926,
+          "end_s": 149.20675925925926,
+          "review_start_s": 136.95675925925926,
+          "review_end_s": 149.45675925925926,
+          "scoring_ready": true,
+          "kick_times_s": [
+            137.2825,
+            137.475,
+            138.0425,
+            138.7175,
+            138.81,
+            139.1825,
+            139.9425,
+            140.3225,
+            140.515,
+            141.08,
+            141.7525,
+            141.845,
+            142.22,
+            142.98,
+            143.3625,
+            143.5525,
+            144.1175,
+            144.7925,
+            144.885,
+            145.2575,
+            146.0175,
+            146.3975,
+            146.5925,
+            147.155,
+            147.8325,
+            147.9225,
+            148.2975,
+            149.055,
+            149.4375
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                137.265,
+                137.3
+              ],
+              "midpoint_s": 137.2825
+            },
+            {
+              "interval_s": [
+                137.455,
+                137.495
+              ],
+              "midpoint_s": 137.475
+            },
+            {
+              "interval_s": [
+                138.025,
+                138.06
+              ],
+              "midpoint_s": 138.0425
+            },
+            {
+              "interval_s": [
+                138.7,
+                138.735
+              ],
+              "midpoint_s": 138.7175
+            },
+            {
+              "interval_s": [
+                138.795,
+                138.825
+              ],
+              "midpoint_s": 138.81
+            },
+            {
+              "interval_s": [
+                139.165,
+                139.2
+              ],
+              "midpoint_s": 139.1825
+            },
+            {
+              "interval_s": [
+                139.925,
+                139.96
+              ],
+              "midpoint_s": 139.9425
+            },
+            {
+              "interval_s": [
+                140.305,
+                140.34
+              ],
+              "midpoint_s": 140.3225
+            },
+            {
+              "interval_s": [
+                140.5,
+                140.53
+              ],
+              "midpoint_s": 140.515
+            },
+            {
+              "interval_s": [
+                141.06,
+                141.1
+              ],
+              "midpoint_s": 141.08
+            },
+            {
+              "interval_s": [
+                141.735,
+                141.77
+              ],
+              "midpoint_s": 141.7525
+            },
+            {
+              "interval_s": [
+                141.83,
+                141.86
+              ],
+              "midpoint_s": 141.845
+            },
+            {
+              "interval_s": [
+                142.2,
+                142.24
+              ],
+              "midpoint_s": 142.22
+            },
+            {
+              "interval_s": [
+                142.96,
+                143.0
+              ],
+              "midpoint_s": 142.98
+            },
+            {
+              "interval_s": [
+                143.345,
+                143.38
+              ],
+              "midpoint_s": 143.3625
+            },
+            {
+              "interval_s": [
+                143.535,
+                143.57
+              ],
+              "midpoint_s": 143.5525
+            },
+            {
+              "interval_s": [
+                144.1,
+                144.135
+              ],
+              "midpoint_s": 144.1175
+            },
+            {
+              "interval_s": [
+                144.775,
+                144.81
+              ],
+              "midpoint_s": 144.7925
+            },
+            {
+              "interval_s": [
+                144.87,
+                144.9
+              ],
+              "midpoint_s": 144.885
+            },
+            {
+              "interval_s": [
+                145.24,
+                145.275
+              ],
+              "midpoint_s": 145.2575
+            },
+            {
+              "interval_s": [
+                146.0,
+                146.035
+              ],
+              "midpoint_s": 146.0175
+            },
+            {
+              "interval_s": [
+                146.38,
+                146.415
+              ],
+              "midpoint_s": 146.3975
+            },
+            {
+              "interval_s": [
+                146.575,
+                146.61
+              ],
+              "midpoint_s": 146.5925
+            },
+            {
+              "interval_s": [
+                147.135,
+                147.175
+              ],
+              "midpoint_s": 147.155
+            },
+            {
+              "interval_s": [
+                147.815,
+                147.85
+              ],
+              "midpoint_s": 147.8325
+            },
+            {
+              "interval_s": [
+                147.905,
+                147.94
+              ],
+              "midpoint_s": 147.9225
+            },
+            {
+              "interval_s": [
+                148.28,
+                148.315
+              ],
+              "midpoint_s": 148.2975
+            },
+            {
+              "interval_s": [
+                149.035,
+                149.075
+              ],
+              "midpoint_s": 149.055
+            },
+            {
+              "interval_s": [
+                149.425,
+                149.45
+              ],
+              "midpoint_s": 149.4375
+            }
+          ],
+          "uncertain_regions": [],
+          "review_findings": "Twenty-eight clear core pulses plus one trailing-margin pulse. Separate raw attacks and renewed low-frequency sweeps resolve seven second pulses that lacked onset proposals. The existing trailing crossings are tails, not replacement onset times. All intervening bass and body transients inspected; no additional kick identified.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/heavy_on_mind_s4_overview.png",
+            "sha256": "2cc4e12ccaa4845dda84725b514a25843094e02f42c12b0f817c868e1605490e"
+          }
+        },
+        {
+          "id": "expanded_heavy_on_mind_s5",
+          "start_s": 175.26583333333335,
+          "end_s": 187.26583333333335,
+          "review_start_s": 175.01583333333335,
+          "review_end_s": 187.51583333333335,
+          "scoring_ready": true,
+          "kick_times_s": [
+            175.07,
+            175.45,
+            176.02,
+            176.5925,
+            176.9725,
+            177.5425,
+            178.1125,
+            178.4925,
+            183.0425,
+            183.615,
+            184.56,
+            185.1325,
+            186.08,
+            186.65
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                175.05,
+                175.09
+              ],
+              "midpoint_s": 175.07
+            },
+            {
+              "interval_s": [
+                175.43,
+                175.47
+              ],
+              "midpoint_s": 175.45
+            },
+            {
+              "interval_s": [
+                176.005,
+                176.035
+              ],
+              "midpoint_s": 176.02
+            },
+            {
+              "interval_s": [
+                176.575,
+                176.61
+              ],
+              "midpoint_s": 176.5925
+            },
+            {
+              "interval_s": [
+                176.955,
+                176.99
+              ],
+              "midpoint_s": 176.9725
+            },
+            {
+              "interval_s": [
+                177.53,
+                177.555
+              ],
+              "midpoint_s": 177.5425
+            },
+            {
+              "interval_s": [
+                178.1,
+                178.125
+              ],
+              "midpoint_s": 178.1125
+            },
+            {
+              "interval_s": [
+                178.48,
+                178.505
+              ],
+              "midpoint_s": 178.4925
+            },
+            {
+              "interval_s": [
+                183.03,
+                183.055
+              ],
+              "midpoint_s": 183.0425
+            },
+            {
+              "interval_s": [
+                183.595,
+                183.635
+              ],
+              "midpoint_s": 183.615
+            },
+            {
+              "interval_s": [
+                184.54,
+                184.58
+              ],
+              "midpoint_s": 184.56
+            },
+            {
+              "interval_s": [
+                185.115,
+                185.15
+              ],
+              "midpoint_s": 185.1325
+            },
+            {
+              "interval_s": [
+                186.06,
+                186.1
+              ],
+              "midpoint_s": 186.08
+            },
+            {
+              "interval_s": [
+                186.63,
+                186.67
+              ],
+              "midpoint_s": 186.65
+            }
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 179.045,
+              "end_s": 179.09,
+              "reason": "Highly filtered source click without a clearly separable kick-specific master attack."
+            },
+            {
+              "start_s": 179.615,
+              "end_s": 179.665,
+              "reason": "Highly filtered source click without a clearly separable kick-specific master attack."
+            },
+            {
+              "start_s": 184.165,
+              "end_s": 184.225,
+              "reason": "Weak source pulse under strong broadband master transient and bass change; separate kick presence/timing unresolved."
+            },
+            {
+              "start_s": 187.205,
+              "end_s": 187.27,
+              "reason": "Weak source pulse and late crossing 187.251833 overlap master broadband transient; no separately attributable master kick attack."
+            }
+          ],
+          "review_findings": "Thirteen core pulses plus one leading-margin pulse. Three low sweeps remain visible as source/master fade at 177.54, 178.11, 178.49; two later high-passed clicks remain ambiguous. Two weak pulses under later broadband transients also remain ambiguous. The 185.69 source trace is only tiny residual activity (raw peak about 8.3e-5 in detail) and the master shows a sustained bass transition, not a resolved kick. Bass entry near 182.91 precedes the separate clear kick near 183.04.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/heavy_on_mind_s5_overview.png",
+            "sha256": "4a7f20cfb5d4dcfafa110a543c9694a815bce09f4ea2e03251d68063390283d7"
+          }
+        },
+        {
+          "id": "expanded_heavy_on_mind_s6",
+          "start_s": 213.3249074074074,
+          "end_s": 225.3249074074074,
+          "review_start_s": 213.0749074074074,
+          "review_end_s": 225.5749074074074,
+          "scoring_ready": true,
+          "kick_times_s": [
+            213.425,
+            213.805,
+            214.185,
+            214.565,
+            214.945,
+            215.325,
+            215.705,
+            216.085,
+            216.465,
+            216.845,
+            217.225,
+            217.605,
+            217.985,
+            218.365
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                213.405,
+                213.445
+              ],
+              "midpoint_s": 213.425
+            },
+            {
+              "interval_s": [
+                213.785,
+                213.825
+              ],
+              "midpoint_s": 213.805
+            },
+            {
+              "interval_s": [
+                214.165,
+                214.205
+              ],
+              "midpoint_s": 214.185
+            },
+            {
+              "interval_s": [
+                214.545,
+                214.585
+              ],
+              "midpoint_s": 214.565
+            },
+            {
+              "interval_s": [
+                214.925,
+                214.965
+              ],
+              "midpoint_s": 214.945
+            },
+            {
+              "interval_s": [
+                215.305,
+                215.345
+              ],
+              "midpoint_s": 215.325
+            },
+            {
+              "interval_s": [
+                215.685,
+                215.725
+              ],
+              "midpoint_s": 215.705
+            },
+            {
+              "interval_s": [
+                216.065,
+                216.105
+              ],
+              "midpoint_s": 216.085
+            },
+            {
+              "interval_s": [
+                216.445,
+                216.485
+              ],
+              "midpoint_s": 216.465
+            },
+            {
+              "interval_s": [
+                216.825,
+                216.865
+              ],
+              "midpoint_s": 216.845
+            },
+            {
+              "interval_s": [
+                217.205,
+                217.245
+              ],
+              "midpoint_s": 217.225
+            },
+            {
+              "interval_s": [
+                217.585,
+                217.625
+              ],
+              "midpoint_s": 217.605
+            },
+            {
+              "interval_s": [
+                217.965,
+                218.005
+              ],
+              "midpoint_s": 217.985
+            },
+            {
+              "interval_s": [
+                218.345,
+                218.385
+              ],
+              "midpoint_s": 218.365
+            }
+          ],
+          "uncertain_regions": [],
+          "review_findings": "Fourteen distinct core sweeps; two leading-margin proposals lie on a pre-review pulse tail. After the final decay, upper transients and sustained/modulated bass, including 219.32\u2013220.3 and the low-ridge withdrawal/return around 222.0\u2013222.4, show no separate damped kick attacks. These difficult negative regions remain visible and are not excluded merely for master-only activity.",
+          "review_proposal": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/raw_annotation_proposals.json",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/raw-review-miracle-heavy/heavy_on_mind_s6_overview.png",
+            "sha256": "b0c69b505b873ab1b2430fb5807f75da34a01e3cf8a6dd6b5ce1f15947ea416f"
+          }
+        }
+      ]
+    }
+  ]
+}
