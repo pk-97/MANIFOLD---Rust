@@ -1,3 +1,8 @@
+//! Layer composition and presentation for the instrument.
+//! Owns generator rendering, layer blending, preset thumbnails and output processing.
+//! Never depends on node families, the catalog, UI, editing, IO or the app
+//! in production; catalog dependencies are allowed only in tests.
+
 pub mod compositor;
 pub mod fsr1;
 pub mod generator_renderer;
