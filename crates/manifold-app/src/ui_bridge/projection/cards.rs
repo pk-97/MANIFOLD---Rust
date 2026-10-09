@@ -163,6 +163,13 @@ pub(crate) fn attach_audio_sends(configs: &mut [ParamSurface], setup: &manifold_
     }
 }
 
+/// Attach every project-backed source choice at the structural projection seam.
+/// Audio sends and clip-trigger assignments therefore share one cold/dirty pass.
+pub(crate) fn attach_project_sources(configs: &mut [ParamSurface], project: &Project) {
+    attach_audio_sends(configs, &project.audio_setup);
+    super::trigger_routing::attach_trigger_sources(configs, project);
+}
+
 pub(crate) fn audio_send_choices(
     setup: &manifold_core::audio_setup::AudioSetup,
 ) -> Vec<AudioSendChoice> {
@@ -503,6 +510,7 @@ fn param_surface(
                 rgb_members: None,
                 material_attached: false,
                 audio: Default::default(),
+                clip_trigger: None,
             }
         })
         .collect();
@@ -663,7 +671,7 @@ pub(crate) fn gen_params_to_surface(
     visibility: SurfaceVisibility,
     timing: (manifold_core::Bpm, f32),
 ) -> ParamSurface {
-    param_surface(
+    let mut surface = param_surface(
         gp,
         manifold_core::preset_def::PresetKind::Generator,
         0,
@@ -673,7 +681,9 @@ pub(crate) fn gen_params_to_surface(
         visibility,
         timing,
     )
-    .expect("generator param_surface always yields a config")
+    .expect("generator param_surface always yields a config");
+    surface.layer_id = Some(manifold_core::LayerId::new(layer_id));
+    surface
 }
 
 fn scene_ref_for_vm(
@@ -879,7 +889,8 @@ pub(crate) fn modifier_surfaces(
         }
         Some(ParamSurface {
             kind: ParamCardKind::Effect,
-            title: metadata.display_name.clone(),
+            title: scene_modifier_display_name(def, instance)
+                .unwrap_or_else(|| metadata.display_name.clone()),
             rows,
             string_params: vec![],
             audio_sends: Vec::new(),
@@ -920,6 +931,32 @@ pub(crate) fn modifier_surfaces(
         })
     }).collect()
 }
+
+/// Return the display name shared by modifier cards and trigger target groups.
+/// Duplicate recipe names get an occurrence suffix only when the stack needs
+/// disambiguation; a single instance keeps its existing title unchanged.
+pub(crate) fn scene_modifier_display_name(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    instance: &manifold_core::scene_modifier_preset::SceneModifierInstanceDef,
+) -> Option<String> {
+    let base = instance.graph.preset_metadata.as_ref()?.display_name.clone();
+    let same_name = def.scene_modifiers.iter().filter(|candidate| {
+        candidate.graph.preset_metadata.as_ref().is_some_and(|metadata| {
+            metadata.display_name == base
+        })
+    });
+    let count = same_name.count();
+    if count <= 1 {
+        return Some(base);
+    }
+    let occurrence = def.scene_modifiers.iter().take_while(|candidate| candidate.id != instance.id)
+        .filter(|candidate| candidate.graph.preset_metadata.as_ref().is_some_and(|metadata| {
+            metadata.display_name == base
+        }))
+        .count() + 1;
+    Some(format!("{base} #{occurrence}"))
+}
+
 
 fn modifier_enabled_value(
     gp: &manifold_core::effects::PresetInstance,
@@ -1236,6 +1273,7 @@ mod modifier_audio_projection_tests {
         let surfaces = modifier_surfaces(&host, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
         let surface = &surfaces[0];
         assert!(is_force_surface(surface, &graph));
+        assert_eq!(surface.title, "Radial Force");
         assert!(!surface.rows.is_empty());
         for row in &surface.rows {
             assert!(host.params.get(row.id.as_ref()).is_some());
@@ -1250,8 +1288,24 @@ mod modifier_audio_projection_tests {
         assert!(modifier_picker_entries(&graph, &vm).iter().all(|entry| entry.preset_id != "RadialForce"));
         let mut project = manifold_core::project::Project::default();
         let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), host.generator_type().clone(), 0);
+        layer.layer_id = manifold_core::LayerId::new("layer");
         *layer.gen_params_mut().unwrap() = host;
         project.timeline.layers.push(layer);
+        let mut source = manifold_core::layer::Layer::new_trigger("Hits".into(), "layer".into(), 1);
+        source.layer_id = "hits".into();
+        project.timeline.layers.push(source);
+        project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut(&strength).unwrap()
+            .clip_trigger_source = manifold_core::params::ClipTriggerSource::Lane { layer_id: "hits".into() };
+        let mut projected = surfaces.clone();
+        attach_project_sources(&mut projected, &project);
+        let row = projected[0].rows.iter().find(|row| row.id.as_ref() == strength).unwrap();
+        let route = row.clip_trigger.as_ref().expect("force card source selector");
+        assert_eq!(route.target, manifold_ui::view::UiGraphTarget::Generator("layer".into()));
+        assert_eq!(route.source_label, "Hits");
+        let catalog = super::super::trigger_routing::TriggerRoutingCatalog::project(&project);
+        assert_eq!(catalog.targets.iter().filter(|target| target.param_id.as_ref() == strength).count(), 1);
+        assert!(super::super::trigger_routing::response_uses_scene_panel(&project,
+            &manifold_core::GraphTarget::Generator("layer".into()), &strength));
         let saved = serde_json::to_vec(&project).unwrap();
         let mut loaded: manifold_core::project::Project = serde_json::from_slice(&saved).unwrap();
         assert_eq!(loaded.reconcile_param_manifests(), 0);

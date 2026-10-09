@@ -12,6 +12,7 @@ use manifold_ui::panels::picker_core::PickerItem;
 use manifold_ui::{PanelAction, ParamsAction};
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
+use super::trigger_routing::TriggerRoutingCatalog;
 
 /// Remember strip positions while placeholders still have their pre-edit
 /// location. This is session UI state; creating a lane never changes its rank.
@@ -102,6 +103,8 @@ pub fn sync_project_data(
     // only with structural project data, so opening/searching the popup does
     // not walk or allocate from the project on the input hot path.
     ui.automation_chooser_candidates = automation_chooser_candidates(project);
+    ui.trigger_routing = TriggerRoutingCatalog::project(project);
+    ui.refresh_trigger_target_picker();
     ui.pinned_automation_lanes.clone_from(&selection.pinned_automation_lanes);
     {
         // Rebuild CoordinateMapper Y-layout FIRST so layer headers and viewport share
@@ -174,6 +177,8 @@ pub fn sync_project_data(
                                 .any(|l| l.layer_id == *pid && l.is_solo)
                         }),
                     analysis_only: layer.analysis_only,
+                    is_trigger: layer.is_trigger(),
+                    trigger_targets_label: ui.trigger_routing.targets_label(&layer.layer_id),
                     // The LED lane treatment: true for a mirror-flagged layer
                     // OR an LED-type layer — `routes_to_led` is the one model
                     // predicate for "feeds the LED composite" (LED_STRIPS_DESIGN.md

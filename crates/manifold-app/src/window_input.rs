@@ -2917,6 +2917,7 @@ mod tests {
                 empty_label: "No fonts match",
                 label_in_own_font: true,
                 current: Some(0),
+                ..Default::default()
             },
             Rect::new(100.0, 100.0, 100.0, 30.0),
         );

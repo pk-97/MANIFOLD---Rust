@@ -1,6 +1,15 @@
 //! Undoable parameter clip-trigger source edits.
 
 use crate::command::Command;
+use crate::commands::audio_mod::{
+    AddAudioModCommand, SetAudioModTriggerModeCommand, ToggleAudioModEnabledCommand,
+};
+use crate::commands::effect_target::DriverTarget;
+use crate::commands::envelopes::{AddEnvelopeCommand, ToggleEnvelopeEnabledCommand};
+use crate::command::CompositeCommand;
+use manifold_core::audio_mod::ParameterAudioMod;
+use manifold_core::audio_trigger::TriggerFireMode;
+use manifold_core::effects::ParamEnvelope;
 use manifold_core::GraphTarget;
 use manifold_core::effects::ParamId;
 use manifold_core::params::ClipTriggerSource;
@@ -19,6 +28,7 @@ pub struct SetParamClipTriggerSourceCommand {
     applied: bool,
     validate_scope: bool,
     rejection: Option<String>,
+    response: Option<CompositeCommand>,
 }
 
 impl SetParamClipTriggerSourceCommand {
@@ -35,6 +45,7 @@ impl SetParamClipTriggerSourceCommand {
             applied: false,
             validate_scope: false,
             rejection: None,
+            response: None,
         }
     }
 
@@ -62,6 +73,112 @@ impl SetParamClipTriggerSourceCommand {
         param.clip_trigger_source = source.clone();
         self.applied = true;
     }
+
+    fn prepare_response(
+        project: &Project,
+        target: &GraphTarget,
+        param_id: &ParamId,
+    ) -> Option<CompositeCommand> {
+        let owner = project.graph_target_owner(target)?;
+        let param = owner.params.get(param_id.as_ref())?;
+        let driver_target = DriverTarget::from(target);
+        let response_target = target
+            .host_target()
+            .cloned()
+            .unwrap_or_else(|| target.clone());
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+
+        if param.spec.is_trigger {
+            if let Some(audio) = owner
+                .audio_mods
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .find(|audio| audio.param_id == *param_id)
+            {
+                if audio.enabled {
+                    let mode = audio.trigger_mode.unwrap_or(TriggerFireMode::Transient);
+                    if !mode.wants_clip_edge() {
+                        commands.push(Box::new(SetAudioModTriggerModeCommand::new(
+                            driver_target.clone(),
+                            param_id.clone(),
+                            audio.trigger_mode,
+                            Some(TriggerFireMode::Both),
+                        )));
+                    }
+                } else {
+                    commands.push(Box::new(SetAudioModTriggerModeCommand::new(
+                        driver_target.clone(),
+                        param_id.clone(),
+                        audio.trigger_mode,
+                        Some(TriggerFireMode::ClipEdge),
+                    )));
+                    commands.push(Box::new(ToggleAudioModEnabledCommand::new(
+                        driver_target.clone(),
+                        param_id.clone(),
+                        false,
+                        true,
+                    )));
+                }
+            } else {
+                let mut clip_only = ParameterAudioMod::new(
+                    param_id.clone(),
+                    manifold_core::AudioSendId::new(""),
+                    manifold_core::AudioFeature::default(),
+                );
+                clip_only.trigger_mode = Some(TriggerFireMode::ClipEdge);
+                commands.push(Box::new(AddAudioModCommand::new(driver_target, clip_only)));
+            }
+        } else {
+            let enabled_envelope = owner
+                .envelopes
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .any(|envelope| envelope.param_id == *param_id && envelope.enabled);
+            let enabled_clip_audio = owner
+                .audio_mods
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .any(|audio| {
+                    audio.param_id == *param_id
+                        && audio.enabled
+                        && matches!(audio.action, manifold_core::audio_mod::TriggerAction::Step { .. }
+                            | manifold_core::audio_mod::TriggerAction::Random)
+                        && audio
+                            .trigger_mode
+                            .unwrap_or(TriggerFireMode::Transient)
+                            .wants_clip_edge()
+                });
+            if !enabled_envelope && !enabled_clip_audio {
+                if let Some((index, envelope)) = owner
+                    .envelopes
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .enumerate()
+                    .find(|(_, envelope)| envelope.param_id == *param_id)
+                {
+                    commands.push(Box::new(ToggleEnvelopeEnabledCommand::new(
+                        response_target.clone(),
+                        index,
+                        envelope.enabled,
+                        true,
+                    )));
+                } else {
+                    commands.push(Box::new(AddEnvelopeCommand::new(
+                        response_target.clone(),
+                        ParamEnvelope::new(param_id.clone()),
+                    )));
+                }
+            }
+        }
+
+        (!commands.is_empty()).then(|| {
+            CompositeCommand::new(commands, "Arm Clip Trigger Response".into())
+        })
+    }
 }
 
 impl Command for SetParamClipTriggerSourceCommand {
@@ -74,17 +191,35 @@ impl Command for SetParamClipTriggerSourceCommand {
             self.rejection = Some("The trigger source is unavailable for this parameter".into());
             return;
         }
-        let Some(owner) = project.graph_target_owner_mut(&self.target) else {
-            return;
-        };
-        let Some(param) = owner.params.get_mut(self.param_id.as_ref()) else {
-            return;
-        };
-        if self.old_source.is_none() {
-            self.old_source = Some(param.clip_trigger_source.clone());
+        if self.validate_scope
+            && !matches!(&self.new_source, ClipTriggerSource::Disabled)
+            && self.response.is_none()
+        {
+            if project
+                .graph_target_owner(&self.target)
+                .and_then(|owner| owner.params.get(self.param_id.as_ref()))
+                .is_none()
+            {
+                return;
+            }
+            self.response = Self::prepare_response(project, &self.target, &self.param_id);
         }
-        param.clip_trigger_source = self.new_source.clone();
+        {
+            let Some(owner) = project.graph_target_owner_mut(&self.target) else {
+                return;
+            };
+            let Some(param) = owner.params.get_mut(self.param_id.as_ref()) else {
+                return;
+            };
+            if self.old_source.is_none() {
+                self.old_source = Some(param.clip_trigger_source.clone());
+            }
+            param.clip_trigger_source = self.new_source.clone();
+        }
         self.applied = true;
+        if let Some(response) = self.response.as_mut() {
+            response.execute(project);
+        }
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -95,6 +230,9 @@ impl Command for SetParamClipTriggerSourceCommand {
             self.applied = false;
             return;
         };
+        if let Some(response) = self.response.as_mut() {
+            response.undo(project);
+        }
         self.set_source(project, &old_source);
     }
 
@@ -163,6 +301,26 @@ mod tests {
             .unwrap()
             .clip_trigger_source
             .clone()
+    }
+
+    fn assignment_fixture() -> (Project, GraphTarget, LayerId) {
+        let mut project = Project::default();
+        let mut owner = Layer::new_video("Owner".into(), 0);
+        let owner_id = owner.layer_id.clone();
+        let mut instance = PresetInstance::new(PresetTypeId::new("trigger-assignment"));
+        instance.id = EffectId::new("assignment-effect");
+        let mut fire = slot("fire", 0.0);
+        fire.spec.is_trigger = true;
+        instance.params = ParamManifest::from_params(vec![
+            slot("amount", 0.2),
+            fire,
+        ]);
+        owner.effects = Some(vec![instance]);
+        let target = GraphTarget::Effect(EffectId::new("assignment-effect"));
+        let lane = Layer::new_trigger("Lane".into(), owner_id, 1);
+        let lane_id = lane.layer_id.clone();
+        project.timeline.layers.extend([owner, lane]);
+        (project, target, lane_id)
     }
 
     #[test]
@@ -284,5 +442,90 @@ mod tests {
         missing_param.execute(&mut project);
         assert!(!missing_param.was_applied());
         assert_eq!(serde_json::to_value(&project).unwrap(), before);
+    }
+
+    #[test]
+    fn validated_numeric_assignment_creates_and_round_trips_envelope_response() {
+        let (mut project, target, lane_id) = assignment_fixture();
+        let expected_source = lane_id.clone();
+        let mut command = SetParamClipTriggerSourceCommand::for_assignment(
+            target.clone(),
+            "amount",
+            ClipTriggerSource::Lane { layer_id: lane_id },
+        );
+        command.execute(&mut project);
+        let owner = project.graph_target_owner(&target).unwrap();
+        assert_eq!(owner.params.get("amount").unwrap().clip_trigger_source,
+            ClipTriggerSource::Lane { layer_id: expected_source });
+        assert_eq!(owner.envelopes.as_ref().unwrap().len(), 1);
+        assert!(owner.envelopes.as_ref().unwrap()[0].enabled);
+        command.undo(&mut project);
+        let owner = project.graph_target_owner(&target).unwrap();
+        assert_eq!(owner.params.get("amount").unwrap().clip_trigger_source, ClipTriggerSource::OwnLayer);
+        assert!(owner.envelopes.as_ref().is_none_or(Vec::is_empty));
+        command.execute(&mut project);
+        assert_eq!(project.graph_target_owner(&target).unwrap().envelopes.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn validated_fire_assignment_arms_clip_edge_without_losing_audio_binding() {
+        let (mut project, target, lane_id) = assignment_fixture();
+        {
+            let owner = project.graph_target_owner_mut(&target).unwrap();
+            let audio = ParameterAudioMod::new(
+                "fire".into(),
+                AudioSendId::new("send"),
+                AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
+            );
+            owner.audio_mods_mut().push(audio);
+        }
+        let mut command = SetParamClipTriggerSourceCommand::for_assignment(
+            target.clone(),
+            "fire",
+            ClipTriggerSource::Lane { layer_id: lane_id },
+        );
+        command.execute(&mut project);
+        let audio = project.graph_target_owner(&target).unwrap().find_audio_mod("fire").unwrap();
+        assert_eq!(audio.trigger_mode, Some(TriggerFireMode::Both));
+        assert_eq!(audio.source.send_id, AudioSendId::new("send"));
+        command.undo(&mut project);
+        assert_eq!(project.graph_target_owner(&target).unwrap().find_audio_mod("fire").unwrap().trigger_mode, None);
+        command.execute(&mut project);
+        assert_eq!(project.graph_target_owner(&target).unwrap().find_audio_mod("fire").unwrap().trigger_mode, Some(TriggerFireMode::Both));
+    }
+
+    #[test]
+    fn disabled_fire_audio_arms_clip_edge_and_disabled_source_leaves_it_alone() {
+        let (mut project, target, lane_id) = assignment_fixture();
+        {
+            let owner = project.graph_target_owner_mut(&target).unwrap();
+            let mut audio = ParameterAudioMod::new(
+                "fire".into(),
+                AudioSendId::new("send"),
+                AudioFeature::default(),
+            );
+            audio.enabled = false;
+            audio.trigger_mode = Some(TriggerFireMode::Both);
+            owner.audio_mods_mut().push(audio);
+        }
+        let mut arm = SetParamClipTriggerSourceCommand::for_assignment(
+            target.clone(),
+            "fire",
+            ClipTriggerSource::Lane { layer_id: lane_id },
+        );
+        arm.execute(&mut project);
+        let audio = project.graph_target_owner(&target).unwrap().find_audio_mod("fire").unwrap();
+        assert!(audio.enabled);
+        assert_eq!(audio.trigger_mode, Some(TriggerFireMode::ClipEdge));
+        arm.undo(&mut project);
+        let mut disconnect = SetParamClipTriggerSourceCommand::for_assignment(
+            target.clone(),
+            "fire",
+            ClipTriggerSource::Disabled,
+        );
+        disconnect.execute(&mut project);
+        let audio = project.graph_target_owner(&target).unwrap().find_audio_mod("fire").unwrap();
+        assert!(!audio.enabled);
+        assert_eq!(audio.trigger_mode, Some(TriggerFireMode::Both));
     }
 }

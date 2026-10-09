@@ -20,7 +20,7 @@ impl InspectorCompositePanel {
         self.last_clicked_modifier = ids.last().cloned();
         self.pending_reveal = self.modifier_cards.iter().find(|card|
             card.modifier_info().is_some_and(|info| ids.first() == Some(&info.instance_id)))
-            .map(|card| card.effect_id().clone());
+            .map(|card| (card.effect_id().clone(), None));
     }
 
     pub fn select_modifier_for_context_menu(&mut self, layer: &LayerId, id: &manifold_foundation::NodeId) {
@@ -37,18 +37,34 @@ impl InspectorCompositePanel {
         self.selected_modifier_ids.clear();
         self.selection_set_mut(tab).extend(ids.iter().cloned());
         self.last_effect_tab = tab;
-        self.pending_reveal = ids.first().cloned();
+        self.pending_reveal = ids.first().cloned().map(|id| (id, None));
+    }
+
+    /// Open the existing response drawer and reuse the inspector's reveal path.
+    pub fn reveal_clip_response(&mut self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
+        let id = self.effects[Self::SCOPE_LAYER].iter_mut()
+            .chain(self.gen_params.iter_mut()).chain(self.modifier_cards.iter_mut())
+            .find_map(|card| card.reveal_clip_response(target, param).then(|| card.effect_id().clone()));
+        let Some(id) = id else { return false; };
+        for group in &mut self.rack_groups[Self::SCOPE_LAYER] {
+            if group.member_ids.contains(&id) { group.collapsed = false; }
+        }
+        self.pending_reveal = Some((id, Some(param.clone())));
+        self.mods_compact = false;
+        self.apply_mods_compact();
+        true
     }
 
     pub fn reveal_pending_selection(&mut self, tree: &mut UITree) {
-        let Some(id) = self.pending_reveal.as_ref() else { return; };
+        let Some((id, param)) = self.pending_reveal.as_ref() else { return; };
         let group_bounds = self.rack_groups[Self::scope_idx(self.active_tab)].iter()
             .find(|group| group.collapsed && group.member_ids.contains(id))
             .and_then(|group| self.group_nodes.iter().find(|nodes| nodes.group_id == group.id))
             .map(|nodes| tree.get_bounds(nodes.header));
         let bounds = group_bounds.or_else(|| self.cards_for_tab(self.active_tab).iter()
-            .chain(self.modifier_cards.iter()).find(|card| card.effect_id() == id)
-            .and_then(|card| card.live_bounds(tree)));
+            .chain(self.gen_params.iter()).chain(self.modifier_cards.iter()).find(|card| card.effect_id() == id)
+            .and_then(|card| param.as_ref().and_then(|param| card.clip_response_rect(tree, param.as_ref()))
+                .or_else(|| card.live_bounds(tree))));
         let Some(bounds) = bounds else { return; };
         let scroll = if self.active_tab == InspectorTab::Master { &mut self.master_scroll } else { &mut self.layer_scroll };
         self.scrolled_in_place |= scroll.reveal_rect(tree, bounds);
