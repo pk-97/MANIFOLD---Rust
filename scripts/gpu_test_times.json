@@ -64,7 +64,6 @@
     "manifold-nodes/gpu_proofs/cinematic_scene_tail::import_tail_frame_cost_reported_at_4k": 7.0,
     "manifold-nodes/gpu_proofs/fragment_storage::fragment_reads_storage_buffer_via_bytes_binding": 7.0,
     "manifold-app/renderer_gpu_proofs/physics_solids::physics_imported_flower_shatter_release_preserves_authored_row_and_materials": 7.0,
-    "manifold-nodes-scene/gpu_proofs/render_scene_fog::p3_night_garden_hires_acceptance_demo": 6.8,
     "manifold-app/renderer_gpu_proofs/liquid_conformance::liquid_reset_starts_a_new_epoch": 6.7,
     "manifold-nodes/main/contracts::node_graph::catalog_tests::gltf_import::morph_targets_render_four_visibly_distinct_poses": 6.4,
     "manifold-nodes/main/project_preset_overlay::overlay_only_generator_produces_nonempty_editor_snapshot": 6.2,

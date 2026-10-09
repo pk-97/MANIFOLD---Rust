@@ -204,6 +204,11 @@ BUG-117 (render-generator-preset-silently-under-renders-a…)'s async caveat —
 lands in the landing report for Peter's eyes. Gates stay numeric; the PNG is
 the acceptance demo (L2), and Peter's look-pass is the phase's real exit.
 
+The retained `render_scene_fog::p3_night_garden_acceptance_demo` proof checks
+both quality settings numerically. Set `MANIFOLD_FOG_ARTIFACT_DIR` when running
+that proof for a look-pass to also write its proof-size and 960×540
+checkerboard composites. Routine gates do not produce those demo artifacts.
+
 ## 3. Invariants & enforcement
 
 | Invariant | Machine check |

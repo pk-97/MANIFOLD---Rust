@@ -758,7 +758,7 @@ fn night_garden_scene_json(shaft_quality: u32) -> String {
 /// `out = src_rgb + bg_rgb*(1-a)`: a void pixel (a=0) shows the checkerboard
 /// PLUS whatever additive glow the shaft composite wrote; an opaque pillar
 /// pixel (a≈1) reduces to its own lit colour.
-fn write_checkerboard_composite_png(bytes: &[u8], w: u32, h: u32, path: &str) {
+fn write_checkerboard_composite_png(bytes: &[u8], w: u32, h: u32, path: &std::path::Path) {
     let tile = 16u32;
     let mut out = Vec::with_capacity((w * h * 3) as usize);
     for y in 0..h {
@@ -778,7 +778,7 @@ fn write_checkerboard_composite_png(bytes: &[u8], w: u32, h: u32, path: &str) {
         }
     }
     image::save_buffer(path, &out, w, h, image::ExtendedColorType::Rgb8)
-        .unwrap_or_else(|e| panic!("write {path}: {e}"));
+        .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
 }
 
 /// Same render path as [`render_readback`] but at an arbitrary resolution,
@@ -839,40 +839,29 @@ fn render_readback_hires(json: &str, w: u32, h: u32) -> Vec<u8> {
 }
 
 #[test]
-fn p3_night_garden_hires_acceptance_demo() {
-    // D6/L2: the real look-pass artifact, at a size Peter can actually judge
-    // (960x540, vs the 128x128 numeric-proof canvas above). Med and High
-    // quality, same checkerboard-over composite so the void's additive glow
-    // is visible rather than hidden behind alpha.
-    for (quality, path) in [
-        (1u32, "/tmp/vol_light_p3_night_garden_hires_med.png"),
-        (2u32, "/tmp/vol_light_p3_night_garden_hires_high.png"),
-    ] {
-        let json = night_garden_scene_json(quality);
-        let bytes = render_readback_hires(&json, 960, 540);
-        write_checkerboard_composite_png(&bytes, 960, 540, path);
-    }
-}
-
-#[test]
 fn p3_night_garden_acceptance_demo() {
-    // D6/L2 acceptance demo for P3: renders the night-garden scene at Med
-    // (shaft_quality=1) and High (shaft_quality=2) and writes both PNGs for
-    // Peter's look-pass — this test's job is to produce the artifact, not to
-    // grade it (the report's honest description of what's actually in the
-    // PNG is the real gate, per D6's lesson).
-    for (quality, path) in [
-        (1u32, "/tmp/vol_light_p3_night_garden_med.png"),
-        (2u32, "/tmp/vol_light_p3_night_garden_high.png"),
-    ] {
+    // D6/L2 numeric acceptance at the fixed proof canvas. Set
+    // MANIFOLD_FOG_ARTIFACT_DIR to also write the Med/High proof and hires
+    // checkerboard PNGs for the unresolved volumetric-light look pass.
+    let artifact_dir = std::env::var_os("MANIFOLD_FOG_ARTIFACT_DIR").map(std::path::PathBuf::from);
+    if let Some(dir) = &artifact_dir {
+        std::fs::create_dir_all(dir).expect("fog artifact directory creates");
+    }
+    for (quality, label) in [(1u32, "med"), (2u32, "high")] {
         let json = night_garden_scene_json(quality);
         let (bytes, w, h) = render_readback(&json);
-        write_checkerboard_composite_png(&bytes, w, h, path);
         // Sanity: shafts must actually be contributing SOMETHING (not a
         // silent no-op) — total additive response over the whole frame must
         // be well above the numeric noise floor.
         let sum = total_rgb_sum(&bytes);
         assert!(sum > 1.0, "quality {quality}: night-garden total rgb sum {sum:.4} looks like a no-op");
+        if let Some(dir) = &artifact_dir {
+            let low_path = dir.join(format!("vol_light_p3_night_garden_{label}.png"));
+            write_checkerboard_composite_png(&bytes, w, h, &low_path);
+            let hires_bytes = render_readback_hires(&json, 960, 540);
+            let hires_path = dir.join(format!("vol_light_p3_night_garden_hires_{label}.png"));
+            write_checkerboard_composite_png(&hires_bytes, 960, 540, &hires_path);
+        }
     }
 }
 
