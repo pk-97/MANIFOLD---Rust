@@ -273,26 +273,10 @@ impl TransportController {
                 return;
             }
 
-            let bpm_cmd =
-                manifold_editing::commands::settings::ChangeBpmCommand::new(old_bpm, new_bpm);
-
-            // Build rescale command (proportionally moves clip positions)
-            let rescale_cmd =
-                manifold_editing::commands::settings::RescaleBeatsForBpmChangeCommand::build(
-                    project, old_bpm, new_bpm,
-                );
-
-            if let Some(rescale) = rescale_cmd {
-                let commands: Vec<Box<dyn manifold_editing::command::Command>> =
-                    vec![Box::new(bpm_cmd), Box::new(rescale)];
-                let composite = manifold_editing::command::CompositeCommand::new(
-                    commands,
-                    format!("Change BPM {:.1} → {:.1}", old_bpm.0, new_bpm.0),
-                );
-                editing.execute(Box::new(composite), project);
-            } else {
-                editing.execute(Box::new(bpm_cmd), project);
-            }
+            let old_map = project.tempo_map.clone();
+            let command = manifold_editing::commands::settings::ChangeBpmCommand::master(project, new_bpm);
+            editing.execute(Box::new(command), project);
+            engine.reconcile_tempo_edit(&old_map, old_bpm);
         }
     }
 
@@ -324,9 +308,8 @@ impl TransportController {
                     return;
                 }
 
-                let cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(
-                    old_bpm,
-                    recorded_bpm,
+                let cmd = manifold_editing::commands::settings::ChangeBpmCommand::master(
+                    project, recorded_bpm,
                 );
                 editing.execute(Box::new(cmd), project);
             }

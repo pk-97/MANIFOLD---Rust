@@ -114,6 +114,7 @@ enum OrchestratorPhase {
 /// The clip owns the result (cached analysis + tagged triggers); no global state.
 struct DetectClipState {
     clip_id: ClipId,
+    audio_path: String,
     sub_phase: DetectClipSubPhase,
     temp_output_json: String,
     invocation: PercussionPipelineInvocation,
@@ -344,6 +345,7 @@ impl PercussionImportOrchestrator {
         );
         self.phase = OrchestratorPhase::DetectClip(Box::new(DetectClipState {
             clip_id,
+            audio_path,
             sub_phase: DetectClipSubPhase::RunningPipeline,
             temp_output_json,
             invocation,
@@ -419,8 +421,18 @@ impl PercussionImportOrchestrator {
                     return;
                 };
 
-                if pipeline_ok {
+                let source_unchanged = if let OrchestratorPhase::DetectClip(s) = &self.phase {
+                    project.timeline.find_clip_by_id(&clip_id)
+                        .is_some_and(|clip| clip.audio_file_path == s.audio_path)
+                } else { false };
+                if pipeline_ok && source_unchanged {
                     self.apply_clip_detection(&clip_id, &temp_json, project, editing_service);
+                }
+                if !source_unchanged {
+                    self.set_percussion_import_status(
+                        "Detect: source changed; result discarded", COLOR_ORANGE,
+                        false, 4.0, PERCUSSION_PROGRESS_UNKNOWN, false,
+                    );
                 }
                 let _ = std::fs::remove_file(&temp_json);
 
@@ -474,26 +486,18 @@ impl PercussionImportOrchestrator {
             }
         };
 
-        // Detect path only: record the file's true tempo from a confident
-        // detection. recorded_bpm is the clip's native tempo, and the analysis
-        // events are in file-seconds — so the warp-on placement anchor
-        // (60/recorded_bpm) needs the real BPM, not the project-tempo default the
-        // warp toggle seeds. Route through EditingService so data_version bumps
-        // and UI (waveform warp, inspector BPM field) updates. No duration rescale
-        // by design — the clip's timeline length was set at import time; we're just
-        // correcting the BPM metadata. Only when warp is already on (recorded_bpm > 0),
-        // so detection never flips a native-speed clip into warp.
+        // Detection records source knowledge independently of Warp. A manual BPM
+        // takes precedence, and the command preserves the selected source span.
         const CLIP_BPM_CONFIDENCE: f32 = 0.72;
         let detected = analysis.bpm.0;
         if detected.is_finite()
-            && detected > 0.0
+            && (20.0..=300.0).contains(&detected)
             && analysis.bpm_confidence >= CLIP_BPM_CONFIDENCE
-            && let Some(clip) = project.timeline.find_clip_by_id(clip_id)
-            && clip.recorded_bpm > 0.0
         {
-            let old_bpm = clip.recorded_bpm;
-            let cmd = Box::new(ChangeClipRecordedBpmCommand::new_no_rescale(clip_id.clone(), old_bpm, detected));
-            editing_service.execute(cmd, project);
+            editing_service.execute(
+                Box::new(ChangeClipRecordedBpmCommand::new_detected(clip_id.clone(), detected)),
+                project,
+            );
         }
 
         // Detect path only: pre-fill routing so the inspector dropdowns land on
@@ -545,6 +549,8 @@ impl PercussionImportOrchestrator {
             in_point,
             source_duration,
             recorded_bpm,
+            warp_enabled,
+            bpm_detected,
             audio_path,
         )) = project.timeline.layers.iter().find_map(|l| {
             l.clips.iter().find(|c| c.id == *clip_id).map(|c| {
@@ -555,6 +561,8 @@ impl PercussionImportOrchestrator {
                     c.in_point,
                     c.source_duration,
                     c.recorded_bpm,
+                    c.is_audio_warp_enabled(),
+                    c.audio_bpm_automatic,
                     c.audio_file_path.clone(),
                 )
             })
@@ -749,9 +757,9 @@ impl PercussionImportOrchestrator {
                 source_duration,
             );
             clip.detection_source = Some(clip_id.clone());
-            if recorded_bpm > 0.0 {
-                clip.set_recorded_bpm(recorded_bpm);
-            }
+            clip.set_recorded_bpm(recorded_bpm);
+            clip.audio_warp_enabled = Some(warp_enabled);
+            clip.audio_bpm_automatic = bpm_detected;
             let mut add_clip = AddClipCommand::new(clip, lane_id.clone());
             add_clip.execute(project);
             commands.push(Box::new(add_clip));
@@ -981,24 +989,18 @@ impl PercussionImportOrchestrator {
         // detection config, and build the clip-anchored, warp-aware converter
         // from the clip's geometry. The energy envelope rides inside the cached
         // analysis, so no project-global state is written.
-        let project_bpm = project.settings.bpm;
-        let (config, anchor) = {
-            let clip = match project.timeline.find_clip_by_id_mut(clip_id) {
-                Some(c) => c,
-                None => return false,
-            };
-            let anchor = ClipDetectionAnchor::new(
-                clip.start_beat,
-                clip.duration_beats,
-                clip.in_point,
-                clip.recorded_bpm,
-                project_bpm,
-            );
+        let Some(clip) = project.timeline.layers.iter().flat_map(|layer| &layer.clips)
+            .find(|clip| clip.id == *clip_id) else {
+            return false;
+        };
+        let anchor = ClipDetectionAnchor::from_clip(clip, project);
+        let config = {
+            let clip = project.timeline.find_clip_by_id_mut(clip_id).expect("clip resolved above");
             let detection = clip
                 .audio_detection
                 .get_or_insert_with(AudioClipDetection::new);
             detection.analysis = Some(analysis.clone());
-            (detection.config.clone(), anchor)
+            detection.config.clone()
         };
 
         let options =
