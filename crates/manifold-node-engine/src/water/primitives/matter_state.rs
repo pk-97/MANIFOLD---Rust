@@ -334,7 +334,7 @@ impl Primitive for MatterState {
         }
         self.pending = timing.total_iterations;
         self.substeps = timing.iterations;
-        self.step_dt = substep_duration(timing.interval.duration().0 as f32, self.substeps);
+        self.step_dt = substep_duration(timing.duration().0 as f32, self.substeps);
         self.interval = Some(timing);
     }
 
@@ -445,17 +445,16 @@ mod tests {
     #[test]
     fn matter_state_unequal_interval_counts_keep_tick_flags_and_completion() {
         use manifold_core::Seconds;
-        use manifold_physics::stepping::StepInterval;
         let mut state = MatterState::new();
         state.pending = 2 * 2; // Initial scalar count is only the first interval's.
         state.ticks_done = 10;
         let timings = [
             SubstepInterval {
-                interval: StepInterval::new(Seconds(0.0), Seconds(0.02)),
+                start: Seconds(0.0), end: Seconds(0.02),
                 ordinal: 0, first_iteration: 0, iterations: 2, total_iterations: 7,
             },
             SubstepInterval {
-                interval: StepInterval::new(Seconds(0.02), Seconds(0.07)),
+                start: Seconds(0.02), end: Seconds(0.07),
                 ordinal: 1, first_iteration: 2, iterations: 5, total_iterations: 7,
             },
         ];
@@ -466,7 +465,7 @@ mod tests {
                 let iteration = timing.first_iteration + local;
                 assert!(EffectNode::substep_iteration(&mut state, iteration, &mut scalars));
                 assert_eq!(scalars, [
-                    substep_duration(timing.interval.duration().0 as f32, timing.iterations),
+                    substep_duration(timing.duration().0 as f32, timing.iterations),
                     iteration as f32, local as f32,
                     if local == 0 { 1.0 } else { 0.0 },
                     if local + 1 == timing.iterations { 1.0 } else { 0.0 },

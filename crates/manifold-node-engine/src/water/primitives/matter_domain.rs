@@ -392,6 +392,10 @@ pub struct MatterInterval {
 }
 
 impl MatterInterval {
+    fn interval(&self) -> manifold_physics::stepping::StepInterval {
+        manifold_physics::stepping::StepInterval::new(self.timing.start, self.timing.end)
+    }
+
     fn contains(&self, iteration: u32) -> bool {
         iteration >= self.timing.first_iteration
             && iteration - self.timing.first_iteration < self.timing.iterations
@@ -420,7 +424,8 @@ fn schedule_intervals(
         capped |= requested >= MAX_SUBSTEPS;
         schedule.push(MatterInterval {
             timing: SubstepInterval {
-                interval, ordinal, first_iteration: total, iterations, total_iterations: 0,
+                start: interval.start, end: interval.end,
+                ordinal, first_iteration: total, iterations, total_iterations: 0,
             },
             scalars: [
                 ("substeps_per_tick", iterations as f32),
@@ -1036,7 +1041,7 @@ impl MatterDomain {
         reaction.zero_fill();
         owner.set_pending(PendingTick {
             tick: exchange.pending.tick + u64::from(tick),
-            interval: record.timing.interval,
+            interval: record.interval(),
             ..exchange.pending
         });
         self.coupled.scale = Some(scale);
@@ -1075,9 +1080,9 @@ mod sim_rate_tests {
                 let frame = clock.advance(transport, TICK, 4.0, 0.0, false, true);
                 schedule_intervals(&mut schedule, &frame, 100, 0.0625);
                 for record in &schedule {
-                    result.push((record.timing.interval, record.timing.iterations,
+                    result.push((record.interval(), record.timing.iterations,
                         crate::water::matter::substep_duration(
-                            record.timing.interval.duration().0 as f32, record.timing.iterations,
+                            record.timing.duration().0 as f32, record.timing.iterations,
                         ).to_bits(), record.scalars[1].1.to_bits()));
                 }
             }
@@ -1105,7 +1110,7 @@ mod sim_rate_tests {
         assert_eq!(first.timing.total_iterations, 153);
         assert_eq!(second.timing.total_iterations, 153);
         domain.coupled.exchange = Some(Exchange {
-            pending: PendingTick { tick: 7, interval: first.timing.interval, offline: true, stamp: 0 },
+            pending: PendingTick { tick: 7, interval: first.interval(), offline: true, stamp: 0 },
             scale: ReactionScale { unit: first.scalars[1].1, cell_size: 0.0625, offset: 0 },
         });
         for iteration in 0..153 {
@@ -1133,13 +1138,13 @@ mod sim_rate_tests {
         let previous = ReactionScale { unit: 64.0, cell_size: 0.0625, offset: 3 };
         let record = MatterInterval {
             timing: SubstepInterval {
-                interval: StepInterval::new(Seconds(TICK), Seconds(2.0 * TICK)),
+                start: Seconds(TICK), end: Seconds(2.0 * TICK),
                 ordinal: 1, first_iteration: 25, iterations: 128, total_iterations: 153,
             },
             scalars: [("substeps_per_tick", 128.0), ("momentum_unit", 256.0)],
         };
         let exchange = Exchange {
-            pending: PendingTick { tick: 7, interval: record.timing.interval, offline: true, stamp: 0 },
+            pending: PendingTick { tick: 7, interval: record.interval(), offline: true, stamp: 0 },
             scale: previous,
         };
         let next = record.reaction_scale(exchange.scale);

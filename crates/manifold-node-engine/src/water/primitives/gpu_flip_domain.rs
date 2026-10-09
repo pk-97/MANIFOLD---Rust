@@ -493,7 +493,9 @@ impl Primitive for GpuFlipDomain {
     fn substep_clock_interval(&self, iteration: u32) -> Option<crate::exec::substeps::SubstepClockOutput<'_>> {
         let frame = self.scheduled_frame.as_ref()?;
         frame.interval(u64::from(iteration)).map(|interval| {
-            let mut output = crate::exec::substeps::SubstepClockOutput::single("interval_duration", interval, iteration, frame.ticks);
+            let mut output = crate::exec::substeps::SubstepClockOutput::single(
+                "interval_duration", interval.start, interval.end, iteration, frame.ticks,
+            );
             if iteration > 0 {
                 output.scalars = if self.later_obstacle_tick == Some(iteration) { &self.later_obstacle } else { NO_OBSTACLE_BOUND };
             }

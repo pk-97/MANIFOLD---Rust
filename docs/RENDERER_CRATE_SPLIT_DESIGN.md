@@ -297,7 +297,7 @@ The existing cloned-solid FLIP binding tests cover the second call site. Compile
 the engine, then run these focused CPU contracts. Full P5 invariants and landing
 remain required after the complete extraction; this is not a separate landing.
 
-#### P5 clock carrier seam (decided; implementation pending)
+#### P5 clock carrier seam
 
 Keep `manifold_physics::clock::SimulationClock`, `stepping::StepInterval` and every
 acceptance/CFL/event rule in their present native owners. The graph executor only
@@ -325,6 +325,11 @@ interval, host-sync, pause, reset, export and coupled-progress proofs. The live
 clock's section 9 remains authoritative: two fixed accepted intervals at most,
 one after a late frame, existing overload discard, ordered hits and exact export.
 This refactor does not reopen that policy or claim the pending live HUD work.
+
+Implemented in the T2 lane: engine check and clippy with `gpu-proofs` pass;
+45 existing CPU contracts pass across executor substeps, FLIP obstacle timing,
+Matter interval scheduling and state publication. GPU behavior and the complete
+extraction remain subject to the P5 gates above.
 
 Phasing-completeness check: every D1 crate appears in exactly one phase's deliverables (ui-paint P1a, graph P1, image/scene/compositor P2, nodes P3, water P5); D5 P0; D6 P3; D7 P1/P2; D8 P4; D10 P0; D11 P0; D12 P1a; INV-5's script P0; measurement P4.
 

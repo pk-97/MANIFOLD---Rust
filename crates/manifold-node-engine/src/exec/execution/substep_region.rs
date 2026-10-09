@@ -179,7 +179,7 @@ impl Executor {
     /// then its extra scalars, each into the clock step's output slot.
     fn publish_clock_output(&mut self, plan: &ExecutionPlan, clock: NodeInstanceId, output: &SubstepClockOutput<'_>) {
         let clock_step = plan.steps().iter().find(|step| step.node == clock);
-        let duration = (output.duration_port, output.timing.interval.duration().0 as f32);
+        let duration = (output.duration_port, output.timing.duration().0 as f32);
         for &(port, value) in std::iter::once(&duration).chain(output.scalars) {
             if let Some(slot) = clock_step
                 .and_then(|step| step.outputs.iter().find(|(name, _)| *name == port))

@@ -27,11 +27,18 @@ use crate::validation::GraphError;
 /// Iteration identity does not imply a fixed number of subdivisions per interval.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SubstepInterval {
-    pub interval: manifold_physics::stepping::StepInterval,
+    pub start: manifold_core::Seconds,
+    pub end: manifold_core::Seconds,
     pub ordinal: u32,
     pub first_iteration: u32,
     pub iterations: u32,
     pub total_iterations: u32,
+}
+
+impl SubstepInterval {
+    pub fn duration(self) -> manifold_core::Seconds {
+        manifold_core::Seconds(self.end.0 - self.start.0)
+    }
 }
 
 /// Clock outputs refreshed before a region iteration. Additional scalars use
@@ -45,14 +52,16 @@ pub struct SubstepClockOutput<'a> {
 impl SubstepClockOutput<'_> {
     pub fn single(
         duration_port: &'static str,
-        interval: manifold_physics::stepping::StepInterval,
+        start: manifold_core::Seconds,
+        end: manifold_core::Seconds,
         ordinal: u32,
         total_iterations: u32,
     ) -> Self {
         Self {
             duration_port,
             timing: SubstepInterval {
-                interval,
+                start,
+                end,
                 ordinal,
                 first_iteration: ordinal,
                 iterations: 1,
@@ -1325,7 +1334,7 @@ mod tests {
             Some(self.ports)
         }
         fn set_substep_interval(&mut self, interval: SubstepInterval) {
-            self.interval_duration = interval.interval.duration().0 as f32;
+            self.interval_duration = interval.duration().0 as f32;
         }
         fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
             if iteration >= self.pending {
@@ -1468,7 +1477,9 @@ mod tests {
         fn substep_clock_interval(&self, iteration: u32) -> Option<SubstepClockOutput<'_>> {
             let frame = self.intervals.as_ref()?;
             frame.interval(u64::from(iteration)).map(|interval| {
-                let mut output = SubstepClockOutput::single("out", interval, iteration, frame.ticks);
+                let mut output = SubstepClockOutput::single(
+                    "out", interval.start, interval.end, iteration, frame.ticks,
+                );
                 if self.stepped_for == Some(iteration) {
                     output.scalars = &self.stepped;
                 }
