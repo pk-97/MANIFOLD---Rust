@@ -1019,6 +1019,17 @@ the 42.6 ms evidence window sets the earliest emission.
 | H22 H21 gate with linear+glide fallback fitted on low-support candidates / same with H16 / control fitted on all | **256+90** / 250+86 / 229+86 | Inside low support glide points the physical way in every song; main config: zero core fires, ≤1 baseline loss per track, one extra over the count rule. Control fails, so the conditioning matters. |
 | H23 early path: the 15 features over 15 / 20 / 25 ms fire confident kicks early, H18 decides the rest, one shared refractory | 262+89 on all three; 35 ms 47 / 54 / 65 (H18 42) | Safe: 70 ms unchanged, cores clear. Only 3–13% of fires qualify early (~16 ms sooner); fails the declared +20 at 50 ms or −10 ms median bar. Second feature pass costs 0.8% of a core in Python. |
 
+Stem cue in the mix (`kick_night_lowshare_mix.py`): the share of first-40 ms
+energy below 140 Hz separates kicks from every impostor on the drum stem (AUC
+1.0) but not reliably in the mix. It holds for Bad Guy's claps (1.0, though the
+frozen body/low balance feature already scores 1.0 there, so those clap fires
+are a transfer failure, not missing information) and for bass-line onsets in
+Late Night and Heavy (0.92/0.91, where the frozen balance feature gets ~0.4).
+It collapses for the real false fires in Tears and Inhale (0.45/0.64) and
+reverses in Midnight (0.17–0.34: its impostors are sub-heavier than its kicks).
+A kick sits between claps (less low end) and sub swells (more); the kick's own
+share runs 0.14–0.81 across songs, so no fixed cut on it transfers.
+
 Without Bad Guy (366 labels): baseline 208+44, H18 247+47, H21 240 config
 225+51, H22 main 241+52, H23 247+47.
 
