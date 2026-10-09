@@ -921,4 +921,32 @@ mod tests {
         eprintln!("weakest 16-sample 18kHz burst: {weakest} dB");
     }
 
+    #[test]
+    fn sharpen_preserves_tone_frequency_with_dense_hops() {
+        let rate=48000.0;
+        let params=crate::spectrum_gpu::cqt_build_params(rate);
+        let mut cqt=CqtTransform::new(rate,params.n_fft,params.fmin,params.fmax,
+            params.bpo,params.gamma_lo,params.gamma_hi,params.gamma_transition,
+            params.causal,params.threshold_rel);
+        let bins=cqt.num_bins();
+        let cfg=WorkerConfig { synchrosqueeze:true, ..WorkerConfig::OFF };
+        for frequency in [50.0,1000.0,18000.0] {
+            let mut frames=vec![vec![CqtComplex::new(0.0,0.0);bins];3];
+            for (frame,out) in frames.iter_mut().enumerate() {
+                let audio:Vec<_>=(0..params.n_fft).map(|i|
+                    (0.25*(std::f64::consts::TAU*frequency*(i+frame*params.hop_samples) as f64/rate as f64).sin()) as f32).collect();
+                cqt.process_complex(&audio,out);
+            }
+            let mut scratch=vec![0.0;bins];let mut output=vec![0.0;bins];
+            synchrosqueeze_into(cqt.center_freqs(),cqt.bandwidths_hz(),
+                &frames[2],&frames[1],&frames[0],true,&cfg,params.hop_samples,
+                rate,bins,&mut scratch,&mut output);
+            assert!(output.iter().all(|v|v.is_finite()));
+            let peak=output.iter().enumerate().max_by(|a,b|a.1.total_cmp(b.1)).unwrap().0;
+            assert!(output[peak]>-30.0);
+            assert!((cqt.center_freqs()[peak] as f64/frequency-1.0).abs()<0.02,
+                "Sharpen moved {frequency}Hz to {}Hz",cqt.center_freqs()[peak]);
+        }
+    }
+
 }
