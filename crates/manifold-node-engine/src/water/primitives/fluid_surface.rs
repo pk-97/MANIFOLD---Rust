@@ -10,13 +10,14 @@ use crate::water::fluid_cache::CacheMode;
 use crate::water::fluid_mesh_upload::FluidMeshUpload;
 use crate::water::fluid::particle_ring::SlotFrame;
 use crate::water::fluid_particles::FluidParticle;
-use crate::water::fluid_role::MAX_FLUID_ROLES;
+use crate::water::fluid_role::{FluidRole, MAX_FLUID_ROLES};
 use crate::exec::instance_upload::InstanceSnapshotUpload;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::water::physics::{RigidImpulseTargets, RigidSceneObservation};
 use crate::water::physics_events::ResolvedNodeImpulse;
 use crate::primitive::Primitive;
 use manifold_fluids::{LiquidOptions, SurfaceOptions, WhitewaterOptions};
+use manifold_physics::FieldValue;
 
 /// Particle-frame outputs (GPU_FLUID_SURFACE_DESIGN.md section 3.2). Any of
 /// them wired switches the node into publishing particle frames.
@@ -411,14 +412,14 @@ impl Primitive for FluidSurface {
         let mut roles = std::array::from_fn::<_, MAX_FLUID_ROLES, _>(|_| None);
         for (index, port) in ROLE_PORTS.iter().enumerate() {
             if ctx.inputs.slot(port).is_some() {
-                roles[index] = ctx.inputs.fluid_role(port);
+                roles[index] = ctx.inputs.cpu_value::<FluidRole>(port);
                 self.role_pending |= roles[index].is_none();
             }
         }
         if ctx.inputs.slot("domain").is_some() {
             self.role_pending |= ctx.inputs.transform("domain").is_none();
         }
-        let acceleration_field = ctx.inputs.vector_field("acceleration_field");
+        let acceleration_field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
         if ctx.inputs.slot("acceleration_field").is_some() {
             self.role_pending |= acceleration_field.is_none();
         }

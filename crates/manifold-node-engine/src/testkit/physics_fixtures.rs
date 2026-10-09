@@ -62,11 +62,11 @@ impl EffectNode for Fixture {
             }
             Kind::Body => {
                 let body = RigidBody { transform: ctx.inputs.transform("transform").expect("fixture transform"), ..RigidBody::default() };
-                ctx.outputs.set_rigid_body("body", body);
+                ctx.outputs.set_cpu_value("body", body);
             }
             Kind::Field => {
                 let field = manifold_physics::FieldValue::uniform([ctx.param_f32("x", 0.0), ctx.param_f32("y", 0.0), 0.0]).expect("finite fixture field");
-                ctx.outputs.set_vector_field("out", field);
+                ctx.outputs.set_cpu_value("out", field);
             }
             Kind::Wave => {
                 let Some(ParamValue::Float(clock)) = ctx.inputs.scalar("clock") else { panic!("fixture clock") };

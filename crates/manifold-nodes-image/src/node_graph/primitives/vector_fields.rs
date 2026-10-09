@@ -14,7 +14,7 @@ fn required_field(ctx: &mut EffectNodeContext<'_, '_>, port: &str) -> Option<Fie
         ctx.mark_outputs_pending();
         return None;
     };
-    let Some(value) = ctx.inputs.vector_field_slot(slot) else {
+    let Some(value) = ctx.inputs.cpu_value_slot::<FieldValue>(slot) else {
         ctx.error(format!("vector field input `{port}` has no value"));
         ctx.mark_outputs_pending();
         return None;
@@ -28,7 +28,7 @@ fn write_result(
     operation: &str,
 ) {
     match result {
-        Ok(value) => ctx.outputs.set_vector_field("out", value),
+        Ok(value) => ctx.outputs.set_cpu_value("out", value),
         Err(error) => {
             ctx.error(format!("{operation}: {error}"));
             ctx.mark_outputs_pending();
@@ -291,6 +291,7 @@ impl Primitive for ScaleVectorField {
 
 #[cfg(test)]
 mod tests {
+    use manifold_node_engine::exec::cpu_values::CpuWireWrites;
     use super::*;
 
     use manifold_node_engine::exec::backend::Backend;
@@ -327,7 +328,7 @@ mod tests {
                 None,
                 (0, 0),
             );
-            backend.set_vector_field(slot, value.clone());
+            backend.cpu_values_mut().set(slot, value.clone());
             input_bindings.push((port, slot));
         }
         for (index, &(port, value)) in scalars.iter().enumerate() {
@@ -350,7 +351,7 @@ mod tests {
         let mut atmosphere_scratch = Vec::new();
         let mut render_mode_scratch = Vec::new();
         let mut object_scratch = Vec::new();
-        let mut vector_field_scratch = Vec::new();
+        let mut vector_field_scratch = CpuWireWrites::default();
         let outputs = NodeOutputs::new(
             output_bindings,
             &backend,
@@ -363,7 +364,7 @@ mod tests {
             &mut render_mode_scratch,
             &mut object_scratch,
         )
-        .with_vector_field_writes(&mut vector_field_scratch);
+        .with_cpu_value_writes(&mut vector_field_scratch);
         let mut errors = Vec::new();
         let outputs_pending;
         {
@@ -372,10 +373,8 @@ mod tests {
             node.run(&mut context);
             outputs_pending = context.outputs_pending;
         }
-        for (slot, value) in vector_field_scratch.drain(..) {
-            backend.set_vector_field(slot, value);
-        }
-        (backend.vector_field(output_slot), outputs_pending, errors)
+        vector_field_scratch.commit(backend.cpu_values_mut());
+        (backend.cpu_values().get::<FieldValue>(output_slot), outputs_pending, errors)
     }
 
     #[test]

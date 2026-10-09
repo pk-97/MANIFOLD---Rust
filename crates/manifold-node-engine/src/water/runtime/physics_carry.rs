@@ -1,6 +1,9 @@
 //! Preserve native physics through compatible generator presentation rebuilds.
 use crate::runtime::*;
 use crate::ports::PortType;
+use crate::water::physics::RigidBody;
+use crate::water::fluid_role::FluidRole;
+use manifold_physics::FieldValue;
 
 #[cfg(test)]
 mod tests;
@@ -116,6 +119,12 @@ impl PresetRuntime {
                 };
                 let backend = self.executor.backend_mut();
                 macro_rules! carry {
+                    ($payload:ty) => {
+                        if let Some(value) = old_backend.cpu_values().get::<$payload>(old_slot) {
+                            let slot = backend.acquire(resource, ty, None, (0, 0));
+                            backend.cpu_values_mut().set(slot, value);
+                        }
+                    };
                     ($read:ident, $write:ident) => {
                         if let Some(value) = old_backend.$read(old_slot) {
                             let slot = backend.acquire(resource, ty, None, (0, 0));
@@ -126,9 +135,9 @@ impl PresetRuntime {
                 match ty {
                     PortType::Scalar(_) => carry!(scalar, set_scalar),
                     PortType::Transform => carry!(transform, set_transform),
-                    PortType::RigidBody => carry!(rigid_body, set_rigid_body),
-                    PortType::FluidRole => carry!(fluid_role, set_fluid_role),
-                    PortType::VectorField => carry!(vector_field, set_vector_field),
+                    PortType::RigidBody => carry!(RigidBody),
+                    PortType::FluidRole => carry!(FluidRole),
+                    PortType::VectorField => carry!(FieldValue),
                     PortType::MeshSource => carry!(mesh_source, set_mesh_source),
                     _ => {}
                 }

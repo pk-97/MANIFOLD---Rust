@@ -349,7 +349,7 @@ impl PresetRuntime {
         let backend = self.executor.backend();
         let field = backend
             .slot_for(binding.field)
-            .and_then(|slot| backend.vector_field(slot))
+            .and_then(|slot| backend.cpu_values().get::<FieldValue>(slot))
             .ok_or_else(|| "Impulse: field has no captured value".to_string())?;
         captured.field = Some(field);
         captured.source = Some(source);

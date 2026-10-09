@@ -170,17 +170,12 @@ pub struct Executor {
     material_write_scratch: Vec<(Slot, crate::scene::material::Material)>,
     /// Sibling scratch for [`PortType::Transform`] writes — same drain pattern.
     transform_write_scratch: Vec<(Slot, crate::scene::transform::Transform)>,
-    /// Sibling scratch for [`PortType::Atmosphere`] writes — same drain pattern.
-    /// Sibling scratch for [`PortType::RenderMode`] writes — same drain pattern.
-    rigid_body_write_scratch: Vec<(Slot, crate::water::physics::RigidBody)>,
-    /// Sibling scratch for [`PortType::FluidRole`] writes — same drain pattern.
-    fluid_role_write_scratch: Vec<(Slot, crate::water::fluid_role::FluidRole)>,
+    /// Family-owned CPU payloads, published after each node evaluates.
+    cpu_value_write_scratch: crate::exec::cpu_values::CpuWireWrites,
     /// Sibling scratch for [`PortType::MeshSource`] writes — same drain pattern.
     mesh_source_write_scratch: Vec<(Slot, crate::scene::mesh_source::MeshSource)>,
     /// Sibling scratch for published array live extents — same drain pattern.
     live_extent_write_scratch: Vec<(Slot, crate::scene::live_extent::LiveExtent)>,
-    /// Sibling scratch for [`PortType::VectorField`] writes — same drain pattern.
-    vector_field_write_scratch: Vec<(Slot, manifold_physics::FieldValue)>,
     render_mode_write_scratch: Vec<(Slot, crate::scene::render_mode::RenderMode)>,
     atmosphere_write_scratch: Vec<(Slot, crate::scene::atmosphere::Atmosphere)>,
     /// Sibling scratch for [`PortType::Object`] writes — same drain pattern.
@@ -585,11 +580,9 @@ impl Executor {
             transform_write_scratch: Vec::new(),
             atmosphere_write_scratch: Vec::new(),
             render_mode_write_scratch: Vec::new(),
-            rigid_body_write_scratch: Vec::new(),
-            fluid_role_write_scratch: Vec::new(),
+            cpu_value_write_scratch: crate::exec::cpu_values::CpuWireWrites::default(),
             mesh_source_write_scratch: Vec::new(),
             live_extent_write_scratch: Vec::new(),
-            vector_field_write_scratch: Vec::new(),
             object_write_scratch: Vec::new(),
             error_scratch: Vec::new(),
             initialized_persistent: ahash::AHashSet::default(),
@@ -2354,11 +2347,9 @@ impl Executor {
                     self.transform_write_scratch.clear();
                     self.atmosphere_write_scratch.clear();
                     self.render_mode_write_scratch.clear();
-                    self.rigid_body_write_scratch.clear();
-                    self.fluid_role_write_scratch.clear();
+                    self.cpu_value_write_scratch.clear();
                     self.mesh_source_write_scratch.clear();
                     self.live_extent_write_scratch.clear();
-                    self.vector_field_write_scratch.clear();
                     self.object_write_scratch.clear();
                     self.error_scratch.clear();
                     {
@@ -2380,11 +2371,9 @@ impl Executor {
                             &mut self.render_mode_write_scratch,
                             &mut self.object_write_scratch,
                         )
-                        .with_rigid_body_writes(&mut self.rigid_body_write_scratch)
-                        .with_fluid_role_writes(&mut self.fluid_role_write_scratch)
+                        .with_cpu_value_writes(&mut self.cpu_value_write_scratch)
                         .with_mesh_source_writes(&mut self.mesh_source_write_scratch)
-                        .with_live_extent_writes(&mut self.live_extent_write_scratch)
-                        .with_vector_field_writes(&mut self.vector_field_write_scratch);
+                        .with_live_extent_writes(&mut self.live_extent_write_scratch);
                         // Canvas dims are no longer hung off the
                         // context as a side-channel. Primitives that
                         // need them (`scatter_particles` and friends)
@@ -2536,20 +2525,12 @@ impl Executor {
                     for (slot, value) in self.render_mode_write_scratch.drain(..) {
                         self.backend.set_render_mode(slot, value);
                     }
-                    for (slot, value) in self.rigid_body_write_scratch.drain(..) {
-                        self.backend.set_rigid_body(slot, value);
-                    }
-                    for (slot, value) in self.fluid_role_write_scratch.drain(..) {
-                        self.backend.set_fluid_role(slot, value);
-                    }
+                    self.cpu_value_write_scratch.commit(self.backend.cpu_values_mut());
                     for (slot, value) in self.mesh_source_write_scratch.drain(..) {
                         self.backend.set_mesh_source(slot, value);
                     }
                     for (slot, value) in self.live_extent_write_scratch.drain(..) {
                         self.backend.set_live_extent(slot, value);
-                    }
-                    for (slot, value) in self.vector_field_write_scratch.drain(..) {
-                        self.backend.set_vector_field(slot, value);
                     }
                     // Object writes use the same drain shape.
                     for (slot, value) in self.object_write_scratch.drain(..) {
@@ -3145,7 +3126,7 @@ mod tests {
         }
 
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-            ctx.outputs.set_vector_field(
+            ctx.outputs.set_cpu_value(
                 "field",
                 manifold_physics::FieldValue::uniform([1.0, -2.0, 3.0]).expect("finite uniform field"),
             );
@@ -3174,7 +3155,8 @@ mod tests {
             .expect("external output slot remains bound after frame");
         let field = executor
             .backend()
-            .vector_field(slot)
+            .cpu_values()
+            .get::<manifold_physics::FieldValue>(slot)
             .expect("external field was published by execute_frame");
         assert_eq!(field.sample([0.0, 0.0, 0.0]), [1.0, -2.0, 3.0]);
     }

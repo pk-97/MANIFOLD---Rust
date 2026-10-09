@@ -3,7 +3,7 @@ use crate::exec::effect_node::EffectNodeContext;
 use crate::water::fluid::CoupledRigidFrame;
 use crate::exec::instance_upload::InstanceSnapshotUpload;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
-use crate::water::physics::{BODY_PORTS, MAX_BODIES, MAX_COPIES, POSE_PORTS, ResolvedRigidImpulse, RigidSceneInputs, RigidSceneObservation, RigidSimulation};
+use crate::water::physics::{BODY_PORTS, MAX_BODIES, MAX_COPIES, POSE_PORTS, ResolvedRigidImpulse, RigidBody, RigidSceneInputs, RigidSceneObservation, RigidSimulation};
 use crate::water::physics_events::{map_rigid_receipt, ImpulseTarget, ResolvedNodeImpulse};
 use crate::primitive::Primitive;
 use manifold_physics::FieldValue;
@@ -386,15 +386,15 @@ impl PhysicsWorldNode {
         let mut body_inputs_pending = ctx.inputs.any_pending();
         for (i, port) in BODY_PORTS.iter().enumerate() {
             if ctx.inputs.slot(port).is_some() {
-                bodies[i] = ctx.inputs.rigid_body(port);
+                bodies[i] = ctx.inputs.cpu_value::<RigidBody>(port);
                 body_inputs_pending |= bodies[i].is_none();
             }
         }
-        let prototype = ctx.inputs.rigid_body("copies");
+        let prototype = ctx.inputs.cpu_value::<RigidBody>("copies");
         if ctx.inputs.slot("copies").is_some() {
             body_inputs_pending |= prototype.is_none();
         }
-        let acceleration_field = ctx.inputs.vector_field("acceleration_field");
+        let acceleration_field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
         if ctx.inputs.slot("acceleration_field").is_some() {
             body_inputs_pending |= acceleration_field.is_none();
         }
@@ -412,7 +412,7 @@ impl PhysicsWorldNode {
                     "Physics World `{port}` requires its matching body input to be wired"
                 ));
             }
-            let Some(field) = ctx.inputs.vector_field(port) else {
+            let Some(field) = ctx.inputs.cpu_value::<FieldValue>(port) else {
                 body_inputs_pending = true;
                 continue;
             };
@@ -803,7 +803,7 @@ mod tests {
             "body_0",
             PortType::RigidBody,
         );
-        backend.set_rigid_body(body_slot, body.clone());
+        backend.cpu_values_mut().set(body_slot, body.clone());
         let mut prototype = body.clone();
         prototype.transform.pos = [4.0, 8.0, 0.0];
         let prototype_slot = acquire_mock_wire(
@@ -813,7 +813,7 @@ mod tests {
             "copies",
             PortType::RigidBody,
         );
-        backend.set_rigid_body(prototype_slot, prototype);
+        backend.cpu_values_mut().set(prototype_slot, prototype);
 
         let scalar_ty = PortType::Scalar(ScalarType::F32);
         for (port, value) in [
@@ -861,11 +861,11 @@ mod tests {
         let global = FieldValue::uniform([1.0, 0.0, 0.0]).expect("finite global field");
         let target = FieldValue::uniform([2.0, 0.0, 0.0]).expect("finite target field");
         let copy_target = FieldValue::uniform([0.5, 0.0, 0.0]).expect("finite copy field");
-        backend.set_vector_field(global_slot, global);
+        backend.cpu_values_mut().set(global_slot, global);
         if !matches!(field_state, MockFieldState::MissingTarget) {
-            backend.set_vector_field(target_slot, target);
+            backend.cpu_values_mut().set(target_slot, target);
         }
-        backend.set_vector_field(copy_target_slot, copy_target);
+        backend.cpu_values_mut().set(copy_target_slot, copy_target);
         if matches!(field_state, MockFieldState::PendingGlobal) {
             pending.resize(backend.slot_count() as usize, false);
             pending[global_slot.0 as usize] = true;

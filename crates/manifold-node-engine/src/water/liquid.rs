@@ -35,7 +35,7 @@ pub fn read_roles(inputs: &NodeInputs<'_>, ports: &[&str], roles: &mut [Option<F
     for (port, role) in ports.iter().zip(roles.iter_mut()) {
         *role = None;
         if inputs.slot(port).is_some() {
-            *role = inputs.fluid_role(port);
+            *role = inputs.cpu_value::<FluidRole>(port);
             pending |= role.is_none();
         }
     }

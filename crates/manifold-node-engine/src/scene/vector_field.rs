@@ -41,7 +41,7 @@ impl VectorField for ContinuousField<'_> {
 mod tests {
     use manifold_physics::{FieldValue, VectorField};
 
-    use crate::{exec::backend::Backend, exec::backend::MockBackend, bindings::NodeInputs, bindings::NodeOutputs, ports::PortType, exec::execution_plan::ResourceId};
+    use crate::{exec::backend::Backend, exec::backend::MockBackend, exec::cpu_values::CpuWireWrites, bindings::NodeInputs, bindings::NodeOutputs, ports::PortType, exec::execution_plan::ResourceId};
 
     fn field() -> FieldValue {
         FieldValue::uniform([1.0, -2.0, 3.0]).expect("finite uniform field")
@@ -60,7 +60,7 @@ mod tests {
         let mut atmosphere = Vec::new();
         let mut render_mode = Vec::new();
         let mut object = Vec::new();
-        let mut writes = Vec::new();
+        let mut writes = CpuWireWrites::default();
         let value = field();
         {
             let mut outputs = NodeOutputs::new(
@@ -75,16 +75,14 @@ mod tests {
                 &mut render_mode,
                 &mut object,
             )
-            .with_vector_field_writes(&mut writes);
-            outputs.set_vector_field("field", value.clone());
+            .with_cpu_value_writes(&mut writes);
+            outputs.set_cpu_value("field", value.clone());
         }
-        for (slot, value) in writes.drain(..) {
-            backend.set_vector_field(slot, value);
-        }
+        writes.commit(backend.cpu_values_mut());
 
         let inputs = NodeInputs::new(bindings, &backend, &[]);
         let got = inputs
-            .vector_field("field")
+            .cpu_value::<FieldValue>("field")
             .expect("vector field should be wired");
         assert_eq!(got, value);
         assert_eq!(got.sample([2.0, 4.0, 6.0]), [1.0, -2.0, 3.0]);
@@ -113,14 +111,14 @@ mod tests {
         for backend in &mut backends {
             for clear in [false, true] {
                 let slot = backend.acquire(ResourceId(0), PortType::VectorField, None, (0, 0));
-                backend.set_vector_field(slot, field());
-                assert!(backend.vector_field(slot).is_some());
+                backend.cpu_values_mut().set(slot, field());
+                assert!(backend.cpu_values().get::<FieldValue>(slot).is_some());
                 if clear {
                     backend.clear();
                 } else {
                     backend.release(ResourceId(0), PortType::VectorField, None, (0, 0));
                 }
-                assert!(backend.vector_field(slot).is_none());
+                assert!(backend.cpu_values().get::<FieldValue>(slot).is_none());
             }
         }
     }

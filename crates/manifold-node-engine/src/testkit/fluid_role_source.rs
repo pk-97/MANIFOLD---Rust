@@ -2,6 +2,7 @@
 
 use crate::water::primitives::fluid_role_source::FluidRoleSource;
 use crate::exec::backend::{Backend, MockBackend};
+use crate::exec::cpu_values::CpuWireWrites;
 use crate::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
 use crate::exec::execution_plan::ResourceId;
@@ -37,7 +38,7 @@ pub(crate) fn run_inputs(
     let mut atmosphere_scratch = Vec::new();
     let mut render_mode_scratch = Vec::new();
     let mut object_scratch = Vec::new();
-    let mut role_scratch = Vec::new();
+    let mut role_scratch = CpuWireWrites::default();
     let inputs = NodeInputs::new(input_bindings, backend, &[]);
     let outputs = NodeOutputs::new(
         output_bindings,
@@ -51,15 +52,13 @@ pub(crate) fn run_inputs(
         &mut render_mode_scratch,
         &mut object_scratch,
     )
-    .with_fluid_role_writes(&mut role_scratch);
+    .with_cpu_value_writes(&mut role_scratch);
     let pending = {
         let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, None);
         primitive.run(&mut ctx);
         ctx.outputs_pending
     };
-    for (slot, value) in role_scratch.drain(..) {
-        backend.set_fluid_role(slot, value);
-    }
+    role_scratch.commit(backend.cpu_values_mut());
     pending
 }
 
@@ -79,7 +78,7 @@ pub fn settle_inputs(
 ) -> FluidRole {
     for _ in 0..200 {
         let pending = run_inputs(primitive, backend, inputs, output_slot, params);
-        if !pending && let Some(role) = backend.fluid_role(output_slot) {
+        if !pending && let Some(role) = backend.cpu_values().get::<FluidRole>(output_slot) {
             return role;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));

@@ -595,14 +595,14 @@ impl Primitive for GpuFlipDomain {
         // start; it never advances time.
         if crate::water::physics::authored_sample_only() {
             self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
-            let field = ctx.inputs.vector_field("acceleration_field");
+            let field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
             self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
             self.bodies.observe_sample(ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
             self.coupled.scenes.observe(ctx.time.seconds.0, None);
             return;
         }
         self.role_pending = ctx.inputs.any_pending() || role_pending;
-        self.acceleration = ctx.inputs.vector_field("acceleration_field");
+        self.acceleration = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
         if ctx.inputs.slot("acceleration_field").is_some() {
             self.role_pending |= self.acceleration.is_none();
         }

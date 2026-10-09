@@ -331,6 +331,54 @@ Implemented in the T2 lane: engine check and clippy with `gpu-proofs` pass;
 Matter interval scheduling and state publication. GPU behavior and the complete
 extraction remain subject to the P5 gates above.
 
+#### P5 CPU wire storage seam
+
+The three family payloads currently repeat a typed `AHashMap<Slot, T>` in both
+backends and a `Vec<(Slot, T)>` in the executor. Keep those containers and the
+post-evaluate publication point. Add `exec::cpu_values` with
+`CpuWireRegistration::new<T: Clone + Send + 'static>()`, collected through
+`inventory`. A registration constructs one erased map and one erased write
+buffer per backend/executor at construction; individual values remain inline in
+their typed containers. Native geometry and field evaluators remain family-owned.
+
+`CpuWireValues` provides `get<T>(Slot) -> Option<T>`, `set<T>(Slot, T)`,
+`remove(Slot)` and `clear()`. `CpuWireWrites` provides `push<T>(Slot, T)`,
+`clear()` and `commit(&mut CpuWireValues)`. Both implement `Default` using the
+registry; duplicate type registrations and access to unregistered types fail
+explicitly. Private erased traits expose the typed containers through `Any`;
+the registry and container lookups use Rust `TypeId` and `AHashMap`, never a new
+serialized identifier. Draining writes retains their vector capacity and order.
+
+`Backend` exposes required `cpu_values()` and `cpu_values_mut()` accessors;
+`NodeInputs` exposes `cpu_value<T>(port)` and `cpu_value_slot<T>(Slot)`;
+`NodeOutputs` exposes `set_cpu_value<T>(port, value)` and the existing testkit
+visibility pattern for `with_cpu_value_writes`. Replace only the three family
+payload APIs. Existing scene vocabulary, scalar storage and port tags stay put.
+Release/reset removes these values so a recycled slot cannot expose old data.
+
+Register `RigidBody`, `FluidRole` and `FieldValue` in water. The image family's
+`vector_fields.rs` contains only native physics field sources/composition; include
+it in the water move and remove the image crate's native physics dependency.
+This narrows D1's image owner; it does not relocate native field algorithms.
+
+Rejected: one boxed payload per write, because it adds frame allocations;
+`StateStore`, because its node/owner identity and rebuild lifecycle do not model
+resource slots; opaque byte buffers, because they require unsafe layout contracts.
+The cost is typed table lookup/downcast plus one erased drain per registered
+family type. No locks, per-frame boxes, alternate clock or serialized changes.
+
+Verification: retain existing fluid-role and vector-field round-trip/release
+tests and executor publication proof; add focused storage coverage for multiple
+types, ordered overwrite, retained capacities and unknown/duplicate registration.
+Compile all migrated call sites, then run their existing CPU contracts. Final
+water GPU parity and the P5 trace still establish behavior and hot-path cost.
+
+Lane verification: engine/image compile and four-package clippy with
+`gpu-proofs` pass. All 46 selected CPU contracts pass, including state carry,
+host modulation, field composition, shared geometry and recycled body slots.
+The compiler also found the three payload accesses inside `physics_carry`'s
+macro; those use the same storage API. No full water GPU parity claim yet.
+
 Phasing-completeness check: every D1 crate appears in exactly one phase's deliverables (ui-paint P1a, graph P1, image/scene/compositor P2, nodes P3, water P5); D5 P0; D6 P3; D7 P1/P2; D8 P4; D10 P0; D11 P0; D12 P1a; INV-5's script P0; measurement P4.
 
 ---

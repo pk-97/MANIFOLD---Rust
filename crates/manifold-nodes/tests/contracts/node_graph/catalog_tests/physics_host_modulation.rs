@@ -17,7 +17,7 @@ use manifold_core::effect_graph_def::ParamSpecDef;
 use manifold_core::layer::Layer;
 use manifold_core::params::Param;
 use manifold_core::project::Project;
-use manifold_physics::VectorField;
+use manifold_physics::{FieldValue, VectorField};
 use std::{borrow::Cow, cell::RefCell};
 
 const TICK_RATE: f64 = 120.0;
@@ -79,7 +79,7 @@ impl EffectNode for TickedLiquid {
         }
         let force = ctx
             .inputs
-            .vector_field("acceleration_field")
+            .cpu_value::<FieldValue>("acceleration_field")
             .map_or(f32::NAN, |field| field.sample([0.0; 3])[1]);
         TICKS.with_borrow_mut(|ticks| {
             ticks.extend(self.1.drain(..reached).map(|tick| (tick, force)));

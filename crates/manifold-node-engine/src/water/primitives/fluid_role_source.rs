@@ -607,7 +607,7 @@ impl FluidRoleSource {
             ctx.mark_outputs_pending();
             return;
         }
-        ctx.outputs.set_fluid_role(
+        ctx.outputs.set_cpu_value(
             "role",
             FluidRole {
                 geometry: self.geometry.as_ref().expect("checked above").clone(),
@@ -965,7 +965,7 @@ mod tests {
                 output,
                 &params
             ));
-            let sampled = backend.fluid_role(output).unwrap();
+            let sampled = backend.cpu_values().get::<FluidRole>(output).unwrap();
             assert!(Arc::ptr_eq(&sampled.geometry, &larger.geometry));
             assert_eq!(sampled.velocity[1], 3.0);
             assert_eq!(sampled.transform.pos[0], 2.0);
@@ -1066,7 +1066,8 @@ mod tests {
             &params,
         );
         let second = backend
-            .fluid_role(output_slot)
+            .cpu_values()
+            .get::<FluidRole>(output_slot)
             .expect("live-control update should publish");
         assert!(Arc::ptr_eq(&first.geometry, &second.geometry));
         assert_eq!(second.velocity, [4.0, 0.0, 0.0]);
@@ -1095,7 +1096,7 @@ mod tests {
             output_slot,
             &changed,
         );
-        let after_revision = backend.fluid_role(output_slot);
+        let after_revision = backend.cpu_values().get::<FluidRole>(output_slot);
         assert!(
             Primitive::warmup_pending(&primitive)
                 || after_revision

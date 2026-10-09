@@ -1,11 +1,6 @@
 //! [`MetalBackend`] — production [`Backend`] implementation using
 //! `manifold_gpu`'s `RenderTargetPool` for real `GpuTexture` allocation.
 //!
-//! This is the first file in `node_graph/` that imports types from outside
-//! the module (it pulls in `manifold_gpu::GpuTexture` / `GpuDevice` and
-//! `crate::render_target::RenderTarget`). The rest of `node_graph/`
-//! remains backend-agnostic and routes through the [`Backend`] trait.
-//!
 //! ## Lifecycle
 //!
 //! The backend's slot-recycling logic is identical to [`MockBackend`]:
@@ -20,24 +15,15 @@
 //! underlying `RenderTarget` stays available for the next acquire of the
 //! same slot. Cleanup happens on `drop` or via [`MetalBackend::clear`].
 //!
-//! ## What's not yet integrated
-//!
-//! - `Texture3D` resources are pre-bind-only (mirror of `pre_bind_array`).
-//!   No lazy-alloc — the host pre-binds every volume via
-//!   [`MetalBackend::pre_bind_texture_3d`] before the chain runs.
-//!   `manifold-gpu`'s `GpuDevice::create_texture` supports 3D fully (used
-//!   by the existing FluidSim3D atomic generator); the gap was just at
-//!   the graph-runtime layer, now closed.
-//! - `Scalar` resource backing falls back to mock semantics today.
-//! - The host wiring that pre-binds the input frame to `Source`'s output
-//!   slot before each frame and reads `FinalOutput`'s input slot afterward.
-//!   That comes in the next step alongside the `GpuEncoder` plumbing.
+//! Arrays and volume textures are pre-bound before execution. CPU wire values
+//! use the same storage and publication contract as the mock backend.
 
 use ahash::{AHashMap, AHashSet};
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuTexture, GpuTextureFormat, TexturePool};
 use std::sync::Arc;
 
 use crate::exec::backend::Backend;
+use crate::exec::cpu_values::CpuWireValues;
 use crate::bindings::Slot;
 use crate::exec::execution_plan::ResourceId;
 use crate::exec::execution_plan::ExecutionPlan;
@@ -182,17 +168,12 @@ pub struct MetalBackend {
     /// Same shape as `atmospheres` — drained after `node.render_mode`'s
     /// `evaluate`.
     render_modes: AHashMap<Slot, crate::scene::render_mode::RenderMode>,
-    rigid_bodies: AHashMap<Slot, crate::water::physics::RigidBody>,
-    /// CPU-only [`FluidRole`] values written via [`Backend::set_fluid_role`].
-    /// Prepared geometry remains shared through the payload's `Arc`.
-    fluid_roles: AHashMap<Slot, crate::water::fluid_role::FluidRole>,
+    cpu_values: CpuWireValues,
     /// CPU-only authored [`MeshSource`](crate::node_graph::mesh_source::MeshSource) values written via
     /// [`Backend::set_mesh_source`].
     mesh_sources: AHashMap<Slot, crate::scene::mesh_source::MeshSource>,
     /// Live extents of GPU-counted arrays, written via [`Backend::set_live_extent`].
     live_extents: AHashMap<Slot, crate::scene::live_extent::LiveExtent>,
-    /// CPU-only owned vector fields written via [`Backend::set_vector_field`].
-    vector_fields: AHashMap<Slot, manifold_physics::FieldValue>,
     /// CPU-only [`SceneObject`] values written via [`Backend::set_object`].
     /// Same shape as `atmospheres` — drained after `node.scene_object`'s
     /// `evaluate`.
@@ -255,11 +236,9 @@ impl MetalBackend {
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
             render_modes: AHashMap::default(),
-            rigid_bodies: AHashMap::default(),
-            fluid_roles: AHashMap::default(),
+            cpu_values: CpuWireValues::default(),
             mesh_sources: AHashMap::default(),
             live_extents: AHashMap::default(),
-            vector_fields: AHashMap::default(),
             objects: AHashMap::default(),
         }
     }
@@ -295,11 +274,9 @@ impl MetalBackend {
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
             render_modes: AHashMap::default(),
-            rigid_bodies: AHashMap::default(),
-            fluid_roles: AHashMap::default(),
+            cpu_values: CpuWireValues::default(),
             mesh_sources: AHashMap::default(),
             live_extents: AHashMap::default(),
-            vector_fields: AHashMap::default(),
             objects: AHashMap::default(),
         }
     }
@@ -536,10 +513,9 @@ impl MetalBackend {
         self.scalars.clear();
         self.buffers_array.clear();
         self.textures_3d.clear();
-        self.fluid_roles.clear();
+        self.cpu_values.clear();
         self.mesh_sources.clear();
         self.live_extents.clear();
-        self.vector_fields.clear();
         self.bound.clear();
         self.free_by_type.clear();
         self.pinned.clear();
@@ -601,11 +577,9 @@ impl MetalBackend {
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
             render_modes: AHashMap::default(),
-            rigid_bodies: AHashMap::default(),
-            fluid_roles: AHashMap::default(),
+            cpu_values: CpuWireValues::default(),
             mesh_sources: AHashMap::default(),
             live_extents: AHashMap::default(),
-            vector_fields: AHashMap::default(),
             objects: AHashMap::default(),
         };
         // Immutable slots are dedicated. Preserve compatible images; a changed
@@ -701,6 +675,14 @@ impl MetalBackend {
 }
 
 impl Backend for MetalBackend {
+    fn cpu_values(&self) -> &CpuWireValues {
+        &self.cpu_values
+    }
+
+    fn cpu_values_mut(&mut self) -> &mut CpuWireValues {
+        &mut self.cpu_values
+    }
+
     fn install_array_buffer(&mut self, slot: Slot, buffer: GpuBuffer) -> bool {
         let Some(current) = self.buffers_array.get_mut(&slot) else { return false; };
         *current = buffer;
@@ -828,10 +810,9 @@ impl Backend for MetalBackend {
             return;
         }
         if let Some(slot) = self.bound.remove(&id) {
-            self.fluid_roles.remove(&slot);
+            self.cpu_values.remove(slot);
             self.mesh_sources.remove(&slot);
             self.live_extents.remove(&slot);
-            self.vector_fields.remove(&slot);
             let mipmapped = ty.is_texture_2d() && self.mipmapped_ids.contains(&id);
             let key = crate::exec::backend::pool_key(ty, format, dims, mipmapped);
             self.free_by_type.entry(key).or_default().push(slot);
@@ -866,10 +847,9 @@ impl Backend for MetalBackend {
         self.free_by_type.clear();
         self.pinned.clear();
         self.provided_2d.clear();
-        self.fluid_roles.clear();
+        self.cpu_values.clear();
         self.mesh_sources.clear();
         self.live_extents.clear();
-        self.vector_fields.clear();
     }
 
     fn texture_2d(&self, slot: Slot) -> Option<&GpuTexture> {
@@ -957,24 +937,8 @@ impl Backend for MetalBackend {
         self.render_modes.get(&slot).copied()
     }
 
-    fn rigid_body(&self, slot: Slot) -> Option<crate::water::physics::RigidBody> {
-        self.rigid_bodies.get(&slot).cloned()
-    }
-
     fn set_render_mode(&mut self, slot: Slot, value: crate::scene::render_mode::RenderMode) {
         self.render_modes.insert(slot, value);
-    }
-
-    fn set_rigid_body(&mut self, slot: Slot, value: crate::water::physics::RigidBody) {
-        self.rigid_bodies.insert(slot, value);
-    }
-
-    fn fluid_role(&self, slot: Slot) -> Option<crate::water::fluid_role::FluidRole> {
-        self.fluid_roles.get(&slot).cloned()
-    }
-
-    fn set_fluid_role(&mut self, slot: Slot, value: crate::water::fluid_role::FluidRole) {
-        self.fluid_roles.insert(slot, value);
     }
 
     fn mesh_source(&self, slot: Slot) -> Option<crate::scene::mesh_source::MeshSource> {
@@ -995,14 +959,6 @@ impl Backend for MetalBackend {
 
     fn set_live_extent(&mut self, slot: Slot, value: crate::scene::live_extent::LiveExtent) {
         self.live_extents.insert(slot, value);
-    }
-
-    fn vector_field(&self, slot: Slot) -> Option<manifold_physics::FieldValue> {
-        self.vector_fields.get(&slot).cloned()
-    }
-
-    fn set_vector_field(&mut self, slot: Slot, value: manifold_physics::FieldValue) {
-        self.vector_fields.insert(slot, value);
     }
 
     fn object(&self, slot: Slot) -> Option<crate::scene::scene_object::SceneObject> {

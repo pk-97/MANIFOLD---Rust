@@ -15,5 +15,6 @@ pub mod whitewater;
 pub(crate) mod whitewater_handoff;
 pub mod primitives;
 pub mod runtime;
+mod wire_values;
 #[cfg(test)]
 mod live_sim_clock_reference;

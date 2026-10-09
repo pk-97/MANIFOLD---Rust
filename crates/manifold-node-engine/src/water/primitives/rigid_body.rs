@@ -270,7 +270,7 @@ impl Primitive for RigidBodyNode {
                 wall: false,
             };
             let shape = body.shape;
-            ctx.outputs.set_rigid_body("body", body);
+            ctx.outputs.set_cpu_value("body", body);
             ctx.outputs
                 .set_scalar("shape", ParamValue::Float(shape as f32));
             return;
@@ -489,7 +489,7 @@ impl Primitive for RigidBodyNode {
             wall: false,
         };
         let shape = body.shape;
-        ctx.outputs.set_rigid_body("body", body);
+        ctx.outputs.set_cpu_value("body", body);
         ctx.outputs
             .set_scalar("shape", ParamValue::Float(shape as f32));
     }
@@ -499,6 +499,7 @@ impl Primitive for RigidBodyNode {
 mod tests {
     use super::*;
     use crate::exec::backend::Backend;
+    use crate::exec::cpu_values::CpuWireWrites;
     use crate::bindings::{NodeInputs, NodeOutputs, Slot};
     use crate::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
     use crate::exec::execution_plan::ResourceId;
@@ -536,7 +537,7 @@ mod tests {
         let mut atmosphere_scratch = Vec::new();
         let mut render_mode_scratch = Vec::new();
         let mut object_scratch = Vec::new();
-        let mut body_scratch = Vec::new();
+        let mut body_scratch = CpuWireWrites::default();
         let inputs = NodeInputs::new(input_bindings, backend, &[]);
         let outputs = NodeOutputs::new(
             output_bindings,
@@ -550,15 +551,13 @@ mod tests {
             &mut render_mode_scratch,
             &mut object_scratch,
         )
-        .with_rigid_body_writes(&mut body_scratch);
+        .with_cpu_value_writes(&mut body_scratch);
         let pending = {
             let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, None);
             primitive.run(&mut ctx);
             ctx.outputs_pending
         };
-        for (slot, value) in body_scratch.drain(..) {
-            backend.set_rigid_body(slot, value);
-        }
+        body_scratch.commit(backend.cpu_values_mut());
         pending
     }
 
@@ -581,7 +580,7 @@ mod tests {
                 shape_slot,
                 params,
             );
-            if !pending && let Some(body) = backend.rigid_body(body_slot) {
+            if !pending && let Some(body) = backend.cpu_values().get::<RigidBody>(body_slot) {
                 return body;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -671,7 +670,7 @@ mod tests {
             &mut primitive, &mut backend, transform_slot, source_slot,
             body_slot, shape_slot, &params,
         ), "disabled bodies do not wait for missing geometry");
-        assert!(!backend.rigid_body(body_slot).unwrap().enabled);
+        assert!(!backend.cpu_values().get::<RigidBody>(body_slot).unwrap().enabled);
     }
 
     #[test]
@@ -710,6 +709,6 @@ mod tests {
         ));
         assert!(primitive.collider_error.is_some());
         assert!(primitive.pending_collider.is_none(), "unchanged invalid source retains its failure");
-        assert!(backend.rigid_body(body_slot).is_none());
+        assert!(backend.cpu_values().get::<RigidBody>(body_slot).is_none());
     }
 }
