@@ -421,7 +421,7 @@ del _engine_path
 LIB_PROOF_ROWS[RENDERER_SRC + "testkit/reference_fixtures.rs"] = CPU_FLIP_REFERENCE_FILTERS
 for _pressure_fixture in ("dambreak_pressure_problems.bin.zst", "deep_pool_pressure_problems.bin.zst",
                           "deep_pool_density_problems.bin.zst", "gpu_flip_pressure_golden.txt"):
-    LIB_PROOF_ROWS["crates/manifold-node-engine/tests/fixtures/" + _pressure_fixture] = [
+    LIB_PROOF_ROWS["crates/manifold-nodes-water/tests/fixtures/" + _pressure_fixture] = [
         "primitives::gpu_flip_pressure_tests::",
     ]
 

@@ -23,8 +23,31 @@ from gate_workspace import Workspace
 from gate_policy import SHARED_ASSETS
 
 SCHEMA = 3
+PROOF_FEATURE = 'gpu-proofs'
 SESSION = contextvars.ContextVar('pass_session', default=None)
 SNAPSHOT = contextvars.ContextVar('pass_snapshot', default=None)
+
+
+def normalize_features(features=None):
+    """Return the canonical proof feature set, always including gpu-proofs."""
+    values = []
+    for value in features or ():
+        if not isinstance(value, str):
+            raise ValueError('proof features must be strings')
+        values.extend(value.replace(',', ' ').split())
+    return [PROOF_FEATURE, *sorted(set(values) - {PROOF_FEATURE})]
+
+
+def validate_package_features(workspace, package, features):
+    features = normalize_features(features)
+    if package not in workspace.packages:
+        raise ValueError(f'unknown Cargo package: {package}')
+    supported = set(workspace.packages[package].get('features', {}))
+    unsupported = sorted(set(features) - supported)
+    if unsupported:
+        raise ValueError(f'package {package} does not support proof feature(s): '
+                         f'{", ".join(unsupported)}')
+    return features
 
 
 class Snapshot:
@@ -397,7 +420,8 @@ def command_pass(repo, label, cmd):
 def proof_pass(repo, run):
     # Canonical per-invocation selection shared by the proof gate and queue.
     package = run['package']
-    identity = {'kind': 'gpu-proof-run', 'package': package, 'features': ['gpu-proofs'],
+    features = normalize_features(run.get('features'))
+    identity = {'kind': 'gpu-proof-run', 'package': package, 'features': features,
                 'targets': sorted(run['targets'] if run['targets'] is not None
                                   else ([] if run['lib'] else ['gpu_proofs'])), 'lib': run['lib'],
                 'filters': sorted(run['filters']), 'skips': sorted(run['skips']),
@@ -457,11 +481,23 @@ def queued_proof(command, repo):
                 run['filters'].append(arg)
     except (StopIteration, ValueError):
         return None
-    if (len(packages) != 1 or sorted(features) != ['gpu-proofs'] or threads != 1):
+    if not features or PROOF_FEATURE not in features:
+        return None
+    try:
+        features = normalize_features(features)
+    except ValueError:
+        return None
+    if len(packages) != 1 or threads != 1:
         return None
     if not (run['targets'] or run['lib']):
         return None
-    if packages[0] not in Workspace(repo).feature_packages('gpu-proofs'):
+    workspace = Workspace(repo)
+    if packages[0] not in workspace.feature_packages('gpu-proofs'):
         return None
+    try:
+        validate_package_features(workspace, packages[0], features)
+    except ValueError:
+        return None
+    run['features'] = features
     run['package'] = packages[0]
     return proof_pass(repo, run)

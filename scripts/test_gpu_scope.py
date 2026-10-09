@@ -506,10 +506,10 @@ class ScopeTests(unittest.TestCase):
                 self.assertTrue(all(any(f in name for f in result.filters) for name in relevant))
                 self.assertFalse(result.unmapped)
 
-    def test_engine_pressure_fixtures_select_their_consuming_proofs(self):
+    def test_water_pressure_fixtures_select_their_consuming_proofs(self):
         for name in ("dambreak_pressure_problems.bin.zst", "deep_pool_pressure_problems.bin.zst",
                      "deep_pool_density_problems.bin.zst", "gpu_flip_pressure_golden.txt"):
-            path = "crates/manifold-node-engine/tests/fixtures/" + name
+            path = "crates/manifold-nodes-water/tests/fixtures/" + name
             result = plan([path])
             self.assertEqual(result.paths, [path])
             self.assertEqual(result.filters, {"primitives::gpu_flip_pressure_tests::"})
