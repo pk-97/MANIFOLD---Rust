@@ -53,9 +53,14 @@ fn quad_size() -> f32 {
 
 /// grid → tris → render_scene; orbit_camera → camera_lens → scene.camera
 /// and → motion_blur.camera; scene.color → motion_blur.in; scene.velocity
-/// → motion_blur.velocity; motion_blur.out → final.
+/// → motion_blur.velocity; motion_blur.out → invert → final.
 fn scene_json(shutter_angle: f32) -> String {
+    scene_json_with_enabled(shutter_angle, true)
+}
+
+fn scene_json_with_enabled(shutter_angle: f32, enabled: bool) -> String {
     let size = quad_size();
+    let enabled_value = if enabled { 1.0 } else { 0.0 };
     format!(
         r#"{{"version":2,"name":"MotionBlurVisibility","nodes":[
         {{"id":0,"typeId":"system.generator_input","nodeId":"input"}},
@@ -96,7 +101,9 @@ fn scene_json(shutter_angle: f32) -> String {
             "objects":{{"type":"Int","value":1}},
             "lights":{{"type":"Int","value":0}}}}}},
         {{"id":30,"typeId":"node.motion_blur","nodeId":"mb","params":{{
-            "max_blur_px":{{"type":"Float","value":32.0}}}}}},
+            "max_blur_px":{{"type":"Float","value":32.0}},
+            "enabled":{{"type":"Bool","value":{enabled}}}}}}},
+        {{"id":31,"typeId":"node.invert","nodeId":"mb_sink","params":{{}}}},
         {{"id":99,"typeId":"system.final_output","nodeId":"color_out"}}
         ],"wires":[
         {{"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"}},
@@ -109,8 +116,22 @@ fn scene_json(shutter_angle: f32) -> String {
         {{"fromNode":5,"fromPort":"transform","toNode":20,"toPort":"transform_0"}},
         {{"fromNode":20,"fromPort":"color","toNode":30,"toPort":"in"}},
         {{"fromNode":20,"fromPort":"velocity","toNode":30,"toPort":"velocity"}},
-        {{"fromNode":30,"fromPort":"out","toNode":99,"toPort":"in"}}
-        ]}}"#
+        {{"fromNode":30,"fromPort":"out","toNode":31,"toPort":"in"}},
+        {{"fromNode":31,"fromPort":"out","toNode":99,"toPort":"in"}}
+        ],"presetMetadata":{{
+            "id":"MotionBlurVisibility", "displayName":"Motion Blur Visibility",
+            "category":"Scene", "oscPrefix":"motion_blur_visibility",
+            "params":[{{
+                "id":"mb_enabled", "name":"Enabled", "min":0.0,
+                "max":1.0, "defaultValue":{enabled_value}, "isToggle":true
+            }}],
+            "bindings":[{{
+                "id":"mb_enabled", "label":"Enabled",
+                "defaultValue":{enabled_value}, "userAdded":true,
+                "target":{{"kind":"node","nodeId":"mb","param":"enabled"}},
+                "convert":{{"type":"BoolThreshold"}}
+            }}]
+        }}}}"#
     )
 }
 
@@ -120,6 +141,15 @@ fn scene_json(shutter_angle: f32) -> String {
 /// static control); at `BEAT_MOVED` the quad jumps and the frame carries
 /// real velocity.
 fn render_frame(json: &str, beat: f64, label: &str) -> Vec<f32> {
+    render_frame_with_enabled_values(json, beat, label, None)
+}
+
+fn render_frame_with_enabled_values(
+    json: &str,
+    beat: f64,
+    label: &str,
+    enabled_values: Option<[f32; 3]>,
+) -> Vec<f32> {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
@@ -134,8 +164,31 @@ fn render_frame(json: &str, beat: f64, label: &str) -> Vec<f32> {
     .unwrap_or_else(|e| panic!("{label}: graph must build: {e}\n{json}"));
 
     let target = h.make_target(label);
+    let empty_manifest = manifold_core::params::ParamManifest::default();
+    let enabled_manifests = enabled_values.map(|values| {
+        values
+            .into_iter()
+            .map(|value| {
+                let spec = manifold_core::effect_graph_def::ParamSpecDef {
+                    id: "mb_enabled".into(),
+                    name: "Enabled".into(),
+                    min: 0.0,
+                    max: 1.0,
+                    default_value: value,
+                    is_toggle: true,
+                    ..Default::default()
+                };
+                let mut param = manifold_core::params::Param::bundled(spec);
+                param.value = value;
+                manifold_core::params::ParamManifest::from_params(vec![param])
+            })
+            .collect::<Vec<_>>()
+    });
     let mut pixels = vec![0.0f32; (h.width * h.height * 4) as usize];
-    for (frame_count, b) in [(0i64, 0.0f64), (1, 0.0), (2, beat)] {
+    for (frame_index, (frame_count, b)) in [(0i64, 0.0f64), (1, 0.0), (2, beat)]
+        .into_iter()
+        .enumerate()
+    {
         let ctx = PresetContext {
             time: 0.0,
             beat: b,
@@ -159,7 +212,9 @@ fn render_frame(json: &str, beat: f64, label: &str) -> Vec<f32> {
                     &mut gpu,
                     &target.texture,
                     &ctx,
-                    &manifold_core::params::ParamManifest::default(),
+                    enabled_manifests
+                        .as_ref()
+                        .map_or(&empty_manifest, |manifests| &manifests[frame_index]),
                 );
             }
             enc.commit_and_wait_completed();
@@ -195,6 +250,21 @@ fn diff(a: &[f32], b: &[f32]) -> Diff {
     Diff { max, count_above }
 }
 
+fn fused_scene_json(shutter_angle: f32, enabled: bool) -> String {
+    let def: manifold_core::effect_graph_def::EffectGraphDef =
+        serde_json::from_str(&scene_json_with_enabled(shutter_angle, enabled))
+            .expect("motion blur def parses");
+    let fused = manifold_node_engine::freeze::install::fused_generator_view_for(&def)
+        .expect("motion blur graph must fuse through its downstream pointwise node");
+    assert!(
+        fused
+            .retarget
+            .contains_key(&("mb".to_owned(), "enabled".to_owned())),
+        "fused motion blur must retarget its enabled binding"
+    );
+    serde_json::to_string(&*fused.def).expect("fused motion blur def serializes")
+}
+
 /// The measured assertions for one route (raw or fused): blur must be
 /// visible under motion with a 180° shutter, and absent with no motion.
 fn assert_blur_visible_on_route(json_for: &dyn Fn(f32) -> String, route: &str) {
@@ -227,32 +297,62 @@ fn motion_blur_output_differs_under_motion_raw_route() {
     assert_blur_visible_on_route(&scene_json, "raw");
 }
 
-/// The latent fused-route suspect: a fused region containing motion_blur
-/// resolves its shutter via the `camera_ext_N` external; an unresolved one
-/// zero-fills the derived block — the exact-no-op failure. If the freeze
-/// compiler refuses this chain, say so and skip (the import tail's
-/// assembled-graph tests in CINEMATIC_SCENE_TAIL P1 carry the fused
-/// coverage for the shipped topology).
+#[test]
+fn motion_blur_disabled_bool_is_passthrough_raw_and_fused() {
+    // Start enabled for the warm-up frames, then toggle the BoolThreshold
+    // binding off for the measured moving frame.
+    let toggle_off = [1.0, 1.0, 0.0];
+    let raw_on = render_frame_with_enabled_values(
+        &scene_json_with_enabled(SHUTTER, false),
+        BEAT_MOVED,
+        "mb-raw-disabled-180",
+        Some(toggle_off),
+    );
+    let raw_off = render_frame_with_enabled_values(
+        &scene_json_with_enabled(0.0, false),
+        BEAT_MOVED,
+        "mb-raw-disabled-0",
+        Some(toggle_off),
+    );
+    let raw_diff = diff(&raw_on, &raw_off);
+    assert!(
+        raw_diff.max < 1e-3,
+        "raw disabled motion blur must ignore shutter: max diff {:.5}",
+        raw_diff.max
+    );
+
+    let fused_on = render_frame_with_enabled_values(
+        &fused_scene_json(SHUTTER, false),
+        BEAT_MOVED,
+        "mb-fused-disabled-180",
+        Some(toggle_off),
+    );
+    let fused_off = render_frame_with_enabled_values(
+        &fused_scene_json(0.0, false),
+        BEAT_MOVED,
+        "mb-fused-disabled-0",
+        Some(toggle_off),
+    );
+    let fused_diff = diff(&fused_on, &fused_off);
+    assert!(
+        fused_diff.max < 1e-3,
+        "fused disabled motion blur must ignore shutter: max diff {:.5}",
+        fused_diff.max
+    );
+    let parity = diff(&fused_on, &raw_on);
+    assert!(
+        parity.max < 1e-3,
+        "fused disabled motion blur must match the raw passthrough: max diff {:.5}",
+        parity.max
+    );
+}
+
+/// The fused region must retain motion_blur's camera external and retarget
+/// its live enabled binding through the downstream pointwise node.
 #[test]
 fn motion_blur_output_differs_under_motion_fused_route() {
-    let def_on: manifold_core::effect_graph_def::EffectGraphDef =
-        serde_json::from_str(&scene_json(SHUTTER)).expect("shutter=180 def parses");
-    let def_off: manifold_core::effect_graph_def::EffectGraphDef =
-        serde_json::from_str(&scene_json(0.0)).expect("shutter=0 def parses");
-    let fused_on = manifold_node_engine::freeze::install::fused_generator_view_for(&def_on);
-    let fused_off = manifold_node_engine::freeze::install::fused_generator_view_for(&def_off);
-    if fused_on.is_none() || fused_off.is_none() {
-        eprintln!(
-            "motion_blur fused-route: freeze compiler refused the chain \
-             (fused_on={}, fused_off={}) — fused assertion skipped",
-            fused_on.is_some(),
-            fused_off.is_some()
-        );
-        return;
-    }
-    let (fused_on, fused_off) = (fused_on.unwrap(), fused_off.unwrap());
-    let json_on = serde_json::to_string(&*fused_on.def).expect("fused def serializes");
-    let json_off = serde_json::to_string(&*fused_off.def).expect("fused def serializes");
+    let json_on = fused_scene_json(SHUTTER, true);
+    let json_off = fused_scene_json(0.0, true);
     assert_blur_visible_on_route(
         &move |shutter: f32| {
             if shutter > 0.0 {

@@ -66,8 +66,6 @@ const FREE_CAMERA_TYPE_ID: &str = "node.free_camera";
 const LOOK_AT_CAMERA_TYPE_ID: &str = "node.look_at_camera";
 const LOOP_CAMERA_TYPE_ID: &str = "node.loop_camera";
 const CAMERA_LENS_TYPE_ID: &str = "node.camera_lens";
-const MOTION_BLUR_TYPE_ID: &str = "node.motion_blur";
-const BOKEH_GATHER_TYPE_ID: &str = "node.bokeh_gather";
 /// PBR/unlit/cel — the three material atoms (D3's Objects material row).
 const MATERIAL_TYPE_IDS: &[&str] = &[
     "node.pbr_material",
@@ -606,7 +604,7 @@ impl SceneVm {
             trace_objects(&root, scene_node, &layer_id_set, index.as_ref());
         let lights = trace_lights(&root, scene_node);
         let camera = trace_camera(&root, scene_node);
-        let camera_controls = camera_controls(&root, &camera);
+        let camera_controls = camera_controls(&root, &camera, scene_node, index.as_ref());
         let environment = trace_environment(&root, scene_node);
         let atmosphere = trace_atmosphere(&root, scene_node);
         let world_controls = world_controls(&root, scene_node, &environment, &atmosphere);
@@ -684,19 +682,8 @@ fn stable_ids(level: &Level, ids: impl IntoIterator<Item = u32>) -> Vec<NodeId> 
         .collect()
 }
 
-/// The first node of `type_id` anywhere in `nodes`, group bodies included.
-fn first_of_type<'a>(nodes: &'a [EffectGraphNode], type_id: &str) -> Option<&'a EffectGraphNode> {
-    nodes.iter().find_map(|node| {
-        if node.type_id == type_id {
-            return Some(node);
-        }
-        node.group.as_deref().and_then(|group| first_of_type(&group.nodes, type_id))
-    })
-}
-
-/// The camera atom (curated shapes only), its lens, and, when a lens is
-/// wired, the cinematic tail's motion blur and bokeh wherever they live.
-fn camera_controls(level: &Level, camera: &CameraVm) -> Vec<NodeId> {
+/// The camera atom, its lens, and the effects connected to this scene/camera.
+fn camera_controls(level: &Level, camera: &CameraVm, scene: &EffectGraphNode, index: Option<&FlatSceneIndex>) -> Vec<NodeId> {
     let (atom, lens) = match camera {
         CameraVm::Orbit(c) => (Some(c.node_doc_id), c.lens.as_ref()),
         CameraVm::Free(c) => (Some(c.node_doc_id), c.lens.as_ref()),
@@ -706,14 +693,10 @@ fn camera_controls(level: &Level, camera: &CameraVm) -> Vec<NodeId> {
         CameraVm::None => (None, None),
     };
     let mut controls = stable_ids(level, atom.into_iter().chain(lens.map(|lens| lens.node_doc_id)));
-    if lens.is_some() {
-        controls.extend(
-            [MOTION_BLUR_TYPE_ID, BOKEH_GATHER_TYPE_ID]
-                .into_iter()
-                .filter_map(|type_id| first_of_type(level.nodes, type_id))
-                .map(|node| node.node_id.clone())
-                .filter(|id| !id.is_empty()),
-        );
+    if let Some(index) = index {
+        controls.extend(super::scene_camera::camera_effect_controls(index, &SceneNodeRef {
+            scope: Vec::new(), node: scene.node_id.clone(),
+        }));
     }
     controls
 }
@@ -2927,21 +2910,30 @@ mod tests {
             d.nodes.extend([
                 with_param(node(30, "node.camera_switch", None), "select", SerializedParamValue::Enum { value: select }),
                 node(31, LOOP_CAMERA_TYPE_ID, None),
-                node(32, MOTION_BLUR_TYPE_ID, None),
-                node(33, BOKEH_GATHER_TYPE_ID, None),
+                node(32, "node.motion_blur", None),
+                node(33, "node.bokeh_gather", None),
+                node(34, "node.coc_from_depth", None),
             ]);
-            d.wires.retain(|w| !(w.to_node == 2 && w.to_port == "camera"));
+            d.wires.retain(|w| !(w.to_node == 2 && w.to_port == "camera") && w.to_node != 20);
             d.wires.extend([
                 wire(1, "out", 30, "a"),
                 wire(31, "out", 30, "b"),
                 wire(30, "out", 2, "camera"),
+                wire(2, "out", 34, "camera"),
+                wire(10, "depth", 34, "depth"),
+                wire(34, "out", 33, "width"),
+                wire(10, "color", 33, "in"),
+                wire(33, "out", 32, "in"),
+                wire(2, "out", 32, "camera"),
+                wire(10, "velocity", 32, "velocity"),
+                wire(32, "out", 20, "in"),
             ]);
             let vm = SceneVm::from_def(&d).unwrap();
             let CameraVm::Custom { node_doc_id: 30, lens: Some(lens) } = vm.camera else {
                 panic!("switch must retain shared lens: {:?}", vm.camera);
             };
             assert_eq!(lens.node_doc_id, 2);
-            assert_eq!(vm.camera_controls, ["n2", "n32", "n33"].map(NodeId::new), "the lens and tail, never the switch");
+            assert_eq!(vm.camera_controls, ["n2", "n33", "n32"].map(NodeId::new), "the lens and connected tail, never the switch");
         }
     }
 

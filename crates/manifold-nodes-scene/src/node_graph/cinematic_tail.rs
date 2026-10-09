@@ -1,4 +1,4 @@
-//! Cinematic tail for imported scenes (CINEMATIC_SCENE_TAIL_DESIGN.md D1 /
+//! Shared cinematic tail for native and imported scenes (CINEMATIC_SCENE_TAIL_DESIGN.md D1 /
 //! section 3 (chain topology)): the DoF chain (`coc_from_depth` →
 //! `bokeh_gather`) plus the velocity-directed `motion_blur`,
 //! templated node-for-node on the CinematicScene reference preset.
@@ -14,7 +14,7 @@ use manifold_core::effect_graph_def::{
 use manifold_core::NodeId;
 use manifold_core::scene_exposure::stamp_scene_node_exposures_into;
 
-use super::assembly::{enum_val, float, plain_node, wire};
+use crate::node_graph::scene_graph::{bool_val, enum_val, float, plain_node, wire};
 use crate::node_graph::scene_exposure::metadata_for_node_type;
 
 /// The tail's products: the assembled `dof` group node and the top-level
@@ -25,7 +25,7 @@ use crate::node_graph::scene_exposure::metadata_for_node_type;
 /// (P4): the bokeh stamp targets the group-internal `dof/bokeh` nodeId,
 /// and the motion_blur stamp seeds its slider defaults from the node's
 /// stamped params.
-pub(super) struct CinematicTail {
+pub(crate) struct CinematicTail {
     pub nodes: Vec<EffectGraphNode>,
     pub dof_group_id: u32,
     pub motion_blur_id: u32,
@@ -36,8 +36,8 @@ pub(super) struct CinematicTail {
 
 /// Build the DoF group + motion_blur node with neutral lens-era params
 /// (CoC/bokeh `max_radius` = 24, `max_blur_px` = 32 — the CinematicScene
-/// values), with bokeh enabled by default. Existing projects retain their
-/// saved enabled value. The caller wires the shared lens in, so depth-of-field
+/// values). The caller chooses the initial enabled state and wires the shared
+/// lens in, so depth-of-field
 /// and shutter read the SAME lens the exposure and FOV card knob surface.
 ///
 /// `scene_radius` is the imported bbox bounding-sphere radius (BUG-bdwd):
@@ -45,9 +45,10 @@ pub(super) struct CinematicTail {
 /// read as real meter-scale distances in the lens physics (a unit-scale
 /// scene reads 1 unit = 1 meter, the old constant — a 0.01-unit scene reads
 /// 1 unit = 100m; see `docs/CINEMATIC_POST_DESIGN.md` D1's `WORLD_TO_MM`).
-pub(super) fn build_cinematic_tail(
+pub(crate) fn build_cinematic_tail(
     fresh_id: &mut impl FnMut() -> u32,
     scene_radius: f32,
+    enabled: bool,
 ) -> CinematicTail {
     let mut dof_nodes: Vec<EffectGraphNode> = Vec::new();
     let mut dof_wires: Vec<EffectGraphWire> = Vec::new();
@@ -66,10 +67,10 @@ pub(super) fn build_cinematic_tail(
     let bokeh_id = fresh_id();
     let mut bokeh_node = plain_node(bokeh_id, "bokeh", "node.bokeh_gather", "bokeh");
     bokeh_node.params.insert("max_radius".to_string(), float(24.0));
-    bokeh_node.params.insert("enabled".to_string(), super::assembly::bool_val(true));
+    bokeh_node.params.insert("enabled".to_string(), bool_val(enabled));
     bokeh_node.params.insert("aperture".to_string(), enum_val(0));
     bokeh_node.params.insert("quality".to_string(), enum_val(1));
-    bokeh_node.params.insert("blur_alpha".to_string(), super::assembly::bool_val(true));
+    bokeh_node.params.insert("blur_alpha".to_string(), bool_val(true));
     let bokeh_params = bokeh_node.params.clone();
     dof_nodes.push(bokeh_node);
     let dof_out_id = fresh_id();
@@ -104,6 +105,7 @@ pub(super) fn build_cinematic_tail(
     let mut motion_blur_node =
         plain_node(motion_blur_id, "motion_blur", "node.motion_blur", "motion_blur");
     motion_blur_node.params.insert("max_blur_px".to_string(), float(32.0));
+    motion_blur_node.params.insert("enabled".to_string(), bool_val(enabled));
     let motion_blur_params = motion_blur_node.params.clone();
 
     CinematicTail {
@@ -126,7 +128,7 @@ pub(super) fn build_cinematic_tail(
 /// identity match) key on the id. The bokeh toggle, aperture and quality are stamped:
 /// the radius slider stays deferred (f-stop is the photographic DoF
 /// control).
-pub(super) fn stamp_tail_camera_sections(
+pub(crate) fn stamp_tail_camera_sections(
     card_params: &mut Vec<ParamSpecDef>,
     card_bindings: &mut Vec<BindingDef>,
     motion_blur_id: u32,

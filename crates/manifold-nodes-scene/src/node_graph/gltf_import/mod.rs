@@ -38,7 +38,6 @@ mod animation;
 manifold_core::testkit_visible! { mod assembly; }
 mod bounds_probe;
 mod cards;
-mod cinematic_tail;
 mod materials;
 manifold_core::testkit_visible! { mod merge; }
 mod object_group;

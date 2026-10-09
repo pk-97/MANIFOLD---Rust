@@ -80,6 +80,9 @@ fn parse_bundled_preset(kind: PresetKind, id: &str, json: &str) -> EffectGraphDe
     let mut def: EffectGraphDef = serde_json::from_str(json)
         .unwrap_or_else(|e| panic!("bundled {kind:?} preset {id}: parse failed: {e}"));
     if !kind.is_scene_modifier() {
+        if let Err(error) = manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(&mut def) {
+            log::warn!("Scene camera setup for {id}: {error}");
+        }
         migrate_scene_exposures(&mut def);
     }
     def

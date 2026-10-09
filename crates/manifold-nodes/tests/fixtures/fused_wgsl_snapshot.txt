@@ -12388,6 +12388,8 @@ struct Params {
     _pad2: u32,
 }
 
+// @bool_uniform: n0_normalise
+// @bool_uniform: n1_normalise
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
@@ -18060,6 +18062,7 @@ struct Params {
     n0_shutter_angle: f32,
 }
 
+// @bool_uniform: n0_enabled
 // @camera_external: camera_ext_0
 // @derived_uniform_member: n0_shutter_angle words=1 node.motion_blur camera_ext_0
 @group(0) @binding(0) var<uniform> params: Params;
@@ -18278,6 +18281,9 @@ fn n0_body(
     enabled: u32,
     shutter_angle: f32,
 ) -> vec4<f32> {
+    if (enabled == 0u) {
+        return n0_fetch_in(uv);
+    }
     let velocity_ndc = c_velocity.rg;
     let smear_px_raw = velocity_ndc * 0.5 * dims * (shutter_angle / 360.0);
     let smear_px = clamp(smear_px_raw, vec2<f32>(-max_blur_px), vec2<f32>(max_blur_px));

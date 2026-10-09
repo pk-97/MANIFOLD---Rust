@@ -35,6 +35,7 @@ pub enum ContentCommand {
     /// Commit one viewport domain gesture against the current content project.
     FluidDomainEdit(Box<crate::fluid_domain_edit::FluidDomainDrag>),
     SceneItem(crate::scene_item_transfer::SceneItemAction),
+    SceneCameraSetup(LayerId),
     ChangeGeneratorType { layer_id: LayerId, new_type: manifold_core::PresetTypeId },
     GraphEditRejected(String),
     ExecuteBatch(Vec<Box<dyn Command>>, String),
