@@ -16,8 +16,7 @@ use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use sha2::{Digest, Sha256};
 
 use crate::persistence::PrimitiveRegistry;
-use crate::water::physics::RigidImpulseTargets;
-use crate::water::physics_events::ImpulseTarget;
+use crate::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
 use crate::load::expand::{SceneModifierImpulseRoute, impulse_recipients, prepare_coupled_scenes};
 
 /// Authored identity for one fluid source graph.

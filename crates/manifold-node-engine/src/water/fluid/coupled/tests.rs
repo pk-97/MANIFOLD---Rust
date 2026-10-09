@@ -5,11 +5,13 @@ use manifold_fluids::{LiquidOptions, TimeStepOptions};
 use manifold_physics::input::EventStamp;
 use manifold_physics::{FieldValue, Seconds, TickStamp};
 
-use super::{CoupledRigidInputs, RigidImpulseTargets};
+use super::CoupledRigidInputs;
+use crate::scene::impulse::RigidImpulseTargets;
 use crate::water::fluid::native::NativeSimulation;
 use crate::water::fluid::{FluidControls, FluidRuntime, FluidSettings, TICK, Worker};
 use crate::water::physics::{ColliderGeometry, RigidBody, RigidSceneInputs};
-use crate::water::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
+use crate::scene::impulse::ImpulseTarget;
+use crate::water::physics_events::ResolvedNodeImpulse;
 use crate::scene::transform::Transform;
 
 mod vortex;

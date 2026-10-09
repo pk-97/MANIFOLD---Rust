@@ -1,7 +1,8 @@
 use manifold_core::Seconds;
 use manifold_physics::input::EventStamp;
 
-use crate::water::physics::{PhysicsAuthoredSampleScope, ResolvedRigidImpulse, RigidBody, RigidImpulseTargets, RigidSimulation, MAX_BODIES};
+use crate::scene::impulse::RigidImpulseTargets;
+use crate::water::physics::{PhysicsAuthoredSampleScope, ResolvedRigidImpulse, RigidBody, RigidSimulation, MAX_BODIES};
 use crate::scene::transform::Transform;
 
 const DT: f64 = 1.0 / 60.0;

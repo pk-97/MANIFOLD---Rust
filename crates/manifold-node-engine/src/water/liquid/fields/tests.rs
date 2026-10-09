@@ -1,6 +1,6 @@
 use super::*;
 use crate::water::liquid::clock::LiquidClock;
-use crate::water::physics_events::ImpulseTarget;
+use crate::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
 use manifold_physics::input::EventStamp;
 
 fn fluid(field: FieldValue) -> ResolvedNodeImpulse {
@@ -579,7 +579,7 @@ fn liquid_impulse_refusals_are_named() {
     let stamp = impulses.stamp(0.0, 0).unwrap();
     let rigid = ResolvedNodeImpulse {
         field: FieldValue::uniform([1.0; 3]).unwrap(),
-        target: ImpulseTarget::Rigid(crate::water::physics::RigidImpulseTargets { bodies: 1, copies: false }),
+        target: ImpulseTarget::Rigid(RigidImpulseTargets { bodies: 1, copies: false }),
     };
     assert!(impulses.enqueue(stamp, rigid, None).unwrap_err().contains("coupled rigid world"));
     // The history is bounded and the overflow latches until a restart.

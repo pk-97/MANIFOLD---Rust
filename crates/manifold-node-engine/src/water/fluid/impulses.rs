@@ -7,7 +7,8 @@ use manifold_physics::input::{AppliedEvent, EventQueue, EventStamp};
 use manifold_physics::{FieldValue, TickStamp, VectorField};
 
 use super::{FluidRuntime, TICK};
-use crate::water::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
+use crate::scene::impulse::ImpulseTarget;
+use crate::water::physics_events::ResolvedNodeImpulse;
 use manifold_core::Seconds;
 
 pub(super) const IMPULSE_CAPACITY: usize = 256;

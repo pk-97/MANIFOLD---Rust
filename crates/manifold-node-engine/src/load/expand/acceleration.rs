@@ -8,6 +8,7 @@ use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 
 use crate::persistence::PrimitiveRegistry;
+use crate::scene::impulse::RigidImpulseTargets;
 
 use super::SceneModifierExpandError;
 
@@ -118,7 +119,10 @@ fn trace(
                 Some(("copies".to_string(), "copies_acceleration".to_string()))
             } else {
                 port.strip_prefix("pose_")
-                    .filter(|slot| slot.parse::<usize>().is_ok_and(|slot| slot < 64))
+                    .filter(|slot| {
+                        slot.parse::<usize>()
+                            .is_ok_and(|slot| slot < RigidImpulseTargets::BODY_CAPACITY)
+                    })
                     .map(|slot| (format!("body_{slot}"), format!("body_acceleration_{slot}")))
             };
             if let Some((input, port)) = input {
@@ -250,7 +254,7 @@ pub(crate) fn impulse_recipients(
 ) -> Result<
     Vec<(
         manifold_core::NodeId,
-        crate::water::physics_events::ImpulseTarget,
+        crate::scene::impulse::ImpulseTarget,
     )>,
     SceneModifierExpandError,
 > {
@@ -266,12 +270,11 @@ pub(super) fn impulse_recipients_with_index(
 ) -> Result<
     Vec<(
         manifold_core::NodeId,
-        crate::water::physics_events::ImpulseTarget,
+        crate::scene::impulse::ImpulseTarget,
     )>,
     SceneModifierExpandError,
 > {
-    use crate::water::physics::RigidImpulseTargets;
-    use crate::water::physics_events::ImpulseTarget;
+    use crate::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
     let mut worlds = std::collections::BTreeMap::new();
     for object in selected(index, selection, scene, registry)? {
         let Some(recipient) = resolve(index, &object, registry)? else {
@@ -289,7 +292,7 @@ pub(super) fn impulse_recipients_with_index(
                     .port
                     .strip_prefix("body_acceleration_")
                     .and_then(|slot| slot.parse::<usize>().ok())
-                    .filter(|&slot| slot < 64)
+                    .filter(|&slot| slot < RigidImpulseTargets::BODY_CAPACITY)
                     .ok_or_else(|| {
                         unsupported(&recipient.port, "invalid rigid impulse recipient")
                     })?;

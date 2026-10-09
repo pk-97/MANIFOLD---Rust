@@ -95,7 +95,8 @@ mod tests {
     use super::*;
     use crate::water::fluid::TICK;
     use crate::water::liquid::coupling::PendingTick;
-    use crate::water::physics::{RigidBody, RigidImpulseTargets, RigidSceneInputs};
+    use crate::scene::impulse::RigidImpulseTargets;
+    use crate::water::physics::{RigidBody, RigidSceneInputs};
     use crate::scene::transform::Transform;
 
     /// A reaction of Δv = +1 m/s (encoded at U = 128) reaches Box3D as a

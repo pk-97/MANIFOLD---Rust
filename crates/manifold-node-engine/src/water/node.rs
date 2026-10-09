@@ -54,7 +54,7 @@ pub trait PhysicsNode: Send {
     fn set_coupled_rigid_inputs(
         &mut self,
         _observation: Option<&crate::water::physics::RigidSceneObservation>,
-        _colliders: crate::water::physics::RigidImpulseTargets,
+        _colliders: crate::scene::impulse::RigidImpulseTargets,
         _error: Option<&str>,
     ) {
     }

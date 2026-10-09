@@ -9,7 +9,7 @@ mod tests {
         SceneModifierExpandError,
     };
     use manifold_node_engine::persistence::PrimitiveRegistry;
-    use manifold_node_engine::water::physics::RigidImpulseTargets;
+    use manifold_node_engine::scene::impulse::RigidImpulseTargets;
 
     struct GraphBuilder {
         next_id: u32,

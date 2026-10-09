@@ -415,7 +415,8 @@ impl RigidSimulation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::water::physics::{PhysicsAuthoredSampleScope, PhysicsStepScope, ResolvedRigidImpulse, RigidImpulseTargets};
+    use crate::scene::impulse::RigidImpulseTargets;
+    use crate::water::physics::{PhysicsAuthoredSampleScope, PhysicsStepScope, ResolvedRigidImpulse};
     use manifold_physics::input::{AppliedEvent, EventStamp};
     use manifold_physics::stepping::{FramePlan, Uncoupled};
     use manifold_physics::TickStamp;

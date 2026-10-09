@@ -3,6 +3,7 @@ pub mod boundary_nodes;
 pub mod camera;
 pub mod depth_rule;
 pub mod exposure_source;
+pub mod impulse;
 pub mod light;
 pub mod live_extent;
 pub mod material;

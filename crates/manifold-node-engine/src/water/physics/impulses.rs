@@ -4,25 +4,9 @@ use manifold_physics::{
     FieldInput, FieldValue, TickStamp, VectorField,
 };
 
+use crate::scene::impulse::RigidImpulseTargets;
+
 use super::{RigidSimulation, FIXED_TICK, IMPULSE_CAPACITY, MAX_BODIES, TARGET_SLOTS};
-
-/// A fixed set of ordinary body slots and the reset-latched copy group.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RigidImpulseTargets {
-    pub bodies: u64,
-    pub copies: bool,
-}
-
-impl RigidImpulseTargets {
-    pub const fn is_empty(self) -> bool {
-        self.bodies == 0 && !self.copies
-    }
-
-    pub const fn contains_body(self, index: usize) -> bool {
-        index < MAX_BODIES && (self.bodies & (1u64 << index)) != 0
-    }
-}
 
 /// A resolved scene-space delta velocity retained by value until its fixed
 /// tick begins. The field is sampled at each recipient's current center of

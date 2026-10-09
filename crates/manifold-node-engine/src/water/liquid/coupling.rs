@@ -25,7 +25,8 @@ use super::bodies::{pack_supports, unpack_supports, BodySupports, LiquidBody};
 use crate::water::fluid::TICK;
 use crate::water::fluid::{CoupledRigidFrame, CoupledRigidLayout, FluidDomainLayout};
 use crate::water::fluid_role::PreparedFluidGeometry;
-use crate::water::physics::{RigidBody, RigidImpulseTargets, RigidSceneInputs, RigidSimulation};
+use crate::scene::impulse::RigidImpulseTargets;
+use crate::water::physics::{RigidBody, RigidSceneInputs, RigidSimulation};
 use crate::scene::transform::Transform;
 
 /// One coupled Box3D body, in row order.

@@ -11,7 +11,8 @@ use crate::exec::effect_node::EffectNode;
 use crate::water::fluid_role::MAX_FLUID_ROLES;
 use crate::parameters::ParamType;
 use crate::persistence::PrimitiveRegistry;
-use crate::water::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
+use crate::scene::impulse::ImpulseTarget;
+use crate::water::physics_events::ResolvedNodeImpulse;
 use crate::ports::{PortKind, PortType};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

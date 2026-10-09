@@ -7,8 +7,8 @@ use manifold_physics::{FieldValue, TickStamp, input::EventStamp};
 use super::*;
 use crate::water::fluid::{CoupledRigidInputs, FluidRuntime, Transform, Worker};
 use crate::water::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
-use crate::water::physics::{ColliderGeometry, RigidBody, RigidImpulseTargets, RigidSceneInputs};
-use crate::water::physics_events::ImpulseTarget;
+use crate::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
+use crate::water::physics::{ColliderGeometry, RigidBody, RigidSceneInputs};
 use crate::runtime::preset_context::ProjectTempo;
 
 struct Directory(Arc<PathBuf>);

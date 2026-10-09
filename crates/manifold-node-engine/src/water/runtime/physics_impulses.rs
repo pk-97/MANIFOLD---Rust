@@ -9,7 +9,8 @@ use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::{FieldValue, TickStamp};
 
 use crate::{exec::effect_node::FrameTime, runtime::PresetRuntime};
-use crate::water::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
+use crate::scene::impulse::ImpulseTarget;
+use crate::water::physics_events::ResolvedNodeImpulse;
 use crate::water::node;
 use crate::{exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId};
 

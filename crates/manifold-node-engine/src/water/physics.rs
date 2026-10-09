@@ -13,6 +13,7 @@ use manifold_physics::{
 use std::sync::Arc;
 
 use crate::scene::transform::Transform;
+use crate::scene::impulse::RigidImpulseTargets;
 use crate::platonic::platonic_points;
 
 #[cfg(test)]
@@ -22,7 +23,7 @@ mod serialization;
 mod targeted_fields;
 mod worker;
 
-pub use impulses::{ResolvedRigidImpulse, RigidImpulseTargets};
+pub use impulses::ResolvedRigidImpulse;
 use targeted_fields::{TargetedFieldHistory, TARGET_SLOTS};
 pub use worker::{RigidSceneInputs, RigidSceneObservation};
 
@@ -209,7 +210,7 @@ impl Drop for PhysicsStepScope {
     }
 }
 
-pub const MAX_BODIES: usize = 64;
+pub const MAX_BODIES: usize = RigidImpulseTargets::BODY_CAPACITY;
 pub const MAX_COPIES: usize = 4_000;
 pub(crate) const AUTHORED_HISTORY_CAPACITY: usize = 256;
 const IMPULSE_CAPACITY: usize = 256;

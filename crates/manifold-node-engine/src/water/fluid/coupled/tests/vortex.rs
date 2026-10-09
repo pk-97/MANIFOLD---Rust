@@ -1,6 +1,7 @@
 use super::*;
 
-use crate::water::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
+use crate::scene::impulse::ImpulseTarget;
+use crate::water::physics_events::ResolvedNodeImpulse;
 
 const VORTEX_SEQUENCE: u64 = 1;
 const OUTER_TICKS: u64 = 12;

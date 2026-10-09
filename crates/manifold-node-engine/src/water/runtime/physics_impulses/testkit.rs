@@ -1,7 +1,7 @@
 //! Capture observations without exposing recipient or capture storage.
 use crate::water::runtime::physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
 #[cfg(feature = "gpu-proofs")]
-use crate::water::physics_events::ImpulseTarget;
+use crate::scene::impulse::ImpulseTarget;
 #[cfg(feature = "gpu-proofs")]
 use manifold_core::NodeId;
 use manifold_physics::{FieldValue, input::EventStamp};

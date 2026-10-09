@@ -5,7 +5,7 @@ use crate::exec::node_pairs::NodePairBehavior;
 use crate::graph::Graph;
 use crate::validation::GraphError;
 use crate::water::node;
-use crate::water::physics::RigidImpulseTargets;
+use crate::scene::impulse::RigidImpulseTargets;
 
 pub(crate) struct PhysicsPair {
     colliders: RigidImpulseTargets,

@@ -459,6 +459,26 @@ Cost: one preparation-time box per pair and borrowed callback dispatch. No new
 clock, lock or frame allocation. Verify scheduling, substep, splice, sampling
 and coupled playback contracts; final P5 GPU parity and landing still apply.
 
+#### P5 authored impulse routing
+
+Move `RigidImpulseTargets` and `ImpulseTarget` into `scene::impulse`: they are
+scene recipient selections, independent of fields, clocks, queues and solvers.
+Preserve their serde representations and selection operations. Make `union`
+public for the extracted water consumer. `RigidImpulseTargets::BODY_CAPACITY`
+is `u64::BITS as usize`; native `MAX_BODIES`, authored slot allocation and
+recipient parsing use this one mask bound. Remove the former exports and update
+callers directly. Resolved fields, event receipts and simulation stay in water.
+
+Shatter reads an absent parent density from the registered body parameter
+definition. Pass its existing registry into preparation and report missing or
+non-numeric metadata explicitly. Preserve numeric authored overrides, generated
+density values and the native default; do not copy the density constant into
+the engine. This lookup happens during graph preparation, once per parent.
+
+Verify exact serialized recipient shapes and slot bounds, existing authored
+route/coupling contracts, and Shatter default and override inheritance. This
+seam does not establish final water GPU parity or complete the extraction.
+
 Phasing-completeness check: every D1 crate appears in exactly one phase's deliverables (ui-paint P1a, graph P1, image/scene/compositor P2, nodes P3, water P5); D5 P0; D6 P3; D7 P1/P2; D8 P4; D10 P0; D11 P0; D12 P1a; INV-5's script P0; measurement P4.
 
 ---
