@@ -37,6 +37,45 @@ duplicates without improving the tight accuracy score. It does not establish
 which sound caused a trigger or measure capture/UI/display delay. Results:
 `tools/audio_analysis/eval/scoreboard/live_kick_2026-10-09.json`.
 
+**2026-10-09 attack trial — experimental, not enabled in the app:**
+`kick_attack_probe` processes PCM causally through 45–140, 140–400 and
+400–2000 Hz filters, 3/80 ms power followers, an attack/rearm check, a
+35 ms low-band confirmation timeout and a 60 ms minimum firing interval. This is
+the fifth mechanism variant tried on these same clips, with one fixed setting
+across songs. These are development results, not held-out validation.
+
+| Full mix | Live → trial matches within ±50 ms | Live → trial extra triggers, allowing -35/+200 ms association |
+|---|---:|---:|
+| Apricots | 0 → 14 / 14 | 5 → 0 |
+| Bad Guy | 3 → 15 / 15 | 55 → 17 |
+| Feel the Vibration | 2 → 13 / 15 | 27 → 2 |
+| Inhale Exhale | 1 → 11 / 12 | 4 → 14 |
+| Tears | 2 → 10 / 10 | 34 → 7 |
+| Total | 8 → 63 / 66 | 125 → 40 |
+
+At the strict ±50 ms tolerance, unmatched triggers fall from 179 to 42;
+that includes late kicks, so it is not a pure false-positive count. The wider
+association finds 65/66 labels versus 62/66 live; median availability delay
+falls from 68.17 to 15.67 ms (p90 116.33 to 43 ms). The Rust event hops match
+the SciPy reference exactly on all five files. The standalone synthetic probe
+reports silence 0, four falling-pitch kicks 4, stationary bass pulses 3 and
+slow bass swell 0 events. Bass-note confusion and the Inhale regression block
+live replacement. Next work belongs to BUG-5to: discriminate non-kick attacks
+without losing this timing improvement, then validate on fresh material.
+
+```sh
+CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 cargo build -p manifold-audio --example kick_attack_probe
+target/debug/examples/kick_attack_probe --selftest
+python3 tools/audio_analysis/eval/live_kick_baseline.py \
+  --detector attack-probe --harness target/debug/examples/kick_attack_probe \
+  --audio-root '/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio' \
+  --out-dir /tmp/kick-attack-trial --report /tmp/kick-attack-trial.json
+```
+
+Recorded evidence: `tools/audio_analysis/eval/scoreboard/kick_attack_trial_2026-10-09.json`.
+The report includes working-source and binary hashes; its base revision alone
+does not identify uncommitted prototype source.
+
 ## 1. Running it
 
 ```
@@ -56,9 +95,9 @@ CSV filenames embed the input path — pre-create nested dirs when batch-running
 `write_csv`, mod_harness.rs) if it bites again.
 
 **Real fixtures:** `tests/fixtures/audio/<track>_<bpm>bpm/{mix,bass,drums,others,vocals}.wav`
-— 5 tracks, 8-bar grid-aligned loops, Ableton stem splits (gitignored, never commit
-audio). Rendered PNGs: `tests/fixtures/audio/renders/`. The clips are ON-GRID once
-BPM-warped: fire timing can be judged against the 8th/16th grid (±35 ms).
+— 5 tracks, Ableton stem splits (gitignored, never commit audio). Rendered PNGs:
+`tests/fixtures/audio/renders/`. Folder BPMs are historical and are not validated
+export tempos. Grade against the reviewed attacks, not an assumed beat grid.
 
 ## 2. Reading the PNG
 
