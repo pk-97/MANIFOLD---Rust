@@ -1,24 +1,25 @@
-//! Bundled effect preset registry.
+//! Bundled effect, generator, and scene modifier preset catalogs.
 //!
-//! Each shipping effect ships with one **bundled preset** — a JSON
+//! Each bundled preset is a JSON
 //! [`EffectGraphDef`]. The JSON files are **scanned from disk at
-//! startup** by [`crate::preset_loader`] (stock from the packaged
+//! startup** by [`manifold_node_engine::load::preset_loader`] (stock from the packaged
 //! bundle or the dev workspace assets dir, plus optional user presets),
 //! not embedded into the binary. The binary has zero compile-time
 //! knowledge of which effects exist. Adding a preset is just dropping a
 //! JSON file in the stock directory — no rebuild required.
 //!
 //! The bundled preset for `PresetTypeId::X` is the canonical default
-//! graph for that effect. Post-section 11 the JSON file is authoritative —
+//! graph for that preset. The JSON file is authoritative —
 //! the chain runtime and editor snapshot both source bindings,
 //! skip-mode, and topology from the embedded
 //! [`PresetMetadata`](manifold_core::effect_graph_def::PresetMetadata)
-//! block via [`crate::node_graph::LoadedPresetView`].
+//! block via [`manifold_node_engine::load::loaded_preset_view::LoadedPresetView`].
 //!
 //! User-authored per-instance graphs are stored separately on the
 //! [`PresetInstance`](manifold_core::effects::PresetInstance). Both
 //! shapes use the same [`EffectGraphDef`] schema and the same
-//! [`PrimitiveRegistry`] loader; they differ only in storage location.
+//! [`manifold_node_engine::persistence::PrimitiveRegistry`] loader; they
+//! differ only in storage location.
 //!
 //! The type id is the JSON filename stem, exactly as before — type ids
 //! are forever (save files reference them).
@@ -32,7 +33,10 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
 
 use manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures;
-use manifold_node_engine::load::preset_loader::{EFFECT_CATALOG, GENERATOR_CATALOG, SCENE_MODIFIER_CATALOG, catalog_generation};
+use manifold_node_engine::load::preset_loader::{
+    EFFECT_CATALOG, GENERATOR_CATALOG, PresetCatalog, SCENE_MODIFIER_CATALOG,
+    catalog_generation,
+};
 
 inventory::submit! {
     manifold_node_engine::load::catalog_source::PresetCatalogSource {
@@ -44,7 +48,7 @@ inventory::submit! {
 }
 
 
-/// Raw JSON for the bundled preset of `preset_type` (either kind), or
+/// Raw JSON for the bundled preset of `preset_type` (any kind), or
 /// `None` if no preset has that type id.
 ///
 /// Kind-agnostic: catalog ids are globally disjoint (verified), so this checks
@@ -55,11 +59,30 @@ inventory::submit! {
 /// than a `&'static` borrow — a concurrent reload can swap the snapshot
 /// without invalidating a value the caller already holds.
 pub fn bundled_preset_json(preset_type: &PresetTypeId) -> Option<Arc<str>> {
-    EFFECT_CATALOG
-        .load()
-        .json(preset_type.as_str())
-        .or_else(|| GENERATOR_CATALOG.load().json(preset_type.as_str()))
-        .or_else(|| SCENE_MODIFIER_CATALOG.load().json(preset_type.as_str()))
+    [PresetKind::Effect, PresetKind::Generator, PresetKind::SceneModifier]
+        .into_iter()
+        .find_map(|kind| catalog_for_kind(kind).load().json(preset_type.as_str()))
+}
+
+/// Return the live catalog for one preset kind.
+fn catalog_for_kind(kind: PresetKind) -> &'static ArcSwap<PresetCatalog> {
+    match kind {
+        PresetKind::Effect => &EFFECT_CATALOG,
+        PresetKind::Generator => &GENERATOR_CATALOG,
+        PresetKind::SceneModifier => &SCENE_MODIFIER_CATALOG,
+    }
+}
+
+/// Parse one catalog entry and apply the migration policy for its kind.
+/// Effects and generators carry scene exposures; scene modifier recipes use
+/// their own vocabulary and deliberately skip that migration.
+fn parse_bundled_preset(kind: PresetKind, id: &str, json: &str) -> EffectGraphDef {
+    let mut def: EffectGraphDef = serde_json::from_str(json)
+        .unwrap_or_else(|e| panic!("bundled {kind:?} preset {id}: parse failed: {e}"));
+    if !kind.is_scene_modifier() {
+        migrate_scene_exposures(&mut def);
+    }
+    def
 }
 
 /// Generation-stamped parsed-def cache. Keyed `&'static str` → leaked
@@ -67,8 +90,7 @@ pub fn bundled_preset_json(preset_type: &PresetTypeId) -> Option<Arc<str>> {
 /// `&'static` references (the render path stores them on
 /// `LoadedPresetView.canonical_def`). The cache is rebuilt (and re-leaked)
 /// whenever the catalog generation advances; at rest the generation never
-/// moves and the cache is reused, so the only at-rest cost over the old
-/// `OnceLock` is one relaxed atomic load.
+/// moves and the cache is reused.
 struct DefCache {
     /// Generation this map was built against. `u64::MAX` = not yet built.
     generation: std::sync::atomic::AtomicU64,
@@ -95,31 +117,23 @@ fn rebuild_def_cache(generation: u64) {
     // (finite) shipping preset count × the number of reloads in a session —
     // authoring-time, never on the perform path.
     let mut m: AHashMap<&'static str, &'static EffectGraphDef> = AHashMap::default();
-    // Parse BOTH catalogs into the one cache — ids are globally disjoint, so
-    // a generator gets the same leaked-`&'static` parsed-def path effects
-    // already have (the cluster-#4 DefCache parity). The leak is bounded by
-    // the (finite) shipping preset count × reloads per session.
-    let effect_catalog = EFFECT_CATALOG.load();
-    let generator_catalog = GENERATOR_CATALOG.load();
-    for (id, json) in effect_catalog.entries().chain(generator_catalog.entries()) {
-        let mut def: EffectGraphDef = serde_json::from_str(&json)
-            .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
-        let id_static: &'static str = Box::leak(id.to_string().into_boxed_str());
-        // P1: stamp scene-vocabulary exposures so bundled scene presets carry
-        // the same full-param manifest as freshly imported models.
-        migrate_scene_exposures(&mut def);
-        let def_static: &'static EffectGraphDef = Box::leak(Box::new(def));
-        m.insert(id_static, def_static);
-    }
-    let scene_modifier_catalog = SCENE_MODIFIER_CATALOG.load();
-    for (id, json) in scene_modifier_catalog.entries() {
-        let def: EffectGraphDef = serde_json::from_str(&json)
-            .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
-        let id_static: &'static str = Box::leak(id.to_string().into_boxed_str());
-        // Scene modifier recipes use their own vocabulary. In particular,
-        // do not stamp generator scene exposures onto their raw metadata.
-        let def_static: &'static EffectGraphDef = Box::leak(Box::new(def));
-        m.insert(id_static, def_static);
+    // Hold each catalog snapshot through the rebuild so no snapshot is
+    // dropped midway through parsing its entries.
+    let effect_catalog = catalog_for_kind(PresetKind::Effect).load();
+    let generator_catalog = catalog_for_kind(PresetKind::Generator).load();
+    let scene_modifier_catalog = catalog_for_kind(PresetKind::SceneModifier).load();
+    let catalogs = [
+        (PresetKind::Effect, &*effect_catalog),
+        (PresetKind::Generator, &*generator_catalog),
+        (PresetKind::SceneModifier, &*scene_modifier_catalog),
+    ];
+    for (kind, catalog) in catalogs {
+        for (id, json) in catalog.entries() {
+            let def = parse_bundled_preset(kind, &id, &json);
+            let id_static: &'static str = Box::leak(id.to_string().into_boxed_str());
+            let def_static: &'static EffectGraphDef = Box::leak(Box::new(def));
+            m.insert(id_static, def_static);
+        }
     }
     DEF_CACHE.map.store(Arc::new(m));
     DEF_CACHE
@@ -128,10 +142,10 @@ fn rebuild_def_cache(generation: u64) {
 }
 
 /// Parsed [`EffectGraphDef`] for the bundled preset of `preset_type`
-/// (either kind), or `None` if no preset is registered.
+/// (any kind), or `None` if no preset is registered.
 ///
 /// First call (and every call after a hot-reload generation bump) parses
-/// both catalog snapshots into a leaked map; subsequent calls return a
+/// all three catalog snapshots into a leaked map; subsequent calls return a
 /// borrowed reference into that map. At rest, parsing happens once.
 ///
 /// Parse failures panic with the type id and underlying error — these come
@@ -144,12 +158,7 @@ pub fn bundled_preset_def(preset_type: &PresetTypeId) -> Option<&'static EffectG
 /// Every [`PresetTypeId`] of `kind` that has a bundled preset registered
 /// (current snapshot of that kind's catalog).
 pub fn bundled_preset_type_ids(kind: PresetKind) -> impl Iterator<Item = PresetTypeId> {
-    let catalog = match kind {
-        PresetKind::Effect => &EFFECT_CATALOG,
-        PresetKind::Generator => &GENERATOR_CATALOG,
-        PresetKind::SceneModifier => &SCENE_MODIFIER_CATALOG,
-    };
-    catalog
+    catalog_for_kind(kind)
         .load()
         .type_ids()
         .map(|id| PresetTypeId::from_string(id.to_string()))
@@ -157,7 +166,8 @@ pub fn bundled_preset_type_ids(kind: PresetKind) -> impl Iterator<Item = PresetT
         .into_iter()
 }
 
-/// Loader function for the core's [`LoadedPresetSource`] inventory.
+/// Loader function for the core's
+/// [`manifold_core::preset_definition_registry::effect::PresetSource`] inventory.
 /// Walks the bundled preset table, parses each JSON document, and
 /// returns the `preset_metadata` field from every entry that carries
 /// one (v2 schema). Every shipping bundled preset is v2 post-section 11;
@@ -165,38 +175,30 @@ pub fn bundled_preset_type_ids(kind: PresetKind) -> impl Iterator<Item = PresetT
 /// hand-authored v1 fixtures stay loadable as graphs without
 /// breaking the metadata projection.
 ///
-/// Cached at the `loaded_preset_metadata()` callsite — invoked once
-/// per process.
+/// Called at startup and again during hot reload after the catalog snapshot
+/// has been swapped.
 pub fn loaded_presets_from_bundled() -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
-    EFFECT_CATALOG
-        .load()
-        .entries()
-        .filter_map(|(id, json)| {
-            let mut def: EffectGraphDef = serde_json::from_str(&json)
-                .unwrap_or_else(|e| panic!("bundled preset {id}: parse failed: {e}"));
-            // P1 scene-panel exposure convergence: keep the preset-definition
-            // registry (instance-slot seed) in lockstep with the def cache's
-            // stamped exposures — same call as `rebuild_def_cache`. A no-op for
-            // effect presets today (no scene-vocabulary nodes), applied for
-            // symmetry so a future scene-effect can't silently reopen the gap.
-            migrate_scene_exposures(&mut def);
-            def.preset_metadata
-        })
-        .collect()
+    loaded_preset_metadata(PresetKind::Effect)
 }
 
 /// Loader for the dedicated scene-modifier metadata inventory bucket. Raw
 /// modifier recipes deliberately skip [`migrate_scene_exposures`].
 pub fn loaded_scene_modifier_presets_from_bundled(
 ) -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
-    SCENE_MODIFIER_CATALOG
+    loaded_preset_metadata(PresetKind::SceneModifier)
+}
+
+/// Load metadata directly from the current catalog snapshot for one kind.
+/// During hot reload, `apply_reload` swaps catalogs before calling the public
+/// metadata loaders and bumps the generation only afterward, so this helper
+/// must parse those current snapshots rather than read the prior def cache.
+pub(crate) fn loaded_preset_metadata(
+    kind: PresetKind,
+) -> Vec<manifold_core::effect_graph_def::PresetMetadata> {
+    catalog_for_kind(kind)
         .load()
         .entries()
-        .filter_map(|(id, json)| {
-            let def: EffectGraphDef = serde_json::from_str(&json)
-                .unwrap_or_else(|e| panic!("bundled scene modifier preset {id}: parse failed: {e}"));
-            def.preset_metadata
-        })
+        .filter_map(|(id, json)| parse_bundled_preset(kind, &id, &json).preset_metadata)
         .collect()
 }
 
