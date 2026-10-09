@@ -215,8 +215,14 @@ pub struct DeleteLayerCommand {
     deleted_at_index: usize,
     /// Children whose parent_layer_id was cleared when a group was deleted.
     orphaned_children: Vec<(LayerId, Option<LayerId>)>,
+    /// Direct trigger children removed with the owner, with their original
+    /// timeline positions so undo restores the layer order exactly.
+    removed_trigger_children: Vec<(usize, Layer)>,
+    /// `None` detaches every ordinary child (DeleteLayerCommand's behavior);
+    /// `Some` limits detachment for UngroupLayersCommand's existing API.
+    detach_child_ids: Option<Vec<LayerId>>,
     /// This layer's session slots, removed alongside the layer itself.
-    removed_slots: Vec<SessionSlot>,
+    removed_slots: Vec<(usize, SessionSlot)>,
 }
 
 impl DeleteLayerCommand {
@@ -227,8 +233,16 @@ impl DeleteLayerCommand {
             layer_id,
             deleted_at_index: 0,
             orphaned_children: Vec::new(),
+            removed_trigger_children: Vec::new(),
+            detach_child_ids: None,
             removed_slots: Vec::new(),
         }
+    }
+
+    fn for_ungroup(layer: Layer, child_layer_ids: Vec<LayerId>) -> Self {
+        let mut command = Self::new(layer);
+        command.detach_child_ids = Some(child_layer_ids);
+        command
     }
 }
 
@@ -237,25 +251,68 @@ impl Command for DeleteLayerCommand {
         if let Some(idx) = project.timeline.find_layer_index_by_id(&self.layer_id) {
             self.deleted_at_index = idx;
 
-            // Clear parent_layer_id on children referencing this layer
+            // Trigger children are owned by their parent and disappear with
+            // it. Capture their original positions for an exact undo.
+            self.removed_trigger_children.clear();
+            let trigger_indices: Vec<usize> = project
+                .timeline
+                .layers
+                .iter()
+                .enumerate()
+                .filter(|(_, layer)| {
+                    layer.parent_layer_id.as_ref() == Some(&self.layer_id) && layer.is_trigger()
+                })
+                .map(|(index, _)| index)
+                .collect();
+            for trigger_index in trigger_indices.into_iter().rev() {
+                let trigger = project.timeline.layers.remove(trigger_index);
+                self.removed_trigger_children
+                    .push((trigger_index, trigger));
+            }
+            self.removed_trigger_children
+                .sort_by_key(|(index, _)| *index);
+
+            // Clear parent_layer_id on ordinary children referencing this
+            // layer. Ungrouping retains its existing selected-child scope.
             self.orphaned_children.clear();
             for layer in &mut project.timeline.layers {
-                if layer.parent_layer_id.as_ref() == Some(&self.layer_id) {
+                let should_detach = self
+                    .detach_child_ids
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&layer.layer_id));
+                if should_detach
+                    && layer.parent_layer_id.as_ref() == Some(&self.layer_id)
+                {
                     self.orphaned_children
                         .push((layer.layer_id.clone(), layer.parent_layer_id.clone()));
                     layer.parent_layer_id = None;
                 }
             }
 
-            self.layer = project.timeline.remove_layer(idx);
+            let owner_index = project
+                .timeline
+                .find_layer_index_by_id(&self.layer_id)
+                .expect("owner layer remains after trigger children are removed");
+            self.layer = project.timeline.remove_layer(owner_index);
 
-            // Grid integrity: remove this layer's session slots too.
+            // Grid integrity: remove this layer and its owned trigger lanes'
+            // session slots together.
             self.removed_slots.clear();
-            let layer_id = self.layer_id.clone();
+            let mut removed_layer_ids = vec![self.layer_id.clone()];
+            removed_layer_ids.extend(
+                self.removed_trigger_children
+                    .iter()
+                    .map(|(_, layer)| layer.layer_id.clone()),
+            );
             let mut i = 0;
             while i < project.session.slots.len() {
-                if project.session.slots[i].layer_id == layer_id {
-                    self.removed_slots.push(project.session.slots.remove(i));
+                if removed_layer_ids.contains(&project.session.slots[i].layer_id) {
+                    // `i` is relative to the shrinking vector; account for
+                    // previously removed slots so undo can restore original
+                    // positions even when unrelated slots are interleaved.
+                    let original_index = i + self.removed_slots.len();
+                    self.removed_slots
+                        .push((original_index, project.session.slots.remove(i)));
                 } else {
                     i += 1;
                 }
@@ -268,9 +325,15 @@ impl Command for DeleteLayerCommand {
 
     fn undo(&mut self, project: &mut Project) {
         if let Some(layer) = self.layer.take() {
-            let idx = self.deleted_at_index.min(project.timeline.layers.len());
-            project.timeline.insert_layer(idx, layer.clone());
-            self.layer = Some(layer);
+            let restored_owner = layer.clone();
+            let mut restored_layers = vec![(self.deleted_at_index, layer)];
+            restored_layers.extend(self.removed_trigger_children.iter().cloned());
+            restored_layers.sort_by_key(|(index, _)| *index);
+            for (index, restored_layer) in restored_layers {
+                let idx = index.min(project.timeline.layers.len());
+                project.timeline.layers.insert(idx, restored_layer);
+            }
+            self.layer = Some(restored_owner);
 
             // Restore parent_layer_id on previously orphaned children
             for (child_id, old_parent) in &self.orphaned_children {
@@ -278,10 +341,12 @@ impl Command for DeleteLayerCommand {
                     child.parent_layer_id = old_parent.clone();
                 }
             }
-            project.timeline.enforce_tree_order();
+            let restored_order = project.timeline.layers.clone();
+            project.timeline.replace_layer_order(restored_order);
 
-            for slot in self.removed_slots.drain(..) {
-                project.session.slots.push(slot);
+            for (index, slot) in self.removed_slots.drain(..) {
+                let insert_at = index.min(project.session.slots.len());
+                project.session.slots.insert(insert_at, slot);
             }
             project.session.mark_slot_lookup_dirty();
         }
@@ -462,6 +527,7 @@ pub struct UngroupLayersCommand {
     group_layer: Option<Layer>,
     child_layer_ids: Vec<LayerId>,
     original_order: Vec<Layer>,
+    delete_command: Option<DeleteLayerCommand>,
 }
 
 impl UngroupLayersCommand {
@@ -474,38 +540,32 @@ impl UngroupLayersCommand {
             group_layer: Some(group_layer),
             child_layer_ids,
             original_order,
+            delete_command: None,
         }
     }
 }
 
 impl Command for UngroupLayersCommand {
     fn execute(&mut self, project: &mut Project) {
-        // Clear parent IDs on children
         if let Some(group) = &self.group_layer {
-            for layer in &mut project.timeline.layers {
-                if self.child_layer_ids.contains(&layer.layer_id)
-                    && layer.parent_layer_id.as_ref() == Some(&group.layer_id)
-                {
-                    layer.parent_layer_id = None;
-                }
+            if self.delete_command.is_none() {
+                self.delete_command = Some(DeleteLayerCommand::for_ungroup(
+                    group.clone(),
+                    self.child_layer_ids.clone(),
+                ));
             }
-            // Remove group layer
-            if let Some(idx) = project
-                .timeline
-                .layers
-                .iter()
-                .position(|l| l.layer_id == group.layer_id)
-            {
-                project.timeline.remove_layer(idx);
+            if let Some(delete) = &mut self.delete_command {
+                delete.execute(project);
             }
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        // Restore original order (includes group layer)
-        project
-            .timeline
-            .replace_layer_order(self.original_order.clone());
+        if let Some(delete) = &mut self.delete_command {
+            delete.undo(project);
+        }
+        // Restore original order (includes group and all owned trigger lanes).
+        project.timeline.replace_layer_order(self.original_order.clone());
     }
 
     fn description(&self) -> &str {

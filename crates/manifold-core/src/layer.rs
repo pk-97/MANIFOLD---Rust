@@ -301,9 +301,21 @@ impl Layer {
         Self::new(name, LayerType::Audio, index)
     }
 
+    /// Create a new non-rendering trigger lane owned by `parent_layer_id`.
+    pub fn new_trigger(name: String, parent_layer_id: LayerId, index: i32) -> Self {
+        let mut layer = Self::new(name, LayerType::Trigger, index);
+        layer.parent_layer_id = Some(parent_layer_id);
+        layer
+    }
+
     #[inline]
     pub fn is_audio(&self) -> bool {
         self.layer_type == LayerType::Audio
+    }
+
+    #[inline]
+    pub fn is_trigger(&self) -> bool {
+        self.layer_type == LayerType::Trigger
     }
 
     #[inline]
@@ -321,6 +333,7 @@ impl Layer {
     pub fn routes_to_led(&self) -> bool {
         match self.layer_type {
             LayerType::Dmx => true,
+            LayerType::Trigger => false,
             _ => self.blit_to_led,
         }
     }
@@ -417,7 +430,7 @@ impl Layer {
 
     /// Whether this layer is hidden from the visual composite by mute/solo.
     /// `parent` is the immediate group parent (if any); `any_solo_video` is
-    /// true when any non-audio layer is soloed. Audio layers are never passed
+    /// true when any visual layer is soloed. Audio layers are never passed
     /// here — their mute/solo is an audible bus, not a visual gate.
     #[inline]
     pub fn is_hidden(&self, parent: Option<&Layer>, any_solo_video: bool) -> bool {
@@ -439,10 +452,13 @@ impl Layer {
 
 
 
-    /// True when any non-audio layer is soloed. Audio layers have their own
-    /// solo/mute bus (audible, not visual) and must not affect video visibility.
+    /// True when any visual layer is soloed. Audio has its own solo/mute bus;
+    /// timing-only trigger lanes must not affect video visibility either.
     pub fn any_solo_video(layers: &[Layer]) -> bool {
-        layers.iter().filter(|l| !l.is_audio()).any(|l| l.is_solo)
+        layers
+            .iter()
+            .filter(|l| !l.is_audio() && !l.is_trigger())
+            .any(|l| l.is_solo)
     }
 
     /// Find the parent group layer for a child in a slice of layers in tree order.
@@ -948,12 +964,13 @@ impl Layer {
 
     /// Deep-clone this layer with all nested IDs regenerated.
     /// Used for duplicate-layer: new LayerId, new ClipIds, new EffectIds, remapped EffectGroupIds.
-    /// Effects are duplicated via [`PresetInstance::duplicated`], so hardware
-    /// bindings (Ableton / audio mods) are dropped on the copy.
+    /// Generator and effects use [`PresetInstance::duplicated`]: external
+    /// bindings are dropped, while local clip responses are retained.
     /// `parent_layer_id` is NOT remapped here — callers handle group subtree remapping.
     pub fn clone_with_new_ids(&self) -> Self {
         let mut cloned = self.clone();
         cloned.layer_id = LayerId::new(crate::short_id());
+        cloned.gen_params = self.gen_params.as_ref().map(PresetInstance::duplicated);
 
         // Fresh clip IDs.
         cloned.clips = self.clips.iter().map(|c| c.clone_with_new_id()).collect();
@@ -1433,6 +1450,39 @@ mod tests {
         audio.is_solo = true;
         let video = Layer::new("Video".into(), LayerType::Video, 1);
         let any_solo = Layer::any_solo_video(&[audio.clone(), video.clone()]);
+        assert!(!video.is_hidden(None, any_solo));
+    }
+
+    #[test]
+    fn trigger_layer_keeps_owner_and_has_no_media_or_generator_state() {
+        let owner = LayerId::new("owner");
+        let trigger = Layer::new_trigger("Hits".into(), owner.clone(), 1);
+
+        assert!(trigger.is_trigger());
+        assert_eq!(trigger.parent_layer_id, Some(owner));
+        assert!(trigger.clips.is_empty());
+        assert!(trigger.gen_params().is_none());
+        assert!(trigger.video_folder_path.is_none());
+        assert!(trigger.relative_video_folder_path.is_none());
+
+        let json = serde_json::to_string(&trigger).unwrap();
+        let round_trip: Layer = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_trip.layer_type, LayerType::Trigger);
+        assert_eq!(round_trip.parent_layer_id, trigger.parent_layer_id);
+        assert!(!json.contains("genParams"));
+        assert!(!json.contains("videoFolderPath"));
+        assert!(!json.contains("relativeVideoFolderPath"));
+    }
+
+    #[test]
+    fn solo_trigger_does_not_count_as_any_solo_video() {
+        let owner = LayerId::new("owner");
+        let mut trigger = Layer::new_trigger("Hits".into(), owner, 1);
+        trigger.is_solo = true;
+        let video = Layer::new_video("Video".into(), 2);
+
+        let any_solo = Layer::any_solo_video(&[trigger, video.clone()]);
+        assert!(!any_solo);
         assert!(!video.is_hidden(None, any_solo));
     }
 

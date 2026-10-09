@@ -326,6 +326,15 @@ impl TimelineClip {
         }
     }
 
+    /// Create a new non-media trigger clip.
+    pub fn new_trigger(start: Beats, duration: Beats) -> Self {
+        Self {
+            start_beat: start,
+            duration_beats: duration.max(Beats::ZERO),
+            ..Default::default()
+        }
+    }
+
     /// Create a new audio clip backed by a decoded file. `in_point` is the
     /// offset into the source file (seconds, BPM-independent, like video).
     /// `recorded_bpm` carries the clip's native tempo for warp (0 = no warp).
@@ -659,6 +668,16 @@ mod tests {
     fn test_new_generator_clamps_duration() {
         let clip = TimelineClip::new_generator(Beats(0.0), Beats(-2.0));
         assert_eq!(clip.duration_beats, Beats(0.0));
+    }
+
+    #[test]
+    fn test_new_trigger_is_non_media_and_clamps_duration() {
+        let clip = TimelineClip::new_trigger(Beats(4.0), Beats(-2.0));
+        assert_eq!(clip.start_beat, Beats(4.0));
+        assert_eq!(clip.duration_beats, Beats(0.0));
+        assert!(!clip.is_source_media());
+        assert!(!clip.is_audio());
+        assert!(!clip.is_image());
     }
 
     #[test]

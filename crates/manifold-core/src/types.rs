@@ -126,6 +126,8 @@ pub enum LayerType {
     /// routes ONLY to the LED composite — screen-invisible by construction.
     /// See `docs/LED_STRIPS_DESIGN.md` section 5b (D10/D11/D14, D15 rename).
     Dmx = 4,
+    /// A non-rendering child lane whose clips provide independent trigger timing.
+    Trigger = 5,
 }
 
 /// The kind of clip a layer holds. A clip may only live on a layer of the
@@ -137,6 +139,7 @@ pub enum ClipKind {
     /// clip adopts its target layer's generator.
     Generator,
     Audio,
+    Trigger,
 }
 
 impl LayerType {
@@ -146,6 +149,7 @@ impl LayerType {
             LayerType::Video => Some(ClipKind::Video),
             LayerType::Generator | LayerType::Dmx => Some(ClipKind::Generator),
             LayerType::Audio => Some(ClipKind::Audio),
+            LayerType::Trigger => Some(ClipKind::Trigger),
             LayerType::Group => None,
         }
     }
@@ -153,6 +157,16 @@ impl LayerType {
     /// Whether clips living on a `from` layer may be placed on this one.
     pub fn accepts_clips_from(self, from: LayerType) -> bool {
         self.clip_kind().is_some() && self.clip_kind() == from.clip_kind()
+    }
+
+    /// Whether this layer kind can play timeline clip content.
+    pub fn supports_clip_playback(self) -> bool {
+        !matches!(self, LayerType::Group | LayerType::Trigger)
+    }
+
+    /// Whether this layer kind should produce timeline clip thumbnails.
+    pub fn supports_clip_thumbnails(self) -> bool {
+        matches!(self, LayerType::Video | LayerType::Generator | LayerType::Dmx)
     }
 }
 
@@ -172,6 +186,7 @@ impl<'de> Deserialize<'de> for LayerType {
                 2 => LayerType::Group,
                 3 => LayerType::Audio,
                 4 => LayerType::Dmx,
+                5 => LayerType::Trigger,
                 _ => LayerType::Video,
             },
             serde_json::Value::String(s) => match s.as_str() {
@@ -181,6 +196,7 @@ impl<'de> Deserialize<'de> for LayerType {
                 "Audio" => LayerType::Audio,
                 // "Led" is the pre-D15 name; hand-built JSON may carry it (D15).
                 "Dmx" | "Led" => LayerType::Dmx,
+                "Trigger" => LayerType::Trigger,
                 _ => LayerType::Video,
             },
             _ => LayerType::Video,
@@ -1112,5 +1128,34 @@ mod tests {
             serde_json::from_str::<LayerType>("\"Nonsense\"").unwrap(),
             LayerType::Video
         );
+    }
+
+    #[test]
+    fn layer_type_wire_values_and_trigger_capabilities() {
+        use LayerType::*;
+
+        for (wire, kind) in [(0, Video), (1, Generator), (2, Group), (3, Audio), (4, Dmx)] {
+            assert_eq!(serde_json::to_string(&kind).unwrap(), wire.to_string());
+            assert_eq!(serde_json::from_str::<LayerType>(&wire.to_string()).unwrap(), kind);
+        }
+        assert_eq!(serde_json::to_string(&Trigger).unwrap(), "5");
+        assert_eq!(serde_json::from_str::<LayerType>("5").unwrap(), Trigger);
+        assert_eq!(serde_json::from_str::<LayerType>("\"Trigger\"").unwrap(), Trigger);
+
+        assert!(Trigger.accepts_clips_from(Trigger));
+        assert!(!Trigger.accepts_clips_from(Video));
+        assert!(!Video.accepts_clips_from(Trigger));
+        assert!(!Group.supports_clip_playback());
+        assert!(!Trigger.supports_clip_playback());
+        assert!(Video.supports_clip_playback());
+        assert!(Generator.supports_clip_playback());
+        assert!(Audio.supports_clip_playback());
+        assert!(Dmx.supports_clip_playback());
+        assert!(Video.supports_clip_thumbnails());
+        assert!(Generator.supports_clip_thumbnails());
+        assert!(Dmx.supports_clip_thumbnails());
+        assert!(!Group.supports_clip_thumbnails());
+        assert!(!Audio.supports_clip_thumbnails());
+        assert!(!Trigger.supports_clip_thumbnails());
     }
 }

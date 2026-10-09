@@ -339,6 +339,55 @@ fn stopped_engine_activates_clip_under_playhead() {
     );
 }
 
+/// Trigger lanes are timeline children, but their clips never enter renderer
+/// admission. The clip deliberately carries its owner's id to prove admission
+/// uses the containing layer index rather than trusting stale clip ownership.
+#[test]
+fn trigger_child_is_excluded_from_renderer_admission_for_every_owner_kind() {
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+
+    for owner_kind in [
+        LayerType::Video,
+        LayerType::Generator,
+        LayerType::Audio,
+        LayerType::Dmx,
+        LayerType::Group,
+    ] {
+        let mut project = manifold_core::project::Project::default();
+        let owner = if owner_kind == LayerType::Audio {
+            Layer::new_audio("Owner".into(), 0)
+        } else {
+            Layer::new("Owner".into(), owner_kind, 0)
+        };
+
+        let mut trigger = Layer::new_trigger("Trigger".into(), owner.layer_id.clone(), 1);
+        let mut clip = manifold_core::clip::TimelineClip::new_trigger(
+            Beats::ZERO,
+            Beats(4.0),
+        );
+        clip.layer_id = owner.layer_id.clone();
+        let clip_id = clip.id.clone();
+        trigger.clips.push(clip);
+        project.timeline.layers.push(owner);
+        project.timeline.layers.push(trigger);
+
+        let mut engine = create_engine();
+        engine.initialize(project);
+        engine.play();
+        for frame in 0..3 {
+            tick_once(&mut engine, frame as f64 / 60.0, frame);
+            let _ = engine.sync_clips_to_time();
+        }
+
+        assert_eq!(
+            stub_gen(&engine).start_count_for(&clip_id),
+            0,
+            "trigger child under {owner_kind:?} must never start a renderer"
+        );
+    }
+}
+
 #[test]
 fn engine_advances_time_when_playing() {
     let project = load_project("Burn V5.manifold");

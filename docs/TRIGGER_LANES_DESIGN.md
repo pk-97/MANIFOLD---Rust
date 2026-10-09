@@ -2,8 +2,10 @@
 
 <!-- index: Child trigger lanes with no thumbnails; shared assignment from lane headers and parameter drawers. Current-code audit, proposed architecture, and first-slice acceptance contract. -->
 
-**Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence and undoable
-assignment are the first implementation seam; full playback and UI remain pending.
+**Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence, undoable assignment,
+trigger lane/clip kinds, media admission and ownership deletion/duplication are
+implemented. Ownership validation, authoring UI and full runtime acceptance
+remain pending.
 **Tracking:** `BUG-tqtel` (feature).
 **Prerequisites:** crate refactor landed; reverify the audited seams against subsequent cleanup.
 **Execution contract:** read `DESIGN_DOC_STANDARD.md` sections 5–6 before briefing
@@ -94,6 +96,16 @@ lifetime, thumbnails and render readiness must not determine musical events.
 Consequences, stated honestly: a new kind requires exhaustive checks across media
 admission, MIDI/session launching, rendering, thumbnails and layer operations.
 It is not just an extra timeline row.
+
+Deleting or ungrouping an owner removes its direct trigger children and their
+session slots in the same undoable operation. Ordinary group children retain
+the existing detach-to-root behaviour, including their own trigger children.
+Deleting a source leaves parameter assignments explicit and unresolved; undo
+restores the same source identity. Whole-owner duplication includes trigger
+children and remaps copied parameter references inside that subtree. References
+outside it remain unchanged. Copied clip response arms keep their authored
+settings with fresh runtime state; external audio bindings are dropped under
+the existing duplication policy, so a combined audio/clip arm becomes clip-only.
 
 **D4 — Recommended routing scope.** A regular owner's trigger children may target
 that owner's compatible parameters. A group's trigger children may target the
@@ -212,6 +224,22 @@ Classify tests separately and read enclosing functions; raw text-hit counts incl
 comments, imports and test code. A new production caller changes the seam brief.
 
 ### Model, scheduling and delivery
+
+`LayerType::Trigger` uses wire value 5; existing values 0–4 remain unchanged.
+`ClipKind::Trigger` reuses ordinary timeline clips and their containing layer's
+identity. `supports_clip_playback` excludes groups and triggers from media
+acquisition; `supports_clip_thumbnails` admits only visual clip content. Trigger
+lanes are also excluded from compositor descriptors, chain preparation and LED
+routing. Thumbnail eligibility is checked before UI requests and again against
+the current project on content-thread admission. Timing queries retain trigger
+clips independently of these media capabilities.
+
+`accepts_clips_from` is the common kind rule for paste, drag preview, service move
+preflight and committed moves. Container membership is authoritative even if a
+clip's stored layer ID is stale. A missing or incompatible move destination rejects
+before removing the source. Undo remains valid for commands recorded after a live
+preview. Focused CPU checks cover these boundaries and wire compatibility; they
+do not establish rendered scene behavior or the full trigger-lane UI.
 
 Content-thread ownership, snapshots, `ContentCommand` and `EditingService` remain
 unchanged. UI emits intents; it never edits project state. No new thread or locks.

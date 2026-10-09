@@ -5,7 +5,7 @@ use manifold_core::layer::Layer;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
 use manifold_core::tempo::TempoMapConverter;
-use manifold_core::types::{LayerType, PlaybackState, TempoPointSource};
+use manifold_core::types::{PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, GraphTarget, LayerId, SceneId, Seconds};
 
 use crate::live_clip_manager::LiveClipManager;
@@ -1359,11 +1359,11 @@ impl PlaybackEngine {
         layer_index: i32,
         fire_clip_edge: bool,
     ) {
-        // Fix 6: Never start clips on group layers
+        // The container owns clip kind, including after a drag with a stale layer_id.
+        // Timing-only membership never acquires a renderer.
         if let Some(project) = &self.project
-            && let Some(li) = project.timeline.layer_index_for_id(&clip.layer_id)
-            && let Some(layer) = project.timeline.layers.get(li)
-            && layer.layer_type == LayerType::Group
+            && let Some(layer) = project.timeline.layers.get(layer_index as usize)
+            && !layer.layer_type.supports_clip_playback()
         {
             return;
         }
@@ -2973,6 +2973,9 @@ impl PlaybackEngine {
             let any_solo_video = manifold_core::layer::Layer::any_solo_video(layers);
 
             for (li, layer) in layers.iter().enumerate() {
+                if !layer.layer_type.supports_clip_playback() {
+                    continue;
+                }
                 let parent = manifold_core::layer::Layer::find_parent_layer(layers, li)
                     .map(|(_, p)| p);
                 let hidden = layer.is_hidden(parent, any_solo_video);

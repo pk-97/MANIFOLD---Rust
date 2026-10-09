@@ -402,7 +402,7 @@ impl Application {
         // continue with `ui.lane_content_scissor`/`emit_clips`/`ui.prepare`/
         // `ui.render` (4b) and `content_gpu.render` (4b') here.
 
-        // Tell the content thread which clips want a thumbnail (non-audio,
+        // Tell the content thread which clips want a thumbnail (visual content,
         // wide enough), deduped so a stable view sends nothing. The content thread
         // snapshots those clips' live output into the shared atlas.
         {
@@ -410,7 +410,11 @@ impl Application {
             let thumb_clips: Vec<manifold_core::ClipId> = self
                 .clip_rect_scratch
                 .iter()
-                .filter(|cr| !cr.is_audio && cr.rect.width >= MIN_THUMB_W)
+                .filter(|cr| {
+                    cr.rect.width >= MIN_THUMB_W
+                        && self.local_project.timeline.layers.get(cr.layer_index)
+                            .is_some_and(|layer| layer.layer_type.supports_clip_thumbnails())
+                })
                 .map(|cr| cr.clip_id.clone())
                 .collect();
             if thumb_clips != self.last_clip_atlas_visible_sent {
@@ -494,7 +498,10 @@ impl Application {
                 for cr in &self.clip_rect_scratch {
                     // Match the SetClipAtlasVisible filter so a clip too narrow to
                     // have requested a cell never draws one.
-                    if cr.is_audio || cr.rect.width < 24.0 {
+                    if cr.rect.width < 24.0
+                        || !self.local_project.timeline.layers.get(cr.layer_index)
+                            .is_some_and(|layer| layer.layer_type.supports_clip_thumbnails())
+                    {
                         continue;
                     }
                     let Some(strip) = strips_of.get(cr.clip_id.as_str()) else {

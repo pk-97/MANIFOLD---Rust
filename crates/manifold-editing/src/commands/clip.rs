@@ -137,9 +137,13 @@ impl Command for ResolveDependentOverlaps {
     fn description(&self) -> &str { "Resolve Linked Clip Overlaps" }
 }
 
+const MOVE_CLIP_SOURCE_UNAVAILABLE: &str = "move clip source layer or clip is unavailable";
+const MOVE_CLIP_TARGET_UNAVAILABLE: &str = "move clip destination layer is unavailable";
+const MOVE_CLIP_KIND_MISMATCH: &str = "move clip layer kinds are incompatible";
+
 /// Move a clip to a new beat position and/or layer.
 /// Matches Unity MoveClipCommand: cross-layer transfer removes from source and adds to target,
-/// generator-type adoption when moving to a generator layer, and undo restores the original type.
+/// with layer-kind admission and undo restoring the original container.
 #[derive(Debug)]
 pub struct MoveClipCommand {
     clip_id: ClipId,
@@ -149,6 +153,8 @@ pub struct MoveClipCommand {
     new_layer_id: LayerId,
     dependent_commands: Vec<Box<dyn Command>>,
     dependent_prepared: bool,
+    applied: bool,
+    rejection: Option<&'static str>,
 }
 
 impl MoveClipCommand {
@@ -167,35 +173,53 @@ impl MoveClipCommand {
             new_layer_id,
             dependent_commands: Vec::new(),
             dependent_prepared: false,
+            // Commands can be recorded after a live preview already applied
+            // them. Keep the historical default so fresh recorded commands
+            // remain undoable; execute() sets it false only on rejection.
+            applied: true,
+            rejection: None,
         }
     }
 }
 
 impl Command for MoveClipCommand {
     fn execute(&mut self, project: &mut Project) {
-        let old_source = if !self.dependent_prepared {
-            project.timeline.find_clip_by_id(&self.clip_id).cloned()
-        } else {
-            None
-        };
-        if self.old_layer_id != self.new_layer_id {
-            let src = project.timeline.layer_index_for_id(&self.old_layer_id);
-            let dst = project.timeline.layer_index_for_id(&self.new_layer_id);
+        self.applied = false;
+        self.rejection = None;
 
+        let Some(src_idx) = project.timeline.layer_index_for_id(&self.old_layer_id) else {
+            self.rejection = Some(MOVE_CLIP_SOURCE_UNAVAILABLE);
+            return;
+        };
+        let Some(dst_idx) = project.timeline.layer_index_for_id(&self.new_layer_id) else {
+            self.rejection = Some(MOVE_CLIP_TARGET_UNAVAILABLE);
+            return;
+        };
+        let Some(source_layer) = project.timeline.layers.get(src_idx) else {
+            self.rejection = Some(MOVE_CLIP_SOURCE_UNAVAILABLE);
+            return;
+        };
+        let Some(source_clip) = source_layer.clips.iter().find(|clip| clip.id == self.clip_id) else {
+            self.rejection = Some(MOVE_CLIP_SOURCE_UNAVAILABLE);
+            return;
+        };
+        let destination_layer = &project.timeline.layers[dst_idx];
+        if !destination_layer
+            .layer_type
+            .accepts_clips_from(source_layer.layer_type)
+        {
+            self.rejection = Some(MOVE_CLIP_KIND_MISMATCH);
+            return;
+        }
+
+        let old_source = (!self.dependent_prepared).then(|| source_clip.clone());
+        if self.old_layer_id != self.new_layer_id {
             // Remove clip from source layer.
-            let clip = if let Some(src_idx) = src
-                && let Some(layer) = project.timeline.layers.get_mut(src_idx)
-            {
-                layer.remove_clip(&self.clip_id)
-            } else {
-                None
-            };
+            let clip = project.timeline.layers[src_idx].remove_clip(&self.clip_id);
 
             // Restore clip to target layer (overlap handled by batch).
-            if let Some(c) = clip
-                && let Some(dst_idx) = dst
-                && let Some(layer) = project.timeline.layers.get_mut(dst_idx)
-            {
+            if let Some(c) = clip {
+                let layer = &mut project.timeline.layers[dst_idx];
                 layer.restore_clip(c);
             }
         }
@@ -230,9 +254,13 @@ impl Command for MoveClipCommand {
         for command in &mut self.dependent_commands {
             command.execute(project);
         }
+        self.applied = true;
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if !self.applied {
+            return;
+        }
         for command in self.dependent_commands.iter_mut().rev() {
             command.undo(project);
         }
@@ -269,10 +297,19 @@ impl Command for MoveClipCommand {
             layer.mark_clips_unsorted();
         }
         project.timeline.mark_clip_lookup_dirty();
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
         "Move Clip"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
     }
 }
 

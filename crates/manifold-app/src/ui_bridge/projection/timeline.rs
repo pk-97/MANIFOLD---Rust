@@ -158,7 +158,7 @@ pub fn sync_project_data(
                     is_generator: layer.layer_type == LayerType::Generator,
                     is_audio: layer.is_audio(),
                     is_muted: layer.is_muted
-                        || layer.parent_layer_id.as_ref().is_some_and(|pid| {
+                        || !layer.is_trigger() && layer.parent_layer_id.as_ref().is_some_and(|pid| {
                             project
                                 .timeline
                                 .layers
@@ -166,7 +166,7 @@ pub fn sync_project_data(
                                 .any(|l| l.layer_id == *pid && l.is_muted)
                         }),
                     is_solo: layer.is_solo
-                        || layer.parent_layer_id.as_ref().is_some_and(|pid| {
+                        || !layer.is_trigger() && layer.parent_layer_id.as_ref().is_some_and(|pid| {
                             project
                                 .timeline
                                 .layers

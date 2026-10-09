@@ -848,7 +848,7 @@ impl ContentThread {
                 self.content_pipeline.set_node_atlas_visible(nodes);
             }
             ContentCommand::SetClipAtlasVisible(clips) => {
-                self.content_pipeline.set_clip_atlas_visible(clips);
+                self.content_pipeline.set_clip_atlas_visible(clips, self.engine.project());
             }
             ContentCommand::DumpGraphOutputs => {
                 if let Some(manifold_core::GraphTarget::Effect(effect_id)) =

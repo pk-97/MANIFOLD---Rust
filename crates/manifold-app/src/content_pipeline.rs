@@ -374,6 +374,20 @@ fn clip_atlas_cell_full(i: usize) -> (f32, f32, f32, f32) {
     )
 }
 
+/// Validate UI thumbnail requests against the current project before allocating
+/// cache entries or rendering previews. The UI may hold an older snapshot.
+fn retain_thumbnail_requests(
+    visible: &mut Vec<ClipId>,
+    project: Option<&manifold_core::project::Project>,
+) {
+    visible.retain(|id| project.is_some_and(|p| {
+        p.timeline.layers.iter().any(|layer| {
+            layer.layer_type.supports_clip_thumbnails()
+                && layer.clips.iter().any(|clip| clip.id == *id)
+        })
+    }));
+}
+
 /// section 24 5c cold-start: locate a PARKED generator clip by id — its layer (must be a
 /// generator), clip index, and clip-start `(time, beat)` for a thumbnail render.
 /// `None` if not found or the layer isn't a generator (video posters are separate).
@@ -383,7 +397,7 @@ fn find_parked_generator_clip<'a>(
     clip_id: &str,
 ) -> Option<(&'a manifold_core::layer::Layer, u32, f64, f64)> {
     for layer in layers {
-        if layer.gen_params().is_none() {
+        if !layer.hosts_generator() || layer.gen_params().is_none() {
             continue;
         }
         for (ci, clip) in layer.clips.iter().enumerate() {
@@ -1959,7 +1973,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
     /// Set the clips that currently want a timeline thumbnail (deduped by the UI).
     /// Empty = no timeline visible, so the snapshot path is skipped entirely.
-    pub fn set_clip_atlas_visible(&mut self, visible: Vec<ClipId>) {
+    pub fn set_clip_atlas_visible(
+        &mut self,
+        mut visible: Vec<ClipId>,
+        project: Option<&manifold_core::project::Project>,
+    ) {
+        retain_thumbnail_requests(&mut visible, project);
         self.clip_atlas_visible = visible;
     }
 
@@ -2712,9 +2731,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
         let layer_descs: Vec<CompositeLayerDescriptor> = layers
             .iter()
-            // Audio layers produce no visual output and must not enter the
-            // compositor (their solo/mute is an audible bus). section 5 of the design.
-            .filter(|layer| !layer.is_audio())
+            // Audio and trigger lanes never contribute visual content.
+            .filter(|layer| !layer.is_audio() && !layer.is_trigger())
             .map(|layer| CompositeLayerDescriptor {
                 layer_index: layer.index,
                 layer_id: &layer.layer_id,
@@ -4295,6 +4313,39 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         type_id: &manifold_core::PresetTypeId,
     ) -> Vec<manifold_node_engine::snapshot::OuterParamRouting> {
         self.compositor.outer_routings_for(type_id)
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_admission_tests {
+    use super::retain_thumbnail_requests;
+    use manifold_core::{Beats, LayerType};
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
+    use manifold_core::project::Project;
+
+    #[test]
+    fn thumbnail_requests_use_container_capability_and_reject_stale_ids() {
+        let mut project = Project::default();
+        let mut requests = Vec::new();
+        let mut expected = Vec::new();
+        for (index, kind) in [LayerType::Video, LayerType::Generator, LayerType::Dmx,
+            LayerType::Audio, LayerType::Group, LayerType::Trigger].into_iter().enumerate()
+        {
+            let mut layer = Layer::new("Lane".into(), kind, index as i32);
+            // Resource fields must not turn a non-visual container into media.
+            let mut clip = TimelineClip::new_trigger(Beats::ZERO, Beats(1.0));
+            clip.video_clip_id = "media".into();
+            requests.push(clip.id.clone());
+            if index < 3 { expected.push(clip.id.clone()); }
+            layer.clips.push(clip);
+            project.timeline.layers.push(layer);
+        }
+        requests.push("deleted-clip".into());
+        retain_thumbnail_requests(&mut requests, Some(&project));
+        assert_eq!(requests, expected);
+        retain_thumbnail_requests(&mut requests, None);
+        assert!(requests.is_empty());
     }
 }
 
