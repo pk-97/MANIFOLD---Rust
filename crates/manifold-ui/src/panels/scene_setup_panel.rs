@@ -1240,6 +1240,10 @@ impl ScenePanel {
         self.open
     }
 
+    pub fn content_viewport(&self) -> Rect {
+        self.scroll.viewport()
+    }
+
     /// Node-intent dispatch for this panel's right-click gestures: the
     /// properties card's slider resets (main rows + armed drawers). Called
     /// from `UIRoot::repopulate_intents` like every other intent-bearing

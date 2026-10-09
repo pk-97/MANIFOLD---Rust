@@ -548,6 +548,10 @@ fn param_surface(
                                 .cloned()
                                 .unwrap_or_else(|| sp_def.default_value.to_string())
                         };
+                        let display_value = (scene_graph.is_some() && sp_def.is_file_path)
+                            .then(|| std::path::Path::new(&value).file_name()
+                                .map(|name| name.to_string_lossy().into_owned()))
+                            .flatten();
                         ParamCardStringInfo {
                             name: sp_def.name.to_string(),
                             key: sp_def.key.to_string(),
@@ -556,7 +560,7 @@ fn param_surface(
                             effect_id: None,
                             binding_id: None,
                             dropdown_choices: Vec::new(),
-                            display_value: None,
+                            display_value,
                         }
                     })
                     .collect()

@@ -1057,7 +1057,7 @@ impl Runner {
             if container_is_inspector {
                 ui.layout.inspector()
             } else {
-                ui.layout.scene_setup()
+                ui.scene_setup_panel.content_viewport()
             }
         };
 

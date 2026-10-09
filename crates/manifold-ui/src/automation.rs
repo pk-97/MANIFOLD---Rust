@@ -172,6 +172,8 @@ pub struct SelectorQuery {
     #[serde(rename = "type")]
     pub node_type: Option<String>,
     pub under_text: Option<String>,
+    /// Restrict matches to descendants of a named container, such as a panel.
+    pub under_name: Option<String>,
     pub nth: Option<usize>,
 }
 
@@ -367,6 +369,14 @@ fn node_matches(
     {
         return false;
     }
+    if let Some(under) = &q.under_name {
+        let mut parent = tree.parent_of(n.id);
+        while let Some(id) = parent {
+            if tree.name_of(id) == Some(under.as_str()) { break; }
+            parent = tree.parent_of(id);
+        }
+        if parent.is_none() { return false; }
+    }
     true
 }
 
@@ -445,6 +455,9 @@ fn describe_query(q: &SelectorQuery) -> String {
     }
     if let Some(v) = &q.under_text {
         parts.push(format!("under_text={v:?}"));
+    }
+    if let Some(v) = &q.under_name {
+        parts.push(format!("under_name={v:?}"));
     }
     format!("query{{{}}}", parts.join(", "))
 }
@@ -554,6 +567,27 @@ mod tests {
         let resolved = resolve(&tree, &[], &AutomationTarget::Query(q)).expect("resolves");
         let expected = tree.nodes()[second.index()].bounds;
         assert_eq!(resolved.rect, expected);
+    }
+
+    #[test]
+    fn named_ancestor_separates_shared_controls_across_panels() {
+        let mut tree = UITree::new();
+        let mut expected = None;
+        for name in ["inspector", "scene_setup"] {
+            let region = tree.begin_region(Rect::new(0.0, 0.0, 100.0, 100.0), crate::tree::ZTier::Base, name, UIFlags::empty());
+            let start = tree.count();
+            let body = tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, UIStyle::default());
+            let control = tree.add_button(Some(body), 0.0, 0.0, 40.0, 20.0, UIStyle::default(), "3.50");
+            tree.set_name(control, "param_row.light_intensity.value");
+            tree.end_region(region, start);
+            if name == "scene_setup" { expected = Some(control); }
+        }
+        let mut query = SelectorQuery { name: Some("param_row.light_intensity.value".into()), ..Default::default() };
+        assert!(matches!(resolve(&tree, &[], &AutomationTarget::Query(query.clone())), Err(ResolveError::Ambiguous { .. })));
+        query.under_name = Some("scene_setup".into());
+        assert_eq!(resolve(&tree, &[], &AutomationTarget::Query(query.clone())).unwrap().node, expected);
+        query.under_name = Some("missing_panel".into());
+        assert!(matches!(resolve(&tree, &[], &AutomationTarget::Query(query)), Err(ResolveError::NoMatch { .. })));
     }
 
     #[test]
