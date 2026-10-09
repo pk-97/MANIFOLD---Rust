@@ -1,6 +1,6 @@
 # Renderer Crate Split — one engine crate, node families as leaves
 
-**Status:** IN PROGRESS · Tier 1 shipped · P5 authorized after post-T1 cleanup, P1 boundary landing, and baseline measurement. Section 5 (Phasing).
+**Status:** IN PROGRESS · Tier 1 and post-T1 production cleanup shipped · P1 boundary landed; baseline measured · P5 authorized and pending. Section 5 (Phasing).
 **Prerequisites:** none.
 **Work items:** epic BUG-hkbdp (renderer crate split epic); phases BUG-jo1qt (P0 census and seams), BUG-k452g (P1a ui-paint), BUG-9hndn (P1 carve manifold-node-engine), BUG-vnbdt (P2 leaves), BUG-uones (P3 catalog), BUG-l6ltu (P4 review and measurement), BUG-t2jwg (P5 water seam). Status is recorded only above.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before any phase. Lead: Opus 5.5. Lanes: Astra (Codex) for every mechanical phase (Peter, 2026-10-07: *"please use Astra agents for this work"*); this overrides `feedback_astra_review_only` for this campaign only. Lanes make one commit then stop; the lead lands.
@@ -24,7 +24,7 @@ Companion docs: `PHYSICS_ENGINE_BOUNDARY_DESIGN.md` (owns the physics graph-adap
 | Piece | Where | State |
 |---|---|---|
 | Crate size | `crates/manifold-renderer`: 487,842 lines of Rust, 53% of the workspace (next: app 120,894). `node_graph/` 361k; `node_graph/primitives/` 199k in 455 flat files; `preset_runtime/` 25k; root files 36k. 3,406 `#[test]` in `src/`; 45 integration test binaries (67k lines) in `tests/` | SPLIT |
-| Rebuild cost after touching one primitive (`primitives/vignette.rs`, warm target, `CARGO_BUILD_JOBS=4`, measured this session) | lib 5.1s · lib test binary 57.7s (255 CPU-s) · app 38.1s | The test binary is the cost. The P4 after-measurement was skipped by Peter (2026-10-09): other sessions shared the cores, so timings would be noise |
+| Rebuild cost after touching one primitive (`primitives/vignette.rs`, warm target, `CARGO_BUILD_JOBS=4`, measured this session) | lib 5.1s · lib test binary 57.7s (255 CPU-s) · app 38.1s | Historical pre-T1 measurement. Peter skipped the P4 after-measurement; the later post-T1 baseline below records its own method and cache configuration |
 | Node registration | `node_graph/primitive.rs:1276` `macro_rules! primitive` — 91 `$crate::` paths, zero bare `crate::` inside the macro body; expands to `inventory::submit!` (`:1408`, `:1421`). `persistence.rs:216` `register_builtin` iterates `inventory::iter::<PrimitiveFactory>`; `descriptor.rs:206`, `param_doc.rs:33` collect the same way | EXISTS — cross-crate registration needs no engine change |
 | Other `inventory::iter` consumers | `catalog_gen.rs:181,755`, `validation.rs:2226`, `palette.rs:99,131`, `ports.rs:754` | Work unchanged as long as the family crates are linked (D6) |
 | Engine core → primitives, non-test | `rg 'primitives::' node_graph/{execution,graph_loader,validation,effect_node}.rs node_graph/freeze` outside tests: `wgsl_compute` (freeze/install.rs:854), `render_scene::rt_proof::RtProbeScene` (effect_node.rs:1386, `cfg(feature="gpu-proofs")`), `liquid_frame::{WHITEWATER_INPUTS,WHITEWATER_OUTPUTS}` (graph_loader.rs:805), `liquid_stats`/`gpu_flip_preset` re-exports (node_graph/mod.rs:102–103) | The cheap seams — P0 cuts them |
@@ -45,6 +45,28 @@ Companion docs: `PHYSICS_ENGINE_BOUNDARY_DESIGN.md` (owns the physics graph-adap
 | Path-keyed tooling | `scripts/*.py` 20 files name `manifold-renderer` (test_landing_gate 34, feature_matrix 8, dev.py 8, landing_gate 6, cpu_scope 6, gpu_scope 4, gpu_proofs_gate 2…); `.config/nextest.toml` 16; `docs/*.md` 101 files name `crates/manifold-renderer/src`; memory 5 files | The sweep inventory, re-derived per phase: `rg -l 'manifold[-_]renderer' scripts .config .claude docs` |
 | Concurrent work (2026-10-07 11:00 AEDT) | slot-7 `feat/godfile-trim`: uncommitted edits in `freeze/codegen/{entry_points,mod,types}.rs`, `preset_runtime/mod.rs`, `preset_runtime/tests/`. slot-8 `feat/nightly-gate`: scripts only. `feat/test-warmup`: landed. Nobody in `primitives/` | P1 waits for slot-7; P1a and P0 do not |
 | Precedents | `manifold-physics`, `manifold-fluids`: engine crates already extracted, renderer depends on them (the direction this design extends); `manifold-foundation` (UI-reachable shared types); Wave 1–3 pure-move landings | Shape every new crate like these |
+
+Post-T1 baseline (2026-10-09, `b3e492e63`): a warm local-variable rename in
+`crates/manifold-nodes-image/src/node_graph/primitives/vignette.rs` took **3.6s**
+to rebuild the image library, **13.2s** to build its library test binary, and
+**9.3s** to rebuild the app. Each configuration was warmed first; the commands
+ran serially with `CARGO_BUILD_JOBS=4`, `CARGO_INCREMENTAL=0`, configured sccache,
+and default features. In order: `cargo build -p manifold-nodes-image --lib`,
+`cargo test -p manifold-nodes-image --lib vignette --no-run`, and
+`cargo build -p manifold-app --bin manifold`. The test command only compiled.
+The source was restored byte-for-byte afterward. Initial warmups took
+59.5s / 45.0s / 51.0s and are excluded from the edit timings. These shared-Mac
+measurements establish a current baseline, not an isolated speedup against the
+historical touch-only measurement. The local record and full command arguments
+are in `~/.cache/manifold/post-t1-baseline/warm-edit.json`.
+
+The same cleanup's landing passed all 48 checks in about **39 minutes**, with
+**zero GPU queue wait**. Test builds took 243s and proof builds 214.5s; selected
+default tests took 23.2s. GPU proof execution took 1467.8s, including 30 liquid
+proofs at 992.4s. The required broad selection followed shared engine and Metal
+backend changes; this is not the expected cost of an ordinary leaf-node edit.
+The existing landing timing log records the individual legs under
+`codex/wgsl-metadata-ownership` at `2026-10-09T12:17:32Z`.
 
 Classification: **exists** — registration, census oracles, move gate, byte snapshot, device lock, crate precedents. **One wire away** — the testkit feature, the catalog crate's link lines, the layering test. **Genuinely new** — zero runtime systems. D5's migration registry reuses the `inventory` pattern that already serves four registries; it is a fifth row, not a new mechanism. Zero-new-systems test: passes.
 
