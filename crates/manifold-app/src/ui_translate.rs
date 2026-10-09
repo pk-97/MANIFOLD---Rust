@@ -50,6 +50,7 @@ pub fn layer_type_to_ui(v: LayerType) -> UiLayerType {
         LayerType::Group => UiLayerType::Group,
         LayerType::Audio => UiLayerType::Audio,
         LayerType::Dmx => UiLayerType::Dmx,
+        LayerType::Trigger => UiLayerType::Trigger,
     }
 }
 

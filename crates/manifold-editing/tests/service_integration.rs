@@ -4,10 +4,147 @@ use manifold_core::project::Project;
 use manifold_core::selection::SelectionRegion;
 use manifold_core::types::*;
 use manifold_core::units::Bpm;
-use manifold_core::{Beats, ClipId, Seconds};
+use manifold_core::{Beats, ClipId, LayerId, Seconds};
 use manifold_editing::command::Command;
+use manifold_editing::commands::clip::MoveClipCommand;
 use manifold_editing::service::EditingService;
 use std::collections::HashSet;
+
+fn trigger_assignment_project() -> (Project, manifold_core::GraphTarget, LayerId) {
+    let mut project = Project::default();
+    let mut owner = Layer::new_generator("Scene".into(), manifold_core::PresetTypeId::PLASMA, 0);
+    let owner_id = owner.layer_id.clone();
+    owner.gen_params_mut().unwrap().params = manifold_core::params::ParamManifest::from_params(vec![
+        manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+            id: "force".into(), ..Default::default()
+        }),
+    ]);
+    project.timeline.layers.push(owner);
+    (project, manifold_core::GraphTarget::Generator(owner_id.clone()), owner_id)
+}
+
+#[test]
+fn create_trigger_lane_and_assignment_are_one_undoable_edit() {
+    use manifold_core::params::ClipTriggerSource;
+    let (mut project, target, owner_id) = trigger_assignment_project();
+    project.graph_target_owner_mut(&target).unwrap().params.get_mut("force").unwrap()
+        .clip_trigger_source = ClipTriggerSource::Lane { layer_id: LayerId::new("missing") };
+    let before = serde_json::to_value(&project).unwrap();
+    let command = EditingService::create_trigger_lane(&project, &owner_id, Some((target.clone(), "force".into()))).unwrap();
+    let mut editing = EditingService::new();
+    editing.execute(command, &mut project);
+    assert!(editing.take_rejection().is_none());
+    assert_eq!(project.timeline.layers.len(), 2);
+    let lane = &project.timeline.layers[1];
+    assert!(lane.is_trigger());
+    assert_eq!(lane.parent_layer_id.as_ref(), Some(&owner_id));
+    assert!(lane.clips.is_empty());
+    assert_eq!(project.graph_target_owner(&target).unwrap().params.get("force").unwrap().clip_trigger_source,
+        ClipTriggerSource::Lane { layer_id: lane.layer_id.clone() });
+    let after = serde_json::to_value(&project).unwrap();
+    assert!(editing.undo(&mut project));
+    assert_eq!(serde_json::to_value(&project).unwrap(), before);
+    assert!(!editing.can_undo());
+    assert!(editing.redo(&mut project));
+    assert_eq!(serde_json::to_value(&project).unwrap(), after);
+}
+
+#[test]
+fn rejected_trigger_assignment_rolls_back_creation_and_preserves_history() {
+    let (mut project, target, owner_id) = trigger_assignment_project();
+    let before = serde_json::to_value(&project).unwrap();
+    let command = EditingService::create_trigger_lane(&project, &owner_id, Some((target, "missing-param".into()))).unwrap();
+    let mut editing = EditingService::new();
+    editing.execute(command, &mut project);
+    assert!(editing.take_rejection().is_some());
+    assert!(!editing.can_undo());
+    assert_eq!(serde_json::to_value(&project).unwrap(), before);
+
+    let command = EditingService::create_trigger_lane(&project, &owner_id, None).unwrap();
+    project.timeline.remove_layer(0);
+    editing.execute(command, &mut project);
+    assert!(editing.take_rejection().is_some());
+    assert!(project.timeline.layers.is_empty());
+    assert!(!editing.can_undo());
+}
+
+#[test]
+fn authoring_assignment_rejects_an_unrelated_source_on_execution() {
+    use manifold_core::params::ClipTriggerSource;
+    use manifold_editing::commands::trigger_source::SetParamClipTriggerSourceCommand;
+    let (mut project, target, _) = trigger_assignment_project();
+    let other = Layer::new_video("Other".into(), 1);
+    let lane = Layer::new_trigger("Other pattern".into(), other.layer_id.clone(), 2);
+    let source = ClipTriggerSource::Lane { layer_id: lane.layer_id.clone() };
+    project.timeline.layers.extend([other, lane]);
+    let mut editing = EditingService::new();
+    editing.execute(Box::new(SetParamClipTriggerSourceCommand::for_assignment(target.clone(), "force", source)), &mut project);
+    assert!(editing.take_rejection().is_some());
+    assert!(!editing.can_undo());
+    assert_eq!(project.graph_target_owner(&target).unwrap().params.get("force").unwrap().clip_trigger_source,
+        ClipTriggerSource::OwnLayer);
+}
+
+#[test]
+fn duplicate_owner_remaps_trigger_sources_across_instances_and_undo_redo() {
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::params::{ClipTriggerSource, Param, ParamManifest};
+    use manifold_core::effect_graph_def::ParamSpecDef;
+    use manifold_core::PresetTypeId;
+
+    let mut project = Project::default();
+    let mut group = Layer::new("Group".into(), LayerType::Group, 0);
+    let external = Layer::new_trigger("External".into(), group.layer_id.clone(), 1);
+    let mut owner = Layer::new_generator("Scene".into(), PresetTypeId::NONE, 2);
+    owner.parent_layer_id = Some(group.layer_id.clone());
+    let source = Layer::new_trigger("Force".into(), owner.layer_id.clone(), 3);
+    let sources = [
+        ClipTriggerSource::Lane { layer_id: source.layer_id.clone() },
+        ClipTriggerSource::Lane { layer_id: external.layer_id.clone() },
+        ClipTriggerSource::Lane { layer_id: LayerId::new("missing") },
+        ClipTriggerSource::OwnLayer,
+        ClipTriggerSource::Disabled,
+    ];
+    let params = ParamManifest::from_params(sources.iter().enumerate().map(|(i, source)| {
+        let mut param = Param::bundled(ParamSpecDef { id: format!("p{i}"), ..Default::default() });
+        param.clip_trigger_source = source.clone();
+        param
+    }).collect());
+    let mut effect = PresetInstance::new(PresetTypeId::BLOOM);
+    effect.params = params.clone();
+    group.effects = Some(vec![effect.clone()]);
+    owner.effects = Some(vec![effect.clone()]);
+    owner.gen_params_mut().unwrap().params = params;
+    owner.clips.push(TimelineClip { effects: vec![effect], ..Default::default() });
+    let owner_id = owner.layer_id.clone();
+    let source_id = source.layer_id.clone();
+    let generator_id = owner.gen_params().unwrap().id.clone();
+    project.timeline.layers = vec![group, external, owner, source];
+    project.timeline.enforce_tree_order();
+    let before = serde_json::to_value(&project).unwrap();
+
+    let mut command = EditingService::duplicate_layers(&project, std::slice::from_ref(&owner_id)).unwrap();
+    command.execute(&mut project);
+    let copied_owner = project.timeline.layers.iter().find(|l| l.name == "Scene" && l.layer_id != owner_id).unwrap();
+    let copied_source = project.timeline.layers.iter().find(|l| l.name == "Force" && l.layer_id != source_id).unwrap();
+    assert_eq!(copied_source.parent_layer_id.as_ref(), Some(&copied_owner.layer_id));
+    assert_ne!(copied_owner.gen_params().unwrap().id, generator_id);
+    for instance in [copied_owner.gen_params().unwrap(), &copied_owner.effects.as_ref().unwrap()[0], &copied_owner.clips[0].effects[0]] {
+        for (i, original) in sources.iter().enumerate() {
+            let expected = if i == 0 {
+                ClipTriggerSource::Lane { layer_id: copied_source.layer_id.clone() }
+            } else { original.clone() };
+            assert_eq!(instance.params.get(&format!("p{i}")).unwrap().clip_trigger_source, expected);
+        }
+    }
+    // Targets outside the duplicated subtree still point at the original source.
+    assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("p0").unwrap().clip_trigger_source, sources[0]);
+    let after = serde_json::to_value(&project).unwrap();
+    command.undo(&mut project);
+    assert_eq!(serde_json::to_value(&project).unwrap(), before);
+    command.execute(&mut project);
+    assert_eq!(serde_json::to_value(&project).unwrap(), after);
+}
 
 fn make_project() -> Project {
     let mut project = Project::default();
@@ -311,6 +448,30 @@ fn create_clip_at_position() {
     assert!((clip.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 }
 
+#[test]
+fn create_clip_at_position_uses_trigger_constructor() {
+    let mut project = Project::default();
+    let owner = Layer::new("Owner".into(), LayerType::Group, 0);
+    let trigger = Layer::new_trigger("Trigger".into(), owner.layer_id.clone(), 1);
+    project.timeline.layers.extend([owner, trigger]);
+
+    let (mut command, clip_id) = EditingService::create_clip_at_position(
+        &mut project,
+        Beats(2.0),
+        1,
+        Beats(4.0),
+    )
+    .expect("trigger layers accept ordinary timeline clips");
+    command.execute(&mut project);
+
+    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
+    assert_eq!(clip.start_beat, Beats(2.0));
+    assert_eq!(clip.duration_beats, Beats(4.0));
+    assert!(!clip.is_source_media());
+    assert!(!clip.is_audio());
+    assert!(!clip.is_image());
+}
+
 // ─── Nudge ───
 
 #[test]
@@ -575,6 +736,244 @@ fn move_clip_to_layer() {
 
     // Verify the clip is now on layer 1
     assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == id1));
+}
+
+#[test]
+fn trigger_clip_moves_between_trigger_layers_and_recorded_preview_is_undoable() {
+    let mut project = Project::default();
+    let owner = Layer::new("Owner".into(), LayerType::Group, 0);
+    let owner_id = owner.layer_id.clone();
+    let mut source = Layer::new_trigger("Trigger A".into(), owner_id.clone(), 1);
+    let target = Layer::new_trigger("Trigger B".into(), owner_id, 2);
+    let clip = TimelineClip::new_trigger(Beats::ZERO, Beats(4.0));
+    let clip_id = clip.id.clone();
+    source.restore_clip(clip);
+    project.timeline.layers.extend([owner, source, target]);
+    project.timeline.rebuild_clip_lookup();
+
+    let mut service = EditingService::new();
+    let source_layer_id = project.timeline.layers[1].layer_id.clone();
+    let target_layer_id = project.timeline.layers[2].layer_id.clone();
+    let preview_clip = project.timeline.layers[1]
+        .remove_clip(&clip_id)
+        .expect("preview source clip");
+    project.timeline.layers[2].restore_clip(preview_clip);
+    project.timeline.mark_clip_lookup_dirty();
+    let command = MoveClipCommand::new(
+        clip_id.clone(),
+        Beats::ZERO,
+        Beats::ZERO,
+        source_layer_id,
+        target_layer_id,
+    );
+    service.record(Box::new(command));
+
+    assert!(project.timeline.layers[1].clips.is_empty());
+    assert!(project.timeline.layers[2].clips.iter().any(|c| c.id == clip_id));
+    assert!(service.undo(&mut project));
+    assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
+    assert!(service.redo(&mut project));
+    assert!(project.timeline.layers[2].clips.iter().any(|c| c.id == clip_id));
+}
+
+#[test]
+fn move_command_uses_containing_layer_for_stale_clip_id_and_rejects_incompatible_kind() {
+    let mut compatible = Project::default();
+    let mut source = Layer::new("Source".into(), LayerType::Video, 0);
+    let target = Layer::new("Target".into(), LayerType::Video, 1);
+    let clip = TimelineClip {
+        video_clip_id: "video".into(),
+        start_beat: Beats::ZERO,
+        duration_beats: Beats(4.0),
+        ..Default::default()
+    };
+    let clip_id = clip.id.clone();
+    source.restore_clip(clip);
+    compatible.timeline.layers.extend([source, target]);
+    compatible.timeline.layers[0].clips[0].layer_id = LayerId::new("stale-layer");
+    compatible.timeline.rebuild_clip_lookup();
+    let source_id = compatible.timeline.layers[0].layer_id.clone();
+    let target_id = compatible.timeline.layers[1].layer_id.clone();
+    let mut command = MoveClipCommand::new(
+        clip_id.clone(),
+        Beats::ZERO,
+        Beats::ZERO,
+        source_id,
+        target_id,
+    );
+    command.execute(&mut compatible);
+    assert!(command.was_applied());
+    assert!(compatible.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
+
+    let mut incompatible = Project::default();
+    let mut media = Layer::new("Media".into(), LayerType::Video, 0);
+    let trigger = Layer::new_trigger("Trigger".into(), media.layer_id.clone(), 1);
+    let clip = TimelineClip {
+        video_clip_id: "video".into(),
+        start_beat: Beats::ZERO,
+        duration_beats: Beats(4.0),
+        ..Default::default()
+    };
+    let clip_id = clip.id.clone();
+    media.restore_clip(clip);
+    incompatible.timeline.layers.extend([media, trigger]);
+    incompatible.timeline.rebuild_clip_lookup();
+    let source_id = incompatible.timeline.layers[0].layer_id.clone();
+    let target_id = incompatible.timeline.layers[1].layer_id.clone();
+    let mut command = MoveClipCommand::new(
+        clip_id.clone(),
+        Beats::ZERO,
+        Beats::ZERO,
+        source_id,
+        target_id,
+    );
+    command.execute(&mut incompatible);
+    assert!(!command.was_applied());
+    assert_eq!(command.rejection_reason(), Some("move clip layer kinds are incompatible"));
+    assert!(incompatible.timeline.layers[0].clips.iter().any(|c| c.id == clip_id));
+    assert!(incompatible.timeline.layers[1].clips.is_empty());
+}
+
+#[test]
+fn trigger_and_media_clip_moves_are_rejected_in_both_directions() {
+    for (source_kind, target_kind) in [
+        (LayerType::Trigger, LayerType::Video),
+        (LayerType::Video, LayerType::Trigger),
+    ] {
+        let mut project = Project::default();
+        let owner = Layer::new("Owner".into(), LayerType::Group, 0);
+        let owner_id = owner.layer_id.clone();
+        let mut source = if source_kind == LayerType::Trigger {
+            Layer::new_trigger("Source".into(), owner_id.clone(), 1)
+        } else {
+            Layer::new("Source".into(), source_kind, 1)
+        };
+        let target = if target_kind == LayerType::Trigger {
+            Layer::new_trigger("Target".into(), owner_id, 2)
+        } else {
+            Layer::new("Target".into(), target_kind, 2)
+        };
+        let clip = if source_kind == LayerType::Trigger {
+            TimelineClip::new_trigger(Beats::ZERO, Beats(4.0))
+        } else {
+            TimelineClip {
+                video_clip_id: "video".into(),
+                start_beat: Beats::ZERO,
+                duration_beats: Beats(4.0),
+                ..Default::default()
+            }
+        };
+        let clip_id = clip.id.clone();
+        source.restore_clip(clip);
+        project.timeline.layers.extend([owner, source, target]);
+        project.timeline.rebuild_clip_lookup();
+
+        assert!(EditingService::move_clip_to_layer(&project, &clip_id, 2).is_none());
+        assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
+        assert!(project.timeline.layers[2].clips.is_empty());
+    }
+}
+
+#[test]
+fn generator_and_dmx_clip_moves_are_compatible_both_directions() {
+    for (source_kind, target_kind) in [
+        (LayerType::Generator, LayerType::Dmx),
+        (LayerType::Dmx, LayerType::Generator),
+    ] {
+        let mut project = Project::default();
+        let mut source = Layer::new("Source".into(), source_kind, 0);
+        let target = Layer::new("Target".into(), target_kind, 1);
+        let clip = TimelineClip::new_generator(Beats::ZERO, Beats(4.0));
+        let clip_id = clip.id.clone();
+        source.restore_clip(clip);
+        project.timeline.layers.extend([source, target]);
+        project.timeline.rebuild_clip_lookup();
+
+        let cmd = EditingService::move_clip_to_layer(&project, &clip_id, 1)
+            .expect("Generator and Dmx layers share the generator clip kind");
+        let mut service = EditingService::new();
+        service.execute(cmd, &mut project);
+        assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
+    }
+}
+
+#[test]
+fn mixed_clip_move_batch_rejects_atomically_on_kind_mismatch() {
+    let mut project = Project::default();
+    let mut video_source = Layer::new("Video source".into(), LayerType::Video, 0);
+    let video_clip = TimelineClip {
+        video_clip_id: "video".into(),
+        start_beat: Beats::ZERO,
+        duration_beats: Beats(4.0),
+        ..Default::default()
+    };
+    let video_id = video_clip.id.clone();
+    video_source.restore_clip(video_clip);
+
+    let mut trigger_source = Layer::new_trigger(
+        "Trigger source".into(),
+        video_source.layer_id.clone(),
+        1,
+    );
+    let trigger_clip = TimelineClip::new_trigger(Beats::ZERO, Beats(4.0));
+    let trigger_id = trigger_clip.id.clone();
+    trigger_source.restore_clip(trigger_clip);
+
+    project.timeline.layers.push(video_source);
+    project.timeline.layers.push(trigger_source);
+    project
+        .timeline
+        .layers
+        .push(Layer::new("Video target A".into(), LayerType::Video, 2));
+    project
+        .timeline
+        .layers
+        .push(Layer::new("Video target B".into(), LayerType::Video, 3));
+    project.timeline.rebuild_clip_lookup();
+
+    let commands = EditingService::move_clips_across_layers(
+        &project,
+        &[video_id.clone(), trigger_id.clone()],
+        2,
+    );
+    assert!(commands.is_empty(), "one incompatible destination rejects the batch");
+    assert!(project.timeline.layers[0].clips.iter().any(|c| c.id == video_id));
+    assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == trigger_id));
+    assert!(project.timeline.layers[2].clips.is_empty());
+    assert!(project.timeline.layers[3].clips.is_empty());
+}
+
+#[test]
+fn move_command_missing_target_preserves_source_and_valid_move_undoes_redoes() {
+    let mut project = make_project();
+    let clip_id = add_clip(&mut project, 0, 0.0, 4.0);
+    let source_layer_id = project.timeline.layers[0].layer_id.clone();
+    let missing_layer_id = LayerId::new("missing-layer");
+    let original = project.timeline.layers[0].clips[0].clone();
+
+    let mut missing = MoveClipCommand::new(
+        clip_id.clone(),
+        original.start_beat,
+        original.start_beat,
+        source_layer_id.clone(),
+        missing_layer_id,
+    );
+    missing.execute(&mut project);
+    assert!(!missing.was_applied());
+    assert!(missing.rejection_reason().is_some());
+    missing.undo(&mut project);
+    assert!(project.timeline.layers[0].clips.iter().any(|c| c.id == clip_id));
+
+    let mut service = EditingService::new();
+    service.execute(
+        EditingService::move_clip_to_layer(&project, &clip_id, 1).unwrap(),
+        &mut project,
+    );
+    assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
+    assert!(service.undo(&mut project));
+    assert!(project.timeline.layers[0].clips.iter().any(|c| c.id == clip_id));
+    assert!(service.redo(&mut project));
+    assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == clip_id));
 }
 
 // ─── Move clips across layers (B14 keyboard Up/Down —

@@ -7,6 +7,7 @@ pub mod audio_mixdown;
 pub mod audio_sync;
 pub mod audio_warp;
 pub mod clip_launcher;
+pub mod clip_controls;
 pub mod engine;
 pub mod link_sync;
 pub mod live_clip_manager;

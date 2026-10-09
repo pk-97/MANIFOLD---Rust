@@ -2,8 +2,13 @@
 
 <!-- index: Child trigger lanes with no thumbnails; shared assignment from lane headers and parameter drawers. Current-code audit, proposed architecture, and first-slice acceptance contract. -->
 
-**Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence and undoable
-assignment are the first implementation seam; full playback and UI remain pending.
+**Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence, undoable assignment,
+trigger lane/clip kinds, media exclusion, ownership deletion/duplication, shared
+arrangement/live/session timing and source-timed delivery are implemented.
+Authoring commands now validate ownership and routing, create-and-assign in one
+undo step, and preserve trigger ownership when grouping or reordering. Source
+mute and renderer-free live launches are implemented. Authoring UI and full
+runtime acceptance remain pending; these foundations are not yet all landed.
 **Tracking:** `BUG-tqtel` (feature).
 **Prerequisites:** crate refactor landed; reverify the audited seams against subsequent cleanup.
 **Execution contract:** read `DESIGN_DOC_STANDARD.md` sections 5–6 before briefing
@@ -95,6 +100,19 @@ Consequences, stated honestly: a new kind requires exhaustive checks across medi
 admission, MIDI/session launching, rendering, thumbnails and layer operations.
 It is not just an extra timeline row.
 
+Deleting or ungrouping an owner removes its direct trigger children and their
+session slots in the same undoable operation. Ordinary group children retain
+the existing detach-to-root behaviour, including their own trigger children.
+Deleting a source leaves parameter assignments explicit and unresolved; undo
+restores the same source identity. Whole-owner duplication includes trigger
+children and remaps copied parameter references inside that subtree. References
+outside it remain unchanged. Copied clip response arms keep their authored
+settings with fresh runtime state; external audio bindings are dropped under
+the existing duplication policy, so a combined audio/clip arm becomes clip-only.
+Reordering preserves a trigger lane's owner; moving or grouping that owner keeps
+its trigger children attached. Grouping a selection containing both an owner and
+its trigger children groups the owner. A trigger-only selection cannot form a group.
+
 **D4 — Recommended routing scope.** A regular owner's trigger children may target
 that owner's compatible parameters. A group's trigger children may target the
 group and its descendant content layers. The drawer offers local trigger children
@@ -170,18 +188,27 @@ manager, universal event bus, or common float standing for both values and event
 | Does this clip need media resources? | Playback activation and explicit layer/clip capabilities | Scheduling membership is independent of renderer acquisition. Video/audio/generator consumers own readiness and resources; trigger clips own none. Avoid scattered “not audio means generator” fallthroughs. |
 | What invalidates prepared state? | Existing manifest reconcile, project edit versions and physics control digest | Include authored routing and applicable source-pattern dependencies. Keep transient counters, meters and event cursors out of serialization and authored hashes. |
 
-Concrete duplicate paths found: `evaluate_modulation` selects staged composition
-when `audio.hop_batches` is empty and pure retained composition otherwise;
-`apply_instance_envelopes` still composes decay separately from `compose_param`.
-The two paths have documented shadow-update timing differences. Characterize those
-before consolidation; do not silently change existing show timing. A single pure
-composer can serve both while input-advancement policy remains explicit.
+Snapshot and retained inputs now share pure shadow preparation and dynamic value
+composition in `modulation/composition.rs`. Snapshot audio steps retain next-update
+visibility; retained audio steps apply on the current update. Envelope steps still
+advance after composition in both paths. Snapshot source loss supplies no audio
+value or Fire counter; retained counters continue through input gaps. Compatibility
+entry points delegate their arithmetic to the same composer. Historical sampling
+does not advance inputs or publish meters.
 
-Also, `record_hop_values` computes each observation's transport timestamp but passes
-the outer `ControlSample` into `compose_param`. This is an inspected API constraint,
-not a reproduced defect report. The new contract must supply the selected clip's
-phase at the observation's timestamp, including a boundary crossed within one frame.
-A frame-only lane lookup would undermine simulation/export consistency.
+`ControlHistory` replaces the audio-only observation batch. It retains typed
+audio and clip contributions in transport-time order, using the same
+`TriggerSourceStamp` as targeted delivery. Step, Random and Fire consume every
+clip start independently of audio availability; equal-time clip and audio events
+remain separate, with clip starts first. Both contribute to the existing sampled
+parameter timeline. Capacity is checked before advancing an interval; overflow
+latches an explicit capture error and exposes no partial history. Transport reset
+clears the latch. The normal path reuses bounded storage.
+
+The timing migration now builds each retained hop's `ControlSample` at the hop's
+timestamp and tempo-derived beat. Arrangement spans cover the interval since the
+last evaluation, including session loops and quantized replacement/stop boundaries.
+Ended live notes and Back to Arrangement now retain that history as well.
 
 Small typed interfaces should expose only what their consumers need: clip events
 and phase to modulation, evaluated controls/events to rendering, and snapshots plus
@@ -211,7 +238,123 @@ rg -n 'evaluate_modulation|evaluate_all_envelopes|evaluate_all_audio_mods|compos
 Classify tests separately and read enclosing functions; raw text-hit counts include
 comments, imports and test code. A new production caller changes the seam brief.
 
+**Implemented timing contract (2026-10-09).** `ClipControlFrame` is keyed by stable
+`LayerId` and exposes `elapsed(source, owner, beat)` and ordered `starts(source, owner)`.
+The scheduler records logical membership from the same timeline/live/session refs
+used by `sync_clips_to_time`, before renderer acquisition or its warm-up guard.
+Rebinding a clip remains silent; session iteration changes emit starts. Main clip
+mute is carried with the event so envelopes preserve their mute behavior while
+legacy audio clip-edge responses remain compatible. Parent mute does not gate it.
+
+`evaluate_modulation`, `evaluate_all_envelopes` and `evaluate_all_audio_mods` consume
+that frame. `compose_controls` receives a per-parameter sample. The independent
+arrangement scanner, numeric-layer edge buffer and envelope edge-inference fields
+are removed. Scripted UI steps use an engine with no content renderers; it verifies
+UI/control state, not scene impulse delivery. Export already uses engine ticks.
+
+Focused CPU checks cover source isolation, disabled/missing sources, adjacent starts,
+renderer independence, mute, source deletion, seek cancellation and session launch.
+Arrangement queries now use the existing dual sorted indexes for a beat window;
+point queries delegate to equal endpoints. Media membership filters that same
+result at the current beat. The scheduler also emits starts from clips wholly
+crossed during forward playback, independent of media lifetime. A separate
+evaluation boundary retains phase coverage across out-of-tick syncs; source
+events use the last reconciled beat so those syncs cannot deliver a start twice.
+Initial membership is reconciled before the first time advance. Explicit seeks
+discard pending starts and traverse no skipped region; backwards clock movement
+also uses destination membership only. A CPU engine proof compares the same short
+pattern at fine/coarse display intervals, repeated syncs and fixed export time.
+
+Session resolution now captures crossed iterations before applying pending launches
+or stops. It retains completed spans across repeated syncs, closes arrangement
+coverage at the first session launch and avoids firing arrangement clips when a
+session launch starts transport. A bounded interval that cannot be retained latches
+the existing delivery failure instead of publishing a partial Fire stream.
+While that failure is latched, synchronization clears clip spans and starts
+before modulation can consume them. The overflow regression also checks that
+Step state does not partially advance and seeking restores source delivery.
+
+`TriggerSourceStamp` distinguishes snapshot, audio-hop and clip events. Clip Fire
+events retain source layer, clip and beat separately from destination identity.
+Scene delivery converts that beat using the project tempo map. The existing native
+event queue already orders source timestamps and preserves equal-time events;
+there is no new delivery queue. CPU proofs cover provenance and tempo conversion;
+they do not establish rendered force isolation. Audio events now carry resolved
+transport seconds beside their original hop stamp. Advancement settles the existing
+hop clock once per new batch; parameter sampling reuses it, and replay cannot
+re-anchor it. Delivery converts those source seconds to beats, independently of
+the accepting display frame. Live phantom clips now retain their owning LayerId
+from creation. Focused CPU tests cover source-clock/sample agreement, replay,
+invalid-clock rejection and phantom identity; app compilation and clippy pass.
+Rendered timing remains unverified.
+
+Live NoteOff, replacement and one-shot expiry retain completed intervals until
+modulation samples them. Source starts are delivered once even when an entire
+note falls between syncs or begins at the previous sync boundary. NoteOff uses
+the accepted raw event beat; recording quantization remains separate. Focused
+CPU checks cover interval boundaries, repeated sync, existing MIDI guards and
+seek cancellation.
+
+Trigger live launches use the same `trigger_live_content_clip` path as generator
+launches, with the containing layer deciding the clip constructor. MIDI from-layer
+and audio one-shot classification admit trigger lanes without requiring media.
+
+`clip_trigger_source_is_eligible` supplies the shared authoring and playback rule:
+local children and children of consecutive ancestor groups. The project exposes
+eligible choices in timeline order; the playback control frame publishes the
+current layer hierarchy alongside its source facts and uses the same predicate.
+Missing, unrelated and out-of-scope saved sources produce neither phase nor
+starts, without changing the saved assignment. Hierarchy edits take effect on
+the next synchronization.
+`SetParamClipTriggerSourceCommand::for_assignment` validates it on execution;
+the existing raw constructor still supports restoring unresolved saved references.
+`EditingService::create_trigger_lane` composes insertion and optional assignment
+through `CompositeCommand`, so rejection rolls back insertion. Both UI entry
+points must use these same content-thread commands.
+
+Trigger lane/clip mute removes spans and pending starts without changing scheduler
+membership. Parent and group mute do not participate. CPU checks establish
+phase-preserving unmute and no replay of muted starts.
+
+Source edits and restored target availability establish a runtime event cutoff
+in `ClipControlFrame`, keyed by instance and parameter identity. The cutoff uses
+both the edit beat and producer sequence: it rejects queued or late-discovered
+old starts while accepting new starts at the same beat. The parameter remains
+the only authored connection. Content edits reconcile before the next command,
+and mutable project access marks bindings dirty for reconciliation before clock
+advancement, clip synchronization or pulse delivery. Phase sampling is unchanged.
+Changed sources cancel already-captured clip Fire pulses for that parameter;
+independent audio pulses remain. Seek/stop clears the event cutoff with the
+existing transport history boundary.
+
+Back to Arrangement retains the session interval before clearing its authority.
+`ActiveClipRef::control_from` and `ClipControlSpan::control_from` distinguish when
+an interval controls a source from its original clip phase. The resumed arrangement
+cannot overwrite earlier session samples or replay a start from before resumption.
+`session_mode::back_to_arrangement_preserves_control_history_and_phase` reproduces
+the former error and checks repeated transitions, stopped-session gaps and seeking.
+
+Full acceptance below remains open: external-clock discontinuities
+and rendered scene timing must be completed before exposing
+trigger lanes. CPU event-order proofs do not establish rendered scene behaviour.
+
 ### Model, scheduling and delivery
+
+`LayerType::Trigger` uses wire value 5; existing values 0–4 remain unchanged.
+`ClipKind::Trigger` reuses ordinary timeline clips and their containing layer's
+identity. `supports_clip_playback` excludes groups and triggers from media
+acquisition; `supports_clip_thumbnails` admits only visual clip content. Trigger
+lanes are also excluded from compositor descriptors, chain preparation and LED
+routing. Thumbnail eligibility is checked before UI requests and again against
+the current project on content-thread admission. Timing queries retain trigger
+clips independently of these media capabilities.
+
+`accepts_clips_from` is the common kind rule for paste, drag preview, service move
+preflight and committed moves. Container membership is authoritative even if a
+clip's stored layer ID is stale. A missing or incompatible move destination rejects
+before removing the source. Undo remains valid for commands recorded after a live
+preview. Focused CPU checks cover these boundaries and wire compatibility; they
+do not establish rendered scene behavior or the full trigger-lane UI.
 
 Content-thread ownership, snapshots, `ContentCommand` and `EditingService` remain
 unchanged. UI emits intents; it never edits project state. No new thread or locks.

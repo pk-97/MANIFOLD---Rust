@@ -352,39 +352,29 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn move_clip_to_layer(&mut self, clip_id: &str, target_layer: usize) {
         // Live mutation for drag preview — undo is tracked separately via record_move.
-        // Port of Unity EditingService.MoveClipToLayer: validates gen↔video type
-        // compatibility, blocks group layers, adopts generator type.
+        // Use the same container-kind admission as paste and committed moves.
         if let Some(project) = Some(&mut *self.project) {
             if target_layer >= project.timeline.layers.len() {
-                return;
-            }
-
-            // Block group layers
-            if project.timeline.layers[target_layer].is_group() {
                 return;
             }
 
             // Find the clip and its source layer
             let mut found = None;
             for (li, layer) in project.timeline.layers.iter().enumerate() {
-                if let Some(ci) = layer.clips.iter().position(|c| c.id == clip_id) {
-                    found = Some((li, ci));
+                if layer.clips.iter().any(|c| c.id == clip_id) {
+                    found = Some(li);
                     break;
                 }
             }
 
-            if let Some((src_layer, clip_idx)) = found {
+            if let Some(src_layer) = found {
                 if src_layer == target_layer {
                     return;
                 }
 
-                // Gen↔video type mismatch: block
-                let clip_is_gen = project.timeline.layers[src_layer].clips[clip_idx]
-                    .video_clip_id
-                    .is_empty();
-                let target_is_gen = project.timeline.layers[target_layer].layer_type
-                    == manifold_core::types::LayerType::Generator;
-                if clip_is_gen != target_is_gen {
+                if !project.timeline.layers[target_layer].layer_type.accepts_clips_from(
+                    project.timeline.layers[src_layer].layer_type,
+                ) {
                     return;
                 }
 

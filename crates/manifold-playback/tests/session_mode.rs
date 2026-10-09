@@ -131,6 +131,54 @@ fn transport_stop_clears_session_playback_but_not_override() {
 }
 
 #[test]
+fn back_to_arrangement_preserves_control_history_and_phase() {
+    use manifold_core::params::ClipTriggerSource;
+    let mut project = make_project();
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let mut arrangement = TimelineClip::new_generator(Beats::ZERO, Beats(8.0));
+    arrangement.id = ClipId::new("arrangement");
+    project.timeline.layers[0].clips.push(arrangement);
+    let scene = SceneId::new("session");
+    add_session_slot(&mut project, &layer_id, &scene, one_clip_sequence(6.0, "session-clip"));
+    let mut engine = create_engine();
+    engine.initialize(project);
+    engine.session_set_quantize(Beats::ZERO);
+    engine.set_state(PlaybackState::Playing);
+    engine.sync_clips_to_time();
+    engine.set_beat(Beats(1.0));
+    engine.session_launch_slot(layer_id.clone(), scene.clone());
+    engine.set_beat(Beats(2.5));
+    engine.session_back_to_arrangement(Some(layer_id.clone()));
+    for _ in 0..2 {
+        engine.sync_clips_to_time();
+        let controls = engine.clip_controls();
+        for (beat, elapsed) in [(0.5, 0.5), (1.5, 0.5), (2.5, 2.5)] {
+            assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(beat)), Some(Beats(elapsed)), "at beat {beat}");
+        }
+        assert_eq!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&layer_id)).iter()
+            .filter(|start| start.clip_id.as_str() == "arrangement").count(), 1);
+    }
+    engine.set_beat(Beats(3.0));
+    engine.session_launch_slot(layer_id.clone(), scene.clone());
+    engine.set_beat(Beats(4.0));
+    engine.session_back_to_arrangement(Some(layer_id.clone()));
+    for (beat, elapsed) in [(0.5, 0.5), (1.5, 0.5), (2.75, 2.75), (3.5, 0.5), (4.0, 4.0)] {
+        assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(beat)), Some(Beats(elapsed)), "after second return at beat {beat}");
+    }
+    engine.set_beat(Beats(5.0));
+    engine.session_launch_slot(layer_id.clone(), scene);
+    engine.set_beat(Beats(5.5));
+    engine.session_stop_slot(layer_id.clone());
+    engine.set_beat(Beats(6.0));
+    engine.session_back_to_arrangement(None);
+    assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(5.25)), Some(Beats(0.25)));
+    assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(5.75)), None);
+    assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(6.0)), Some(Beats(6.0)));
+    engine.seek_to(Seconds(1.0));
+    assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&layer_id), Beats(2.0)), Some(Beats(2.0)));
+}
+
+#[test]
 fn scene_launch_and_stop_matrix_end_to_end() {
     let mut project = make_project();
     project

@@ -12,52 +12,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::audio_features::{AudioHopBatch, AudioHopSample, AudioHopStamp, SendFeatures};
+use crate::audio_features::SendFeatures;
+use crate::control_history::ControlHistory;
 use crate::effects::ParamId;
 use crate::id::AudioSendId;
 use crate::macro_bank::MacroCurve;
-
-/// The contribution an audio modulation made during one completed hop. This
-/// is the audio stage result, before drivers, envelopes, and other sources are
-/// combined into a final parameter value.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum AudioModContribution {
-    Continuous(f32),
-    Stepped(Option<f32>),
-    TriggerCounter { count: u32, value: f32 },
-}
-
-/// Runtime-only audio modulation output retained alongside the source hop.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AudioModObservation {
-    pub stamp: AudioHopStamp,
-    pub dt: crate::Seconds,
-    pub contribution: AudioModContribution,
-    /// Logical transport time of the outer evaluator, when one was supplied.
-    pub evaluation_time: Option<crate::Seconds>,
-    /// True when the existing evaluator coalesced a clip edge with this hop.
-    pub clip_edge: bool,
-}
-
-impl AudioHopSample for AudioModObservation {
-    fn stamp(&self) -> AudioHopStamp {
-        self.stamp
-    }
-
-    fn duration(&self) -> crate::Seconds {
-        self.dt
-    }
-
-    fn is_finite(&self) -> bool {
-        self.evaluation_time
-            .is_none_or(|time| time.0.is_finite())
-            && match self.contribution {
-                AudioModContribution::Continuous(value)
-                | AudioModContribution::TriggerCounter { value, .. } => value.is_finite(),
-                AudioModContribution::Stepped(value) => value.is_none_or(f32::is_finite),
-            }
-    }
-}
 
 /// One hop's effective parameter value at its transport time.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -597,9 +556,9 @@ pub struct ParameterAudioMod {
     #[serde(skip)]
     pub audio_hop_source: Option<AudioModSource>,
     /// Runtime-only stage contributions retained for inspection and downstream
-    /// consumers. The batch reuses the same bounded hop storage contract.
+    /// consumers. Audio and clip events share one bounded history.
     #[serde(skip)]
-    pub audio_observations: AudioHopBatch<AudioModObservation>,
+    pub control_observations: ControlHistory,
     #[serde(skip)]
     pub hop_timeline: HopTimeline,
     /// Last effective audio output and normalized meter level, held between hops.
@@ -671,7 +630,7 @@ impl ParameterAudioMod {
             prev_raw: 0.0,
             audio_hop_cursor: crate::audio_features::AudioHopCursor::default(),
             audio_hop_source: None,
-            audio_observations: AudioHopBatch::default(),
+            control_observations: ControlHistory::default(),
             hop_timeline: HopTimeline::default(),
             audio_held_output: None,
             audio_held_meter: 0.0,
@@ -939,32 +898,49 @@ mod tests {
     }
 
     #[test]
-    fn audio_observations_are_runtime_only_and_reload_empty() {
+    fn control_observations_are_runtime_only_and_reload_empty() {
+        use crate::control_history::{ControlContribution, ControlObservation, TriggerSourceStamp};
         let mut m = ParameterAudioMod::new(
             "amount".into(),
             AudioSendId::new("send-1"),
             AudioFeature::default(),
         );
-        m.audio_observations.begin(7);
-        m.audio_observations
-            .push(AudioModObservation {
-                stamp: AudioHopStamp {
-                    epoch: 7,
-                    end_sample: 512,
-                    sample_rate: 48_000,
-                    source_time: None,
-                    timeline_time: Some(crate::Seconds(512. / 48_000.)),
+        m.control_observations.begin(7);
+        m.control_observations
+            .push(ControlObservation {
+                stamp: TriggerSourceStamp::Audio {
+                    stamp: crate::audio_features::AudioHopStamp {
+                        epoch: 7,
+                        end_sample: 512,
+                        sample_rate: 48_000,
+                        source_time: None,
+                        timeline_time: Some(crate::Seconds(512. / 48_000.)),
+                    },
+                    time: crate::Seconds(512. / 48_000.),
                 },
                 dt: crate::Seconds(512. / 48_000.),
-                contribution: AudioModContribution::Continuous(0.5),
+                time: crate::Seconds(512. / 48_000.),
+                contribution: ControlContribution::Continuous(0.5),
                 evaluation_time: Some(crate::Seconds(1.25)),
-                clip_edge: true,
+            })
+            .unwrap();
+        m.control_observations
+            .push(ControlObservation {
+                stamp: TriggerSourceStamp::Clip {
+                    layer_id: crate::LayerId::new("layer"),
+                    clip_id: crate::ClipId::new("clip"),
+                    beat: crate::Beats(2.0),
+                },
+                time: crate::Seconds(1.0),
+                dt: crate::Seconds(0.0),
+                contribution: ControlContribution::Stepped(Some(0.75)),
+                evaluation_time: None,
             })
             .unwrap();
         let json = serde_json::to_string(&m).unwrap();
-        assert!(!json.contains("audioObservations"));
+        assert!(!json.contains("controlObservations"));
         let back: ParameterAudioMod = serde_json::from_str(&json).unwrap();
-        assert!(back.audio_observations.hops().is_empty());
+        assert!(back.control_observations.observations().is_empty());
     }
 
     #[test]

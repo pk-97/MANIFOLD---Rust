@@ -385,7 +385,8 @@ impl Timeline {
         self.mark_clip_lookup_dirty();
     }
 
-    /// Ensure all layers have up-to-date sort caches. Call before `get_active_clips_at_beat_ref`.
+    /// Ensure all layers have up-to-date sort caches. Call before
+    /// `get_clips_in_beat_window_ref`.
     pub fn ensure_layers_sorted(&mut self) {
         for layer in &mut self.layers {
             layer.ensure_sorted();
@@ -403,7 +404,7 @@ impl Timeline {
         active_indices: &mut Vec<usize>,
     ) {
         self.ensure_layers_sorted();
-        self.get_active_clips_at_beat_ref(beat, results, active_indices);
+        self.get_clips_in_beat_window_ref(beat, beat, results, active_indices);
     }
 
     /// Get active clips at a given beat into caller-provided buffer.
@@ -417,6 +418,18 @@ impl Timeline {
         results: &mut Vec<(usize, usize)>,
         active_indices: &mut Vec<usize>,
     ) {
+        self.get_clips_in_beat_window_ref(beat, beat, results, active_indices);
+    }
+
+    /// Get clips covering any beat from `from` through `through`, inclusive.
+    /// Caller must ensure sort caches are current first. Group layers are skipped.
+    pub fn get_clips_in_beat_window_ref(
+        &self,
+        from: Beats,
+        through: Beats,
+        results: &mut Vec<(usize, usize)>,
+        active_indices: &mut Vec<usize>,
+    ) {
         results.clear();
         for li in 0..self.layers.len() {
             if self.layers[li].is_group() {
@@ -424,7 +437,7 @@ impl Timeline {
             }
 
             active_indices.clear();
-            self.layers[li].collect_active_clips_at_beat(beat, active_indices);
+            self.layers[li].collect_clips_in_beat_window(from, through, active_indices);
             for ci in active_indices.iter().copied() {
                 results.push((li, ci));
             }
@@ -664,6 +677,58 @@ mod enforce_tree_order_tests {
         t.enforce_tree_order();
         assert!(t.layers.is_empty());
     }
+}
+
+#[cfg(test)]
+mod clip_window_tests {
+    use super::*;
+    use crate::layer::Layer;
+    use crate::types::LayerType;
+    use crate::clip::TimelineClip;
+
+    fn clip_layer() -> Layer {
+        let mut layer = Layer::new("Clips".into(), LayerType::Video, 0);
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(0.0),
+            duration_beats: Beats(2.0),
+            ..TimelineClip::default()
+        });
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(4.0),
+            duration_beats: Beats(1.0),
+            ..TimelineClip::default()
+        });
+        layer.ensure_sorted();
+        layer
+    }
+
+    #[test]
+    fn beat_window_ref_clears_output_skips_groups_and_preserves_append_indices() {
+        let mut timeline = Timeline::default();
+        timeline.layers.push(Layer::new("Group".into(), LayerType::Group, 0));
+        timeline.layers.push(clip_layer());
+        timeline.ensure_layers_sorted();
+
+        let mut results = vec![(99, 99)];
+        let mut active_indices = Vec::new();
+        timeline.get_clips_in_beat_window_ref(
+            Beats(2.0),
+            Beats(4.0),
+            &mut results,
+            &mut active_indices,
+        );
+        assert_eq!(results, vec![(1, 1)]);
+
+        timeline.get_clips_in_beat_window_ref(
+            Beats(2.0),
+            Beats(2.0),
+            &mut results,
+            &mut active_indices,
+        );
+        assert!(results.is_empty(), "equal endpoints use point-query semantics");
+    }
+
+
 }
 
 #[cfg(test)]

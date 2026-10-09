@@ -15,6 +15,7 @@ pub mod audio_setup;
 pub mod audio_trigger;
 pub mod clip;
 pub mod color;
+pub mod control_history;
 pub mod effect_graph_def;
 pub mod effect_registration;
 pub mod effects;
@@ -86,6 +87,10 @@ pub use audio_setup::{
     AudioDeviceRef, AudioSend, AudioSendSource, AudioSetup, AudioSourceKind, SendAnalysisConfig,
 };
 pub use audio_trigger::{LayerClipTrigger, TransientEdge, TriggerFireMode, TriggerRoute};
+pub use control_history::{
+    ControlContribution, ControlHistory, ControlHistoryError, ControlObservation,
+    TriggerSourceStamp,
+};
 pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId, SceneId};
 pub use layer::OverlapAction;
 pub use macro_bank::{

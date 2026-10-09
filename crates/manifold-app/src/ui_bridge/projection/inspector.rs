@@ -2225,7 +2225,8 @@ mod fire_meter_roundtrip_tests {
         let dt = Seconds(1.0 / 60.0);
         let mut fire_meters = FireMeterCapture::default();
         let mut pulses: Vec<TriggerPulse> = Vec::new();
-        evaluate_all_audio_mods(&mut project, &snapshot, dt, &mut pulses, &[], &mut fire_meters);
+        evaluate_all_audio_mods(&mut project, &snapshot, dt, Seconds::ZERO,
+            &manifold_playback::clip_controls::ClipControlFrame::default(), &mut pulses, &mut fire_meters);
         let mut live_trigger = LiveTriggerState::default();
         live_trigger.evaluate(&snapshot, &project.audio_setup, &project.timeline.layers, dt, &mut fire_meters);
 

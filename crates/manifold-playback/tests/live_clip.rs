@@ -1,10 +1,10 @@
-use manifold_core::PresetTypeId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::*;
 use manifold_core::{Beats, Seconds};
 use manifold_editing::command::Command;
+use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::live_clip_manager::*;
 use manifold_playback::scheduler::ClipScheduler;
 
@@ -108,6 +108,22 @@ fn make_project() -> Project {
     project
 }
 
+fn add_trigger_layer(project: &mut Project) -> usize {
+    let owner_id = project.timeline.layers[0].layer_id.clone();
+    let mut trigger = Layer::new_trigger("Trigger".into(), owner_id, 2);
+    let trigger_id = trigger.layer_id.clone();
+    trigger.midi_note = 60;
+    trigger.midi_channel = 1;
+    trigger.midi_trigger_mode = MidiTriggerMode::SingleNote;
+    project.timeline.insert_layer(2, trigger);
+    project
+        .timeline
+        .layers
+        .iter()
+        .position(|layer| layer.layer_id == trigger_id)
+        .expect("trigger inserted")
+}
+
 // ─── Trigger ───
 
 #[test]
@@ -132,19 +148,23 @@ fn trigger_creates_phantom_clip() {
 
     assert!(clip.is_some());
     assert_eq!(mgr.live_slots().len(), 1);
-    assert!(mgr.is_live_slot_clip(&clip.unwrap().id));
+    let clip = clip.unwrap();
+    assert!(mgr.is_live_slot_clip(&clip.id));
+    assert_eq!(clip.layer_id, project.timeline.layers[0].layer_id);
+    let mut refs = Vec::new();
+    mgr.fill_live_slot_refs(&mut refs);
+    assert_eq!(refs[0].layer_id, clip.layer_id);
 }
 
 #[test]
-fn trigger_live_generator_clip() {
+fn trigger_live_content_clip_for_generator() {
     let mut project = make_project();
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
 
-    let clip = mgr.trigger_live_generator_clip(
+    let clip = mgr.trigger_live_content_clip(
         &mut project,
         &host,
-        PresetTypeId::PLASMA,
         0,
         4.0,
         None,
@@ -158,6 +178,119 @@ fn trigger_live_generator_clip() {
     let clip = clip.unwrap();
     assert!(clip.video_clip_id.is_empty());
     assert!(mgr.is_live_slot_clip(&clip.id));
+    assert_eq!(clip.layer_id, project.timeline.layers[0].layer_id);
+    let mut refs = Vec::new();
+    mgr.fill_live_slot_refs(&mut refs);
+    assert_eq!(refs[0].layer_id, clip.layer_id);
+}
+
+#[test]
+fn trigger_live_content_clip_for_trigger_owner_uses_trigger_clip() {
+    let mut project = make_project();
+    let trigger_index = add_trigger_layer(&mut project);
+    let host = MockHost::new();
+    let mut mgr = LiveClipManager::new();
+
+    let clip = mgr
+        .trigger_live_content_clip(
+            &mut project,
+            &host,
+            trigger_index as i32,
+            1.0,
+            None,
+            -1,
+            false,
+            0.0,
+            -1,
+        )
+        .unwrap();
+
+    assert!(clip.video_clip_id.is_empty());
+    assert_eq!(clip.layer_id, project.timeline.layers[trigger_index].layer_id);
+    assert_eq!(clip.duration_beats, Beats(2.0));
+}
+
+#[test]
+fn trigger_one_shot_expires_without_parent_mute_gate() {
+    let mut project = make_project();
+    project.timeline.layers[0].is_muted = true;
+    let trigger_index = add_trigger_layer(&mut project);
+    let mut host = MockHost::new();
+    host.beat = Beats(1.5);
+    let mut mgr = LiveClipManager::new();
+
+    let clip = mgr
+        .fire_layer_oneshot(
+            &mut project,
+            &host,
+            trigger_index as i32,
+            Beats(1.0),
+            0.0,
+        )
+        .unwrap();
+    assert_eq!(clip.layer_id, project.timeline.layers[trigger_index].layer_id);
+    assert!(mgr.is_live_slot_clip(&clip.id));
+    assert!(mgr.expire_due_oneshots(2.49).is_empty());
+    assert_eq!(mgr.expire_due_oneshots(2.5), vec![(trigger_index as i32, clip.id.clone())]);
+}
+
+#[test]
+fn trigger_midi_launch_preserves_channel_noteoff_guards() {
+    let mut project = make_project();
+    let trigger_index = add_trigger_layer(&mut project);
+    let mut host = MockHost::new();
+    let mut manager = LiveClipManager::new();
+    let mut launcher = ClipLauncher::new();
+
+    assert!(launcher.handle_note_on_from_layer(
+        &mut project,
+        &mut manager,
+        &mut host,
+        60,
+        1.0,
+        1,
+        7,
+        "device",
+        None,
+        1,
+        -1,
+        0.0,
+    ));
+    let clip = manager
+        .live_slots()
+        .get(&(trigger_index as i32))
+        .expect("trigger MIDI live slot");
+    assert!(clip.video_clip_id.is_empty());
+    let clip_id = clip.id.clone();
+
+    launcher.handle_note_off(
+        &mut project,
+        &mut manager,
+        &mut host,
+        60,
+        2,
+        7,
+        None,
+        2,
+        -1,
+        1.0,
+    );
+    assert!(manager.is_live_slot_clip(&clip_id));
+
+    launcher.handle_note_off(
+        &mut project,
+        &mut manager,
+        &mut host,
+        60,
+        1,
+        7,
+        None,
+        2,
+        -1,
+        1.0,
+    );
+    assert!(!manager.is_live_slot_clip(&clip_id));
+    assert!(host.stopped_clips.iter().any(|id| id == &clip_id));
 }
 
 #[test]

@@ -490,10 +490,9 @@ impl PresetInstance {
     ///
     /// Mints a new [`EffectId`] (so the copy is a distinct identity, not a
     /// reference to the original) and applies the "fresh copy" carry-rule:
-    /// hardware/external bindings are dropped — `ableton_mappings` and
-    /// `audio_mods` are cleared, so a pasted card is NOT mapped to the same
-    /// Ableton control or audio send as its source. Per-instance modulation
-    /// that has no external binding (`drivers`, `envelopes`) is kept.
+    /// hardware/external bindings are dropped. Clip response arms are kept
+    /// with fresh runtime state and no audio send; a combined audio/clip arm
+    /// becomes clip-only. Drivers and envelopes are kept.
     ///
     /// `group_id` is left untouched — the caller decides: a cross-chain paste
     /// drops it (the source group doesn't exist in the destination); a
@@ -502,7 +501,22 @@ impl PresetInstance {
         let mut copy = self.clone();
         copy.regenerate_id();
         copy.ableton_mappings = None;
-        copy.audio_mods = None;
+        let clip_responses: Vec<_> = self.audio_mods.iter().flatten().filter_map(|source| {
+            if !source.trigger_mode.is_some_and(|mode| mode.wants_clip_edge()) {
+                return None;
+            }
+            let mut response = crate::audio_mod::ParameterAudioMod::new(
+                source.param_id.clone(),
+                Default::default(),
+                source.source.feature,
+            );
+            response.enabled = source.enabled;
+            response.shape = source.shape;
+            response.action = source.action;
+            response.trigger_mode = Some(crate::audio_trigger::TriggerFireMode::ClipEdge);
+            Some(response)
+        }).collect();
+        copy.audio_mods = (!clip_responses.is_empty()).then_some(clip_responses);
         copy
     }
 
@@ -1620,6 +1634,43 @@ mod tests {
             copy.group_id, src.group_id,
             "duplicated() leaves group_id for the caller to remap/clear"
         );
+    }
+
+    #[test]
+    fn duplicated_preserves_clip_responses_without_audio_bindings_or_runtime_state() {
+        use crate::audio_mod::{AudioFeature, ParameterAudioMod, TriggerAction, WrapMode};
+        use crate::audio_trigger::TriggerFireMode;
+        let mut source = PresetInstance::new(PresetTypeId::BLOOM);
+        let modes = [None, Some(TriggerFireMode::Transient), Some(TriggerFireMode::ClipEdge), Some(TriggerFireMode::Both)];
+        source.audio_mods = Some(modes.into_iter().enumerate().map(|(i, mode)| {
+            let mut response = ParameterAudioMod::new(
+                format!("response-{i}").into(), crate::AudioSendId::new("external"), AudioFeature::default(),
+            );
+            response.trigger_mode = mode;
+            response.action = TriggerAction::Step { amount: 0.2, wrap: WrapMode::Clamp };
+            response.shape.range_max = 0.7;
+            response.enabled = i != 3;
+            response.fire_count = 10;
+            response.step_value = Some(0.5);
+            response.smoothed = 0.8;
+            response
+        }).collect());
+
+        let copy = source.duplicated();
+        let responses = copy.audio_mods.as_ref().unwrap();
+        assert_eq!(responses.len(), 2);
+        for (response, original) in responses.iter().zip(&source.audio_mods.as_ref().unwrap()[2..]) {
+            assert_eq!(response.param_id, original.param_id);
+            assert_eq!(response.enabled, original.enabled);
+            assert_eq!(response.shape, original.shape);
+            assert_eq!(response.action, original.action);
+            assert_eq!(response.trigger_mode, Some(TriggerFireMode::ClipEdge));
+            assert!(response.source.send_id.as_str().is_empty());
+            assert_eq!(response.fire_count, 0);
+            assert_eq!(response.step_value, None);
+            assert_eq!(response.smoothed, 0.0);
+        }
+        assert_eq!(source.audio_mods.as_ref().unwrap().len(), 4);
     }
 
     #[test]

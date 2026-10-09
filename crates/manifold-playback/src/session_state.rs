@@ -13,7 +13,7 @@
 
 use ahash::{AHashMap, AHashSet};
 use manifold_core::clip::TimelineClip;
-use manifold_core::session::SessionGrid;
+use manifold_core::session::{SessionGrid, SessionSlot};
 use manifold_core::timeline::Timeline;
 use manifold_core::{Beats, ClipId, LayerId, SceneId};
 
@@ -62,7 +62,10 @@ pub struct SessionRuntime {
     playing: AHashMap<LayerId, PlayingSlot>,
     pending: Vec<PendingSlotLaunch>,
     session_override: AHashSet<LayerId>,
+    arrangement_resumed_at: AHashMap<LayerId, Beats>,
     quantize_beats: Beats,
+    // Scratch index for extending retained spans across out-of-tick syncs.
+    control_span_indices: AHashMap<(LayerId, ClipId, u64), usize>,
 }
 
 impl SessionRuntime {
@@ -71,7 +74,9 @@ impl SessionRuntime {
             playing: AHashMap::with_capacity(8),
             pending: Vec::with_capacity(4),
             session_override: AHashSet::with_capacity(8),
+            arrangement_resumed_at: AHashMap::with_capacity(8),
             quantize_beats: Beats(DEFAULT_QUANTIZE_BEATS),
+            control_span_indices: AHashMap::with_capacity(8),
         }
     }
 
@@ -81,6 +86,21 @@ impl SessionRuntime {
     /// `query_active_timeline_clips` for that layer.
     pub fn is_overridden(&self, layer_id: &LayerId) -> bool {
         self.session_override.contains(layer_id)
+    }
+
+    pub(crate) fn arrangement_control_from(&self, layer_id: &LayerId) -> Option<Beats> {
+        self.arrangement_resumed_at.get(layer_id).copied()
+    }
+
+    /// Arrangement coverage ends at the first due session launch, even when
+    /// one display tick crosses both the launch and later arrangement clips.
+    pub(crate) fn pending_arrangement_end(&self, layer_id: &LayerId, through: Beats) -> Option<Beats> {
+        self.pending.iter().find_map(|pending| {
+            (&pending.layer_id == layer_id
+                && pending.target_beat <= through.0
+                && matches!(pending.action, LaunchAction::Launch(_)))
+                .then_some(Beats(pending.target_beat))
+        })
     }
 
     /// The scene currently playing on `layer_id`, if any.
@@ -114,6 +134,7 @@ impl SessionRuntime {
         self.playing.clear();
         self.pending.clear();
         self.session_override.clear();
+        self.control_span_indices.clear();
     }
 
     // ─── Quantize math (pure) ───
@@ -212,15 +233,19 @@ impl SessionRuntime {
     /// `session_override` and any playing/pending session state for the
     /// given layer, or every layer if `None`. Timeline clips resume via
     /// normal `sync_clips_to_time` on the next tick (section 5).
-    pub fn back_to_arrangement(&mut self, layer_id: Option<&LayerId>) {
+    pub fn back_to_arrangement(&mut self, layer_id: Option<&LayerId>, beat: Beats) {
         match layer_id {
             Some(id) => {
-                self.session_override.remove(id);
+                if self.session_override.remove(id) {
+                    self.arrangement_resumed_at.insert(id.clone(), beat);
+                }
                 self.playing.remove(id);
                 self.replace_pending_for_layer(id);
             }
             None => {
-                self.session_override.clear();
+                for id in self.session_override.drain() {
+                    self.arrangement_resumed_at.insert(id, beat);
+                }
                 self.playing.clear();
                 self.pending.clear();
             }
@@ -233,6 +258,7 @@ impl SessionRuntime {
     pub fn on_transport_stop(&mut self) {
         self.playing.clear();
         self.pending.clear();
+        self.arrangement_resumed_at.clear();
     }
 
     /// Seek: session slots are beat-anchored and stateless, so a seek never
@@ -241,6 +267,7 @@ impl SessionRuntime {
     /// position, so a jump backward/forward can't fire them off-grid or (if
     /// the new position is already past the old target) instantly.
     pub fn on_seek(&mut self, new_beat: f64) {
+        self.arrangement_resumed_at.clear();
         let q = self.quantize_beats.0;
         for p in &mut self.pending {
             p.target_beat = Self::ceil_to_boundary(new_beat, q);
@@ -303,9 +330,28 @@ impl SessionRuntime {
         out: &mut Vec<ActiveClipRef>,
         wrap_restarts: &mut Vec<ClipId>,
     ) {
-        self.activate_due_pending(current_beat);
+        self.resolve_refs_with_controls(Beats(current_beat), grid, timeline, out, wrap_restarts, None);
+    }
+
+    /// Resolve current membership and the control interval from the same slot
+    /// state. Capture old/new slot segments before applying pending transitions.
+    /// False means the complete interval exceeded the delivery capacity.
+    pub(crate) fn resolve_refs_with_controls(
+        &mut self,
+        current_beat: Beats,
+        grid: &SessionGrid,
+        timeline: &Timeline,
+        out: &mut Vec<ActiveClipRef>,
+        wrap_restarts: &mut Vec<ClipId>,
+        window: Option<(Beats, &mut Vec<ActiveClipRef>)>,
+    ) -> bool {
+        self.arrangement_resumed_at.retain(|id, _| timeline.layer_index_for_id(id).is_some());
+        let complete = window.is_none_or(|(from, controls)| {
+            self.collect_control_window(from, current_beat, grid, timeline, controls)
+        });
+        self.activate_due_pending(current_beat.0);
         if self.playing.is_empty() {
-            return;
+            return complete;
         }
 
         for (layer_id, slot) in self.playing.iter_mut() {
@@ -320,7 +366,7 @@ impl SessionRuntime {
                 continue;
             };
 
-            let elapsed = current_beat - slot.launch_beat;
+            let elapsed = current_beat.0 - slot.launch_beat;
             let iteration_f = (elapsed / length).floor();
             let local = elapsed - iteration_f * length;
             let iteration = iteration_f as i64;
@@ -352,14 +398,54 @@ impl SessionRuntime {
                     layer_index: layer_index as i32,
                     clip_index: ActiveClipRef::SESSION_SLOT,
                     start_beat: Beats(global_start),
+                    control_from: Beats(global_start),
                     duration_beats: clip.duration_beats,
                     is_looping: clip.is_looping,
                     is_video: !clip.video_clip_id.is_empty(),
-                    is_muted: false,
+                    is_muted: clip.is_muted,
                     layer_id: layer_id.clone(),
                 });
             }
         }
+        complete
+    }
+
+    fn collect_control_window(
+        &mut self,
+        from: Beats,
+        through: Beats,
+        grid: &SessionGrid,
+        timeline: &Timeline,
+        out: &mut Vec<ActiveClipRef>,
+    ) -> bool {
+        self.control_span_indices.clear();
+        for (index, entry) in out.iter().enumerate() {
+            self.control_span_indices.insert(
+                (entry.layer_id.clone(), entry.clip_id.clone(), entry.start_beat.0.to_bits()), index,
+            );
+        }
+        for (layer, playing) in &self.playing {
+            let end = self.pending.iter()
+                .find(|pending| &pending.layer_id == layer && pending.target_beat <= through.0)
+                .map_or(through, |pending| Beats(pending.target_beat));
+            if let (Some(slot), Some(index)) = (
+                grid.get_slot(layer, &playing.scene_id), timeline.layer_index_for_id(layer),
+            ) && !append_control_window(slot, index, Beats(playing.launch_beat), from, end, out, &mut self.control_span_indices) {
+                return false;
+            }
+        }
+        for pending in &self.pending {
+            if pending.target_beat > through.0 { continue; }
+            if let LaunchAction::Launch(scene) = &pending.action
+                && let (Some(slot), Some(index)) = (
+                    grid.get_slot(&pending.layer_id, scene), timeline.layer_index_for_id(&pending.layer_id),
+                )
+                && !append_control_window(slot, index, Beats(pending.target_beat), from, through, out, &mut self.control_span_indices)
+            {
+                return false;
+            }
+        }
+        true
     }
 
     /// Resolve the full `TimelineClip` for a session-slot `ActiveClipRef` at
@@ -383,6 +469,53 @@ impl SessionRuntime {
         resolved.start_beat = global_start_beat;
         Some(resolved)
     }
+}
+
+/// Retain observed spans, including completed loop iterations. Repeated syncs
+/// extend the same span in place; a pending replacement closes it at its boundary.
+fn append_control_window(
+    slot: &SessionSlot,
+    layer_index: usize,
+    launch: Beats,
+    from: Beats,
+    through: Beats,
+    out: &mut Vec<ActiveClipRef>,
+    indices: &mut AHashMap<(LayerId, ClipId, u64), usize>,
+) -> bool {
+    let length = slot.sequence.length_beats.0;
+    if length <= 0.0 || through <= from || through <= launch
+        || !slot.sequence.clips.iter().any(|clip| clip.duration_beats > Beats::ZERO)
+    {
+        return true;
+    }
+    let first = ((from.max(launch) - launch).0 / length).floor() as i64;
+    let last = ((through - launch).0 / length).floor() as i64;
+    let limit = crate::engine::trigger_delivery::DEFAULT_TRIGGER_DELIVERY_CAPACITY;
+    if last.saturating_sub(first) > limit as i64 { return false; }
+    for iteration in first..=last {
+        let origin = launch.0 + iteration as f64 * length;
+        for clip in &slot.sequence.clips {
+            let start = Beats(origin + clip.start_beat.0);
+            let end = Beats((origin + clip.end_beat().0).min(origin + length)).min(through);
+            if start >= through || end <= from || end <= start { continue; }
+            let key = (slot.layer_id.clone(), clip.id.clone(), start.0.to_bits());
+            if let Some(&index) = indices.get(&key) {
+                out[index].duration_beats = end - start;
+                continue;
+            }
+            if out.len() == limit { return false; }
+            indices.insert(key, out.len());
+            out.push(ActiveClipRef {
+                clip_id: clip.id.clone(), layer_index: layer_index as i32,
+                clip_index: ActiveClipRef::SESSION_SLOT, start_beat: start,
+                control_from: start,
+                duration_beats: end - start, is_looping: clip.is_looping,
+                is_video: !clip.video_clip_id.is_empty(), is_muted: clip.is_muted,
+                layer_id: slot.layer_id.clone(),
+            });
+        }
+    }
+    true
 }
 
 impl Default for SessionRuntime {
@@ -442,6 +575,43 @@ mod tests {
     }
 
     // ─── Quantize targeting (section 5) ───
+
+    #[test]
+    fn control_window_closes_replaced_and_stopped_slots_at_the_quantized_boundary() {
+        let layer = layer_id("l1");
+        let timeline = timeline_with_layers(&["l1"]);
+        let mut grid = grid_with_slot(&layer, &scene_id("a"), one_clip_sequence(4.0, 0.0, 4.0, "old"));
+        grid.slots.push(SessionSlot {
+            layer_id: layer.clone(), scene_id: scene_id("b"),
+            sequence: one_clip_sequence(4.0, 0.0, 4.0, "new"),
+            name: "New".into(), color: None,
+        });
+        let mut runtime = SessionRuntime::new();
+        runtime.set_quantize(Beats(1.0));
+        let (mut active, mut restarts, mut controls) = (Vec::new(), Vec::new(), Vec::new());
+        runtime.launch_slot(layer.clone(), scene_id("a"), 0.0, true);
+        runtime.resolve_refs(0.0, &grid, &timeline, &mut active, &mut restarts);
+        runtime.launch_slot(layer.clone(), scene_id("b"), 0.5, false);
+        active.clear();
+        assert!(runtime.resolve_refs_with_controls(
+            Beats(1.4), &grid, &timeline, &mut active, &mut restarts, Some((Beats::ZERO, &mut controls)),
+        ));
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].clip_id, ClipId::new("new"));
+        assert_eq!(controls.len(), 2);
+        assert_eq!((controls[0].start_beat, controls[0].end_beat()), (Beats::ZERO, Beats(1.0)));
+        assert_eq!((controls[1].start_beat, controls[1].end_beat()), (Beats(1.0), Beats(1.4)));
+
+        runtime.stop_slot(layer.clone(), 1.5, false);
+        active.clear();
+        assert!(runtime.resolve_refs_with_controls(
+            Beats(2.4), &grid, &timeline, &mut active, &mut restarts, Some((Beats(1.4), &mut controls)),
+        ));
+        assert!(active.is_empty());
+        assert_eq!(controls.len(), 2, "repeated sync extends the existing observed span");
+        assert_eq!(controls[1].end_beat(), Beats(2.0));
+        assert!(runtime.is_overridden(&layer), "stop does not resume arrangement");
+    }
 
     #[test]
     fn launch_slot_targets_next_boundary() {
@@ -692,7 +862,9 @@ mod tests {
         rt.launch_slot(l2.clone(), s1.clone(), 0.0, true);
         rt.activate_due_pending(0.0);
 
-        rt.back_to_arrangement(Some(&l1));
+        rt.back_to_arrangement(Some(&l1), Beats(2.0));
+        assert_eq!(rt.arrangement_control_from(&l1), Some(Beats(2.0)));
+        assert_eq!(rt.arrangement_control_from(&l2), None);
         assert!(!rt.is_overridden(&l1));
         assert!(!rt.is_playing_layer(&l1));
         assert!(rt.is_overridden(&l2));
@@ -707,7 +879,8 @@ mod tests {
         rt.launch_slot(l1.clone(), s1.clone(), 0.0, true);
         rt.activate_due_pending(0.0);
 
-        rt.back_to_arrangement(None);
+        rt.back_to_arrangement(None, Beats(2.0));
+        assert_eq!(rt.arrangement_control_from(&l1), Some(Beats(2.0)));
         assert!(!rt.is_overridden(&l1));
         assert!(!rt.is_playing_layer(&l1));
     }
