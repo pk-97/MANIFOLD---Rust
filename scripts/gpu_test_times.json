@@ -3122,7 +3122,6 @@
     "manifold-nodes/main/contracts::freeze::segment::tests::state_store_scalar_card_is_not_segment_stateless": 0,
     "manifold-nodes/main/contracts::freeze::segment::tests::two_pointwise_cards_concat_into_one_region": 0,
     "manifold-nodes/lib/bundled_generator_presets::tests::bundled_presets_include_shipping_generators": 0,
-    "manifold-nodes/lib/bundled_generator_presets::tests::every_bundled_generator_preset_parses": 0,
     "manifold-nodes/lib/bundled_generator_presets::tests::every_bundled_preset_binding_resolves_to_an_outer_param": 0,
     "manifold-nodes/lib/registry::gpu_tests::prewarm_populates_the_shared_cache_for_representative_converted_atoms": 0,
     "manifold-nodes/main/contracts::load::expand::compiler::camera_endpoint_tests::camera_chain_anchors_before_lens_and_preserves_downstream_fanout": 0,
