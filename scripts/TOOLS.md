@@ -23,7 +23,6 @@ Landing and gates:
   crate-move              replay a reviewed crate move or verify full tree identity  [scripts/crate_move_replay.py]  (cost: unit)
   move-check              prove a pure code move; --plan derives replay maps and reports template digests; --rewrite/--rewrites-file for explicit maps  [scripts/move_identity_check.py]  (cost: unit)
   test-census             record and compare test identities across crate moves  [scripts/test_census.py]  (cost: focused)
-  crate-closure           renderer crate-split census: `closure` sizes the engine hub, `seams` lists hub->family reaches  [scripts/crate_closure.py]  (cost: unit)
   docs-index              regenerate docs/README.md after adding or renaming a doc  [scripts/gen_docs_index.py]  (cost: unit)
   glb-status              regenerate the glTF conformance status doc  [scripts/gen_glb_conformance_status.py]  (cost: unit)
   gate-runner             machine-written verdict trail for lane gates  [scripts/gate_runner.py]  (cost: focused)
