@@ -95,7 +95,12 @@ pub fn render_view(def: EffectGraphDef, registry: &PrimitiveRegistry, params: Op
 }
 pub fn set_modifier_events(runtime: &mut PresetRuntime, events: Option<PreparedModifierEvents>) { runtime.modifier_events = events; }
 pub fn heal_bool_convert_bindings(def: &mut EffectGraphDef, registry: &PrimitiveRegistry) -> usize { super::convert_heal::heal_bool_convert_bindings(def, registry) }
-pub fn prepare_surface(def: &mut EffectGraphDef) { crate::water::runtime::gpu_flip_surface::prepare(def); }
+pub fn prepare_surface(def: &mut EffectGraphDef) {
+    crate::load::migration::prepare_stage(
+        def,
+        crate::load::migration::MigrationStage::BeforeSceneModifiers,
+    );
+}
 #[cfg(feature = "gpu-proofs")]
 pub fn build_segment_cards(indices: &[usize], effects: &[(usize, &manifold_core::effects::PresetInstance)], registry: &PrimitiveRegistry) -> Vec<(EffectGraphDef, std::sync::Arc<LoadedPresetView>)> { super::segments::build_segment_cards(indices, effects, registry) }
 

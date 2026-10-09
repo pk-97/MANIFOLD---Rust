@@ -319,6 +319,15 @@ inventory::submit! {
 
 inventory::submit! {
     crate::load::migration::GraphMigration {
+        name: "wire_gpu_flip_grid",
+        stage: crate::load::migration::MigrationStage::BeforeBindingCapture,
+        order: 310,
+        apply: wire_gpu_flip_grid,
+    }
+}
+
+inventory::submit! {
+    crate::load::migration::GraphMigration {
         name: "wire_liquid_frame_cursor",
         stage: crate::load::migration::MigrationStage::AfterFlatten,
         order: 320,

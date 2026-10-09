@@ -88,7 +88,10 @@ impl PresetRuntime {
         if crate::load::graph_loader::has_retired_params(&doc) {
             crate::load::graph_loader::retire_params(&mut doc);
         }
-        crate::water::runtime::gpu_flip_surface::prepare(&mut doc);
+        crate::load::migration::prepare_stage(
+            &mut doc,
+            crate::load::migration::MigrationStage::BeforeSceneModifiers,
+        );
         let (render_def, authoring) =
             if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc)
                 || crate::load::expand::contains_fragments(&doc)

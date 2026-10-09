@@ -357,7 +357,10 @@ manifold_core::testkit_visible! {
         let group_preview_map = manifold_core::flatten::group_output_producer_map(&doc);
         let mut flat_doc = manifold_core::flatten::flatten_groups(&doc).ok();
         if let Some(flat) = flat_doc.as_mut()
-            && crate::water::liquid::migration::wire_gpu_flip_grid(flat)
+            && crate::load::migration::prepare_stage(
+                flat,
+                crate::load::migration::MigrationStage::BeforeBindingCapture,
+            )
         {
             doc = flat.clone();
         }

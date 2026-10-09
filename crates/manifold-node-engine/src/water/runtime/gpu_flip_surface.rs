@@ -18,11 +18,11 @@ fn shared_param(name: &str) -> bool {
     name == "resolution_scale" || SHARED_INPUTS[4..].contains(&name)
 }
 
-pub(crate) fn prepare(def: &mut EffectGraphDef) {
+fn prepare(def: &mut EffectGraphDef) -> bool {
     if def.preset_metadata.as_ref().is_none_or(|m| m.id.as_str() != "WaterDamBreakGpuFlip")
         || !contains_step(&def.nodes)
     {
-        return;
+        return false;
     }
     let mut identities = BTreeSet::new();
     let mut aliased = BTreeSet::new();
@@ -31,7 +31,7 @@ pub(crate) fn prepare(def: &mut EffectGraphDef) {
         collect(&modifier.graph.nodes, &mut identities, &mut aliased);
     }
     let bindings = &mut def.preset_metadata.as_mut().expect("metadata checked").bindings;
-    prepare_groups(&mut def.nodes, &mut identities, &aliased, bindings);
+    prepare_groups(&mut def.nodes, &mut identities, &aliased, bindings)
 }
 
 fn contains_step(nodes: &[EffectGraphNode]) -> bool {
@@ -72,14 +72,16 @@ fn prepare_groups(
     identities: &mut BTreeSet<String>,
     aliased: &BTreeSet<String>,
     bindings: &mut Vec<BindingDef>,
-) {
+) -> bool {
+    let mut changed = false;
     for node in nodes {
         let Some(group) = &mut node.group else { continue };
         if node.node_id.as_str() == "surface" && node.type_id == "group" {
-            prepare_surface(group, identities, aliased, bindings);
+            changed |= prepare_surface(group, identities, aliased, bindings);
         }
-        prepare_groups(&mut group.nodes, identities, aliased, bindings);
+        changed |= prepare_groups(&mut group.nodes, identities, aliased, bindings);
     }
+    changed
 }
 
 fn prepare_surface(
@@ -87,29 +89,29 @@ fn prepare_surface(
     identities: &mut BTreeSet<String>,
     aliased: &BTreeSet<String>,
     bindings: &mut Vec<BindingDef>,
-) {
+) -> bool {
     let volumes: Vec<_> = group.nodes.iter().filter(|n|
         n.node_id.as_str() == "liquid_volume" && n.type_id == "node.particle_volume"
     ).cloned().collect();
     // A repeated stable identity cannot be safely addressed by metadata.
-    if volumes.len() != 1 { return; }
+    if volumes.len() != 1 { return false; }
     let volume = &volumes[0];
     if aliased.contains(volume.node_id.as_str())
         || group.wires.iter().any(|w| w.to_node == volume.id && w.to_port == "bricks")
         || group.nodes.iter().filter(|n| n.id == volume.id).count() != 1
     {
-        return;
+        return false;
     }
     let mut incoming = Vec::new();
     for &port in SHARED_INPUTS {
         let mut wires = group.wires.iter().filter(|w| w.to_node == volume.id && w.to_port == port);
         let wire = wires.next();
-        if wires.next().is_some() { return; }
+        if wires.next().is_some() { return false; }
         if let Some(wire) = wire {
-            if group.nodes.iter().filter(|n| n.id == wire.from_node).count() != 1 { return; }
+            if group.nodes.iter().filter(|n| n.id == wire.from_node).count() != 1 { return false; }
             incoming.push(wire.clone());
         } else if matches!(port, "blobs" | "cell_ranges" | "solid") {
-            return;
+            return false;
         }
         // Old surfaces predate bounds. wire_blob_bounds supplies one reduction
         // for this same blob endpoint to both consumers during graph loading.
@@ -117,7 +119,7 @@ fn prepare_surface(
     }
     let mut id = 0u32;
     while group.nodes.iter().any(|n| n.id == id) {
-        let Some(next) = id.checked_add(1) else { return };
+        let Some(next) = id.checked_add(1) else { return false };
         id = next;
     }
     let mut suffix = 0u32;
@@ -130,7 +132,7 @@ fn prepare_surface(
         {
             break (node_id, handle);
         }
-        let Some(next) = suffix.checked_add(1) else { return };
+        let Some(next) = suffix.checked_add(1) else { return false };
         suffix = next;
     };
     let mirrored: Vec<_> = bindings.iter().filter_map(|binding| {
@@ -159,6 +161,16 @@ fn prepare_surface(
     });
     identities.insert(node_id.to_string());
     bindings.extend(mirrored);
+    true
+}
+
+inventory::submit! {
+    crate::load::migration::GraphMigration {
+        name: "prepare_gpu_flip_surface",
+        stage: crate::load::migration::MigrationStage::BeforeSceneModifiers,
+        order: 300,
+        apply: prepare,
+    }
 }
 
 #[cfg(any(test, feature = "testkit"))]

@@ -1,6 +1,6 @@
 # Renderer Crate Split — one engine crate, node families as leaves
 
-**Status:** IN PROGRESS · Tier 1 and post-T1 production cleanup shipped · P1 boundary landed; baseline measured · P5 authorized and pending. Section 5 (Phasing).
+**Status:** IN PROGRESS · Tier 1 and post-T1 production cleanup shipped · P1 boundary landed; baseline measured · P5 implementation underway, extraction not landed. Section 5 (Phasing).
 **Prerequisites:** none.
 **Work items:** epic BUG-hkbdp (renderer crate split epic); phases BUG-jo1qt (P0 census and seams), BUG-k452g (P1a ui-paint), BUG-9hndn (P1 carve manifold-node-engine), BUG-vnbdt (P2 leaves), BUG-uones (P3 catalog), BUG-l6ltu (P4 review and measurement), BUG-t2jwg (P5 water seam). Status is recorded only above.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before any phase. Lead: Opus 5.5. Lanes: Astra (Codex) for every mechanical phase (Peter, 2026-10-07: *"please use Astra agents for this work"*); this overrides `feedback_astra_review_only` for this campaign only. Lanes make one commit then stop; the lead lands.
@@ -242,6 +242,89 @@ The P0 closure/seam census assumed the monolithic renderer layout and was retire
 - **What it decides (not decided here, by design):** the `PresetRuntime` extension seam for physics sources, the `substeps`↔`liquid` clock contract (owned by the live sim clock design — coordinate, don't amend), whether `scene_modifier_expand` follows. Mechanism constraint already fixed: registration through `inventory`, like D5; no new shared state; no trait object constructed per frame. The phase ends with `manifold-nodes-water` existing per D1, the hub free of `physics`/`fluids` dependencies (layering row flips), and INV-9's trace clean.
 - **Gate:** every invariant above plus `scripts/gpu_proofs_gate.py` with the water proof set (`fluid-perf-proofs` features on) and `scripts/rt_noise_gate.py` unchanged.
 - **Demo:** L2 — Peter's water demo project renders identically (pixel diff at threshold 0 on the three fixed frames the FLIP proofs already capture).
+
+#### P5 preparation seam (verified 2026-10-09 at `d5d226167`)
+
+The current static inventory finds 136 non-water source lines naming water or
+native physics in 35 engine files (92 production, 44 test-only). This is a source
+inventory, not the compiler-derived closure still required before moving files.
+Re-derive with `rg -n 'crate::water|manifold_physics|manifold_fluids'
+crates/manifold-node-engine/src --glob '*.rs' --glob '!**/water/**'`.
+
+| Remaining boundary | Current owner / consumer |
+|---|---|
+| Three CPU wire payloads: `RigidBody`, `FluidRole`, `FieldValue` | `bindings.rs`, `exec/{backend,metal_backend,execution}.rs`; water owns native values and prepared geometry |
+| Native observations, impulses and coupled publication | `primitive.rs`, `exec/effect_node.rs`, `graph.rs`, `water/physics_scene.rs` |
+| History, source identity, state carry and scene impulses | Seven `PresetRuntime` impl blocks and one `EffectSlot` impl in `water/runtime`; state is embedded in `runtime/core.rs` |
+| Clock interval carrier | `exec/substeps.rs::SubstepInterval` embeds the native `StepInterval`; only accepted endpoints and loop position cross this boundary |
+| Asset cooking and proof helpers | `scene/physics_mesh.rs::prepare_colliders`, `scene/vector_field.rs::ContinuousField`, built-in texture extent registrations and water test fixtures |
+
+Do not move native physics algorithms or caches into foundation merely to hide
+the dependency. Do not add a per-value box on graph writes: these wire values
+currently clone without allocating in the steady frame path. The remaining
+wire/runtime extension signatures must be pinned before their workers start.
+
+The runtime calls two water transformations directly: `runtime/modifier_runtime.rs`
+(`from_def_for_render_view`) prepares the sparse surface before scene expansion;
+`runtime/build.rs` (`from_render_def`) wires the flattened FLIP grid before binding
+capture. Both are construction-time operations. The grid transformation already
+registers with `load/migration.rs::GraphMigration` for ordinary graph loading.
+
+Extend that existing registry with `BeforeSceneModifiers` and
+`BeforeBindingCapture` stages. Register `gpu_flip_surface::prepare` at the first
+and `liquid::migration::wire_gpu_flip_grid` at the second. The engine calls
+`prepare_stage(&mut EffectGraphDef, MigrationStage) -> bool` at the existing call
+sites; it runs every callback in `(order, name)` order and reports whether any
+changed the owned runtime document. Surface preparation returns that change flag
+through its existing recursive walk. No new registry, document clone, runtime
+state, per-frame dispatch, or saved-graph migration is introduced. Existing
+`BeforeFlatten`/`AfterFlatten` callbacks and their order remain unchanged.
+
+Rejected: a separate water preparation provider, because the existing ordered
+registry already represents this operation. Also rejected: running every loader
+migration early, because that would change expansion and binding-capture order.
+The cost is two additional stage tags and a construction-time registry walk.
+
+Keep `scene_modifier_expand` in the engine: its authoring expansion is separate
+from this runtime family preparation. Removing native types from its coupling
+routes remains part of the pending runtime seam; this decision does not permit
+leaving a physics dependency behind.
+
+Verification: extend `migration_order_matches_table` to include the two runtime
+stages; route the existing surface fixture tests through the registered stage.
+Those tests check legacy graph preservation, unsupported inputs, and idempotence.
+The existing cloned-solid FLIP binding tests cover the second call site. Compile
+the engine, then run these focused CPU contracts. Full P5 invariants and landing
+remain required after the complete extraction; this is not a separate landing.
+
+#### P5 clock carrier seam (decided; implementation pending)
+
+Keep `manifold_physics::clock::SimulationClock`, `stepping::StepInterval` and every
+acceptance/CFL/event rule in their present native owners. The graph executor only
+needs accepted interval endpoints and numerical-loop position. In
+`exec/substeps.rs`, replace `SubstepInterval.interval: StepInterval` with
+`start: Seconds, end: Seconds`; retain `ordinal`, `first_iteration`, `iterations`
+and `total_iterations` unchanged. Add `duration(self) -> Seconds`, with the exact
+existing subtraction `Seconds(self.end.0 - self.start.0)`.
+`SubstepClockOutput::single` becomes
+`single(duration_port: &'static str, start: Seconds, end: Seconds,
+ordinal: u32, total_iterations: u32) -> Self`.
+
+`gpu_flip_domain::substep_clock_output` and `matter_domain::schedule_intervals`
+copy the native interval's endpoints into this existing graph carrier. Matter's
+native coupling reconstructs `StepInterval::new(start, end)` at its boundary.
+The executor and `matter_state` read `timing.duration()`; no duration is inferred
+from iteration count. This adds no clock, storage, conversion arithmetic or
+allocation. Rejected: relocating native stepping to the engine or foundation,
+because the executor is a consumer of accepted time, not its owner.
+
+Re-derive callers with `rg -n 'SubstepInterval|SubstepClockOutput::single|timing\.interval'
+crates --glob '*.rs'`. Migrate the production consumers and their existing tests
+together, using compilation to find old field accesses. Preserve the unequal
+interval, host-sync, pause, reset, export and coupled-progress proofs. The live
+clock's section 9 remains authoritative: two fixed accepted intervals at most,
+one after a late frame, existing overload discard, ordered hits and exact export.
+This refactor does not reopen that policy or claim the pending live HUD work.
 
 Phasing-completeness check: every D1 crate appears in exactly one phase's deliverables (ui-paint P1a, graph P1, image/scene/compositor P2, nodes P3, water P5); D5 P0; D6 P3; D7 P1/P2; D8 P4; D10 P0; D11 P0; D12 P1a; INV-5's script P0; measurement P4.
 
