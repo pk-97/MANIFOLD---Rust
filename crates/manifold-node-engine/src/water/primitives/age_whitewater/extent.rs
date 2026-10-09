@@ -1,5 +1,5 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn age_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", x.bytes("pool").unwrap_or(0))

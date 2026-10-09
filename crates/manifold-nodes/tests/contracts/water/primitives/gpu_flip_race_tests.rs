@@ -11,7 +11,7 @@ use manifold_node_engine::water::primitives::gpu_flip_preset::{PRESSURE_ITERATIO
 use crate::contracts::water::primitives::gpu_flip_scene_tests::{Run, divergence, particle_stats};
 use manifold_node_engine::water::primitives::gpu_flip_still::write_still;
 use manifold_node_engine::water::primitives::gpu_flip_volume::VolumeDrift;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::particles::FluidParticle;
 
 /// How the live particles move: mean, 99th-percentile and top speed (m/s),
 /// and the highest particle (m above the floor).

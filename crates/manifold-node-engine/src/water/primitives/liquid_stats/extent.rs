@@ -1,7 +1,8 @@
 //! Buffer extent rule owned by this node.
 use crate::water::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use crate::water::primitives::liquid_stats::partial_bytes;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, PARTICLE, Verdict};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{PARTICLE};
 
 fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let count = x.count("count", 0.0)?;

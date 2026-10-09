@@ -6,7 +6,7 @@ use crate::testkit::liquid_surface::read;
 use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels};
 use super::prefix_scan::ScanLabels;
 use super::whitewater_engine_gpu_tests::marker_phi;
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use manifold_fluids::sheeter;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 

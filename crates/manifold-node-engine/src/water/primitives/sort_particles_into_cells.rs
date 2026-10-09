@@ -19,7 +19,8 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEnco
 use super::prefix_scan::{PrefixScan, ScanLabels};
 use crate::channel_names::well_known;
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::water::fluid_particles::{CellRange, FLUID_PARTICLE_SPECS, FluidParticle, MAX_BINS, bin_counts, bin_total, searched_bins};
+use crate::particles::{FLUID_PARTICLE_SPECS, FluidParticle};
+use crate::water::fluid_particles::{CellRange, MAX_BINS, bin_counts, bin_total, searched_bins};
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::ports::{ArrayType, ChannelElementType, std430_channel};
 use crate::primitive::Primitive;

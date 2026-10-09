@@ -1,7 +1,8 @@
 //! Buffer extent rule owned by this node.
+use crate::water::liquid::extent::liquid_lattice;
 use std::mem::size_of;
 use crate::water::fluid_particles::bin_total;
-use crate::water::fluid_role::MAX_FLUID_ROLES;
+use crate::scene::fluid_domain::MAX_FLUID_ROLES;
 use crate::water::liquid::bodies::LiquidBody;
 use crate::water::liquid::grid::face_len;
 use crate::water::liquid::lattice::FlipSolverGrid;
@@ -18,12 +19,13 @@ use crate::water::primitives::gpu_flip_step::face_bytes;
 use crate::water::primitives::gpu_flip_step::ring_max;
 use crate::water::primitives::gpu_flip_step::scratch_bytes as step_scratch_bytes;
 use crate::water::whitewater::cell_total;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, PARTICLE, Verdict, body_rows, field_reads, lattice_total, search_fits, whole};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{PARTICLE, body_rows, field_reads, lattice_total, search_fits, whole};
 
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("identity", 16)?;
     x.covers_if_bound("identity_out", 16)?;
-    let cells = FlipSolverGrid::from_lattice(x.lattice()?).cells();
+    let cells = FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells();
     if let Some(reason) = lattice_refusal(cells) {
         return Err(Verdict::Refused(format!("GPU FLIP Step: {reason}. Lower Resolution.")));
     }
@@ -37,7 +39,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     x.publish("substep_count",history_slots as f32);
     x.hold(crate::water::liquid::substep_history::history_bytes(cells,history_slots));
-    let lattice = FlipSolverGrid::from_lattice(x.lattice()?);
+    let lattice = FlipSolverGrid::from_lattice(liquid_lattice(x)?);
     x.publish_transform("grid_bounds", lattice.bounds());
     for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes())
         .chain(["face_cells_x", "face_cells_y", "face_cells_z"].into_iter().zip(cells))

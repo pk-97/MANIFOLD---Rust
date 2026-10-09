@@ -14,7 +14,8 @@ use crate::testkit::water_codegen::run;
 use super::whitewater_pool_cpu::fixture::{FACE_CELLS, NODES, faces, grid, pool, tank};
 use {crate::water::primitives::whitewater_pool_cpu as cpu, super::whitewater_pool_cpu::Advect, super::whitewater_pool_cpu::Age, super::whitewater_pool_cpu::DEAD, super::whitewater_pool_cpu::Fields, super::whitewater_pool_cpu::Preserve};
 use crate::bindings::Slot;
-use crate::water::fluid_particles::{CellRange, FluidParticle, bin_counts};
+use crate::particles::{FluidParticle};
+use crate::water::fluid_particles::{CellRange, bin_counts};
 use crate::exec::effect_node::ParamValues;
 use crate::water::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
 

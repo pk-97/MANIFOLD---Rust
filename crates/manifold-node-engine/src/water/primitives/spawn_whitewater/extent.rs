@@ -3,7 +3,8 @@ use std::mem::size_of;
 use crate::water::primitives::whitewater_lifecycle::DEFAULT_CAPACITY;
 use crate::water::whitewater::cell_total;
 use manifold_fluids::WhitewaterSpawn;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, PARTICLE, Verdict, whitewater_faces, whitewater_lattice, whole};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{PARTICLE, whitewater_faces, whitewater_lattice, whole};
 
 fn spawn_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (nodes, _) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;

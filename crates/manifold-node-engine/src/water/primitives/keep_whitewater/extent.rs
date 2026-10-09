@@ -5,7 +5,8 @@ use crate::water::fluid_particles::searched_bins;
 use crate::water::liquid::bodies::LiquidBody;
 use crate::water::liquid::bodies::LiquidShape;
 use crate::water::whitewater::cell_total;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, searched, whitewater_lattice, whole};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{searched, whitewater_lattice, whole};
 
 fn keep_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let regions = u64::from(whole(x, "region_count", 0.0));

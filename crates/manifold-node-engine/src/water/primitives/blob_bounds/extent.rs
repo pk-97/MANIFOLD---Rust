@@ -1,5 +1,5 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn blob_bounds(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("bounds", 8)

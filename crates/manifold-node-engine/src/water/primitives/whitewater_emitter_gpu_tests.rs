@@ -15,7 +15,7 @@ use super::{
     },
 };
 use crate::exec::effect_node::NodeInstanceId;
-use crate::{water::fluid_particles::FluidParticle, freeze::codegen::InputSource};
+use crate::{particles::FluidParticle, freeze::codegen::InputSource};
 
 fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
     let mut v = vec![

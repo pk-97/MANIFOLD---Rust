@@ -215,7 +215,7 @@ fn flip_def(whitewater: bool) -> EffectGraphDef {
 /// The step's face grid resizes and the new water throws whitewater.
 #[test]
 fn gpu_flip_resolution_card_resizes_at_runtime() {
-    use manifold_node_engine::water::fluid_particles::FluidParticle;
+    use manifold_node_engine::particles::FluidParticle;
     fn particles(buffer: &manifold_gpu::GpuBuffer, bytes: u64) -> &[FluidParticle] {
         assert!(buffer.size() >= bytes);
         let len = bytes as usize / std::mem::size_of::<FluidParticle>();
@@ -296,7 +296,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         let live = state_live(&show);
         println!("Resolution {n}: {count} published, {live} live in state, {seeded} initially seeded, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
         assert_eq!(show.provided_bytes(step, "faces"), faces, "Resolution {n}: the step's faces");
-        let record = std::mem::size_of::<manifold_node_engine::water::fluid_particles::FluidParticle>() as u64;
+        let record = std::mem::size_of::<manifold_node_engine::particles::FluidParticle>() as u64;
         assert_eq!(show.provided_bytes("fill", "particles"), WaterScene::dam_break(n as usize).particles() * record, "Resolution {n}: the fill");
         assert_eq!(count as u64, live, "Resolution {n}: the frame's live water");
         assert_eq!(count as u64, published_live(&show), "Resolution {n}: completed publication");
@@ -870,7 +870,7 @@ mod emitter_oracle {
     use manifold_node_engine::water::primitives::whitewater_type::WhitewaterType;
     use crate::contracts::node_graph::catalog_tests::whitewater_scene::*;
     use manifold_node_engine::bindings::Slot;
-    use manifold_node_engine::water::fluid_particles::FluidParticle;
+    use manifold_node_engine::particles::FluidParticle;
     use manifold_node_engine::water::liquid::grid::face_len;
     use manifold_node_engine::primitive::Primitive;
     use manifold_node_engine::water::whitewater::KnownValue;

@@ -1,5 +1,6 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, KNOWN_VALUE, Verdict, whitewater_grid};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{KNOWN_VALUE, whitewater_grid};
 
 fn extend_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (_, cells) = whitewater_grid(x)?;

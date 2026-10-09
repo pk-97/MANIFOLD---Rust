@@ -13,7 +13,8 @@ use super::sort_particles_into_cells::SortParticlesIntoCells;
 use crate::exec::backend::Backend;
 use crate::bindings::Slot;
 use crate::exec::effect_node::ParamValues;
-use crate::water::fluid_particles::{CellRange, FluidParticle, bin_counts};
+use crate::particles::{FluidParticle};
+use crate::water::fluid_particles::{CellRange, bin_counts};
 use crate::parameters::ParamValue;
 use crate::primitive::Primitive;
 

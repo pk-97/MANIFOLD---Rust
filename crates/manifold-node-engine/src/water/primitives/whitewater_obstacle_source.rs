@@ -8,7 +8,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEnco
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 use crate::exec::effect_node::EffectNodeContext;
 use crate::water::fluid::TICK;
-use crate::water::fluid_role::MAX_FLUID_ROLES;
+use crate::scene::fluid_domain::MAX_FLUID_ROLES;
 use crate::water::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use crate::water::liquid::lattice::{LiquidLattice, PADDING_NODES};
 use crate::parameters::{ParamDef, ParamType, ParamValue};

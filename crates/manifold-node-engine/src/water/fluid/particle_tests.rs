@@ -7,7 +7,7 @@ use manifold_gpu::{FrameClock, GpuDevice, GpuEvent};
 
 use super::*;
 use crate::water::fluid::FluidDomainNative;
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 
 fn settings() -> FluidSettings {
     FluidSettings {

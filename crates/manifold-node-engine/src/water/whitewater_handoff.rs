@@ -15,7 +15,7 @@ use manifold_fluids::{
 use manifold_gpu::{FrameClock, GpuBuffer, GpuDevice};
 
 use crate::water::fluid::{TICK, whitewater_fade};
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::water::liquid::grid::face_len;
 
 /// The frame-completion clock the rings stamp and check.

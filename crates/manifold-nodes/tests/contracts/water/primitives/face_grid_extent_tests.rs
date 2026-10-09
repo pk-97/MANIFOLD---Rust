@@ -58,7 +58,8 @@ fn face_grid_fusion_in_host_graphs() {
 #[test]
 fn matter_face_scene_covers_every_dispatch() {
     use manifold_node_engine::water::primitives::face_grid_scenes::matter_dam_break_faces;
-    use manifold_node_engine::water::liquid::extent::{ExtentError, LiquidPreset};
+    use manifold_node_engine::exec::extent::{ExtentError};
+use manifold_node_engine::water::liquid::extent::{LiquidPreset};
     for collider in [false, true] {
         let mut preset = LiquidPreset::build(&matter_dam_break_faces(None, collider)).expect("the face scene builds");
         let mut ran = 0;

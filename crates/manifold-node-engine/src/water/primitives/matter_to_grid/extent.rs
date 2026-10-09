@@ -1,13 +1,15 @@
 //! Buffer extent rule owned by this node.
+use crate::water::liquid::extent::liquid_lattice;
 use std::mem::size_of;
 use crate::water::fluid_particles::CellRange;
 use crate::water::fluid_particles::bin_total;
 use crate::water::matter::grid_accum_bytes;
 use crate::water::matter::lattice_blocks;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, node_extent, whole};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{node_extent, whole};
 
 fn matter_to_grid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = x.lattice()?;
+    let lattice = liquid_lattice(x)?;
     node_extent(x, &lattice)?;
     x.covers("accum", grid_accum_bytes(lattice.nodes()))?;
     if x.wired("order") && x.wired("ranges") {

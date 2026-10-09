@@ -10,8 +10,9 @@ use crate::water::fluid::{CoupledRigidInputs, FluidControls, FluidDomainNative, 
 use crate::water::fluid_cache::CacheMode;
 use crate::water::fluid_mesh_upload::FluidMeshUpload;
 use crate::water::fluid::particle_ring::SlotFrame;
-use crate::water::fluid_particles::FluidParticle;
-use crate::water::fluid_role::{FluidRole, MAX_FLUID_ROLES};
+use crate::particles::FluidParticle;
+use crate::scene::fluid_domain::MAX_FLUID_ROLES;
+use crate::water::fluid_role::{FluidRole};
 use crate::exec::instance_upload::InstanceSnapshotUpload;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::scene::impulse::RigidImpulseTargets;

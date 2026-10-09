@@ -1,7 +1,8 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
 use crate::water::fluid_particles::FluidBlob;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, searched};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{searched};
 
 fn shape_particle_blobs(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     searched(x)?;

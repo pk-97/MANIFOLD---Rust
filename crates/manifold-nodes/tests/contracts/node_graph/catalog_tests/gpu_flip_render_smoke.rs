@@ -29,7 +29,7 @@ use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::testkit::gpu::{encode_rgba8_png, readback_srgb_rgba8};
-use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry};
 use manifold_node_engine::runtime::preset_context::PresetContext;

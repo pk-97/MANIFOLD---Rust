@@ -8,7 +8,7 @@ use manifold_core::id::NodeId;
 use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID};
 
 use crate::bundled_presets::bundled_preset_def;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::water::matter::{MatterPoint, STATS_WORDS};
 use manifold_node_engine::water::primitives::face_grid_scenes::matter_dam_break_faces;
 use manifold_node_engine::water::primitives::liquid_stats::LIQUID_STATS_WORDS;
@@ -440,7 +440,8 @@ const BOX_NODES: [&str; 6] = ["box_world", "box_start", "box_body", "box_mesh", 
 mod tests {
 
     use super::*;
-    use manifold_node_engine::water::liquid::extent::{ExtentError, LiquidPreset};
+    use manifold_node_engine::exec::extent::{ExtentError};
+use manifold_node_engine::water::liquid::extent::{LiquidPreset};
     use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain};
 

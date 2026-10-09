@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::exec::effect_node::EffectNodeContext;
-use crate::water::fluid_role::MAX_FLUID_ROLES;
+use crate::scene::fluid_domain::MAX_FLUID_ROLES;
 use crate::water::liquid::bodies::{LIQUID_POSE, LiquidBody};
 use crate::water::matter::REACTION_WORDS;
 use crate::parameters::{ParamDef, ParamType, ParamValue};

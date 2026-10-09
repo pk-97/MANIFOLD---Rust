@@ -7,7 +7,8 @@ use crate::water::primitives::whitewater_step::DEFAULT_CAPACITY as STEP_CAPACITY
 use crate::water::primitives::whitewater_step::MAX_CAPACITY as STEP_MAX_CAPACITY;
 use crate::water::primitives::whitewater_step::StepShape;
 use crate::water::whitewater::cell_total;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, field_reads, whole};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{field_reads, whole};
 
 fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let packed = crate::water::primitives::whitewater_step::packed_face_source(

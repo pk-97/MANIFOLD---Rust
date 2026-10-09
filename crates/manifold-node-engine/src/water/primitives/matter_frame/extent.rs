@@ -1,14 +1,16 @@
 //! Buffer extent rule owned by this node.
+use crate::water::liquid::extent::liquid_lattice;
 use std::mem::size_of;
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::water::liquid::frame_ring::RING;
 use crate::water::matter::MatterPoint;
 use crate::water::matter::STATS_WORDS;
 use crate::water::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, cover_frame_faces, provide_frame_faces};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{cover_frame_faces, provide_frame_faces};
 
 fn matter_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = x.lattice()?;
+    let lattice = liquid_lattice(x)?;
     provide_frame_faces(x, lattice.cells(), MATTER_FACE_VALID_LAYERS as f32);
     let count = x.count("count", 0.0)?;
     x.covers("points", u64::from(count) * size_of::<MatterPoint>() as u64)?;

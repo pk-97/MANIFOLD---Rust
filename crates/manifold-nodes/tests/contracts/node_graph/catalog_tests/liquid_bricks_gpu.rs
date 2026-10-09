@@ -750,8 +750,8 @@ fn scatter_fixture(
     resolution: u32,
     spray: bool,
     seed: u64,
-) -> Vec<manifold_node_engine::water::fluid_particles::FluidParticle> {
-    use manifold_node_engine::water::fluid_particles::FluidParticle;
+) -> Vec<manifold_node_engine::particles::FluidParticle> {
+    use manifold_node_engine::particles::FluidParticle;
     let min = lattice.min();
     let unit = lattice.size[0] / 4.0;
     let marker = 0.310_175_25 * lattice.cell;

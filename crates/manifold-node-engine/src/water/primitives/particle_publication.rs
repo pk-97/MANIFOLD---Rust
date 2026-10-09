@@ -184,7 +184,7 @@ fn binding(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
 #[cfg(any(test, feature = "testkit"))]
 pub mod reference {
     use super::super::liquid_stats::NARROW_BAND_SHORTAGE_WORD;
-    use crate::water::fluid_particles::FluidParticle;
+    use crate::particles::FluidParticle;
 
     /// `radius > 0.0` as that shader's GPU compare evaluated it: subnormals
     /// flush to zero (measured on the 1-bit publisher, 2026-10-04).
@@ -249,7 +249,7 @@ pub mod reference {
 mod tests {
     use super::super::liquid_stats::LIQUID_STATS_WORDS;
     use super::{DIGITS, PASSES, TILE, reference, tiles};
-    use crate::water::fluid_particles::FluidParticle;
+    use crate::particles::FluidParticle;
 
     /// Finite records, a fifth of them dead by each kind of non-positive or
     /// subnormal radius, ids under `mask`.

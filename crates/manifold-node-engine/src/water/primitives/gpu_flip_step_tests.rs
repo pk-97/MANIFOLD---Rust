@@ -16,7 +16,8 @@ use super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass, tile_to
 use super::liquid_fill::LiquidFill;
 use crate::testkit::liquid_surface::{Harness, params, read};
 use super::liquid_stats::with_stats_layout;
-use crate::water::fluid_particles::{CellRange, FaceSample, FluidParticle};
+use crate::particles::{FluidParticle};
+use crate::water::fluid_particles::{CellRange, FaceSample};
 use crate::water::liquid::bodies::{BodySupports, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, SUPPORT_VEC4S, body_pose_at, pack_distance_atlas, pack_supports, unpack_supports};
 use crate::water::liquid::coupling::coupled_start;
 use manifold_physics::coupled_motion::{Held, MAX_SUPPORT_POINTS, Mobility, SupportPoint, constrained_mobility, coupled_state_at};

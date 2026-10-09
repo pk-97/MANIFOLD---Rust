@@ -17,7 +17,8 @@ fn face_refusal(packed: bool, axes: [bool; 3], tick: bool, phrase: &str) {
     use manifold_node_engine::{exec::effect_node::FrameTime, exec::backend::MockBackend, bindings::NodeInputs, bindings::NodeOutputs, bindings::Slot};
     use manifold_node_engine::water::primitives::gpu_flip_preset::{render_def, WaterScene};
     use manifold_node_engine::water::primitives::gpu_flip_preset::with_whitewater_axes;
-    use manifold_node_engine::water::liquid::extent::{check_preset_extents, ExtentError};
+    use manifold_node_engine::exec::extent::{ExtentError};
+use manifold_node_engine::water::liquid::extent::{check_preset_extents};
     let backend = MockBackend::new();
     let mut inputs = Vec::new();
     if tick { inputs.push(("distance", Slot(0))); }
@@ -92,7 +93,7 @@ fn whitewater_legacy_refuses_packed_faces() {
 #[cfg(feature = "gpu-proofs")]
 mod gpu {
 use manifold_node_engine::scene::transform::Transform;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::water::primitives::whitewater_step::fused_tests::synthetic_shape;
 use manifold_node_engine::water::liquid::fields::FieldBinding;
 use manifold_node_engine::water::whitewater::WhitewaterParticle;

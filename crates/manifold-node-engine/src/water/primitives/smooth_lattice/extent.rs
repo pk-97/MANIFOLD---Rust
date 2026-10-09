@@ -1,5 +1,6 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, brick_schedule, nodes_total};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{brick_schedule, nodes_total};
 
 fn smooth_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);

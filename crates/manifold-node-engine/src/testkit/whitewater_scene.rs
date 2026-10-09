@@ -590,7 +590,7 @@ impl Show {
     /// Live particles (radius above 0) in the storage the named node provides
     /// on `port`.
     pub fn provided_live(&self, name: &str, port: &str) -> u64 {
-        use crate::water::fluid_particles::FluidParticle;
+        use crate::particles::FluidParticle;
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
         let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
         let ptr = buffer.mapped_ptr().expect("shared particle storage");

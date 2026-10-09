@@ -1,5 +1,6 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, nodes_total};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{nodes_total};
 use crate::water::primitives::offset_lattice::extent::offset_lattice;
 
 fn redistance_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

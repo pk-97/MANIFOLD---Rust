@@ -8,7 +8,7 @@
 use manifold_gpu::GpuBuffer;
 
 use crate::exec::effect_node::EffectNodeContext;
-use crate::water::fluid_role::MAX_FLUID_ROLES;
+use crate::scene::fluid_domain::MAX_FLUID_ROLES;
 use crate::water::matter::{MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes, grid_bytes, substep_duration};
 use crate::parameters::ParamValue;
 use crate::water::physics_metrics::DroppedTimeTracker;

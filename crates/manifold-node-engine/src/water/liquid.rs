@@ -26,7 +26,8 @@ mod scene_contract;
 pub mod tick_samples;
 
 use crate::bindings::NodeInputs;
-use crate::water::fluid_role::{FluidRole, MAX_FLUID_ROLES};
+use crate::scene::fluid_domain::MAX_FLUID_ROLES;
+use crate::water::fluid_role::{FluidRole};
 
 /// Read every wired role port into its slot; true when a wired role is not
 /// ready yet.
@@ -41,10 +42,6 @@ pub fn read_roles(inputs: &NodeInputs<'_>, ports: &[&str], roles: &mut [Option<F
     }
     pending
 }
-
-/// The largest count a scalar wire carries exactly: wires are f32, and past
-/// 2^24 a count can round up past the storage sized from the true count.
-pub const EXACT_F32_COUNT: u32 = 1 << 24;
 
 /// Rest density of water, kg/m³: every liquid solver's water weighs this.
 pub const WATER_DENSITY: f32 = 1000.0;

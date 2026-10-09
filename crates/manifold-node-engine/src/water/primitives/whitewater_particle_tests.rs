@@ -16,7 +16,7 @@ use {crate::water::primitives::whitewater_particle_cpu as cpu, super::whitewater
 use super::whitewater_type::WhitewaterType;
 use manifold_fluids::WhitewaterSpawn;
 use crate::exec::effect_node::ParamValues;
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::water::liquid::grid::face_len;
 use crate::water::whitewater::KnownValue;
 

@@ -2,7 +2,7 @@
 use std::mem::size_of;
 use crate::mesh::InstanceTransform;
 use crate::water::physics::MAX_COPIES;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn physics_world(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers_if_bound("instances", MAX_COPIES as u64 * size_of::<InstanceTransform>() as u64)

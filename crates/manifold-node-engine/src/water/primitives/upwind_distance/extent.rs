@@ -1,5 +1,6 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{ExtentRule, whole};
+use crate::exec::extent::{ExtentRule};
+use crate::water::liquid::extent::{whole};
 
 inventory::submit! {
     ExtentRule { type_id: "node.upwind_distance", check: |x| {

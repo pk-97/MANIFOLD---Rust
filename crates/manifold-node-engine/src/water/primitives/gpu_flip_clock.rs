@@ -826,7 +826,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::water::fluid_particles::FluidParticle;
+    use crate::particles::FluidParticle;
     use crate::water::liquid::bodies::LiquidBody;
     use bytemuck::Zeroable;
     use manifold_physics::stepping::CflRestrictions;

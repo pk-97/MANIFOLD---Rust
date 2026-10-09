@@ -1,6 +1,6 @@
 //! Buffer extent rule owned by this node.
 use crate::water::primitives::dot_products::MAX_ROWS;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, whole_param};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict, whole_param};
 
 fn dot_products(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let length = u64::from(whole_param(x, "row_length", 1024.0).max(1));

@@ -2,7 +2,8 @@
 use std::mem::size_of;
 use crate::mesh::MeshVertex;
 use crate::water::primitives::volume_surface_mesh::start_capacity;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, brick_schedule, nodes_total};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{brick_schedule, nodes_total};
 
 fn volume_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);

@@ -8,7 +8,7 @@ use manifold_physics::input::EventStamp;
 use manifold_physics::{FieldValue, Seconds};
 
 use crate::exec::effect_node::EffectNode;
-use crate::water::fluid_role::MAX_FLUID_ROLES;
+use crate::scene::fluid_domain::MAX_FLUID_ROLES;
 use crate::parameters::ParamType;
 use crate::persistence::PrimitiveRegistry;
 use crate::scene::impulse::ImpulseTarget;

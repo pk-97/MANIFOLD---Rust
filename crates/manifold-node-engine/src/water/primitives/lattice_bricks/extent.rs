@@ -1,6 +1,7 @@
 //! Buffer extent rule owned by this node.
 use crate::water::primitives::particle_volume::volume_scale;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, nodes_total, required_blob_bounds, searched};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{nodes_total, required_blob_bounds, searched};
 
 fn lattice_bricks(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     use crate::water::primitives::{lattice_bricks::brick_layout, prefix_scan::storage_words};

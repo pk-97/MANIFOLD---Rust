@@ -5,7 +5,8 @@ use std::borrow::Cow;
 use manifold_node_engine::water::primitives::particle_volume::ParticleVolume;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
-use manifold_node_engine::water::fluid_particles::{CellRange, FluidBlob, FluidParticle};
+use manifold_node_engine::particles::{FluidParticle};
+use manifold_node_engine::water::fluid_particles::{CellRange, FluidBlob};
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 

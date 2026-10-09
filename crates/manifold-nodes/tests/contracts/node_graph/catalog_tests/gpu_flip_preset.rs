@@ -7,7 +7,7 @@ use manifold_node_engine::water::primitives::gpu_flip_preset::testkit::surface_g
 use manifold_core::effect_graph_def::*;
 use manifold_core::PresetTypeId;
 use serde_json::{Value, json};
-    use manifold_node_engine::water::liquid::extent::{ExtentError, ExtentReport};
+    use manifold_node_engine::exec::extent::{ExtentError, ExtentReport};
 
     use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
 

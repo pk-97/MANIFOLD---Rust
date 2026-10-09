@@ -1,7 +1,4 @@
-//! Shared compute infrastructure for particle and agent-based generators.
-//!
-//! Provides the shared Particle struct layout that matches Unity's
-//! ParticleCommon.cginc (48 bytes per particle).
+//! Shared particle buffer layouts and compute constants.
 
 /// Particle struct matching WGSL layout of ParticleCommon (vec3 alignment = 16).
 /// WGSL pads vec3<f32> to 16-byte alignment, so the struct is 64 bytes, not 48.
@@ -80,4 +77,30 @@ mod particle_specs_drift {
              same byte layout."
         );
     }
+}
+
+/// One liquid particle in scene space. Layout equals
+/// `manifold_fluids::ParticleRecord`, so the FLIP worker writes it directly.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct FluidParticle {
+    /// Metres; w = physical radius in metres. w = 0 marks an unused slot.
+    pub position_radius: [f32; 4],
+    /// Metres per second.
+    pub velocity: [f32; 3],
+    /// Birth order within the frame's identity epoch. 0 = no identity.
+    pub id: u32,
+}
+
+/// Std430: position_radius Vec4F at 0, velocity Vec3F at 16, id U32 at 28;
+/// stride 32 (vec3 + u32 pack into one 16-byte slot, as `Particle`'s
+/// velocity/life do).
+pub const FLUID_PARTICLE_SPECS: &[crate::ports::ChannelSpec] = &[
+    crate::ports::ChannelSpec { name: crate::channel_names::well_known::POSITION_RADIUS, ty: crate::ports::ChannelElementType::Vec4F },
+    crate::ports::ChannelSpec { name: crate::channel_names::well_known::VELOCITY, ty: crate::ports::ChannelElementType::Vec3F },
+    crate::ports::ChannelSpec { name: crate::channel_names::well_known::ID, ty: crate::ports::ChannelElementType::U32 },
+];
+
+impl crate::ports::KnownItem for FluidParticle {
+    const SPECS: &'static [crate::ports::ChannelSpec] = FLUID_PARTICLE_SPECS;
 }

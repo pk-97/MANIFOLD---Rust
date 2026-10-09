@@ -1,11 +1,13 @@
 //! Buffer extent rule owned by this node.
+use crate::water::liquid::extent::liquid_lattice;
 use std::mem::size_of;
 use crate::water::liquid::lattice::FlipSolverGrid;
 use crate::water::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use crate::water::primitives::gpu_flip_step::face_bytes;
 use crate::water::primitives::whitewater_step::DEFAULT_CAPACITY as STEP_CAPACITY;
 use crate::water::primitives::whitewater_step::MAX_CAPACITY as STEP_MAX_CAPACITY;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, PARTICLE, Verdict};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{PARTICLE};
 
 fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.provide("identity", 16);
@@ -39,7 +41,7 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
     let mut interior_check = Ok(());
     if x.wired("interior_in") {
-        let bytes = crate::water::liquid::grid::interior_bytes(FlipSolverGrid::from_lattice(x.lattice()?).cells());
+        let bytes = crate::water::liquid::grid::interior_bytes(FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells());
         x.provide("interior", bytes);
         x.hold(bytes);
         if x.bytes("interior_in") != Some(bytes) {
@@ -56,7 +58,7 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         if ["nodes_x", "nodes_y", "nodes_z"].iter().any(|port| x.input(port).is_none()) {
             return Err(Verdict::Refused("Liquid State: faces_in needs the lattice on nodes_x, nodes_y and nodes_z".into()));
         }
-        let faces = face_bytes(FlipSolverGrid::from_lattice(x.lattice()?).cells());
+        let faces = face_bytes(FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells());
         let fed = x.feeds("faces");
         x.provide("faces", if fed { faces } else { 0 });
         if fed {

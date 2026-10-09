@@ -14,7 +14,7 @@ use manifold_gpu::GpuBuffer;
 
 use crate::gpu::gpu_encoder::GpuEncoder;
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::water::physics::offline_simulation;
 use crate::primitive::Primitive;

@@ -70,7 +70,7 @@ fn fluid_particle_blend_fused_codegen_validates() {
 
 /// Pass-2 CPU reference fixtures, not proof of the current GPU publisher.
 pub(super) mod publication_contract {
-    use manifold_node_engine::water::fluid_particles::FluidParticle;
+    use manifold_node_engine::particles::FluidParticle;
 
     struct ReferenceIds {
         next: u64,
@@ -287,7 +287,7 @@ mod gpu_tests {
     use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
     use crate::contracts::node_graph::catalog_tests::particle_frame_blend_tests::*;
     use manifold_node_engine::mesh::InstanceTransform;
-    use manifold_node_engine::water::fluid_particles::FluidParticle;
+    use manifold_node_engine::particles::FluidParticle;
     use manifold_node_engine::freeze::codegen::ENTRY;
     use manifold_gpu::GpuBinding;
 

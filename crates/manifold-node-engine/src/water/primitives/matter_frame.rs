@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use crate::exec::effect_node::EffectNodeContext;
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::water::liquid::frame_ring::{FrameRing, RING};
 use crate::water::liquid::grid::{FACE_INPUT_PORTS, PublishedFaces};
 use crate::water::liquid::lattice::LiquidLattice;

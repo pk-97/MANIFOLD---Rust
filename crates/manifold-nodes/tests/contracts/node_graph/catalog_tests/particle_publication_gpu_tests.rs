@@ -6,7 +6,8 @@ use crate::contracts::node_graph::catalog_tests::particle_frame_blend_tests::pub
 use manifold_node_engine::water::primitives::particle_identity::{BirthReservation, ParticleIdentity};
 use manifold_node_engine::water::primitives::particle_publication::reference::{live as live_radius, publish as oracle};
 use manifold_node_engine::water::primitives::particle_publication::{ParticlePublication, Publication, scratch_bytes};
-use manifold_node_engine::water::fluid_particles::{CellRange, FluidParticle};
+use manifold_node_engine::particles::{FluidParticle};
+use manifold_node_engine::water::fluid_particles::{CellRange};
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
 fn shared<T: bytemuck::Pod>(device: &manifold_gpu::testkit::TestDevice, values: &[T]) -> GpuBuffer {

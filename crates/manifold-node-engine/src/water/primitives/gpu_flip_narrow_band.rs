@@ -8,7 +8,8 @@ use std::mem::size_of;
 
 use manifold_gpu::{GpuBuffer, GpuComputePipeline, GpuDevice};
 
-use crate::water::fluid_particles::{FaceSample, FluidParticle};
+use crate::particles::{FluidParticle};
+use crate::water::fluid_particles::{FaceSample};
 
 use super::prefix_scan::PrefixScan;
 

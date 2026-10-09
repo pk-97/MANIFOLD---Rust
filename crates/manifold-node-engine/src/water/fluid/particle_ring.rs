@@ -8,7 +8,8 @@
 use manifold_fluids::{CaptureError, FluidWorld, ParticleFrameInfo};
 use manifold_gpu::{FrameClock, GpuBuffer, GpuDevice};
 
-use crate::water::fluid_particles::{FluidParticle, as_records};
+use crate::particles::{FluidParticle};
+use crate::water::fluid_particles::{as_records};
 
 pub(crate) const RING_SLOTS: usize = 4;
 /// First allocation before any frame reports its size. Growth re-captures.

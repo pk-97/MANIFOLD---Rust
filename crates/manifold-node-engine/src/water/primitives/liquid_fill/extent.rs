@@ -1,12 +1,14 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::EXACT_F32_COUNT;
+use crate::water::liquid::extent::liquid_lattice;
+use crate::ports::EXACT_F32_COUNT;
 use crate::water::primitives::liquid_fill::fill_of;
 use crate::water::primitives::liquid_fill::filled_sites;
 use crate::water::primitives::liquid_fill::pool_slots;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, PARTICLE, Verdict};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{PARTICLE};
 
 fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = x.lattice()?.cells();
+    let cells = liquid_lattice(x)?.cells();
     let (pool, sites) = fill_of(|name, default| x.scalar(name, default));
     let placed = pool_slots(filled_sites(cells, pool, sites), x.scalar("particle_capacity", 0.0));
     if placed > u64::from(EXACT_F32_COUNT) {

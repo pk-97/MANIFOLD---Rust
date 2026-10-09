@@ -1,8 +1,9 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::liquid_lattice;
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn whitewater_obstacle_source(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let bytes = x.lattice()?.solid_bytes() * 4;
+    let bytes = liquid_lattice(x)?.solid_bytes() * 4;
     x.provide("solid", bytes); x.hold(bytes); Ok(())
 }
 inventory::submit! {

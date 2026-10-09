@@ -1,5 +1,6 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, particle_values, whitewater_grid};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{particle_values, whitewater_grid};
 
 fn dust_potential(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (nodes, cells) = whitewater_grid(x)?;

@@ -18,7 +18,7 @@ use crate::testkit::liquid_surface::{Harness, params, read};
 use super::whitewater_lifecycle::{Frame, Report, WhitewaterLifecycle};
 use crate::gpu::gpu_encoder::GpuEncoder;
 use crate::water::fluid::{TICK, whitewater_fade};
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::water::liquid::grid::face_len;
 use crate::parameters::ParamValue;
 use crate::primitive::Primitive;

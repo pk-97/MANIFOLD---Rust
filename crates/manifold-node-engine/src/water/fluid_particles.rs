@@ -3,20 +3,10 @@
 //! `Array(FluidParticle)` frames; the surface atoms read them unchanged.
 
 use crate::channel_names::well_known;
+use crate::particles::FluidParticle;
+#[cfg(test)]
+use crate::particles::FLUID_PARTICLE_SPECS;
 use crate::ports::{ChannelElementType, ChannelSpec, KnownItem};
-
-/// One liquid particle in scene space. Layout equals
-/// `manifold_fluids::ParticleRecord`, so the FLIP worker writes it directly.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct FluidParticle {
-    /// Metres; w = physical radius in metres. w = 0 marks an unused slot.
-    pub position_radius: [f32; 4],
-    /// Metres per second.
-    pub velocity: [f32; 3],
-    /// Birth order within the frame's identity epoch. 0 = no identity.
-    pub id: u32,
-}
 
 const _: () = {
     use core::mem::{offset_of, size_of};
@@ -27,19 +17,6 @@ const _: () = {
     assert!(offset_of!(FluidParticle, velocity) == offset_of!(ParticleRecord, velocity));
     assert!(offset_of!(FluidParticle, id) == offset_of!(ParticleRecord, id));
 };
-
-/// Std430: position_radius Vec4F at 0, velocity Vec3F at 16, id U32 at 28;
-/// stride 32 (vec3 + u32 pack into one 16-byte slot, as `Particle`'s
-/// velocity/life do).
-pub const FLUID_PARTICLE_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::POSITION_RADIUS, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: well_known::ID, ty: ChannelElementType::U32 },
-];
-
-impl KnownItem for FluidParticle {
-    const SPECS: &'static [ChannelSpec] = FLUID_PARTICLE_SPECS;
-}
 
 /// One anisotropic surface kernel (Yu & Turk 2010), from
 /// `node.shape_particle_blobs`. The kernel is `(1 − |G·(x − c)|²)³` inside the

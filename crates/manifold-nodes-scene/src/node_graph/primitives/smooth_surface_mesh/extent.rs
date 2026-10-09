@@ -1,5 +1,6 @@
 //! Buffer extent rule owned by this node.
-use manifold_node_engine::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, surface_mesh_pass};
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_node_engine::water::liquid::extent::{surface_mesh_pass};
 
 fn smooth_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     surface_mesh_pass(x, "relaxed")?;

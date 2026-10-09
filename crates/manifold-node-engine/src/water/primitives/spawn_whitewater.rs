@@ -14,7 +14,7 @@ use crate::float_param;
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 use super::whitewater_lifecycle::{DEFAULT_CAPACITY, MAX_CAPACITY};
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::freeze::classify::FusedOutputCapacity;
 use crate::water::liquid::grid::{LIQUID_FACES, face_len};
 use crate::parameters::{ParamDef, ParamType, ParamValue};

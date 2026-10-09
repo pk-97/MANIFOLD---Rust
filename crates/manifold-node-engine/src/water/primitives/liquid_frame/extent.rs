@@ -1,4 +1,5 @@
 //! Buffer extent rule owned by this node.
+use crate::water::liquid::extent::liquid_lattice;
 use crate::water::liquid::frame_history::H_MAX;
 use crate::water::primitives::liquid_frame::WHITEWATER_INPUTS;
 use crate::water::primitives::liquid_frame::WHITEWATER_OUTPUTS;
@@ -6,13 +7,14 @@ use crate::water::liquid::grid::FACE_INPUT_PORTS;
 use crate::water::liquid::grid::face_len;
 use crate::water::liquid::lattice::FlipSolverGrid;
 use crate::water::primitives::liquid_stats::LIQUID_STATS_WORDS;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, PARTICLE, Verdict, cover_frame_faces, provide_frame_faces};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{PARTICLE, cover_frame_faces, provide_frame_faces};
 
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The retained history at its budget: every slot admitted whole.
     const SLOTS: u64 = H_MAX as u64;
     x.covers("identity", 16)?;
-    let lattice = x.lattice()?;
+    let lattice = liquid_lattice(x)?;
     let surface = lattice.surface();
     let solver = FlipSolverGrid::from_lattice(lattice);
     for (axis, input) in FACE_INPUT_PORTS.into_iter().enumerate() {

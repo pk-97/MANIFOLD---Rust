@@ -15,7 +15,7 @@ use manifold_gpu::GpuBuffer;
 use super::liquid_stats::LIQUID_STATS_WORDS;
 use super::particle_publication::{ParticlePublication, Publication};
 use crate::exec::effect_node::EffectNodeContext;
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::water::liquid::display_cursor::{CursorFrame, DisplayCursor};
 use crate::water::liquid::frame_history::{FIELD_FACES, FIELD_INTERIOR, FIELD_SOLID, FIELD_WHITEWATER, FIELDS, FrameHistory, Layout};
 use crate::water::liquid::grid::{interior_bytes, face_len, FACE_GRID_PORTS, FACE_INPUT_PORTS};
@@ -429,7 +429,7 @@ mod tests {
 mod gpu_tests {
     use super::{ParticlePublication, Publication, LIQUID_STATS_WORDS};
     use super::super::liquid_stats::NARROW_BAND_SHORTAGE_WORD;
-    use crate::water::fluid_particles::FluidParticle;
+    use crate::particles::FluidParticle;
     use crate::testkit::liquid_surface::read;
     use manifold_gpu::GpuBuffer;
 

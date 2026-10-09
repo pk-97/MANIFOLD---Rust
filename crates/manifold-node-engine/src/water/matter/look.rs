@@ -5,7 +5,7 @@
 //! no ids).
 
 use crate::scene::fluid_domain::FluidDomainLayout;
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 
 /// The authored cell grid of a domain.
 #[derive(Clone, Copy, Debug)]

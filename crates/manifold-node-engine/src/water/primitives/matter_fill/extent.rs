@@ -1,11 +1,13 @@
 //! Buffer extent rule owned by this node.
+use crate::water::liquid::extent::liquid_lattice;
 use std::mem::size_of;
 use crate::water::matter::MatterPoint;
 use crate::water::primitives::matter_fill::fill_count;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, whole};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{whole};
 
 fn matter_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = x.lattice()?;
+    let lattice = liquid_lattice(x)?;
     let cells = lattice.cells();
     let pool = whole(x, "pool_cells", 3.0).min(cells[1]);
     let column = [["column_x0", "column_x1"], ["column_y0", "column_y1"], ["column_z0", "column_z1"]]

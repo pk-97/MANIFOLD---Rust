@@ -11,7 +11,7 @@ use manifold_gpu::GpuBinding;
 use crate::float_param;
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::freeze::classify::FusedOutputCapacity;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::primitive::Primitive;

@@ -1,5 +1,5 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn push_out_of_solid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (_, bytes) = crate::water::primitives::push_out_of_solid::solid_shape(|name, default| x.scalar(name, default))

@@ -2,7 +2,8 @@
 use crate::water::whitewater::SURFACE_CROSSING_BYTES;
 use crate::water::whitewater::cell_total;
 use crate::water::whitewater::refinement;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, whitewater_lattice, whole};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{whitewater_lattice, whole};
 
 fn surface_crossings(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;

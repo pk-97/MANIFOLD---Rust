@@ -1,7 +1,7 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
 use crate::water::liquid::bodies::LiquidBody;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn matter_move_bodies(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // Rows and bodies clamp to the bodies arrays; the reaction is read only

@@ -302,7 +302,7 @@
         registry.register("test.liquid_source", || {
             Box::new(ArraySource::new(
                 "test.liquid_source",
-                ArrayType::of_known::<crate::water::fluid_particles::FluidParticle>(),
+                ArrayType::of_known::<crate::particles::FluidParticle>(),
             ))
         });
         registry.register("test.count_sink", || {
@@ -357,7 +357,7 @@
                 type_id: EffectNodeType::new("test.liquid_sink"),
                 inputs: vec![port(
                     "particles",
-                    PortType::Array(ArrayType::of_known::<crate::water::fluid_particles::FluidParticle>()),
+                    PortType::Array(ArrayType::of_known::<crate::particles::FluidParticle>()),
                     PortKind::Input,
                     true,
                 )],

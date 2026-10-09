@@ -104,3 +104,6 @@ pub struct FluidDomainSnapshot {
     pub state: FluidDomainState,
     pub accepted_layout: Option<FluidDomainLayout>,
 }
+
+/// Maximum number of fluid-role ports supported by a graph boundary.
+pub const MAX_FLUID_ROLES: usize = 64;

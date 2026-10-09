@@ -9,7 +9,8 @@ use manifold_physics::{BodyPose, Seconds, TriangleMesh};
 
 use crate::scene::fluid_domain::FluidDomainLayout;
 use crate::water::fluid::{FluidDomainNative, HISTORY_CAPACITY, Sample, TICK};
-use crate::water::fluid_role::{FluidRole, FluidRoleKind, MAX_FLUID_ROLES, PreparedFluidGeometry};
+use crate::scene::fluid_domain::MAX_FLUID_ROLES;
+use crate::water::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
 use crate::water::physics::pose_from_transform;
 use crate::scene::transform::Transform;
 

@@ -21,7 +21,7 @@ use manifold_gpu::{FrameClock, GpuDevice, GpuEvent, GpuTextureFormat, RetireMark
 use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::water::fluid::TICK;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::water::liquid::bodies::LiquidBody;
 use manifold_node_engine::water::liquid::coupling::HANDOVER_BOUND;
 use manifold_node_engine::water::liquid::grid::{FACE_GRID_PORTS, face_len};

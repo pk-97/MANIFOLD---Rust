@@ -1,5 +1,6 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, surface_mesh_pass};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{surface_mesh_pass};
 
 fn relax_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     surface_mesh_pass(x, "relaxed")

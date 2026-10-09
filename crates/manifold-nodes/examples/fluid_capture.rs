@@ -48,7 +48,7 @@ use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, readback_srgb_rgba8, readback_tonemapped_rgba8};
 use manifold_node_engine::scene::fluid_domain::domain_layout;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::particles::FluidParticle;
 use {manifold_node_engine::water::matter, manifold_node_engine::water::matter::look::Cells, manifold_node_engine::water::matter::look::LookRecorder};
 use manifold_node_engine::{exec::effect_node::EffectNode, parameters::ParamValue, persistence::PrimitiveRegistry, water::physics::PhysicsStepScope};
 use manifold_node_engine::runtime::preset_context::PresetContext;

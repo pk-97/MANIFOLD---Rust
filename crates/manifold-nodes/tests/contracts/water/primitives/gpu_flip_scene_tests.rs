@@ -21,7 +21,7 @@ use manifold_node_engine::water::primitives::gpu_flip_volume::volume_and_area;
 #[cfg(test)]
 use manifold_node_engine::water::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::particles::FluidParticle;
 #[cfg(test)]
 use manifold_node_engine::water::fluid_particles::FaceSample;
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;

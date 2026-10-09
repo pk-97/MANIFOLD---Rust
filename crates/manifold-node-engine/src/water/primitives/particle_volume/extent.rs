@@ -1,7 +1,8 @@
 //! Buffer extent rule owned by this node.
 use crate::water::primitives::particle_volume::refined_nodes;
 use crate::water::primitives::particle_volume::volume_scale;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, brick_schedule, lattice_total, nodes_total, required_blob_bounds, searched};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{brick_schedule, lattice_total, nodes_total, required_blob_bounds, searched};
 
 fn particle_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);

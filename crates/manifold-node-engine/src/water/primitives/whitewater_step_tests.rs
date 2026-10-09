@@ -23,7 +23,7 @@ use {crate::water::primitives::whitewater_particle_cpu as particle_cpu, super::w
 use {crate::water::primitives::whitewater_pool_cpu as pool_cpu, super::whitewater_pool_cpu::Advect, super::whitewater_pool_cpu::Age, super::whitewater_pool_cpu::PoolState, super::whitewater_pool_cpu::Preserve, super::whitewater_step::empty_slot};
 use super::whitewater_step::{Report, StepShape};
 use crate::water::fluid::{TICK, whitewater_fade};
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::water::liquid::grid::face_len;
 use crate::scene::transform::Transform;
 use crate::water::whitewater::{KnownValue, SPREAD_STEPS, WhitewaterParticle};

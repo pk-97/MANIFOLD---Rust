@@ -1,6 +1,6 @@
     use crate::water::primitives::gpu_flip_preset::testkit::fused_as_rendered;
 use manifold_core::effect_graph_def::*;
-    use crate::water::liquid::extent::{AtomExtent, ExtentError, ExtentReport, ExtentRule, LIQUID_EXTENT_RULES, Verdict, check_graph};
+    use crate::exec::extent::{AtomExtent, ExtentError, ExtentReport, ExtentRule, EXTENT_RULES, Verdict, check_graph};
     use crate::testkit::substep_nodes::register_substep_test_nodes;
     use crate::{persistence::EffectGraphDefExt, exec::execution_plan::ExecutionPlan, graph::Graph, persistence::PrimitiveRegistry, exec::execution_plan::compile};
 
@@ -17,7 +17,7 @@ fn harness_node(_: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// Fused regions are the freeze compiler's contract (BUG-2efy (fused
 /// output capacity probe)); the walk sizes what they read and write.
 fn rules(frozen: bool) -> Vec<ExtentRule> {
-        let mut rules = LIQUID_EXTENT_RULES.to_vec();
+        let mut rules = EXTENT_RULES.to_vec();
         for type_id in ["test.value_source", "test.face_source", "test.value_sink", "test.liquid_sink", "test.mesh_sink"] {
             rules.push(ExtentRule { type_id, check: harness_node });
         }

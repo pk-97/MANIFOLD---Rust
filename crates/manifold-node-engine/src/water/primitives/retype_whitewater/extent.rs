@@ -1,6 +1,7 @@
 //! Buffer extent rule owned by this node.
 use crate::water::whitewater::cell_total;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, whitewater_faces, whitewater_lattice};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{whitewater_faces, whitewater_lattice};
 
 fn retype_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;

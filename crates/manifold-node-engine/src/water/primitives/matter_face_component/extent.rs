@@ -3,7 +3,8 @@ use crate::water::liquid::grid::face_len;
 use crate::water::matter::grid_bytes;
 use crate::water::primitives::face_sample_component::axis_param;
 use crate::water::primitives::matter_face_component::matter_cells;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, whole};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{whole};
 
 fn matter_face_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| whole(x, name, 71.0));

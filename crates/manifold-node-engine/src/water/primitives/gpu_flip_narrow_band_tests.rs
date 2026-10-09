@@ -56,7 +56,7 @@ mod cpu_tests {
     use std::collections::BTreeSet;
 
     use super::{NbParams, SHADER};
-    use crate::water::fluid_particles::FluidParticle;
+    use crate::particles::FluidParticle;
     use crate::water::liquid::lattice::{FlipSolverGrid, LiquidLattice};
 
     pub(super) const STEP_CELLS: [usize; 3] = [16, 16, 16];
@@ -522,7 +522,8 @@ mod gpu_tests {
         stationary_pool_particle_phi,
     };
     use super::{NbFace, NbParams, NbParticle, NbRange, SHADER};
-    use crate::water::fluid_particles::{FaceSample, FluidParticle};
+    use crate::particles::{FluidParticle};
+use crate::water::fluid_particles::{FaceSample};
     use crate::primitive::Primitive;
     use manifold_gpu::{GpuBinding, GpuBuffer};
 

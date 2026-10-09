@@ -18,7 +18,7 @@ use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::water::fluid::TICK;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::water::liquid::bodies::LiquidBody;
 use manifold_node_engine::water::physics::PhysicsStepScope;
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};

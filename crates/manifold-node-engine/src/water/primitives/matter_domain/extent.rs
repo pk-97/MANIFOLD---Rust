@@ -1,7 +1,7 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
 use manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID;
-use crate::water::fluid_role::MAX_FLUID_ROLES;
+use crate::scene::fluid_domain::MAX_FLUID_ROLES;
 use crate::water::liquid::bodies::LiquidBody;
 use crate::water::liquid::bodies::LiquidShape;
 use crate::water::liquid::clock::FIELD_RESERVE_INTERVALS;
@@ -10,7 +10,7 @@ use crate::water::liquid::fields::FieldLattice;
 use crate::water::liquid::fields::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use crate::water::matter::REACTION_WORDS;
 use crate::water::primitives::matter_domain::matter_geometry;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let geometry = matter_geometry(

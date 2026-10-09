@@ -4,7 +4,8 @@ use crate::water::matter::MatterPoint;
 use crate::water::matter::STATS_WORDS;
 use crate::water::matter::grid_accum_bytes;
 use crate::water::matter::grid_bytes;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, whole};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{whole};
 
 fn matter_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| whole(x, name, 71.0));

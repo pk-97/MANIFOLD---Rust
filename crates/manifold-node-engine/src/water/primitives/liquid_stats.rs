@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use crate::exec::effect_node::EffectNodeContext;
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::primitive::Primitive;
 

@@ -1,6 +1,9 @@
 pub mod backend;
 pub mod cpu_values;
 pub mod node_pairs;
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+#[doc(hidden)]
+pub mod extent;
 manifold_core::testkit_visible! { pub(crate) mod bound_graph; }
 pub mod effect_node;
 pub mod execution;

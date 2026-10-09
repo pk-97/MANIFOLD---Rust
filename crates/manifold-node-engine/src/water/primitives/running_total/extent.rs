@@ -1,5 +1,5 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn running_total(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The scan runs over min(count, in, out).

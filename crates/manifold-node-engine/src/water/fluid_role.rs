@@ -13,8 +13,6 @@ use manifold_physics::sdf::{DistanceLattice, signed_distance_union};
 
 use crate::scene::transform::Transform;
 
-/// Maximum number of fluid-role ports supported by a graph boundary.
-pub const MAX_FLUID_ROLES: usize = 64;
 
 /// Semantic role a prepared geometry source contributes to the fluid solver.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

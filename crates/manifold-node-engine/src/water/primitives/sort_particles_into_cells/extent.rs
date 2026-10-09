@@ -1,12 +1,13 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
 use crate::water::fluid_particles::CellRange;
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::water::fluid_particles::MAX_BINS;
 use crate::water::fluid_particles::bin_counts;
 use crate::water::fluid_particles::bin_total;
 use crate::water::primitives::sort_particles_into_cells::range_storage_bytes;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, search_fits};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{search_fits};
 
 fn sort_particles_into_cells(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let capacity = x.items("particles").unwrap_or(0);

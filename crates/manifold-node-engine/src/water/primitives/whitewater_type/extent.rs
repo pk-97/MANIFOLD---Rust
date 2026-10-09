@@ -1,5 +1,6 @@
 //! Buffer extent rule owned by this node.
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, whitewater_grid};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{whitewater_grid};
 
 fn whitewater_type(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (_, cells) = whitewater_grid(x)?;

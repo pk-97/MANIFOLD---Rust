@@ -17,7 +17,7 @@ use manifold_node_engine::testkit::whitewater_scene::{whitewater_render_def, wit
 use manifold_node_engine::water::primitives::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::water::fluid::TICK;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::water::liquid::grid::face_len;
 use manifold_node_engine::scene::transform::Transform;
 use manifold_node_engine::water::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};

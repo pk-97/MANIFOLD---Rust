@@ -11,7 +11,8 @@ use crate::float_param;
 use super::sort_particles_into_cells::{bin_param, read_searched_bins};
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::water::fluid_particles::{CellRange, FluidBlob, FluidParticle};
+use crate::particles::{FluidParticle};
+use crate::water::fluid_particles::{CellRange, FluidBlob};
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::primitive::Primitive;
 

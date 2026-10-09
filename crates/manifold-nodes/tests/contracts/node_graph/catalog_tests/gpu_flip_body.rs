@@ -880,7 +880,7 @@ impl BoxRun {
         };
         let capped = self.words("node.gpu_flip_step", "capped");
         let particles = (capped.len() - SOLVER_WORDS as usize) / 2;
-        let particle_words = std::mem::size_of::<manifold_node_engine::water::fluid_particles::FluidParticle>() / 4;
+        let particle_words = std::mem::size_of::<manifold_node_engine::particles::FluidParticle>() / 4;
         // The active-tile share differs between sparse and all-tiles by design
         // (see `tile_share`); every other solver word must match bit for bit.
         let mut solver = capped[2 * particles..].to_vec();

@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::exec::effect_node::EffectNodeContext;
-use crate::water::fluid_role::MAX_FLUID_ROLES;
+use crate::scene::fluid_domain::MAX_FLUID_ROLES;
 use crate::water::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use crate::water::liquid::lattice::LiquidLattice;
 use crate::water::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, lattice_nodes, momentum_unit_fits};

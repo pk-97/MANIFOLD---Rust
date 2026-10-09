@@ -11,7 +11,7 @@
 #![cfg_attr(not(feature = "gpu-proofs"), allow(dead_code))]
 
 #[cfg(test)]
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 use crate::water::liquid::grid::face_dims;
 #[cfg(test)]
 use crate::water::whitewater::{CELL_AIR, KnownValue};

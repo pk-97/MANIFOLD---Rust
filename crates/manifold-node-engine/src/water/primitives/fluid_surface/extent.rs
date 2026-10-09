@@ -7,13 +7,14 @@ use crate::water::primitives::matter_domain::fill_region;
 #[cfg(feature = "gpu-proofs")]
 use crate::water::primitives::matter_fill::fill_cells;
 use crate::mesh::MeshVertex;
-use crate::water::fluid_particles::FluidParticle;
+use crate::particles::FluidParticle;
 #[cfg(feature = "gpu-proofs")]
 use crate::water::primitives::fluid_surface::boundary_collisions;
 #[cfg(feature = "gpu-proofs")]
 use crate::water::primitives::fluid_surface::fluid_settings;
 use crate::water::fluid::FluidDomainNative;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, lattice_total};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{lattice_total};
 
 fn fluid_surface(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let faces = boundary_collisions(x.params()).map_err(Verdict::Refused)?;

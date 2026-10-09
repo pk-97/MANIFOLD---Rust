@@ -30,7 +30,7 @@
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use super::gpu_flip_pressure::Sink;
-use crate::water::fluid_role::MAX_FLUID_ROLES;
+use crate::scene::fluid_domain::MAX_FLUID_ROLES;
 pub(crate) use crate::water::liquid::coupling::REACTION_FLOATS;
 
 const SHADER: &str = include_str!("shaders/gpu_flip_bodies.wgsl");

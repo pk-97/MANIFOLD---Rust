@@ -8,7 +8,8 @@ use crate::water::whitewater_handoff::OUTPUT_SLOTS;
 use crate::water::whitewater_handoff::SNAPSHOT_SLOTS;
 use crate::water::whitewater_handoff::SnapshotShape;
 use manifold_fluids::WhitewaterGrid;
-use crate::water::liquid::extent::{AtomExtent, ExtentRule, PARTICLE, Verdict, whitewater_lattice, whole};
+use crate::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::water::liquid::extent::{PARTICLE, whitewater_lattice, whole};
 
 fn whitewater_lifecycle(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let capacity = whole(x, "capacity", DEFAULT_CAPACITY as f32).clamp(1, MAX_CAPACITY);
