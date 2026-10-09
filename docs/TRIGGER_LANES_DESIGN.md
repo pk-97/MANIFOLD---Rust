@@ -198,7 +198,7 @@ composer can serve both while input-advancement policy remains explicit.
 The timing migration now builds each retained hop's `ControlSample` at the hop's
 timestamp and tempo-derived beat. Arrangement spans cover the interval since the
 last evaluation, including session loops and quantized replacement/stop boundaries.
-Ended live-note and Back to Arrangement transitions still need the same guarantee.
+Ended live notes and Back to Arrangement now retain that history as well.
 
 Small typed interfaces should expose only what their consumers need: clip events
 and phase to modulation, evaluated controls/events to rendering, and snapshots plus
@@ -298,8 +298,14 @@ Trigger lane/clip mute removes spans and pending starts without changing schedul
 membership. Parent and group mute do not participate. CPU checks establish
 phase-preserving unmute and no replay of muted starts.
 
-Full acceptance below remains open: Back to Arrangement phase
-coverage, external-clock discontinuities, audio clip-Step/Random multiplicity,
+Back to Arrangement retains the session interval before clearing its authority.
+`ActiveClipRef::control_from` and `ClipControlSpan::control_from` distinguish when
+an interval controls a source from its original clip phase. The resumed arrangement
+cannot overwrite earlier session samples or replay a start from before resumption.
+`session_mode::back_to_arrangement_preserves_control_history_and_phase` reproduces
+the former error and checks repeated transitions, stopped-session gaps and seeking.
+
+Full acceptance below remains open: external-clock discontinuities, audio clip-Step/Random multiplicity,
 audio source-time verification, rendered scene timing and snapshot/retained composition
 consolidation must be completed before exposing trigger lanes.
 

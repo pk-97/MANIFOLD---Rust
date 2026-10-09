@@ -16,6 +16,8 @@ use manifold_core::{Beats, ClipId, LayerId};
 pub struct ClipControlSpan {
     pub clip_id: ClipId,
     pub start_beat: Beats,
+    /// Start of control membership; phase remains relative to `start_beat`.
+    pub control_from: Beats,
     pub end_beat: Option<Beats>,
 }
 
@@ -147,8 +149,8 @@ impl ClipControlFrame {
     }
 
     /// Return elapsed beat time for the last matching span at `beat`.
-    /// Spans use half-open `[start, end)` membership; an open span remains
-    /// active after its start until its producer records a closed span.
+    /// Membership is half-open `[control_from, end)`; phase is measured from
+    /// the original clip start. An open span lasts until its producer closes it.
     pub fn elapsed(
         &self,
         source: &ClipTriggerSource,
@@ -158,7 +160,7 @@ impl ClipControlFrame {
         let source_layer = Self::source_layer(source, owner)?;
         let source = self.by_source.get(source_layer)?;
         let span = source.spans.iter().rev().find(|span| {
-            if beat < span.start_beat {
+            if beat < span.start_beat || beat < span.control_from {
                 return false;
             }
             match span.end_beat {
@@ -192,6 +194,7 @@ mod tests {
         ClipControlSpan {
             clip_id: ClipId::new(id),
             start_beat: Beats(start),
+            control_from: Beats(start),
             end_beat: end.map(Beats),
         }
     }

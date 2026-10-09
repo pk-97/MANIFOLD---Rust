@@ -62,6 +62,7 @@ pub struct SessionRuntime {
     playing: AHashMap<LayerId, PlayingSlot>,
     pending: Vec<PendingSlotLaunch>,
     session_override: AHashSet<LayerId>,
+    arrangement_resumed_at: AHashMap<LayerId, Beats>,
     quantize_beats: Beats,
     // Scratch index for extending retained spans across out-of-tick syncs.
     control_span_indices: AHashMap<(LayerId, ClipId, u64), usize>,
@@ -73,6 +74,7 @@ impl SessionRuntime {
             playing: AHashMap::with_capacity(8),
             pending: Vec::with_capacity(4),
             session_override: AHashSet::with_capacity(8),
+            arrangement_resumed_at: AHashMap::with_capacity(8),
             quantize_beats: Beats(DEFAULT_QUANTIZE_BEATS),
             control_span_indices: AHashMap::with_capacity(8),
         }
@@ -84,6 +86,10 @@ impl SessionRuntime {
     /// `query_active_timeline_clips` for that layer.
     pub fn is_overridden(&self, layer_id: &LayerId) -> bool {
         self.session_override.contains(layer_id)
+    }
+
+    pub(crate) fn arrangement_control_from(&self, layer_id: &LayerId) -> Option<Beats> {
+        self.arrangement_resumed_at.get(layer_id).copied()
     }
 
     /// Arrangement coverage ends at the first due session launch, even when
@@ -227,15 +233,19 @@ impl SessionRuntime {
     /// `session_override` and any playing/pending session state for the
     /// given layer, or every layer if `None`. Timeline clips resume via
     /// normal `sync_clips_to_time` on the next tick (section 5).
-    pub fn back_to_arrangement(&mut self, layer_id: Option<&LayerId>) {
+    pub fn back_to_arrangement(&mut self, layer_id: Option<&LayerId>, beat: Beats) {
         match layer_id {
             Some(id) => {
-                self.session_override.remove(id);
+                if self.session_override.remove(id) {
+                    self.arrangement_resumed_at.insert(id.clone(), beat);
+                }
                 self.playing.remove(id);
                 self.replace_pending_for_layer(id);
             }
             None => {
-                self.session_override.clear();
+                for id in self.session_override.drain() {
+                    self.arrangement_resumed_at.insert(id, beat);
+                }
                 self.playing.clear();
                 self.pending.clear();
             }
@@ -248,6 +258,7 @@ impl SessionRuntime {
     pub fn on_transport_stop(&mut self) {
         self.playing.clear();
         self.pending.clear();
+        self.arrangement_resumed_at.clear();
     }
 
     /// Seek: session slots are beat-anchored and stateless, so a seek never
@@ -256,6 +267,7 @@ impl SessionRuntime {
     /// position, so a jump backward/forward can't fire them off-grid or (if
     /// the new position is already past the old target) instantly.
     pub fn on_seek(&mut self, new_beat: f64) {
+        self.arrangement_resumed_at.clear();
         let q = self.quantize_beats.0;
         for p in &mut self.pending {
             p.target_beat = Self::ceil_to_boundary(new_beat, q);
@@ -333,6 +345,7 @@ impl SessionRuntime {
         wrap_restarts: &mut Vec<ClipId>,
         window: Option<(Beats, &mut Vec<ActiveClipRef>)>,
     ) -> bool {
+        self.arrangement_resumed_at.retain(|id, _| timeline.layer_index_for_id(id).is_some());
         let complete = window.is_none_or(|(from, controls)| {
             self.collect_control_window(from, current_beat, grid, timeline, controls)
         });
@@ -385,6 +398,7 @@ impl SessionRuntime {
                     layer_index: layer_index as i32,
                     clip_index: ActiveClipRef::SESSION_SLOT,
                     start_beat: Beats(global_start),
+                    control_from: Beats(global_start),
                     duration_beats: clip.duration_beats,
                     is_looping: clip.is_looping,
                     is_video: !clip.video_clip_id.is_empty(),
@@ -494,6 +508,7 @@ fn append_control_window(
             out.push(ActiveClipRef {
                 clip_id: clip.id.clone(), layer_index: layer_index as i32,
                 clip_index: ActiveClipRef::SESSION_SLOT, start_beat: start,
+                control_from: start,
                 duration_beats: end - start, is_looping: clip.is_looping,
                 is_video: !clip.video_clip_id.is_empty(), is_muted: clip.is_muted,
                 layer_id: slot.layer_id.clone(),
@@ -847,7 +862,9 @@ mod tests {
         rt.launch_slot(l2.clone(), s1.clone(), 0.0, true);
         rt.activate_due_pending(0.0);
 
-        rt.back_to_arrangement(Some(&l1));
+        rt.back_to_arrangement(Some(&l1), Beats(2.0));
+        assert_eq!(rt.arrangement_control_from(&l1), Some(Beats(2.0)));
+        assert_eq!(rt.arrangement_control_from(&l2), None);
         assert!(!rt.is_overridden(&l1));
         assert!(!rt.is_playing_layer(&l1));
         assert!(rt.is_overridden(&l2));
@@ -862,7 +879,8 @@ mod tests {
         rt.launch_slot(l1.clone(), s1.clone(), 0.0, true);
         rt.activate_due_pending(0.0);
 
-        rt.back_to_arrangement(None);
+        rt.back_to_arrangement(None, Beats(2.0));
+        assert_eq!(rt.arrangement_control_from(&l1), Some(Beats(2.0)));
         assert!(!rt.is_overridden(&l1));
         assert!(!rt.is_playing_layer(&l1));
     }

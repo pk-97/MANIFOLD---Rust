@@ -1392,6 +1392,7 @@ mod tests {
                 crate::clip_controls::ClipControlSpan {
                     clip_id: manifold_core::ClipId::new("fixture-span"),
                     start_beat: current_beat - *elapsed,
+                    control_from: current_beat - *elapsed,
                     end_beat: None,
                 },
             );
@@ -1467,6 +1468,7 @@ mod tests {
                     crate::clip_controls::ClipControlSpan {
                         clip_id: manifold_core::ClipId::new("fixture-span"),
                         start_beat: Beats::ZERO,
+                        control_from: Beats::ZERO,
                         end_beat: None,
                     },
                 );

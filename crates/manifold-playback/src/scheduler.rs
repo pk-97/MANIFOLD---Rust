@@ -11,7 +11,7 @@ use manifold_core::{Beats, Seconds};
 /// Full `TimelineClip` data is resolved lazily via `(layer_index, clip_index)`
 /// only when needed (e.g., `start_clip` — rare, per-event, not per-frame).
 ///
-/// Clone cost: 1 atomic increment (Arc<str> inside ClipId) + ~40 bytes memcpy.
+/// Clone cost: ID reference-count increments plus scalar field copies.
 /// vs. TimelineClip clone: ~200+ bytes + heap allocations for legacy Vec fields.
 #[derive(Debug, Clone)]
 pub struct ActiveClipRef {
@@ -23,6 +23,9 @@ pub struct ActiveClipRef {
     pub clip_index: u32,
     /// Beat at which this clip starts.
     pub start_beat: Beats,
+    /// Earliest beat this interval controls modulation. Resuming arrangement
+    /// advances this boundary without changing the clip's phase origin.
+    pub control_from: Beats,
     /// Duration of this clip in beats.
     pub duration_beats: Beats,
     /// Whether this clip loops (bypasses min-remaining check in scheduler).
@@ -142,6 +145,7 @@ impl ClipScheduler {
                 controls.record_span(entry.layer_id.clone(), ClipControlSpan {
                     clip_id: entry.clip_id.clone(),
                     start_beat: entry.start_beat,
+                    control_from: entry.control_from,
                     end_beat: Some(entry.end_beat()),
                 });
             }
@@ -156,7 +160,7 @@ impl ClipScheduler {
             } else {
                 from.is_some_and(|from| from < entry.start_beat && entry.start_beat <= current)
             };
-            if !is_current && starts {
+            if !is_current && starts && entry.start_beat >= entry.control_from {
                 controls.record_start(entry.layer_id.clone(), ClipControlStart {
                     clip_id: entry.clip_id.clone(),
                     beat: entry.start_beat,
@@ -174,6 +178,7 @@ impl ClipScheduler {
                 controls.record_span(entry.layer_id.clone(), ClipControlSpan {
                     clip_id: entry.clip_id.clone(),
                     start_beat: entry.start_beat,
+                    control_from: entry.control_from,
                     end_beat: (!entry.is_live_slot()).then(|| entry.end_beat()),
                 });
             }
@@ -182,7 +187,7 @@ impl ClipScheduler {
                 Some(previous) => previous.layer_id == entry.layer_id
                     && entry.is_session_slot() && previous.start_beat != entry.start_beat,
             };
-            if starts {
+            if starts && entry.start_beat >= entry.control_from {
                 controls.record_start(entry.layer_id.clone(), ClipControlStart {
                     clip_id: entry.clip_id.clone(), beat: entry.start_beat,
                     is_muted: entry.is_muted,
@@ -421,6 +426,7 @@ mod tests {
             layer_index,
             clip_index: 0,
             start_beat: Beats::from_f32(start_beat),
+            control_from: Beats::from_f32(start_beat),
             duration_beats: Beats::from_f32(duration_beats),
             is_looping: false,
             is_video: false,
@@ -440,6 +446,7 @@ mod tests {
             layer_index,
             clip_index: ActiveClipRef::LIVE_SLOT,
             start_beat: Beats::from_f32(start_beat),
+            control_from: Beats::from_f32(start_beat),
             duration_beats: Beats::from_f32(duration_beats),
             is_looping: false,
             is_video: false,

@@ -1313,7 +1313,9 @@ impl PlaybackEngine {
                         &layer.layer_id, Beats(self.current_beat),
                     );
                     let end = cutoff.map_or(clip.end_beat(), |beat| clip.end_beat().min(beat));
-                    if end <= clip.start_beat || end <= from {
+                    let control_from = self.session_runtime.arrangement_control_from(&layer.layer_id)
+                        .map_or(clip.start_beat, |beat| clip.start_beat.max(beat));
+                    if end <= control_from || end <= from {
                         continue;
                     }
                     let entry = ActiveClipRef {
@@ -1321,6 +1323,7 @@ impl PlaybackEngine {
                         layer_index: *li as i32,
                         clip_index: *ci as u32,
                         start_beat: clip.start_beat,
+                        control_from,
                         duration_beats: end - clip.start_beat,
                         is_looping: clip.is_looping,
                         is_video: !clip.video_clip_id.is_empty(),
@@ -1919,7 +1922,9 @@ impl PlaybackEngine {
     /// resume via the normal `sync_clips_to_time` call this method itself
     /// makes — not deferred to the next tick.
     pub fn session_back_to_arrangement(&mut self, layer_id: Option<LayerId>) {
-        self.session_runtime.back_to_arrangement(layer_id.as_ref());
+        // Retain the final session interval before clearing its authority.
+        self.sync_clips_to_time();
+        self.session_runtime.back_to_arrangement(layer_id.as_ref(), Beats(self.current_beat));
         self.sync_clips_to_time();
     }
 
