@@ -146,6 +146,19 @@ pub(crate) fn parse_buffer_snapshot(
     })
 }
 
+/// The pinned glTF importer unwraps UTF-8 after percent-decoding relative
+/// URIs. Validate that one fallible step before calling it, including release
+/// builds with panic=abort. Scheme-bearing URIs are not percent-decoded by
+/// glTF; invalid/incomplete percent escapes and literal `+` remain unchanged.
+fn validate_import_uri(uri: &str) -> Result<(), String> {
+    if uri.contains(':') || !uri.contains('%') {
+        return Ok(());
+    }
+    urlencoding::decode(uri)
+        .map(|_| ())
+        .map_err(|error| format!("invalid resource URI {uri:?}: {error}"))
+}
+
 fn parse_document_and_buffers_from_slice(
     path: &std::path::Path,
     bytes: &[u8],
@@ -188,6 +201,12 @@ fn parse_document_and_buffers_from_slice(
     }
 
     let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
+    for buffer in document.buffers() {
+        if let gltf::buffer::Source::Uri(uri) = buffer.source() {
+            validate_import_uri(uri)
+                .map_err(|error| format!("{}: buffer {}: {error}", path.display(), buffer.index()))?;
+        }
+    }
     let buffers = gltf::import_buffers(&document, Some(base), blob)
         .map_err(|e| format!("{}: buffer import failed: {e}", path.display()))?;
 
@@ -233,12 +252,20 @@ fn import_images_with_webp(
             gltf::image::Source::View { mime_type, .. } => Some(mime_type),
             gltf::image::Source::Uri { mime_type, .. } => mime_type,
         };
-        let decoded = if mime_type == Some("image/webp") {
-            decode_webp_image(&image, buffers)
-        } else {
-            gltf::image::Data::from_source(image.source(), Some(base), buffers)
-                .map_err(|e| e.to_string())
+        #[cfg(test)]
+        TEXTURE_DECODE_COUNT.with(|count| count.set(count.get() + 1));
+        let valid_uri = match image.source() {
+            gltf::image::Source::Uri { uri, .. } => validate_import_uri(uri),
+            gltf::image::Source::View { .. } => Ok(()),
         };
+        let decoded = valid_uri.and_then(|()| {
+            if mime_type == Some("image/webp") {
+                decode_webp_image(&image, buffers)
+            } else {
+                gltf::image::Data::from_source(image.source(), Some(base), buffers)
+                    .map_err(|e| e.to_string())
+            }
+        });
         match decoded {
             Ok(data) => out.push(data),
             Err(e) => {
@@ -281,7 +308,7 @@ fn image_label(image: &gltf::image::Image) -> String {
 /// reuse (the `1×1 dummy` precedent in `render_instanced_3d_mesh.rs` and
 /// `standalone.rs` is a GPU-side `manifold_gpu::GpuTexture`, a different
 /// layer entirely).
-fn dummy_image_data() -> gltf::image::Data {
+pub(crate) fn dummy_image_data() -> gltf::image::Data {
     const MAGENTA: [u8; 4] = [255, 0, 255, 255];
     gltf::image::Data {
         pixels: MAGENTA.repeat(4),
@@ -1000,50 +1027,154 @@ pub(crate) fn load_gltf_mesh_from_buffers(
     Ok(out)
 }
 
-/// Decode one embedded glTF texture to tightly-packed RGBA8 (row-major,
-/// 4 bytes/pixel, no row padding). `texture_index` indexes
-/// `document.textures()`; its image source is resolved to the decoded
-/// `images[..]` entry `gltf::import` already produced. Returns
-/// (width, height, rgba8) or Err on a missing/out-of-range texture or an
-/// unsupported source pixel format.
+/// One source resolver for both import dimensions and runtime pixels. WebP
+/// overrides a base PNG/JPEG fallback, including when the base source is absent.
+fn texture_image_index(texture: &gltf::Texture<'_>) -> Result<usize, String> {
+    if let Some(extension) = texture.extensions().and_then(|e| e.get("EXT_texture_webp")) {
+        return extension
+            .get("source")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or_else(|| {
+                format!(
+                    "texture {} has no valid EXT_texture_webp image source",
+                    texture.index()
+                )
+            });
+    }
+    texture
+        .source()
+        .map(|image| image.index())
+        .ok_or_else(|| format!("texture {} has no image source", texture.index()))
+}
+
+/// Encoded bytes captured before consulting the shared decode jobs. Resolving
+/// every requested dependency first prevents edited or deleted external images
+/// from being hidden by a live cache entry. Decode uses these exact bytes.
+pub(crate) struct GltfTextureSnapshot {
+    encoded: Vec<u8>,
+    format: Result<image::ImageFormat, String>,
+    pub identity: [u8; 32],
+}
+
+pub(crate) fn parse_texture_snapshot(
+    path: &std::path::Path,
+    texture_index: u32,
+) -> Result<GltfTextureSnapshot, String> {
+    use sha2::{Digest, Sha256};
+    let (document, buffers) = parse_document_and_buffers(path)?;
+    let texture = document
+        .textures()
+        .nth(texture_index as usize)
+        .ok_or_else(|| {
+            format!(
+                "texture_index {texture_index} out of range (document has {} textures)",
+                document.textures().len()
+            )
+        })?;
+    let index = texture_image_index(&texture)?;
+    let image = document.images().nth(index).ok_or_else(|| {
+        format!(
+            "texture {texture_index} references image index {index}, out of range ({} images)",
+            document.images().len()
+        )
+    })?;
+    let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
+    let (encoded, mime, uri) = match image.source() {
+        gltf::image::Source::View { view, mime_type } => {
+            let buffer = &buffers[view.buffer().index()].0;
+            let end = view
+                .offset()
+                .checked_add(view.length())
+                .ok_or("image buffer view range overflow")?;
+            let bytes = buffer
+                .get(view.offset()..end)
+                .ok_or("image buffer view outside buffer")?;
+            (bytes.to_vec(), Some(mime_type), None)
+        }
+        gltf::image::Source::Uri { uri, mime_type } => {
+            // Reuse glTF's URI/data-URI decoding and percent-escaped path rules.
+            validate_import_uri(uri)?;
+            let data = gltf::buffer::Data::from_source(gltf::buffer::Source::Uri(uri), Some(base))
+                .map_err(|e| format!("image {index} (\"{}\"): {e}", image_label(&image)))?;
+            let mime = uri
+                .strip_prefix("data:")
+                .and_then(|v| v.split_once(";base64,"))
+                .map(|v| v.0)
+                .or(mime_type);
+            (data.0, mime, Some(uri))
+        }
+    };
+    let format = match mime {
+        Some("image/png") => Ok(image::ImageFormat::Png),
+        Some("image/jpeg") => Ok(image::ImageFormat::Jpeg),
+        Some("image/webp") if uri.is_none() => Ok(image::ImageFormat::WebP),
+        Some("image/webp") => Err("external-URI webp images are not supported".to_string()),
+        None => match uri.and_then(|u| u.rsplit('.').next()) {
+            Some("png") => Ok(image::ImageFormat::Png),
+            Some("jpg" | "jpeg") => Ok(image::ImageFormat::Jpeg),
+            _ => Err(format!(
+                "image {index}: unsupported image encoding {mime:?}"
+            )),
+        },
+        _ => Err(format!(
+            "image {index}: unsupported image encoding {mime:?}"
+        )),
+    };
+    let mut hash = Sha256::new();
+    hash.update(b"manifold.gltf-texture-snapshot.v1");
+    match &format {
+        Ok(format) => hash.update(format.extensions_str()[0].as_bytes()),
+        Err(error) => hash.update(error.as_bytes()),
+    }
+    hash.update(&encoded);
+    Ok(GltfTextureSnapshot {
+        encoded,
+        format,
+        identity: hash.finalize().into(),
+    })
+}
+
+pub(crate) fn decode_texture_snapshot(
+    snapshot: GltfTextureSnapshot,
+) -> Result<(u32, u32, Vec<u8>), String> {
+    #[cfg(test)]
+    TEXTURE_DECODE_COUNT.with(|count| count.set(count.get() + 1));
+    let decoded = image::load_from_memory_with_format(&snapshot.encoded, snapshot.format?)
+        .map_err(|e| format!("glTF image decode failed: {e}"))?;
+    let format = match &decoded {
+        image::DynamicImage::ImageLuma8(_) => gltf::image::Format::R8,
+        image::DynamicImage::ImageLumaA8(_) => gltf::image::Format::R8G8,
+        image::DynamicImage::ImageRgb8(_) => gltf::image::Format::R8G8B8,
+        image::DynamicImage::ImageRgba8(_) => gltf::image::Format::R8G8B8A8,
+        _ => {
+            return Err(format!(
+                "unsupported glTF image format {:?}",
+                decoded.color()
+            ));
+        }
+    };
+    image_data_to_rgba8(gltf::image::Data {
+        width: decoded.width(),
+        height: decoded.height(),
+        format,
+        pixels: decoded.into_bytes(),
+    })
+}
+
+/// Decode only the selected texture, without decoding unrelated document images.
+#[cfg(test)]
 pub(crate) fn load_gltf_texture(
     path: &std::path::Path,
     texture_index: u32,
 ) -> Result<(u32, u32, Vec<u8>), String> {
-    let (document, _buffers, images, _image_report_lines) = import_glb(path)?;
+    decode_texture_snapshot(parse_texture_snapshot(path, texture_index)?)
+}
 
-    let textures: Vec<gltf::Texture> = document.textures().collect();
-    let tex = textures.get(texture_index as usize).ok_or_else(|| {
-        format!(
-            "texture_index {texture_index} out of range (document has {} textures)",
-            textures.len()
-        )
-    })?;
-    // EXT_texture_webp textures carry their image only behind the
-    // extension (base `source` is empty — `allow_empty_texture` feature
-    // above) since no fallback format is offered in these assets.
-    let webp_source_index = tex
-        .extensions()
-        .and_then(|ext| ext.get("EXT_texture_webp"))
-        .and_then(|ext| ext.get("source"))
-        .and_then(|v| v.as_u64());
-    let img_index = match webp_source_index {
-        Some(idx) => idx as usize,
-        None => tex
-            .source()
-            .ok_or_else(|| format!("texture {texture_index} has no image source"))?
-            .index(),
-    };
-    let data = images.get(img_index).ok_or_else(|| {
-        format!(
-            "texture {texture_index} references image index {img_index}, out of range ({} images decoded)",
-            images.len()
-        )
-    })?;
-
+fn image_data_to_rgba8(data: gltf::image::Data) -> Result<(u32, u32, Vec<u8>), String> {
     let (width, height) = (data.width, data.height);
     let rgba: Vec<u8> = match data.format {
-        gltf::image::Format::R8G8B8A8 => data.pixels.clone(),
+        gltf::image::Format::R8G8B8A8 => data.pixels,
         gltf::image::Format::R8G8B8 => {
             let mut out = Vec::with_capacity(data.pixels.len() / 3 * 4);
             for px in data.pixels.chunks_exact(3) {
@@ -1068,16 +1199,14 @@ pub(crate) fn load_gltf_texture(
             let mut out = Vec::with_capacity(data.pixels.len() / 2 * 4);
             for px in data.pixels.chunks_exact(2) {
                 out.push(px[0]);
+                out.push(px[0]);
+                out.push(px[0]);
                 out.push(px[1]);
-                out.push(0);
-                out.push(255);
             }
             out
         }
         other => {
-            return Err(format!(
-                "unsupported glTF image format {other:?} on texture {texture_index}"
-            ));
+            return Err(format!("unsupported glTF image format {other:?}"));
         }
     };
 
@@ -4388,14 +4517,16 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
     // which is correct: the substitute IS what the source node will load.
     let texture_dims: Vec<(u32, u32)> = document
         .textures()
-        .map(|t| {
-            // `source()` is the texture's image reference; KTX2 textures
-            // carry an extensions["KHR_texture_basisu"].source instead and
-            // return None here (their dummy-substitute dims don't matter).
-            t.source()
-                .and_then(|img| images.get(img.index()))
-                .map(|d| (d.width, d.height))
-                .unwrap_or((1024, 1024))
+        .map(|texture| {
+            match texture_image_index(&texture).and_then(|index| {
+                images.get(index).ok_or_else(|| format!("texture {} references missing image {index}", texture.index()))
+            }) {
+                Ok(data) => (data.width, data.height),
+                Err(error) => {
+                    extension_report_lines.push(error);
+                    (2, 2)
+                }
+            }
         })
         .collect();
 
@@ -5969,3 +6100,11 @@ pub mod testkit {
         super::gltf_import_summary(path)
     }
 }
+
+#[cfg(test)]
+thread_local! {
+    static TEXTURE_DECODE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) mod texture_tests;

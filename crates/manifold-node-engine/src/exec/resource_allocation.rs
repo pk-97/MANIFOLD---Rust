@@ -243,7 +243,7 @@ pub fn plan_array_allocations(
     canvas: (u32, u32),
     prebound: &AHashMap<ResourceId, ArrayStorage>,
 ) -> Result<ArrayAllocationPlan, PreAllocationError> {
-    let handle_by_node: AHashMap<NodeInstanceId, &'static str> = graph
+    let handle_by_node: AHashMap<NodeInstanceId, &str> = graph
         .handles()
         .map(|(handle, node)| (node, handle))
         .collect();
@@ -577,7 +577,7 @@ pub fn plan_array_allocations(
 fn unbound_error(
     node_type: &str,
     port: &str,
-    handle_by_node: &AHashMap<NodeInstanceId, &'static str>,
+    handle_by_node: &AHashMap<NodeInstanceId, &str>,
     node: NodeInstanceId,
     cause: &'static str,
 ) -> PreAllocationError {

@@ -888,6 +888,7 @@ struct VsOut {
     @location(5) world_tangent: vec4<f32>,
     @location(6) appearance_weight: f32,
     @location(8) vertex_color: vec4<f32>,
+    @location(9) @interpolate(flat) instance_scale: f32,
 };
 
 // Instance TRS applies FIRST, the object group's `model` (transform_n)
@@ -929,6 +930,7 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     let world = u.model * vec4<f32>(inst_pos, 1.0);
     out.world_pos = world.xyz;
     out.vertex_color = v.color;
+    out.instance_scale = abs(inst.pos_scale.w);
     out.clip_pos = u.view_proj * world;
     // GBUFFER_DESIGN.md section 2 D5, P2: EMIT_VELOCITY substitutes
     // `out.clip_now = out.clip_pos; let prev_world = u.prev_model *
@@ -995,6 +997,7 @@ struct VsOutPoints {
     @location(6) appearance_weight: f32,
     @location(7) point_size: f32,
     @location(8) vertex_color: vec4<f32>,
+    @location(9) @interpolate(flat) instance_scale: f32,
 };
 
 // Points mode draws the SAME vertex buffers with point topology — every
@@ -1017,6 +1020,7 @@ fn vs_points(
         o.appearance_weight,
         u.render_mode.x,
         o.vertex_color,
+        o.instance_scale,
     );
 }
 
@@ -1254,7 +1258,7 @@ fn resolve_clearcoat(uv: vec4<f32>) -> vec2<f32> {
     if (flags & 2u) != 0u {
         roughness = roughness * sample_extension_map(clearcoat_roughness_map, uv, 11u).g;
     }
-    return vec2<f32>(factor, roughness);
+    return vec2<f32>(factor, clamp(roughness, 0.01, 1.0));
 }
 
 // `clearcoatNormalTexture` — a standard tangent-space normal map (same RGB
@@ -1406,20 +1410,20 @@ fn transmission_diffuse(
     F90: vec3<f32>,
     env_brdf: vec2<f32>,
     thickness: f32,
+    instance_scale: f32,
     dispersion: f32,
 ) -> vec3<f32> {
     let attenuation_distance = u.transmission_volume_params.z;
     let attenuation_color = u.volume_attenuation_color.rgb;
 
-    // Model-matrix scale (column lengths) — a non-uniformly-scaled glass
-    // mesh's `thickness_factor` (authored in the mesh's own local units)
-    // needs this to land in world units, same as the Khronos sample
-    // viewer's `getVolumeTransmissionRay`.
+    // Authored thickness is in mesh-local units. Compose the instance's
+    // absolute uniform scale with the model's column lengths for both
+    // refraction and absorption; geometry-derived paths are already world-space.
     var model_scale = vec3<f32>(
         length(u.model[0].xyz),
         length(u.model[1].xyz),
         length(u.model[2].xyz),
-    );
+    ) * instance_scale;
     if u.volume_optics.x > 0.5 { model_scale = vec3<f32>(1.0); }
 
     let max_mip = f32(textureNumLevels(opaque_scene_color) - 1u);
@@ -1740,9 +1744,6 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let iridescence_factor = iridescence.x;
     let a = roughness * roughness;
     let a2 = a * a;
-    let r = roughness + 1.0;
-    let k = (r * r) / 8.0;
-    let g_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
 
     // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: `KHR_materials_anisotropy` —
     // tangent-space GGX stretch. Tangent basis: authored when the mesh
@@ -1769,8 +1770,8 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // glTF KHR_materials_anisotropy: alphaT widens toward 1 with the square
     // of strength while alphaB remains the authored alpha. At zero strength
     // both widths are exactly alpha, preserving isotropic continuity.
-    let at = max(mix(a, 1.0, anisotropy_strength * anisotropy_strength), 0.001);
-    let ab = max(a, 0.001);
+    let at = mix(a, 1.0, anisotropy_strength * anisotropy_strength);
+    let ab = a;
 
     // GLB_CONFORMANCE_DESIGN.md G-P5/D5: KHR_materials_clearcoat — a
     // second, always-dielectric GGX lobe layered on top of the base BRDF.
@@ -1819,50 +1820,52 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         let l_dir = light_direction_attenuation(i, in.world_pos);
         let l_col = lights[i * LIGHT_STRIDE + 1u];
         let L = l_dir.xyz;
-        let H = (L + V) / max(length(L + V), 1e-6);
+        let half_length = length(L + V);
+        let H = (L + V) / max(half_length, 1e-6);
         let n_dot_l = max(dot(N, L), 0.0);
         let n_dot_h = max(dot(N, H), 0.0);
         let v_dot_h = max(dot(V, H), 0.001);
 
-        let denom_d = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
+        let nh2 = clamp(n_dot_h * n_dot_h, 0.0, 1.0);
+        let denom_d = (1.0 - nh2) + nh2 * a2;
         let D = a2 / (PI * denom_d * denom_d);
 
-        let g_l = n_dot_l / (n_dot_l * (1.0 - k) + k);
-        let G = g_v * g_l;
+        // Exact isotropic limit of the anisotropic height-correlated Smith
+        // visibility below. A different zero-strength approximation creates
+        // a visible jump as soon as an anisotropy map becomes nonzero.
+        let nv2 = min(n_dot_v * n_dot_v, 1.0);
+        let nl2 = min(n_dot_l * n_dot_l, 1.0);
+        let lambda_v_iso = n_dot_l * sqrt(a2 * (1.0 - nv2) + nv2);
+        let lambda_l_iso = n_dot_v * sqrt(a2 * (1.0 - nl2) + nl2);
+        let visibility = 0.5 / max(lambda_v_iso + lambda_l_iso, 0.0000001);
 
         let plain_f = schlick_fresnel(base_f0, base_f90, v_dot_h);
         let film_f = eval_iridescence(1.0, iridescence.y, v_dot_h, iridescence.z, base_f0);
         let F = mix(plain_f, film_f, iridescence_factor);
-        // GLTF_MATERIAL_EXTENSIONS_DESIGN.md E5: swap in the anisotropic
-        // GGX D/V (Burley D, Heitz height-correlated Smith V) ONLY when
-        // `anisotropy_strength > 0.0` — a per-fragment branch (this value
-        // already includes the resolved texture sample, unlike the
-        // uniform-only branches elsewhere in this shader), legal here
-        // because nothing inside touches `dpdx`/`dpdy`. The isotropic
-        // path (`D`/`G` above, Schlick-remapped `k`) is UNTOUCHED in the
-        // `else`, so every non-anisotropic material stays byte-identical
-        // to pre-E5 output — the anisotropic V is a genuinely different
-        // approximation (exact Smith height-correlated vs. this file's
-        // existing Schlick-GGX k-remap), so unlike D they do NOT collapse
-        // bit-for-bit at `at == ab`, hence the explicit branch rather than
-        // relying on the math alone.
-        var specular = (D * G * F) / (4.0 * n_dot_v * n_dot_l + 0.0001);
-        if anisotropy_strength > 0.0 {
-            let t_dot_h = dot(aniso_t, H);
-            let b_dot_h = dot(aniso_b, H);
-            let a2_aniso = at * ab;
-            let v3 = vec3<f32>(ab * t_dot_h, at * b_dot_h, a2_aniso * n_dot_h);
-            let v2 = max(dot(v3, v3), 0.0000001);
-            let w2 = a2_aniso / v2;
-            let d_aniso = a2_aniso * w2 * w2 / PI;
-            let t_dot_v = dot(aniso_t, V);
-            let b_dot_v = dot(aniso_b, V);
-            let t_dot_l = dot(aniso_t, L);
-            let b_dot_l = dot(aniso_b, L);
-            let lambda_v = n_dot_l * length(vec3<f32>(at * t_dot_v, ab * b_dot_v, n_dot_v));
-            let lambda_l = n_dot_v * length(vec3<f32>(at * t_dot_l, ab * b_dot_l, n_dot_l));
-            let vis_aniso = 0.5 / max(lambda_v + lambda_l, 0.0000001);
-            specular = vec3<f32>(d_aniso * vis_aniso) * F;
+        // Map samples and derivative frame construction precede this branch.
+        // Only the directional widths differ from the isotropic limit.
+        var specular = vec3<f32>(0.0);
+        // Reflection exists only in the positive hemispheres and requires a
+        // nonzero half-vector. Keep backlit diffuse transmission outside.
+        if n_dot_l > 0.0 && dot(N, V) > 0.0 && half_length > 1e-6 {
+            specular = D * visibility * F;
+            if anisotropy_strength > 0.0 {
+                let t_dot_h = dot(aniso_t, H);
+                let b_dot_h = dot(aniso_b, H);
+                // Divide by the widths before squaring. This equivalent GGX
+                // form stays well-scaled at the peak without clipping narrow lobes.
+                let scaled_h = vec3<f32>(t_dot_h / at, b_dot_h / ab, n_dot_h);
+                let d_denom = dot(scaled_h, scaled_h);
+                let d_aniso = 1.0 / (PI * at * ab * d_denom * d_denom);
+                let t_dot_v = dot(aniso_t, V);
+                let b_dot_v = dot(aniso_b, V);
+                let t_dot_l = dot(aniso_t, L);
+                let b_dot_l = dot(aniso_b, L);
+                let lambda_v = n_dot_l * length(vec3<f32>(at * t_dot_v, ab * b_dot_v, n_dot_v));
+                let lambda_l = n_dot_v * length(vec3<f32>(at * t_dot_l, ab * b_dot_l, n_dot_l));
+                let vis_aniso = 0.5 / max(lambda_v + lambda_l, 0.0000001);
+                specular = vec3<f32>(d_aniso * vis_aniso) * F;
+            }
         }
         let f_max = max(F.r, max(F.g, F.b));
         let kd = (1.0 - f_max) * (1.0 - metallic);
@@ -1887,15 +1890,20 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         // cc_n_dot_h/cc_n_dot_v == n_dot_l/n_dot_h/n_dot_v exactly — same
         // byte-identical-when-unwired contract as everywhere else in this
         // shader).
-        let cc_n_dot_l = max(dot(Nc, L), 0.0);
-        let cc_n_dot_h = max(dot(Nc, H), 0.0);
-        let denom_d_coat = cc_n_dot_h * cc_n_dot_h * (cc_a2 - 1.0) + 1.0;
-        let D_coat = cc_a2 / (PI * denom_d_coat * denom_d_coat);
-        let g_l_coat = cc_n_dot_l / (cc_n_dot_l * (1.0 - cc_k) + cc_k);
-        let G_coat = cc_g_v * g_l_coat;
-        let F_coat = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
-        let specular_coat = (D_coat * G_coat * F_coat) / (4.0 * cc_n_dot_v * cc_n_dot_l + 0.0001);
-        direct_coat = direct_coat + specular_coat * l_col.rgb * cc_n_dot_l * l_dir.w * vis3;
+        // All map samples and derivative frame construction remain above
+        // this per-fragment gate; only inactive coat arithmetic is skipped.
+        if clearcoat > 0.0 && dot(Nc, L) > 0.0 && dot(Nc, V) > 0.0 && half_length > 1e-6 {
+            let cc_n_dot_l = max(dot(Nc, L), 0.0);
+            let cc_n_dot_h = max(dot(Nc, H), 0.0);
+            let cc_nh2 = clamp(cc_n_dot_h * cc_n_dot_h, 0.0, 1.0);
+            let denom_d_coat = (1.0 - cc_nh2) + cc_nh2 * cc_a2;
+            let D_coat = cc_a2 / (PI * denom_d_coat * denom_d_coat);
+            let g_l_coat = cc_n_dot_l / (cc_n_dot_l * (1.0 - cc_k) + cc_k);
+            let G_coat = cc_g_v * g_l_coat;
+            let F_coat = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
+            let specular_coat = (D_coat * G_coat * F_coat) / (4.0 * cc_n_dot_v * cc_n_dot_l + 0.0001);
+            direct_coat = direct_coat + specular_coat * l_col.rgb * cc_n_dot_l * l_dir.w * vis3;
+        }
 
         // E3: Charlie NDF × Ashikhmin visibility, tinted by sheenColor —
         // no Fresnel term (the spec's sheen lobe is grazing-independent),
@@ -2080,7 +2088,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         }
         let transmitted_diffuse = transmission_diffuse(
             N, V, in.world_pos, roughness, ior, albedo.rgb, ibl_f0, base_f90,
-            env_brdf, volume_thickness, u.anisotropy_dispersion_params.z
+            env_brdf, volume_thickness, in.instance_scale, u.anisotropy_dispersion_params.z
         ) * (1.0 - metallic);
         diffuse_component = mix(diffuse_component, transmitted_diffuse, transmission_factor);
     }

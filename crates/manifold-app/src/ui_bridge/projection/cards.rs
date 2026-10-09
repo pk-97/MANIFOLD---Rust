@@ -411,7 +411,15 @@ fn param_surface(
     // hands the FULL manifest as an id-keyed channel and the card JOINS by id
     // (BUG-313), so a hidden param simply finds no row — there is no second
     // filter to drift out of alignment.
+    let is_scene_card_candidate = visibility == SurfaceVisibility::CuratedCard && kind == PresetKind::Generator;
+    let catalog_graph = (is_scene_card_candidate && inst.graph.is_none())
+        .then(|| manifold_nodes::bundled_presets::bundled_preset_def(preset_type)).flatten();
+    let scene_graph = is_scene_card_candidate
+        .then(|| inst.graph.as_ref().or(catalog_graph.as_deref()))
+        .flatten()
+        .filter(|def| manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).is_some());
     let visible_params: Vec<&manifold_core::params::Param> = match visibility {
+        SurfaceVisibility::CuratedCard if scene_graph.is_some() => inst.params.iter().collect(),
         SurfaceVisibility::CuratedCard => {
             let modifier_bindings = inst.graph.as_ref().and_then(|graph| graph.preset_metadata.as_ref());
             inst.params.iter().filter(|p| p.spec.card_visible && !modifier_bindings.is_some_and(|metadata|
@@ -521,6 +529,10 @@ fn param_surface(
         rows[pi].audio = audio_row_state(am, is_fire);
     }
 
+    if let Some(def) = scene_graph {
+        super::scene_performance::curate_scene_rows(&mut rows, inst, def);
+    }
+
     // String params are sourced from the registry def. Graph-backed audio-send
     // selectors use the instance graph for both effects and generators; other
     // generator strings retain their clip-owned value path.
@@ -539,6 +551,10 @@ fn param_surface(
                                 .cloned()
                                 .unwrap_or_else(|| sp_def.default_value.to_string())
                         };
+                        let display_value = (scene_graph.is_some() && sp_def.is_file_path)
+                            .then(|| std::path::Path::new(&value).file_name()
+                                .map(|name| name.to_string_lossy().into_owned()))
+                            .flatten();
                         ParamCardStringInfo {
                             name: sp_def.name.to_string(),
                             key: sp_def.key.to_string(),
@@ -547,7 +563,7 @@ fn param_surface(
                             effect_id: None,
                             binding_id: None,
                             dropdown_choices: Vec::new(),
-                            display_value: None,
+                            display_value,
                         }
                     })
                     .collect()

@@ -18,21 +18,21 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "text": "Shadow Softness", "nth": 1 } },
+      "selector": { "Query": { "name": "param_row.7_shadow_softness", "under_name": "scene_setup" } },
       "check": "Exists"
     }
   },
   {
     "ScrollTo": {
       "target": {
-        "Query": { "name": "param_row.7_shadow_softness.value", "nth": 1 }
+        "Query": { "name": "param_row.7_shadow_softness.value", "under_name": "scene_setup" }
       }
     }
   },
   {
     "Pointer": {
       "target": {
-        "Query": { "name": "param_row.7_shadow_softness.value", "nth": 1 }
+        "Query": { "name": "param_row.7_shadow_softness.value", "under_name": "scene_setup" }
       },
       "gesture": { "Click": { "modifiers": {} } }
     }
@@ -59,7 +59,7 @@
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "text": "Contact", "nth": 1 } },
+      "selector": { "Query": { "text": "Contact" } },
       "check": "Exists"
     }
   }

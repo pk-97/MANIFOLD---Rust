@@ -156,7 +156,8 @@ pub struct RowSpec {
     /// Named value labels for discrete params; shown instead of the number.
     pub value_labels: Option<Vec<String>>,
     /// Card-bundling section name; contiguous `Some(name)` runs share one
-    /// collapsible header. Straight off the manifest spec.
+    /// collapsible header. Usually from the manifest; scene performance
+    /// projection uses stable role-based categories without changing IDs.
     pub section: Option<String>,
     /// `None` = the row is interactive. `Some(reason)` = the row renders
     /// greyed with the reason appended to its label (the modifier-picker

@@ -23,6 +23,7 @@ png = "0.18"
 serde = { workspace = true }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
+urlencoding = "2"
 
 [dev-dependencies]
 manifold-nodes-scene = { path = ".", features = ["testkit"] }

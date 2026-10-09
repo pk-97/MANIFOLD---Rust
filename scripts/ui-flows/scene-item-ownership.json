@@ -32,7 +32,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.13_scale_x"
+          "name": "param_row.13_scale_x",
+          "under_name": "scene_setup"
         }
       },
       "check": "Exists"
@@ -42,7 +43,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.6_f_stop"
+          "name": "param_row.6_f_stop",
+          "under_name": "scene_setup"
         }
       },
       "check": {
@@ -54,7 +56,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Depth of Field"
+          "text": "Depth of Field",
+          "under_name": "scene_setup"
         }
       },
       "check": {
@@ -66,7 +69,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Motion Blur"
+          "text": "Motion Blur",
+          "under_name": "scene_setup"
         }
       },
       "check": {
@@ -93,7 +97,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.6_f_stop"
+          "name": "param_row.6_f_stop",
+          "under_name": "scene_setup"
         }
       },
       "check": "Exists"
@@ -103,7 +108,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.13_scale_x"
+          "name": "param_row.13_scale_x",
+          "under_name": "scene_setup"
         }
       },
       "check": {
@@ -115,7 +121,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Billboard"
+          "text": "Billboard",
+          "under_name": "scene_setup"
         }
       },
       "check": {
@@ -127,7 +134,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "scene_setup.properties.physics"
+          "name": "scene_setup.properties.physics",
+          "under_name": "scene_setup"
         }
       },
       "check": {

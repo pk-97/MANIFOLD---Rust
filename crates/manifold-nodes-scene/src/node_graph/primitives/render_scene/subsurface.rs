@@ -7,7 +7,10 @@ use manifold_gpu::raytrace::{SubsurfaceMaterial, SubsurfaceParams};
 pub(super) struct SubsurfacePass {
     pub(super) output: Option<manifold_gpu::GpuTexture>,
     raw: Option<manifold_gpu::GpuTexture>,
-    guide: Option<manifold_gpu::GpuTexture>,
+    guide: [Option<manifold_gpu::GpuTexture>; 2],
+    depth_history: [Option<manifold_gpu::GpuTexture>; 2],
+    previous_view_proj: Option<[[f32; 4]; 4]>,
+    previous_inv_view_proj: Option<[[f32; 4]; 4]>,
     filter_scratch: Option<manifold_gpu::GpuTexture>,
     history: [Option<manifold_gpu::GpuTexture>; 2],
     history_count: [Option<manifold_gpu::GpuTexture>; 2],
@@ -25,6 +28,8 @@ impl SubsurfacePass {
         self.history_ping = 0;
         self.needs_reset = true;
         self.scene_key = None;
+        self.previous_view_proj = None;
+        self.previous_inv_view_proj = None;
     }
 
     pub(super) fn ensure(
@@ -51,10 +56,10 @@ impl SubsurfacePass {
         }
         let table_bytes = (count * std::mem::size_of::<SubsurfaceMaterial>()) as u64;
         let additional_bytes = if resize {
-            // Five Rgba16Float radiance textures (8 B/px), one Rgba32Float
-            // guide (16 B/px), and two R16Float history-count textures (2
-            // B/px): 60 B/px total. Counts are capped at 64 below.
-            u64::from(w) * u64::from(h) * 60
+            // Five Rgba16Float radiance textures (8 B/px), two Rgba32Float
+            // guides (32 B/px), two R32Float depth histories (8 B/px),
+            // and two R16Float history counts (4 B/px): 84 B/px.
+            u64::from(w) * u64::from(h) * 84
         } else {
             0
         } + if grow { table_bytes } else { 0 };
@@ -94,13 +99,21 @@ impl SubsurfacePass {
             None
         };
         let guide = if resize {
-            Some(make_texture(
-                manifold_gpu::GpuTextureFormat::Rgba32Float,
-                "node.render_scene subsurface guide",
-            )?)
-        } else {
-            None
-        };
+            [
+                Some(make_texture(manifold_gpu::GpuTextureFormat::Rgba32Float,
+                    "node.render_scene subsurface guide A")?),
+                Some(make_texture(manifold_gpu::GpuTextureFormat::Rgba32Float,
+                    "node.render_scene subsurface guide B")?),
+            ]
+        } else { [None, None] };
+        let depth_history = if resize {
+            [
+                Some(make_texture(manifold_gpu::GpuTextureFormat::R32Float,
+                    "node.render_scene subsurface depth A")?),
+                Some(make_texture(manifold_gpu::GpuTextureFormat::R32Float,
+                    "node.render_scene subsurface depth B")?),
+            ]
+        } else { [None, None] };
         let filter_scratch = if resize {
             Some(make_texture(
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -147,6 +160,7 @@ impl SubsurfacePass {
             self.output = Some(output);
             self.raw = raw;
             self.guide = guide;
+            self.depth_history = depth_history;
             self.filter_scratch = filter_scratch;
             self.history = history;
             self.history_count = history_count;
@@ -206,7 +220,8 @@ impl RenderScene {
         // change. Unknown producer versions cannot promise a still scene.
         use std::hash::{Hash, Hasher};
         let mut key = ahash::AHasher::default();
-        key.write(bytemuck::cast_slice(&pre.view_proj));
+        // Sampling jitter moves the sample lattice, not the camera.
+        key.write(bytemuck::cast_slice(&pre.cam.view_proj(pre.aspect)));
         key.write(bytemuck::cast_slice(&pre.light_data));
         key.write(bytemuck::cast_slice(rows.as_slice()));
         self.rt_accel_key.hash(&mut key);
@@ -231,6 +246,17 @@ impl RenderScene {
         let key = key.finish();
         let known = draws.iter().all(|d| d.geometry_content_known && d.appearance_content_known)
             && (ctx.inputs.texture_2d("envmap").is_none() || env_content.is_some());
+        static TRACE_HISTORY: OnceLock<bool> = OnceLock::new();
+        if *TRACE_HISTORY.get_or_init(|| std::env::var_os("MANIFOLD_SSS_HISTORY_TRACE").is_some()) {
+            eprintln!("SSS history frame={} key={key:x} previous={:?} known={known} needs_reset={} env={env_content:?} accel={:?}",
+                self.jitter_frame_index, self.subsurface_pass.scene_key,
+                self.subsurface_pass.needs_reset, self.rt_accel_key);
+            for draw in draws {
+                eprintln!("  vertices={:?} instances={:?} geometry_known={} appearance_known={}",
+                    draw.vertices_content, draw.instances_content,
+                    draw.geometry_content_known, draw.appearance_content_known);
+            }
+        }
         if !known || self.subsurface_pass.scene_key != Some(key) {
             self.subsurface_pass.reset();
         }
@@ -284,7 +310,10 @@ impl RenderScene {
         let write_idx = 1 - read_idx;
         let reset = self.subsurface_pass.needs_reset;
         let raw = self.subsurface_pass.raw.as_ref().expect("ensured");
-        let guide = self.subsurface_pass.guide.as_ref().expect("ensured");
+        let guide = self.subsurface_pass.guide[write_idx].as_ref().expect("ensured");
+        let guide_read = self.subsurface_pass.guide[read_idx].as_ref().expect("ensured");
+        let depth_read = self.subsurface_pass.depth_history[read_idx].as_ref().expect("ensured");
+        let depth_write = self.subsurface_pass.depth_history[write_idx].as_ref().expect("ensured");
         let history_read = self.subsurface_pass.history[read_idx]
             .as_ref()
             .expect("ensured");
@@ -323,6 +352,11 @@ impl RenderScene {
                 environment,
                 raw,
                 guide,
+                guide_read,
+                depth_read,
+                depth_write,
+                self.subsurface_pass.previous_view_proj.unwrap_or(pre.view_proj),
+                self.subsurface_pass.previous_inv_view_proj.unwrap_or(inv_view_proj),
                 history_read,
                 history_write,
                 count_read,
@@ -331,7 +365,17 @@ impl RenderScene {
                 output,
                 reset,
             );
+        // Reuse the opt-in channel capture; no readback or allocation when unarmed.
+        if RT_CAPTURE_ARM.get() {
+            push_rt_capture("sss_raw", raw);
+            push_rt_capture("sss_guide", guide);
+            push_rt_capture("sss_depth", depth_write);
+            push_rt_capture("sss_history", history_write);
+            push_rt_capture("sss_count", count_write);
+        }
         gpu.rt_dispatches += 1;
+        self.subsurface_pass.previous_view_proj = Some(pre.view_proj);
+        self.subsurface_pass.previous_inv_view_proj = Some(inv_view_proj);
         self.subsurface_pass.history_ping = write_idx;
         self.subsurface_pass.needs_reset = false;
         true

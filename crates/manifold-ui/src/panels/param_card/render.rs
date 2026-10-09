@@ -1987,7 +1987,10 @@ impl ParamCardPanel {
             }
         }
         for (i, synced) in self.row_value_synced.iter().enumerate() {
-            if !*synced {
+            // Unavailable presentation rows deliberately have no parameter
+            // address. Real controls still require the manifest join.
+            let placeholder = self.rows[i].spec.disabled.is_some() && !self.rows[i].mapping.mappable;
+            if !*synced && !placeholder {
                 debug_assert!(
                     false,
                     "BUG-313/INV-6: built card row {} (id {:?}) has no live manifest entry",

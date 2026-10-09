@@ -336,7 +336,7 @@ impl UniformMemberType {
                 dst.copy_from_slice(&v.to_ne_bytes());
             }
             (Self::Bool, ParamValue::Float(f)) => {
-                let v: u32 = if *f >= 0.5 { 1 } else { 0 };
+                let v: u32 = if *f > 0.5 { 1 } else { 0 };
                 dst.copy_from_slice(&v.to_ne_bytes());
             }
             _ => {
@@ -759,6 +759,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     // them and the resolution block below for what consumes them.
     let camera_externals = extract_camera_externals(source);
     let raw_derived_markers = extract_derived_uniform_markers(source);
+    let bool_uniform_fields = extract_bool_uniform_fields(source);
 
     let mut inputs: Vec<NodeInput> = Vec::new();
     let mut outputs: Vec<NodeOutput> = Vec::new();
@@ -789,7 +790,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         match gv.space {
             naga::AddressSpace::Uniform => {
                 let (layout, derived_params, derived_scalar_inputs) =
-                    parse_uniform(&module, ty, &name)?;
+                    parse_uniform(&module, ty, &name, &bool_uniform_fields)?;
                 if uniform_layout.is_some() {
                     return Err("multiple uniform globals not supported".into());
                 }
@@ -1122,6 +1123,7 @@ fn parse_uniform(
     module: &naga::Module,
     ty: &naga::Type,
     binding_name: &str,
+    bool_uniform_fields: &[String],
 ) -> Result<(UniformLayout, Vec<ParamDef>, Vec<NodeInput>), String> {
     let naga::TypeInner::Struct { members, span } = &ty.inner else {
         return Err(format!(
@@ -1140,6 +1142,9 @@ fn parse_uniform(
             naga::TypeInner::Scalar(scalar) => match (scalar.kind, scalar.width) {
                 (naga::ScalarKind::Float, 4) => UniformMemberType::F32,
                 (naga::ScalarKind::Sint, 4) => UniformMemberType::I32,
+                (naga::ScalarKind::Uint, 4) if bool_uniform_fields.iter().any(|f| f == &name) => {
+                    UniformMemberType::Bool
+                }
                 (naga::ScalarKind::Uint, 4) => UniformMemberType::U32,
                 (naga::ScalarKind::Bool, _) => UniformMemberType::Bool,
                 _ => {
@@ -1606,6 +1611,20 @@ fn extract_fused_output_capacity(source: &str) -> Option<CapacityExpr> {
         Some(Marker::FusedOutputCapacity { expr }) => Some(expr),
         _ => None,
     })
+}
+
+/// Scan for `// @bool_uniform: <field>` markers emitted by fused codegen.
+/// WGSL lowers authored Bool params to `u32`; this restores their source type
+/// after naga introspection so bindings keep `BoolThreshold` semantics.
+fn extract_bool_uniform_fields(source: &str) -> Vec<String> {
+    let stripped = strip_block_comments(source);
+    stripped
+        .lines()
+        .filter_map(|line| match Marker::parse(line) {
+            Some(Marker::BoolUniform { field }) => Some(field),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Scan for `// @camera_external: <name>` markers (emitted by the fused-region
@@ -2274,7 +2293,19 @@ impl EffectNode for WgslCompute {
                         }) {
                             continue;
                         }
-                        let f = ctx.scalar_or_param(&m.name, 0.0);
+                        let f = if m.ty == UniformMemberType::Bool {
+                            match ctx.inputs.scalar(&m.name) {
+                                Some(ParamValue::Float(value)) => value,
+                                Some(ParamValue::Bool(value)) => f32::from(u8::from(value)),
+                                _ => match ctx.params.get(m.name.as_str()) {
+                                    Some(ParamValue::Bool(value)) => f32::from(u8::from(*value)),
+                                    Some(ParamValue::Float(value)) => *value,
+                                    _ => 0.0,
+                                },
+                            }
+                        } else {
+                            ctx.scalar_or_param(&m.name, 0.0)
+                        };
                         if trace && self.last_logged_uniforms.get(&m.name).copied() != Some(f) {
                             eprintln!(
                                 "[wgsl_compute node={:?}] uniform '{}' = {} (was {:?})",
@@ -2839,6 +2870,36 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             node.output_format("output_tex"),
             Some(GpuTextureFormat::Rgba16Float)
         );
+    }
+
+    #[test]
+    fn bool_uniform_marker_restores_bool_type_and_strict_threshold_packing() {
+        let src = format!(
+            "{}\n\
+             struct U {{ enabled: u32, }};\n\
+             @group(0) @binding(0) var<uniform> u: U;\n\
+             @group(0) @binding(1) var output_tex: texture_storage_2d<rgba16float, write>;\n\
+             @compute @workgroup_size(1)\n\
+             fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {{\n\
+             _ = u.enabled;\n\
+             textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(0.0));\n\
+             }}\n",
+            Marker::BoolUniform { field: "enabled".to_string() }.emit()
+        );
+        let mut node = WgslCompute::new();
+        node.set_wgsl_source(&src);
+        assert!(!node.compile_failed, "marked u32 Bool field must introspect");
+        assert_eq!(node.params[0].ty, ParamType::Bool);
+
+        let mut packed = [0u8; 4];
+        UniformMemberType::Bool.write_to(&mut packed, &ParamValue::Float(0.5));
+        assert_eq!(u32::from_ne_bytes(packed), 0, "BoolThreshold is strictly > 0.5");
+        UniformMemberType::Bool.write_to(&mut packed, &ParamValue::Float(0.5001));
+        assert_eq!(u32::from_ne_bytes(packed), 1);
+        UniformMemberType::Bool.write_to(&mut packed, &ParamValue::Bool(false));
+        assert_eq!(u32::from_ne_bytes(packed), 0);
+        UniformMemberType::Bool.write_to(&mut packed, &ParamValue::Bool(true));
+        assert_eq!(u32::from_ne_bytes(packed), 1);
     }
 
     #[test]
@@ -3561,4 +3622,3 @@ mod gpu_tests {
         }
     }
 }
-
