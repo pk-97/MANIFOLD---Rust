@@ -18,6 +18,7 @@ pub mod selection;
 pub mod session_commands;
 pub mod settings;
 pub mod stage;
+pub mod trigger_source;
 
 #[cfg(test)]
 use crate::command::Command;

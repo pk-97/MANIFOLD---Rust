@@ -2,8 +2,8 @@
 
 <!-- index: Child trigger lanes with no thumbnails; shared assignment from lane headers and parameter drawers. Current-code audit, proposed architecture, and first-slice acceptance contract. -->
 
-**Status:** PROPOSED · 2026-10-09 · Codex. Product direction agreed in discussion;
-architecture recommendations below are not yet an executable implementation plan.
+**Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence and undoable
+assignment are the first implementation seam; full playback and UI remain pending.
 **Tracking:** `BUG-tqtel` (feature).
 **Prerequisites:** crate refactor landed; reverify the audited seams against subsequent cleanup.
 **Execution contract:** read `DESIGN_DOC_STANDARD.md` sections 5–6 before briefing
@@ -109,13 +109,12 @@ queued burst when it later becomes available. Source switching while a clip is
 already active does not synthesize a new Fire; continuous responses may adopt its
 current phase. Explicit scene reset is a separate parameter action.
 
-**D6 — Proposed mute policy; Peter to confirm.** Muting a trigger lane or one of
+**D6 — Agreed mute policy.** Peter: “Keep child triggers running.” Muting a trigger lane or one of
 its clips suppresses its outgoing contribution. Unmuting resumes current phase,
 without replaying missed impulses. Parent/group mute and solo keep their existing
 media/presentation semantics; they do not implicitly turn into trigger-lane mutes.
 This preserves evolving muted scenes. The UI must distinguish source mute from
-target visibility. The alternative, parent mute also silencing its trigger children,
-is a product decision, not an implementation shortcut.
+target visibility. Parent mute must not silence its trigger children.
 
 **D7 — Keep response editing on the parameter.** First implement clip-start timing
 for existing decay/step/random responses and named Fire targets. Do not silently
@@ -296,8 +295,7 @@ existing UI flow harness plus a playback-value integration test.
 write its exact signatures, exhaustive call-site inventory, named test modules and
 runnable commands under `DESIGN_DOC_STANDARD.md` sections 5–6:
 
-1. **Peter: mute policy (D6).** Confirm whether owner mute also suppresses control
-   output; the recommendation preserves current parent presentation semantics.
+1. **Resolved: mute policy (D6).** Owner mute does not suppress child control output.
 2. **Lead: source/response persistence seam.** Pin the exact manifest field,
    disconnected versus implicit-main representation, and command payload. Specify
    atomic response creation from the header and clip-only Fire arming without an
@@ -313,6 +311,31 @@ runnable commands under `DESIGN_DOC_STANDARD.md` sections 5–6:
    group ungrouping, source deletion, moving a target out of scope and subtree
    duplication/remapping. Orphan rescue must preserve data without turning a
    trigger lane into a playable media layer.
+
+### Source persistence and assignment contract
+
+`manifold-core::params::Param.clip_trigger_source: ClipTriggerSource` is the
+single authored connection. `ClipTriggerSource` has `OwnLayer` (default),
+`Disabled`, and `Lane { layer_id: LayerId }`. Its `clipTriggerSource` wire field
+is omitted for `OwnLayer`; explicit variants use `{ "kind": "disabled" }` and
+`{ "kind": "lane", "layerId": "…" }`. An unresolved ID stays unresolved,
+never falling back to Main lane. Existing audio source selection is independent.
+`ParamEntryWire::from_param` and `apply_to` preserve it through save/load,
+template reconciliation and graph-manifest refresh.
+
+`manifold-editing::commands::trigger_source::SetParamClipTriggerSourceCommand::new`
+takes `(GraphTarget, ParamId, ClipTriggerSource)`. It captures the old source at
+execution and restores it on undo, resolving through `Project::graph_target_owner_mut`.
+Both UI surfaces will dispatch this command through `EditingService`; scene
+modifier rows pass the owning manifest's public macro parameter ID. A missing
+owner/parameter is inert. Source-scope validation and atomic response creation
+belong to the later authoring operation, not a second persisted route list.
+
+Focused checks for this seam: `cargo test -p manifold-core --lib trigger_source`
+and `cargo test -p manifold-editing --lib commands::trigger_source`, with
+`CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0` in the leased worktree. The landing gate
+adds scoped clippy and reverse-dependency checks. These checks establish
+persistence and undo only; they do not establish playback or UI behaviour.
 
 **Completion after P1:** named Fire/scene-force isolation, legacy Gate handling,
 all-owner/nested-group coverage, MIDI/live/session/export parity and lifecycle
