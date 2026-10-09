@@ -1755,7 +1755,7 @@ mod tests {
             UIRoot::new(),
             manifold_ui::UIState::new(),
             None,
-            UserPrefs::load(),
+            UserPrefs::for_test(),
         )
     }
 
@@ -3086,7 +3086,7 @@ mod tests {
         let mut ui = UIRoot::new();
         let mut selection = manifold_ui::UIState::new();
         let mut active_layer = None;
-        let mut user_prefs = UserPrefs::load();
+        let mut user_prefs = UserPrefs::for_test();
         dispatch_project(
             &action,
             &mut project,
