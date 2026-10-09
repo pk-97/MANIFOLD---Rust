@@ -12,8 +12,8 @@
 //!
 //! Nothing here runs on the audio thread; the analysis is kicked off from
 //! the GUI thread on file-pick and typically runs on a worker thread.
-//! Storage is downsampled (~1 K points per side) so persisted plugin
-//! state stays small enough for DAW projects.
+//! The persisted envelope keeps the ~1 K log-grid points used by the display
+//! plus complete per-FFT-bin percentile triples for accurate overlays.
 //!
 //! LAME tag parsing lives here too — used to learn a per-file lowpass
 //! cutoff (e.g. 16 kHz for 128 kbps MP3) so the band doesn't misleadingly
@@ -28,9 +28,8 @@ use serde::{Deserialize, Serialize};
 use crate::median::QuantizedHistogram;
 use crate::{Analyzer, LoudnessMeter, MIN_DB};
 
-/// Number of log-spaced points stored per envelope. Chosen to cover the
-/// pixel density of a typical analyzer window (~1 K wide) without eating
-/// plugin-state space (~8 KB per envelope, ~32 KB per slot).
+/// Number of log-spaced display points stored per envelope. Chosen to cover
+/// the pixel density of a typical analyzer window (~1 K wide).
 pub const REF_POINTS: usize = 1024;
 
 /// Low edge of the log-frequency grid the envelope is sampled on.
@@ -68,6 +67,12 @@ pub struct RefEnvelopeAtFft {
     /// percentile estimates) at each of `REF_POINTS` log-spaced frequencies spanning
     /// `[REF_FREQ_MIN, REF_FREQ_MAX]`.
     pub bounds: Vec<[f32; 3]>,
+    /// Per-FFT-bin percentile triples, including bins that are not represented
+    /// by the persisted log-spaced display grid. Empty bins contain the
+    /// `MIN_DB` floor triple. This preserves the full-resolution history for
+    /// overlays that need to read a specific FFT bin.
+    #[serde(default, rename = "binBounds")]
+    pub bin_bounds: Vec<[f32; 3]>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -180,30 +185,26 @@ impl std::error::Error for RefError {}
 /// thread; intended to run on a worker.
 pub fn analyze_ref_file(path: &Path, fft_sizes: &[usize]) -> Result<RefAnalysis, RefError> {
     let lowpass_hz = read_lame_lowpass(path);
-    let mut passes: Option<Vec<ReferenceFftPass>> = None;
-    let mut meter: Option<LoudnessMeter> = None;
-    let mut source_sr = 0.0;
-    let mut decoded_frames = 0usize;
+    let mut meter = None;
+    let mut first_pass = None;
     let mut left = Vec::new();
     let mut right = Vec::new();
     let mut mid = Vec::new();
     let mut side = Vec::new();
     let mut analysis_error = None;
 
-    decode_file(path, |interleaved, channels, sr| {
-        source_sr = sr;
-        if passes.is_none() {
-            passes = Some(
-                fft_sizes
-                    .iter()
-                    .map(|&n_fft| ReferenceFftPass::new(sr, n_fft))
-                    .collect(),
-            );
+    let (source_sr, decoded_frames) = decode_file(path, |interleaved, channels, sr| {
+        if meter.is_none() {
             let mut loudness = LoudnessMeter::new(sr);
             loudness.set_deferred_aggregation(true);
             meter = Some(loudness);
         }
-
+        if first_pass.is_none() {
+            first_pass = fft_sizes
+                .first()
+                .copied()
+                .map(|n_fft| ReferenceFftPass::new(sr, n_fft));
+        }
         let frame_count = interleaved.len() / channels.max(1);
         left.resize(frame_count, 0.0);
         right.resize(frame_count, 0.0);
@@ -224,18 +225,13 @@ pub fn analyze_ref_file(path: &Path, fft_sizes: &[usize]) -> Result<RefAnalysis,
         }
         meter
             .as_mut()
-            .expect("meter initialized with reference passes")
+            .expect("meter initialized on first packet")
             .process(&left, &right);
-        for pass in passes
-            .as_mut()
-            .expect("reference passes initialized on first packet")
-        {
+        if let Some(pass) = first_pass.as_mut() {
             if let Err(err) = pass.process(&mid, &side) {
                 analysis_error = Some(err);
-                break;
             }
         }
-        decoded_frames = decoded_frames.saturating_add(frame_count);
     })?;
     if let Some(err) = analysis_error {
         return Err(err);
@@ -246,12 +242,54 @@ pub fn analyze_ref_file(path: &Path, fft_sizes: &[usize]) -> Result<RefAnalysis,
     if decoded_frames < (source_sr * 0.5) as usize {
         return Err(RefError::TooShort);
     }
-    let passes = passes.unwrap_or_default();
-    let mut mid_per_fft = Vec::with_capacity(passes.len());
-    let mut side_per_fft = Vec::with_capacity(passes.len());
-    for pass in passes {
+    let mut mid_per_fft = Vec::with_capacity(fft_sizes.len());
+    let mut side_per_fft = Vec::with_capacity(fft_sizes.len());
+    if let Some(pass) = first_pass {
         mid_per_fft.push(pass.mid.finish(source_sr));
         side_per_fft.push(pass.side.finish(source_sr));
+    }
+    for &n_fft in fft_sizes.iter().skip(1) {
+        let mut pass = None;
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        let mut mid = Vec::new();
+        let mut side = Vec::new();
+        let mut analysis_error = None;
+        decode_file(path, |interleaved, channels, sr| {
+            if pass.is_none() {
+                pass = Some(ReferenceFftPass::new(sr, n_fft));
+            }
+            let frame_count = interleaved.len() / channels.max(1);
+            left.resize(frame_count, 0.0);
+            right.resize(frame_count, 0.0);
+            mid.resize(frame_count, 0.0);
+            side.resize(frame_count, 0.0);
+            for frame in 0..frame_count {
+                let base = frame * channels;
+                let l = interleaved[base];
+                let r = if channels >= 2 {
+                    interleaved[base + 1]
+                } else {
+                    l
+                };
+                left[frame] = l;
+                right[frame] = r;
+                mid[frame] = 0.5 * (l + r);
+                side[frame] = 0.5 * (l - r);
+            }
+            if let Some(pass) = pass.as_mut() {
+                if let Err(err) = pass.process(&mid, &side) {
+                    analysis_error = Some(err);
+                }
+            }
+        })?;
+        if let Some(err) = analysis_error {
+            return Err(err);
+        }
+        if let Some(pass) = pass {
+            mid_per_fft.push(pass.mid.finish(source_sr));
+            side_per_fft.push(pass.side.finish(source_sr));
+        }
     }
     let mid_env = RefEnvelope {
         per_fft: mid_per_fft,
@@ -303,7 +341,6 @@ impl ReferenceFftPass {
 struct SpectrumPass {
     analyzer: Analyzer,
     histograms: Vec<QuantizedHistogram>,
-    sampled_bins: Vec<usize>,
     fft_size: usize,
 }
 
@@ -312,24 +349,8 @@ impl SpectrumPass {
         let mut analyzer = Analyzer::new(sr, n_fft);
         analyzer.set_overlap_ratio(REF_OVERLAP_RATIO);
         analyzer.set_attack_release_ms(0.0, REF_AVG_MS);
-        // Only the two neighbours of each persisted log-grid point can
-        // contribute to the envelope. Do not retain distributions for unused bins.
-        let mut sampled_bins = Vec::with_capacity(REF_POINTS * 2);
-        let log_min = REF_FREQ_MIN.ln();
-        let log_max = REF_FREQ_MAX.ln();
-        for p in 0..REF_POINTS {
-            let t = p as f32 / (REF_POINTS - 1) as f32;
-            let freq = (log_min + t * (log_max - log_min)).exp();
-            let bin = (freq / (sr / n_fft as f32)).floor() as usize;
-            for neighbour in [bin, bin + 1] {
-                if neighbour <= n_fft / 2 { sampled_bins.push(neighbour); }
-            }
-        }
-        sampled_bins.sort_unstable();
-        sampled_bins.dedup();
         Self {
             analyzer,
-            sampled_bins,
             histograms: vec![QuantizedHistogram::default(); n_fft / 2 + 1],
             fft_size: n_fft,
         }
@@ -337,11 +358,17 @@ impl SpectrumPass {
 
     fn process(&mut self, samples: &[f32]) -> Result<(), RefError> {
         let histograms = &mut self.histograms;
-        let sampled_bins = &self.sampled_bins;
         let mut error = None;
         self.analyzer.process_mono(samples, |average| {
-            for &bin in sampled_bins {
-                if let Err(err) = histograms[bin].add(average[bin]) {
+            for (histogram, &value) in histograms.iter_mut().zip(average) {
+                // Silence below the display floor has no useful distinction,
+                // but non-finite values must still be rejected by the histogram.
+                let value = if value.is_finite() {
+                    value.max(MIN_DB)
+                } else {
+                    value
+                };
+                if let Err(err) = histogram.add(value) {
                     error = Some(RefError::Decode(format!("reference spectrum: {err}")));
                     break;
                 }
@@ -383,6 +410,10 @@ fn collapse_to_log_grid(samples: &[QuantizedHistogram], sr: f32, n_fft: usize) -
     // produced by a bounded sparse histogram, so no frame history is kept.
     let bin_percentiles: Vec<Option<[f32; 3]>> =
         samples.iter().map(QuantizedHistogram::estimates).collect();
+    let bin_bounds = bin_percentiles
+        .iter()
+        .map(|bounds| bounds.unwrap_or([MIN_DB; 3]))
+        .collect();
 
     // Pass 2: linear interpolation between the two FFT bins straddling
     // each log slot's frequency. When one neighbor sits at the silence
@@ -426,6 +457,7 @@ fn collapse_to_log_grid(samples: &[QuantizedHistogram], sr: f32, n_fft: usize) -
     RefEnvelopeAtFft {
         fft_size: n_fft,
         bounds,
+        bin_bounds,
     }
 }
 
@@ -595,20 +627,21 @@ fn find_lame_magic(buf: &[u8]) -> Option<usize> {
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use serde::de::{DeserializeSeed, IntoDeserializer, MapAccess};
+    use serde::Deserialize;
+
     use super::*;
 
     #[test]
-    fn retaining_only_displayed_bins_preserves_the_reference_envelope() {
-        let mut sparse = SpectrumPass::new(48000.0, 32768);
-        let mut dense = SpectrumPass::new(48000.0, 32768);
-        dense.sampled_bins = (0..=16384).collect();
-        assert!(sparse.sampled_bins.len() < 2048);
-        let signal: Vec<f32> = (0..48000).map(|i| {
-            (std::f32::consts::TAU * 997.0 * i as f32 / 48000.0).sin() * 0.25
-        }).collect();
-        sparse.process(&signal).unwrap();
-        dense.process(&signal).unwrap();
-        assert_eq!(sparse.finish(48000.0).bounds, dense.finish(48000.0).bounds);
+    fn retaining_every_fft_bin_preserves_the_reference_envelope() {
+        let mut pass = SpectrumPass::new(48000.0, 32768);
+        let signal: Vec<f32> = (0..48000)
+            .map(|i| (std::f32::consts::TAU * 997.0 * i as f32 / 48000.0).sin() * 0.25)
+            .collect();
+        pass.process(&signal).unwrap();
+        let envelope = pass.finish(48000.0);
+        assert_eq!(envelope.bin_bounds.len(), 32768 / 2 + 1);
+        assert!(envelope.bin_bounds.iter().any(|bound| bound[1] > MIN_DB));
     }
 
     #[test]
@@ -730,6 +763,98 @@ mod tests {
         write_aiff(&path);
         assert_decoded_fixture(&path);
         let _ = std::fs::remove_file(path);
+    }
+
+    fn write_float_wav_18khz(path: &Path) {
+        let sample_rate = 48_000u32;
+        let frames = sample_rate as usize;
+        let mut pcm = Vec::with_capacity(frames * 2 * 4);
+        for frame in 0..frames {
+            let sample = (std::f32::consts::TAU * 18_000.0 * frame as f32
+                / sample_rate as f32)
+                .sin()
+                * 0.25;
+            pcm.extend_from_slice(&sample.to_le_bytes());
+            pcm.extend_from_slice(&sample.to_le_bytes());
+        }
+        let mut bytes = Vec::with_capacity(44 + pcm.len());
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36u32 + pcm.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&3u16.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * 2 * 4).to_le_bytes());
+        bytes.extend_from_slice(&8u16.to_le_bytes());
+        bytes.extend_from_slice(&32u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&pcm);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn stereo_float_wav_18khz_retains_full_bin_peak_at_each_fft_size() {
+        let path = std::env::temp_dir().join(format!(
+            "manifold-reference-{}-18khz.wav",
+            std::process::id()
+        ));
+        write_float_wav_18khz(&path);
+        let analysis = analyze_ref_file(&path, &[8192, 32768]).unwrap();
+        for envelope in &analysis.mid.per_fft {
+            let bin = (18_000.0 * envelope.fft_size as f32 / 48_000.0).round() as usize;
+            assert_eq!(envelope.bin_bounds.len(), envelope.fft_size / 2 + 1);
+            let peak_db = envelope.bin_bounds[bin][1];
+            assert!(
+                (peak_db + 12.041).abs() < 1.1,
+                "{} FFT bin {bin} peak {peak_db} dB",
+                envelope.fft_size
+            );
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    struct LegacyEnvelopeMap {
+        field: usize,
+    }
+
+    impl<'de> MapAccess<'de> for LegacyEnvelopeMap {
+        type Error = serde::de::value::Error;
+
+        fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
+        where
+            K: DeserializeSeed<'de>,
+        {
+            let key = match self.field {
+                0 => "fft_size",
+                1 => "bounds",
+                _ => return Ok(None),
+            };
+            seed.deserialize(key.into_deserializer()).map(Some)
+        }
+
+        fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value, Self::Error>
+        where
+            V: DeserializeSeed<'de>,
+        {
+            let value = match self.field {
+                0 => seed.deserialize(8192usize.into_deserializer()),
+                1 => seed.deserialize(vec![vec![MIN_DB; 3]].into_deserializer()),
+                _ => unreachable!("value requested after map end"),
+            };
+            self.field += 1;
+            value
+        }
+    }
+
+    #[test]
+    fn legacy_envelope_without_bin_bounds_deserializes_with_empty_default() {
+        let map = serde::de::value::MapAccessDeserializer::new(LegacyEnvelopeMap { field: 0 });
+        let envelope = RefEnvelopeAtFft::deserialize(map).unwrap();
+        assert_eq!(envelope.fft_size, 8192);
+        assert_eq!(envelope.bounds.len(), 1);
+        assert!(envelope.bin_bounds.is_empty());
     }
 
     #[test]

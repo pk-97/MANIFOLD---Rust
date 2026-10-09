@@ -6,6 +6,7 @@
 
 mod loudness;
 mod median;
+mod smoothing;
 pub use median::P2Quantile;
 pub mod reference;
 mod stereo_analyzer;
@@ -17,6 +18,7 @@ pub use reference::{
     REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis, RefEnvelope, RefEnvelopeAtFft, RefError,
     analyze_ref_file,
 };
+pub use smoothing::{SpectrumBandwidth, SpectrumSmoothingPlan};
 pub use stereo_analyzer::StereoAnalyzer;
 
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
