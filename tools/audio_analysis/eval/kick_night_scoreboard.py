@@ -85,7 +85,7 @@ def main():
         date='2026-10-10', source_commit=head, labels=381, tolerance_primary_ms=70,
         reference=dict(baseline=[223, 89], h16=[285, 90, '1 core fire'], h18=[262, 89, 'loses Inhale 5.38/6.62']),
         reference_without_bad_guy={k: without_bad_guy(v['per_track']) for k, v in load('replay_summary.json').items()},
-        reserved_songs='no audio for Waypoints or Know You\'re There exists in fixtures or caches; only reservation names',
+        reserved_songs='Waypoints and Know You\'re There audio exists only in Dropbox (EMERGENCE masters and stems); never read by any run, absent from fixtures and caches',
         miss_causes_h18=diag['h18']['miss_causes_total'],
         oracle_per_song_cutoff_diagnostic={k: diag[k]['oracle_total'] for k in diag},
         oracle_frontier=frontier_summary(), oracle_blocking_cases_h22=costly_summary(),

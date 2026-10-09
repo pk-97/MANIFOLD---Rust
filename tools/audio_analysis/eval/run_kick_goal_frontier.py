@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-song oracle frontier on v2 truth: could any cutoff rule reach 90/90?
 
-Usage: run_kick_goal_frontier.py FEATS  (features, f30, f15n, f31, f21; f53, f47, f68, f69 once prof caches exist)
+Usage: run_kick_goal_frontier.py FEATS [strict|loose]  (features, f30, f15n, f31, f21, f53, f47, f68, f69, f85)
 
 Diagnostic only. Fits the 13 outer whole-song models (gbt, as C1), saves each
 song's held-out probabilities to outer_{FEATS}.npz for cheap cutoff-rule
@@ -71,12 +71,14 @@ def pooled(fr, labels, floor):
 
 def main():
     feats = sys.argv[1]
-    g = Goal(mode='strict')
+    mode = sys.argv[2] if len(sys.argv) > 2 else 'strict'
+    g = Goal(mode=mode)
     add_whole_song_truth(g)
     build(g, feats)
     fit, pred = gbt(g, True, feats)
     probs = {o: pred(fit([u for u in ALL if u != o]), o) for o in ALL}
-    np.savez(GOAL / f'outer_{feats}.npz', **probs)
+    tag = feats if mode == 'strict' else f'{feats}_{mode}'
+    np.savez(GOAL / f'outer_{tag}.npz', **probs)
     fr, labels, out = {}, {}, {}
     for t in ALL:
         rows, n = sweep(g, t, probs[t])
@@ -94,7 +96,7 @@ def main():
                new=pooled({t: fr[t] for t in NEW_SONGS}, labels, .8))
     for k in ('all', 'all_no_floor', 'dev', 'new'):
         print(k, res[k], flush=True)
-    (GOAL / f'frontier_{feats}.json').write_text(json.dumps(res, indent=1, default=float))
+    (GOAL / f'frontier_{tag}.json').write_text(json.dumps(res, indent=1, default=float))
 
 
 if __name__ == '__main__':

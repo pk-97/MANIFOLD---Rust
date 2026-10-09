@@ -1052,6 +1052,48 @@ information problems in minutes. The kick detector stays kick-only (a joint
 kick/snare/bass detector is rejected); its open gain is the 41 visible-but-ranked-low
 kicks, where it must learn what a clap or bass-note onset looks like and reject it.
 
+**Kick 90/90 goal, 2026-10-10 — limit demonstrated near 84/84; best nested 78/74.**
+Target: pooled recall and precision ≥ 0.90 at ±70 ms, every song ≥ 0.80, zero
+tail and kick-free fires, delay ≤ 70 ms, kick-only and causal. Truth v2
+(`kick_goal_labels.py`, `labels_v2.json`, audited visually with
+`kick_goal_view.py` and a Fable pass): fresh attacks in isolated kick stems on an
+exact 1 ms analytic envelope; drum-bus kick-shaped onsets are uncertain regions;
+strict mode counts kick rolls over a ringing tail as non-kicks (BUG-gh7sj
+(rolls over a ringing tail) is Peter's call; loose mode restores them). Thirteen
+songs: the nine development tracks plus four stemmed songs labelled from their
+kick stems (Pattern, Back to You, Burn, Cold remix; Cold holds 642 of 1313 labels).
+Harness: `kick_goal_eval.py` (whole-song nested cutoffs, tail and kick-free fire
+counts); `run_kick_goal_preds.py` saves every nested prediction so cutoff rules and
+stacked stages run exactly nested without refits.
+
+Per-song oracle cutoffs (picked with the answers; `run_kick_goal_frontier.py`,
+`run_kick_goal_frontier_saved.py`) bound every cutoff rule. All songs, best
+balanced: base 15 features 0.815; + tail and kick-template cues 0.832 with the
+16-band rise profile; + a causal 40–320 Hz filter bank 0.841; + a sidechain-fall
+profile 0.846; the song-relative stage's own scores 0.835. Every family moves the
+ceiling by about one point, so ranking, not cutoff choice, is the limit.
+
+| Hypothesis | Result |
+|---|---|
+| More training songs (C1–C3) | Dev recall up, precision flat; template cues carry cross-song transfer (new songs 0.61/0.62 vs 0.46/0.49 without). |
+| Per-song feature normalisation against all candidates (N1–N3) | New-song F1 +0.07; fails its bar. |
+| 16-band rise profile (S1–S3) | Burn and Pattern extras fall by a third; fails its bar. |
+| 50 ms evidence window (from 40) | Ceiling 0.818 vs 0.832: later emission loses more to the 70 ms match window than the evidence gains. |
+| Low-band dip before re-firing | Tail fires 102 → 88; F1 unchanged. |
+| **Song-relative stage (R1–R3)**: each candidate's score, shape and low rise against a p⁸-weighted average of the song's own recent candidates (8 s), stacked on base predictions | **All 13 songs R 0.784 P 0.738** (control 0.578/0.593; plain cutoff 0.657/0.652); new songs 0.748/0.747; Cold 165 → 420 of 642. It fixes cross-song cutoff transfer, not ranking. Wider variants (all relative levels, 4 s window, raw fallbacks) do worse. |
+
+Limiting cases (rendered in `views/extras`): soft long sub kicks inside a constant
+bass bed (Cold; Heavy's breakdown at 67–69 s), where the stem attacks but the
+mix low band barely moves; non-kick drum hits with low end (Burn's toms, Heavy's
+busy percussion, Back to You's claps), which rank above weak kicks; bass-note
+plucks and section impacts (Back to You, Pattern); and Midnight's rolls over a
+ringing tail under strict truth. Loose scoring does not lift the ceiling (0.837
+with strict-trained models; a fair loose test needs loose training truth).
+Lessons: run the oracle frontier on every new feature family before a nested
+run; the frozen fusion feature sources key the night feature cache, so never
+edit them (add a module instead); and a stacked song-relative stage is the cheap
+fix for cross-song transfer.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
