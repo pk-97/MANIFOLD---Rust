@@ -190,9 +190,11 @@ fn displace_other_producers(
     displaced
 }
 
-/// The material node types a skin can white an emissive factor on (both
+/// The material node types a skin can white an emissive factor on (all
 /// declare `emission_r/g/b` + `emission_intensity` in their `ParamDef`s).
-const MATERIAL_TYPE_IDS: [&str; 2] = ["node.pbr_material", "node.unlit_material"];
+const MATERIAL_TYPE_IDS: [&str; 3] = [
+    "node.pbr_material", "node.unlit_material", "node.cel_material",
+];
 
 /// Emission params a skin displaces to make an emissive_map actually emit.
 const EMISSION_PARAMS: [&str; 4] = [
@@ -1445,4 +1447,81 @@ mod tests {
             "emission record cleared after leave"
         );
     }
+
+    #[test]
+    fn cel_emissive_skin_bind_move_remove_and_undo_redo_preserve_authored_emission() {
+        // Cover both the black authored default and a non-default colour/intensity.
+        for authored in [[0.0; 4], [0.2, 0.4, 0.6, 2.5]] {
+            let (mut project, lid) = project_with_one_generator_layer();
+            let target = GraphTarget::Generator(lid.clone());
+            let mut initial = object_graph_with_material();
+            let material = initial.nodes.iter_mut().find(|n| n.id == 20).unwrap();
+            material.type_id = "node.cel_material".to_string();
+            for (name, value) in EMISSION_PARAMS.into_iter().zip(authored) {
+                material.params.insert(name.to_string(), SerializedParamValue::Float { value });
+            }
+            with_target_graph_mut(&mut project, &target, &initial, true, |_| Some(())).unwrap();
+            let graph = |project: &Project| {
+                project.timeline.find_layer_by_id(&lid).unwrap().1.gen_params().unwrap()
+                    .graph.clone().unwrap()
+            };
+            let snapshot = |project: &Project| {
+                let mut def = graph(project);
+                // Redo may mint a fresh opaque node key; compare the authored
+                // state and wiring while keeping existing material IDs intact.
+                for node in &mut def.nodes {
+                    if node.type_id == "node.layer_source" {
+                        node.node_id = manifold_core::NodeId::new("skin-proof");
+                    }
+                }
+                def.wires.sort_by(|a, b| (a.from_node, &a.from_port, a.to_node, &a.to_port)
+                    .cmp(&(b.from_node, &b.from_port, b.to_node, &b.to_port)));
+                serde_json::to_value((&def.nodes, &def.wires)).unwrap()
+            };
+            let before = snapshot(&project);
+            let mut bind = SetSceneObjectSkinSourceCommand::new(
+                target.clone(), vec![], 1, None, SkinTargetMap::Emissive,
+                Some("layer-a".to_string()), mirror_catalog_default(),
+            );
+            bind.execute(&mut project);
+            assert_eq!(material_emission(&graph(&project)), (1.0, 1.0, 1.0, 1.0));
+            let bound = snapshot(&project);
+            bind.undo(&mut project);
+            assert_eq!(snapshot(&project), before);
+            bind.execute(&mut project);
+            assert_eq!(snapshot(&project), bound, "bind redo");
+            let skin_id = graph(&project).nodes.iter()
+                .find(|n| n.type_id == "node.layer_source").unwrap().id;
+            let mut move_map = SetSceneObjectSkinTargetMapCommand::new(
+                target.clone(), vec![], 1, Some(skin_id), SkinTargetMap::BaseColor,
+                mirror_catalog_default(),
+            );
+            move_map.execute(&mut project);
+            let authored_tuple = (authored[0], authored[1], authored[2], authored[3]);
+            assert_eq!(material_emission(&graph(&project)), authored_tuple);
+            let moved = snapshot(&project);
+            move_map.undo(&mut project);
+            assert_eq!(snapshot(&project), bound, "move undo");
+            move_map.execute(&mut project);
+            assert_eq!(snapshot(&project), moved, "move redo");
+            let mut move_back = SetSceneObjectSkinTargetMapCommand::new(
+                target.clone(), vec![], 1, Some(skin_id), SkinTargetMap::Emissive,
+                mirror_catalog_default(),
+            );
+            move_back.execute(&mut project);
+            assert_eq!(material_emission(&graph(&project)), (1.0, 1.0, 1.0, 1.0));
+            let rebound = snapshot(&project);
+            let mut remove = SetSceneObjectSkinSourceCommand::new(
+                target, vec![], 1, Some(skin_id), SkinTargetMap::Emissive, None,
+                mirror_catalog_default(),
+            );
+            remove.execute(&mut project);
+            assert_eq!(snapshot(&project), before, "removal restores material and baked wires");
+            remove.undo(&mut project);
+            assert_eq!(snapshot(&project), rebound, "remove undo");
+            remove.execute(&mut project);
+            assert_eq!(snapshot(&project), before, "remove redo");
+        }
+    }
+
 }

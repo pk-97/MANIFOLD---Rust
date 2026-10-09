@@ -156,6 +156,10 @@ fn scene_with_light_aim(
 }
 
 fn render_center(json: &str) -> [f32; 3] {
+    render_center_capture(json, None)
+}
+
+fn render_center_capture(json: &str, capture: Option<&str>) -> [f32; 3] {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
@@ -197,6 +201,14 @@ fn render_center(json: &str) -> [f32; 3] {
         }
         enc.commit_and_wait_completed();
     }
+    if let (Some(name), Some(dir)) = (capture, std::env::var_os("MANIFOLD_MATERIAL_PROOF_DIR")) {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).expect("create material proof directory");
+        let png = manifold_node_engine::testkit::gpu::readback_to_srgb_png_linear(
+            &h.device, &target.texture, h.width, h.height,
+        );
+        std::fs::write(dir.join(format!("{name}.png")), png).expect("write material proof image");
+    }
     let bytes = h.readback(&target.texture);
     let idx = ((h.height / 2) * h.width + h.width / 2) as usize * 8;
     [
@@ -220,10 +232,10 @@ fn anisotropic_d(alpha_t: f32, alpha_b: f32, h: [f32; 3], n_dot_h: f32, tangent_
     let bitangent = [tangent_angle.sin(), 0.0, -tangent_angle.cos()];
     let t_dot_h = tangent[0] * h[0] + tangent[1] * h[1] + tangent[2] * h[2];
     let b_dot_h = bitangent[0] * h[0] + bitangent[1] * h[1] + bitangent[2] * h[2];
-    let alpha2 = alpha_t * alpha_b;
-    let v2 = (alpha_b * t_dot_h).powi(2) + (alpha_t * b_dot_h).powi(2) + (alpha2 * n_dot_h).powi(2);
-    let w2 = alpha2 / v2.max(1e-7);
-    alpha2 * w2 * w2 / std::f32::consts::PI
+    let denominator = (t_dot_h as f64 / alpha_t as f64).powi(2)
+        + (b_dot_h as f64 / alpha_b as f64).powi(2)
+        + (n_dot_h as f64).powi(2);
+    (1.0 / (std::f64::consts::PI * alpha_t as f64 * alpha_b as f64 * denominator.powi(2))) as f32
 }
 
 fn schlick(f0: f32, f90: f32, cos_theta: f32) -> f32 {
@@ -564,4 +576,110 @@ fn sheen_ibl_energy_stays_bounded_across_roughness() {
             "sheen IBL energy must remain bounded at roughness {roughness}: {rgb:?}"
         );
     }
+}
+
+// Opposed light/view tangents put the half-vector on the plane normal.
+// The narrow camera makes the center pixel round to N.H == 1 in f32;
+// low irradiance keeps the physical sharp peak representable in RGBA16F.
+fn aligned_direct_scene(material: String, intensity: f32) -> String {
+    aligned_direct_scene_at_tilt(material, intensity, 0.65)
+}
+
+fn aligned_direct_scene_at_tilt(material: String, intensity: f32, tilt: f32) -> String {
+    use serde_json::json;
+    let mut graph: serde_json::Value = serde_json::from_str(&scene_with_light_aim(
+        material, 0.0, intensity, [30.0 * tilt.cos() / tilt.sin(), 0.0, 0.0],
+    )).unwrap();
+    for node in graph["nodes"].as_array_mut().unwrap() {
+        if node["id"] == 3 {
+            node["params"]["fov_y"] = json!({"type":"Float","value":0.01});
+            node["params"]["tilt"] = json!({"type":"Float","value":tilt});
+        }
+        if node["id"] == 701 {
+            for color in ["color_a", "color_b"] {
+                node["params"][color] = json!({"type":"Color","value":[0.0,0.0,0.0,1.0]});
+            }
+        }
+    }
+    graph.to_string()
+}
+
+#[test]
+fn aligned_minimum_roughness_and_zero_coat_texel_stay_finite() {
+    use serde_json::json;
+    let intensity = 0.00001_f32;
+    let bare = material_params([0.0; 3], 0.0, 0.01, "");
+    let result = render_center(&aligned_direct_scene(bare, intensity));
+    let nv = 0.65_f64.sin();
+    let roughness = 0.01_f64;
+    // Independent f64 GGX peak: D = 1/(pi * roughness^4).
+    let d = 1.0 / (std::f64::consts::PI * roughness.powi(4));
+    let visibility = 1.0 / (4.0 * nv * (roughness.powi(4) * (1.0 - nv * nv) + nv * nv).sqrt());
+    let fresnel = 0.04 + 0.96 * (1.0 - nv).powi(5);
+    let expected = (d * visibility * fresnel * nv * intensity as f64) as f32;
+    assert_rgb_close(result, [expected; 3], expected * 0.08, "finite aligned minimum GGX peak");
+
+    // A zero roughness texel must resolve to the same bounded lobe as .01.
+    // Exercise both active and inactive coats; the latter previously leaked 0*NaN.
+    for coat in [0.0, 1.0] {
+        let material = material_params([0.0; 3], 0.0, 0.4, &format!(
+            ",\"clearcoat\":{{\"type\":\"Float\",\"value\":{coat}}},\"clearcoat_roughness\":{{\"type\":\"Float\",\"value\":0.01}}"
+        ));
+        let reference_json = aligned_direct_scene(material, intensity);
+        let reference = render_center(&reference_json);
+        let mut graph: serde_json::Value = serde_json::from_str(&reference_json).unwrap();
+        let (nodes, wires, out) = solid_texture_nodes(1300, [0.0, 0.0, 0.0, 1.0]);
+        let map_nodes: Vec<serde_json::Value> = serde_json::from_str(&format!("[{}]", nodes.trim_end_matches(','))).unwrap();
+        let map_wires: Vec<serde_json::Value> = serde_json::from_str(&format!("[{}]", wires.trim_end_matches(','))).unwrap();
+        graph["nodes"].as_array_mut().unwrap().extend(map_nodes);
+        graph["wires"].as_array_mut().unwrap().extend(map_wires);
+        graph["wires"].as_array_mut().unwrap().push(json!({
+            "fromNode":out,"fromPort":"out","toNode":20,"toPort":"clearcoat_roughness_map_0"
+        }));
+        let mapped = render_center(&graph.to_string());
+        assert!(mapped.iter().all(|v| v.is_finite()), "zero coat texel produced {mapped:?}, factor {coat}");
+        assert_rgb_close(mapped, reference, 0.005, "zero coat texel minimum roughness");
+    }
+}
+
+#[test]
+fn low_roughness_anisotropy_preserves_peak_magnitude_and_continuity() {
+    let roughness = 0.1_f32;
+    let intensity = 0.01_f32;
+    for tilt in [0.65_f32, 1.2] {
+        let mut results = Vec::new();
+        for strength in [0.0_f32, 0.00001, 0.001] {
+            let material = material_params([0.0; 3], 0.0, roughness, &format!(
+                ",\"anisotropy_strength\":{{\"type\":\"Float\",\"value\":{strength}}}"
+            ));
+            let capture = format!("anisotropy-tilt-{tilt}-strength-{strength}");
+            let result = render_center_capture(&aligned_direct_scene_at_tilt(material, intensity, tilt), Some(&capture));
+            let nv = (tilt as f64).sin();
+            let tangent_v = (tilt as f64).cos();
+            let ab = (roughness as f64).powi(2);
+            let at = ab + (1.0 - ab) * (strength as f64).powi(2);
+            let d = 1.0 / (std::f64::consts::PI * at * ab);
+            let visibility = 1.0 / (4.0 * nv * ((at * tangent_v).powi(2) + nv * nv).sqrt());
+            let f = 0.04 + 0.96 * (1.0 - nv).powi(5);
+            let expected = (d * visibility * f * nv * intensity as f64) as f32;
+            assert_rgb_close(result, [expected; 3], expected * 0.06, "unclipped anisotropic peak");
+            results.push(result);
+        }
+        for result in &results[1..] {
+            assert_rgb_close(results[0], *result, results[0][0] * 0.01, "anisotropy is continuous through zero");
+        }
+    }
+}
+
+#[test]
+fn backlit_anisotropic_surface_has_no_reflection_nan() {
+    use serde_json::json;
+    let material = material_params([0.0; 3], 0.0, 0.1,
+        ",\"anisotropy_strength\":{\"type\":\"Float\",\"value\":0.001},\"clearcoat\":{\"type\":\"Float\",\"value\":0.7}");
+    let mut graph: serde_json::Value = serde_json::from_str(&aligned_direct_scene(material, 1.0)).unwrap();
+    let light = graph["nodes"].as_array_mut().unwrap().iter_mut().find(|node| node["id"] == 30).unwrap();
+    light["params"]["aim_y"] = json!({"type":"Float","value":60.0});
+    let actual = render_center(&graph.to_string());
+    assert!(actual.iter().all(|value| value.is_finite() && value.abs() < 1e-6),
+        "backlit reflection must be zero and finite: {actual:?}");
 }
