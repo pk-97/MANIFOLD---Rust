@@ -1,0 +1,4102 @@
+{
+  "date": "2026-10-09",
+  "decision": "rejected",
+  "base_v5_report": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-9/tools/audio_analysis/eval/scoreboard/kick_attack_trial_2026-10-09.json",
+  "label_limit": "The 66 labels are provisional visual estimates, not listened ground truth.",
+  "provenance": {
+    "base_report_sha256": "461709621dbd1c5601e19f4dbcdf8332e77c1e0d5ae282db388d9b601d8d1d4e",
+    "detector_revision": "0a03898944dd7013591594f972b00e54ad86ca29",
+    "harness": "dc447e5590cf942ed98d3b8bbe855cc4329142454aa927aac8a23ceb7b09ca9c",
+    "recorded_harness": "d5da4e076f6bf6ce4d0ae2ab231f1241505b822ff29f62d5ccd280cf9d2b75e8",
+    "candidate_replay": "All five Rust event-hop lists match the recorded v5 exactly",
+    "source": "9ba5c94e45f057718cfa04085ca46c9ca28e2b28654c2a11140995e7af72694a",
+    "review": "b29e872c8a8ec9d05902c7f76bc68b5a16399fc9cf0fd1ef669c598c8711a9ae",
+    "method": "Recorded v5 candidates; native-rate causal SciPy Butterworth envelopes; fixed 4x low.fast/body.fast growth within 35ms."
+  },
+  "tracks": [
+    {
+      "track": "apricots_128bpm",
+      "sample_rate": 48000,
+      "hop_samples": 256,
+      "duration_s": 13.241395833333334,
+      "input_sha256": {
+        "mix": "fde3593f372875579a15b95d80cb1d4408971ba62dd80b84110623eecbba28c4",
+        "labels": "fa38b535e88b55580df3f90956935420070d95fb89441b30e625b1cdce45b163"
+      },
+      "original_score": {
+        "labels": 14,
+        "scored_triggers": 14,
+        "excluded": [
+          {
+            "reason": "clip_boundary",
+            "start_s": 0.0,
+            "end_s": 0.25,
+            "trigger_times_s": [
+              0.010666666666666666
+            ]
+          }
+        ],
+        "accuracy_by_tolerance_ms": {
+          "35": {
+            "matched": 13,
+            "missed": 1,
+            "extra": 1,
+            "missed_times_s": [
+              6.625
+            ],
+            "extra_times_s": [
+              6.666666666666667
+            ]
+          },
+          "50": {
+            "matched": 14,
+            "missed": 0,
+            "extra": 0,
+            "missed_times_s": [],
+            "extra_times_s": []
+          },
+          "70": {
+            "matched": 14,
+            "missed": 0,
+            "extra": 0,
+            "missed_times_s": [],
+            "extra_times_s": []
+          }
+        },
+        "association_early_35_late_200_ms": {
+          "matched": 14,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 0,
+          "pairs": [
+            {
+              "attack_s": 0.62,
+              "available_s": 0.6506666666666666,
+              "delay_ms": 30.667
+            },
+            {
+              "attack_s": 1.65,
+              "available_s": 1.6693333333333333,
+              "delay_ms": 19.333
+            },
+            {
+              "attack_s": 2.685,
+              "available_s": 2.7146666666666666,
+              "delay_ms": 29.667
+            },
+            {
+              "attack_s": 3.105,
+              "available_s": 3.12,
+              "delay_ms": 15.0
+            },
+            {
+              "attack_s": 3.315,
+              "available_s": 3.344,
+              "delay_ms": 29.0
+            },
+            {
+              "attack_s": 3.93,
+              "available_s": 3.9466666666666668,
+              "delay_ms": 16.667
+            },
+            {
+              "attack_s": 4.96,
+              "available_s": 4.981333333333334,
+              "delay_ms": 21.333
+            },
+            {
+              "attack_s": 5.995,
+              "available_s": 6.016,
+              "delay_ms": 21.0
+            },
+            {
+              "attack_s": 6.41,
+              "available_s": 6.432,
+              "delay_ms": 22.0
+            },
+            {
+              "attack_s": 6.625,
+              "available_s": 6.666666666666667,
+              "delay_ms": 41.667
+            },
+            {
+              "attack_s": 7.24,
+              "available_s": 7.248,
+              "delay_ms": 8.0
+            },
+            {
+              "attack_s": 8.275,
+              "available_s": 8.293333333333333,
+              "delay_ms": 18.333
+            },
+            {
+              "attack_s": 9.305,
+              "available_s": 9.328,
+              "delay_ms": 23.0
+            },
+            {
+              "attack_s": 9.725,
+              "available_s": 9.738666666666667,
+              "delay_ms": 13.667
+            }
+          ],
+          "possible_duplicate_times_s": [],
+          "median_ms": 21.17,
+          "p90_ms": 30.67
+        }
+      },
+      "ratio_growth_score": {
+        "labels": 14,
+        "scored_triggers": 7,
+        "excluded": [
+          {
+            "reason": "clip_boundary",
+            "start_s": 0.0,
+            "end_s": 0.25,
+            "trigger_times_s": [
+              0.016
+            ]
+          }
+        ],
+        "accuracy_by_tolerance_ms": {
+          "35": {
+            "matched": 1,
+            "missed": 13,
+            "extra": 6,
+            "missed_times_s": [
+              0.62,
+              1.65,
+              2.685,
+              3.105,
+              3.315,
+              3.93,
+              4.96,
+              5.995,
+              6.41,
+              6.625,
+              7.24,
+              8.275,
+              9.305
+            ],
+            "extra_times_s": [
+              0.6613333333333333,
+              1.6906666666666665,
+              2.7359999999999998,
+              3.376,
+              6.682666666666666,
+              9.36
+            ]
+          },
+          "50": {
+            "matched": 3,
+            "missed": 11,
+            "extra": 4,
+            "missed_times_s": [
+              2.685,
+              3.105,
+              3.315,
+              3.93,
+              4.96,
+              5.995,
+              6.41,
+              6.625,
+              7.24,
+              8.275,
+              9.305
+            ],
+            "extra_times_s": [
+              2.7359999999999998,
+              3.376,
+              6.682666666666666,
+              9.36
+            ]
+          },
+          "70": {
+            "matched": 7,
+            "missed": 7,
+            "extra": 0,
+            "missed_times_s": [
+              3.105,
+              3.93,
+              4.96,
+              5.995,
+              6.41,
+              7.24,
+              8.275
+            ],
+            "extra_times_s": []
+          }
+        },
+        "association_early_35_late_200_ms": {
+          "matched": 7,
+          "unmatched_labels": 7,
+          "unmatched_triggers": 0,
+          "pairs": [
+            {
+              "attack_s": 0.62,
+              "available_s": 0.6613333333333333,
+              "delay_ms": 41.333
+            },
+            {
+              "attack_s": 1.65,
+              "available_s": 1.6906666666666665,
+              "delay_ms": 40.667
+            },
+            {
+              "attack_s": 2.685,
+              "available_s": 2.7359999999999998,
+              "delay_ms": 51.0
+            },
+            {
+              "attack_s": 3.315,
+              "available_s": 3.376,
+              "delay_ms": 61.0
+            },
+            {
+              "attack_s": 6.625,
+              "available_s": 6.682666666666666,
+              "delay_ms": 57.667
+            },
+            {
+              "attack_s": 9.305,
+              "available_s": 9.36,
+              "delay_ms": 55.0
+            },
+            {
+              "attack_s": 9.725,
+              "available_s": 9.76,
+              "delay_ms": 35.0
+            }
+          ],
+          "possible_duplicate_times_s": [],
+          "median_ms": 51.0,
+          "p90_ms": 61.0
+        }
+      },
+      "candidate_decisions": [
+        {
+          "candidate_hop": 1,
+          "candidate_s": 0.010666666666666666,
+          "initial_ratio_low_fast_body_fast": 0.14244163606024057,
+          "confirmed_s": 0.016,
+          "status": "accepted",
+          "confirmation_hop": 2,
+          "confirmation_ratio": 0.6687827844048629,
+          "classification": "excluded_clip_boundary"
+        },
+        {
+          "candidate_hop": 121,
+          "candidate_s": 0.6506666666666666,
+          "initial_ratio_low_fast_body_fast": 0.16531586205778112,
+          "confirmed_s": 0.6613333333333333,
+          "status": "accepted",
+          "confirmation_hop": 123,
+          "confirmation_ratio": 0.8656760155038143,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 312,
+          "candidate_s": 1.6693333333333333,
+          "initial_ratio_low_fast_body_fast": 0.24867026599424782,
+          "confirmed_s": 1.6906666666666665,
+          "status": "accepted",
+          "confirmation_hop": 316,
+          "confirmation_ratio": 1.1857222691572518,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 508,
+          "candidate_s": 2.7146666666666666,
+          "initial_ratio_low_fast_body_fast": 0.24104506093802583,
+          "confirmed_s": 2.7359999999999998,
+          "status": "accepted",
+          "confirmation_hop": 512,
+          "confirmation_ratio": 1.000462422369739,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 584,
+          "candidate_s": 3.12,
+          "initial_ratio_low_fast_body_fast": 1.8725198199110633,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 626,
+          "candidate_s": 3.344,
+          "initial_ratio_low_fast_body_fast": 0.8448480009164849,
+          "confirmed_s": 3.376,
+          "status": "accepted",
+          "confirmation_hop": 632,
+          "confirmation_ratio": 3.830612059105036,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 739,
+          "candidate_s": 3.9466666666666663,
+          "initial_ratio_low_fast_body_fast": 0.7533123966344412,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 933,
+          "candidate_s": 4.981333333333333,
+          "initial_ratio_low_fast_body_fast": 0.8326863704048677,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1127,
+          "candidate_s": 6.016,
+          "initial_ratio_low_fast_body_fast": 0.5546673123072409,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1205,
+          "candidate_s": 6.4319999999999995,
+          "initial_ratio_low_fast_body_fast": 0.7302104707069492,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1249,
+          "candidate_s": 6.666666666666666,
+          "initial_ratio_low_fast_body_fast": 0.7656119542323175,
+          "confirmed_s": 6.682666666666666,
+          "status": "accepted",
+          "confirmation_hop": 1252,
+          "confirmation_ratio": 7.286005710839315,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1358,
+          "candidate_s": 7.247999999999999,
+          "initial_ratio_low_fast_body_fast": 0.8028280754980472,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1554,
+          "candidate_s": 8.293333333333333,
+          "initial_ratio_low_fast_body_fast": 0.7565568524330356,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1748,
+          "candidate_s": 9.328,
+          "initial_ratio_low_fast_body_fast": 0.14125703643863613,
+          "confirmed_s": 9.36,
+          "status": "accepted",
+          "confirmation_hop": 1754,
+          "confirmation_ratio": 1.1399279953721475,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1825,
+          "candidate_s": 9.738666666666667,
+          "initial_ratio_low_fast_body_fast": 0.22786328358092658,
+          "confirmed_s": 9.76,
+          "status": "accepted",
+          "confirmation_hop": 1829,
+          "confirmation_ratio": 1.0002539244250097,
+          "classification": "matched_association"
+        }
+      ]
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "sample_rate": 44100,
+      "hop_samples": 235,
+      "duration_s": 15.000022675736961,
+      "input_sha256": {
+        "mix": "351ad2f07dc5778690b8f04c0af12c1acc8f83fdb3c253fc988e26a433cff7a8",
+        "labels": "d657d298ad98bee09e048922b465de4b4a69386a1482d8327be3207a37444ef7"
+      },
+      "original_score": {
+        "labels": 15,
+        "scored_triggers": 32,
+        "excluded": [
+          {
+            "reason": "clip_boundary",
+            "start_s": 0.0,
+            "end_s": 0.25,
+            "trigger_times_s": [
+              0.005328798185941043
+            ]
+          },
+          {
+            "reason": "unresolved_ending",
+            "start_s": 14.665000000000001,
+            "end_s": 15.000022675736961,
+            "trigger_times_s": [
+              14.771428571428572
+            ]
+          }
+        ],
+        "accuracy_by_tolerance_ms": {
+          "35": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 17,
+            "missed_times_s": [],
+            "extra_times_s": [
+              0.4849206349206349,
+              1.4174603174603175,
+              2.355328798185941,
+              3.2931972789115647,
+              4.231065759637188,
+              5.168934240362812,
+              6.106802721088435,
+              7.044671201814059,
+              7.982539682539683,
+              8.915079365079364,
+              9.85827664399093,
+              10.796145124716553,
+              11.163832199546485,
+              11.728684807256236,
+              12.6718820861678,
+              13.609750566893425,
+              14.547619047619047
+            ]
+          },
+          "50": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 17,
+            "missed_times_s": [],
+            "extra_times_s": [
+              0.4849206349206349,
+              1.4174603174603175,
+              2.355328798185941,
+              3.2931972789115647,
+              4.231065759637188,
+              5.168934240362812,
+              6.106802721088435,
+              7.044671201814059,
+              7.982539682539683,
+              8.915079365079364,
+              9.85827664399093,
+              10.796145124716553,
+              11.163832199546485,
+              11.728684807256236,
+              12.6718820861678,
+              13.609750566893425,
+              14.547619047619047
+            ]
+          },
+          "70": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 17,
+            "missed_times_s": [],
+            "extra_times_s": [
+              0.4849206349206349,
+              1.4174603174603175,
+              2.355328798185941,
+              3.2931972789115647,
+              4.231065759637188,
+              5.168934240362812,
+              6.106802721088435,
+              7.044671201814059,
+              7.982539682539683,
+              8.915079365079364,
+              9.85827664399093,
+              10.796145124716553,
+              11.163832199546485,
+              11.728684807256236,
+              12.6718820861678,
+              13.609750566893425,
+              14.547619047619047
+            ]
+          }
+        },
+        "association_early_35_late_200_ms": {
+          "matched": 15,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 17,
+          "pairs": [
+            {
+              "attack_s": 0.935,
+              "available_s": 0.9485260770975057,
+              "delay_ms": 13.526
+            },
+            {
+              "attack_s": 1.875,
+              "available_s": 1.8863945578231291,
+              "delay_ms": 11.395
+            },
+            {
+              "attack_s": 2.81,
+              "available_s": 2.818934240362812,
+              "delay_ms": 8.934
+            },
+            {
+              "attack_s": 3.75,
+              "available_s": 3.756802721088435,
+              "delay_ms": 6.803
+            },
+            {
+              "attack_s": 4.685,
+              "available_s": 4.694671201814059,
+              "delay_ms": 9.671
+            },
+            {
+              "attack_s": 5.625,
+              "available_s": 5.632539682539683,
+              "delay_ms": 7.54
+            },
+            {
+              "attack_s": 6.56,
+              "available_s": 6.570408163265306,
+              "delay_ms": 10.408
+            },
+            {
+              "attack_s": 7.5,
+              "available_s": 7.508276643990929,
+              "delay_ms": 8.277
+            },
+            {
+              "attack_s": 8.435,
+              "available_s": 8.446145124716553,
+              "delay_ms": 11.145
+            },
+            {
+              "attack_s": 9.375,
+              "available_s": 9.384013605442178,
+              "delay_ms": 9.014
+            },
+            {
+              "attack_s": 10.315,
+              "available_s": 10.3218820861678,
+              "delay_ms": 6.882
+            },
+            {
+              "attack_s": 11.25,
+              "available_s": 11.259750566893423,
+              "delay_ms": 9.751
+            },
+            {
+              "attack_s": 12.185,
+              "available_s": 12.192290249433107,
+              "delay_ms": 7.29
+            },
+            {
+              "attack_s": 13.125,
+              "available_s": 13.13548752834467,
+              "delay_ms": 10.488
+            },
+            {
+              "attack_s": 14.055,
+              "available_s": 14.073356009070295,
+              "delay_ms": 18.356
+            }
+          ],
+          "possible_duplicate_times_s": [],
+          "median_ms": 9.67,
+          "p90_ms": 13.53
+        }
+      },
+      "ratio_growth_score": {
+        "labels": 15,
+        "scored_triggers": 17,
+        "excluded": [
+          {
+            "reason": "clip_boundary",
+            "start_s": 0.0,
+            "end_s": 0.25,
+            "trigger_times_s": [
+              0.010657596371882086
+            ]
+          },
+          {
+            "reason": "unresolved_ending",
+            "start_s": 14.665000000000001,
+            "end_s": 15.000022675736961,
+            "trigger_times_s": [
+              14.803401360544218
+            ]
+          }
+        ],
+        "accuracy_by_tolerance_ms": {
+          "35": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 2,
+            "missed_times_s": [],
+            "extra_times_s": [
+              1.4334467120181407,
+              11.760657596371882
+            ]
+          },
+          "50": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 2,
+            "missed_times_s": [],
+            "extra_times_s": [
+              1.4334467120181407,
+              11.760657596371882
+            ]
+          },
+          "70": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 2,
+            "missed_times_s": [],
+            "extra_times_s": [
+              1.4334467120181407,
+              11.760657596371882
+            ]
+          }
+        },
+        "association_early_35_late_200_ms": {
+          "matched": 15,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 2,
+          "pairs": [
+            {
+              "attack_s": 0.935,
+              "available_s": 0.9591836734693877,
+              "delay_ms": 24.184
+            },
+            {
+              "attack_s": 1.875,
+              "available_s": 1.8917233560090703,
+              "delay_ms": 16.723
+            },
+            {
+              "attack_s": 2.81,
+              "available_s": 2.8295918367346937,
+              "delay_ms": 19.592
+            },
+            {
+              "attack_s": 3.75,
+              "available_s": 3.7621315192743765,
+              "delay_ms": 12.132
+            },
+            {
+              "attack_s": 4.685,
+              "available_s": 4.7,
+              "delay_ms": 15.0
+            },
+            {
+              "attack_s": 5.625,
+              "available_s": 5.643197278911565,
+              "delay_ms": 18.197
+            },
+            {
+              "attack_s": 6.56,
+              "available_s": 6.575736961451247,
+              "delay_ms": 15.737
+            },
+            {
+              "attack_s": 7.5,
+              "available_s": 7.51360544217687,
+              "delay_ms": 13.605
+            },
+            {
+              "attack_s": 8.435,
+              "available_s": 8.451473922902494,
+              "delay_ms": 16.474
+            },
+            {
+              "attack_s": 9.375,
+              "available_s": 9.389342403628119,
+              "delay_ms": 14.342
+            },
+            {
+              "attack_s": 10.315,
+              "available_s": 10.327210884353741,
+              "delay_ms": 12.211
+            },
+            {
+              "attack_s": 11.25,
+              "available_s": 11.265079365079364,
+              "delay_ms": 15.079
+            },
+            {
+              "attack_s": 12.185,
+              "available_s": 12.202947845804989,
+              "delay_ms": 17.948
+            },
+            {
+              "attack_s": 13.125,
+              "available_s": 13.140816326530611,
+              "delay_ms": 15.816
+            },
+            {
+              "attack_s": 14.055,
+              "available_s": 14.084013605442177,
+              "delay_ms": 29.014
+            }
+          ],
+          "possible_duplicate_times_s": [],
+          "median_ms": 15.82,
+          "p90_ms": 24.18
+        }
+      },
+      "candidate_decisions": [
+        {
+          "candidate_hop": 0,
+          "candidate_s": 0.005328798185941043,
+          "initial_ratio_low_fast_body_fast": 0.07925224548455086,
+          "confirmed_s": 0.010657596371882086,
+          "status": "accepted",
+          "confirmation_hop": 1,
+          "confirmation_ratio": 1.1871103421932352,
+          "classification": "excluded_clip_boundary"
+        },
+        {
+          "candidate_hop": 90,
+          "candidate_s": 0.4849206349206349,
+          "initial_ratio_low_fast_body_fast": 1.0428908398626082,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 177,
+          "candidate_s": 0.9485260770975057,
+          "initial_ratio_low_fast_body_fast": 1.8096323292178838,
+          "confirmed_s": 0.9591836734693877,
+          "status": "accepted",
+          "confirmation_hop": 179,
+          "confirmation_ratio": 14.95461831690896,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 265,
+          "candidate_s": 1.4174603174603175,
+          "initial_ratio_low_fast_body_fast": 0.4979101927884796,
+          "confirmed_s": 1.4334467120181407,
+          "status": "accepted",
+          "confirmation_hop": 268,
+          "confirmation_ratio": 1.9990699064330415,
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 353,
+          "candidate_s": 1.8863945578231291,
+          "initial_ratio_low_fast_body_fast": 1.5025942348136976,
+          "confirmed_s": 1.8917233560090703,
+          "status": "accepted",
+          "confirmation_hop": 354,
+          "confirmation_ratio": 7.1589819879290975,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 441,
+          "candidate_s": 2.355328798185941,
+          "initial_ratio_low_fast_body_fast": 0.7020372295045514,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 528,
+          "candidate_s": 2.818934240362812,
+          "initial_ratio_low_fast_body_fast": 0.4997219949947267,
+          "confirmed_s": 2.8295918367346937,
+          "status": "accepted",
+          "confirmation_hop": 530,
+          "confirmation_ratio": 7.031010333607964,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 617,
+          "candidate_s": 3.2931972789115647,
+          "initial_ratio_low_fast_body_fast": 0.6345140276946805,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 704,
+          "candidate_s": 3.756802721088435,
+          "initial_ratio_low_fast_body_fast": 0.4384717074711497,
+          "confirmed_s": 3.7621315192743765,
+          "status": "accepted",
+          "confirmation_hop": 705,
+          "confirmation_ratio": 2.4355724809178367,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 793,
+          "candidate_s": 4.231065759637188,
+          "initial_ratio_low_fast_body_fast": 0.6905487362510419,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 880,
+          "candidate_s": 4.694671201814059,
+          "initial_ratio_low_fast_body_fast": 0.4067535558933493,
+          "confirmed_s": 4.7,
+          "status": "accepted",
+          "confirmation_hop": 881,
+          "confirmation_ratio": 1.7431559786598545,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 969,
+          "candidate_s": 5.168934240362812,
+          "initial_ratio_low_fast_body_fast": 0.8479735333521333,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1056,
+          "candidate_s": 5.632539682539682,
+          "initial_ratio_low_fast_body_fast": 0.7099324429382871,
+          "confirmed_s": 5.643197278911565,
+          "status": "accepted",
+          "confirmation_hop": 1058,
+          "confirmation_ratio": 6.738461870163872,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1145,
+          "candidate_s": 6.106802721088435,
+          "initial_ratio_low_fast_body_fast": 0.5911019969855915,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1232,
+          "candidate_s": 6.570408163265306,
+          "initial_ratio_low_fast_body_fast": 0.4793308630871664,
+          "confirmed_s": 6.575736961451247,
+          "status": "accepted",
+          "confirmation_hop": 1233,
+          "confirmation_ratio": 2.42686993881455,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1321,
+          "candidate_s": 7.044671201814059,
+          "initial_ratio_low_fast_body_fast": 0.5749437588699815,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1408,
+          "candidate_s": 7.508276643990929,
+          "initial_ratio_low_fast_body_fast": 0.36929497148150625,
+          "confirmed_s": 7.51360544217687,
+          "status": "accepted",
+          "confirmation_hop": 1409,
+          "confirmation_ratio": 1.8588330131449113,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1497,
+          "candidate_s": 7.982539682539683,
+          "initial_ratio_low_fast_body_fast": 0.5775382267579022,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1584,
+          "candidate_s": 8.446145124716553,
+          "initial_ratio_low_fast_body_fast": 0.405848332105297,
+          "confirmed_s": 8.451473922902494,
+          "status": "accepted",
+          "confirmation_hop": 1585,
+          "confirmation_ratio": 2.6473521994810807,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1672,
+          "candidate_s": 8.915079365079364,
+          "initial_ratio_low_fast_body_fast": 0.43855811054024085,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1760,
+          "candidate_s": 9.384013605442176,
+          "initial_ratio_low_fast_body_fast": 0.40461951321183776,
+          "confirmed_s": 9.389342403628119,
+          "status": "accepted",
+          "confirmation_hop": 1761,
+          "confirmation_ratio": 2.5712650016734453,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1849,
+          "candidate_s": 9.85827664399093,
+          "initial_ratio_low_fast_body_fast": 0.7638115756649236,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1936,
+          "candidate_s": 10.3218820861678,
+          "initial_ratio_low_fast_body_fast": 0.7237130249851559,
+          "confirmed_s": 10.327210884353741,
+          "status": "accepted",
+          "confirmation_hop": 1937,
+          "confirmation_ratio": 2.9370940613218894,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2025,
+          "candidate_s": 10.796145124716553,
+          "initial_ratio_low_fast_body_fast": 0.7518009510609719,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 2094,
+          "candidate_s": 11.163832199546485,
+          "initial_ratio_low_fast_body_fast": 1.5206743595108525,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 2112,
+          "candidate_s": 11.259750566893423,
+          "initial_ratio_low_fast_body_fast": 0.8015032033519521,
+          "confirmed_s": 11.265079365079364,
+          "status": "accepted",
+          "confirmation_hop": 2113,
+          "confirmation_ratio": 3.594735936928215,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2200,
+          "candidate_s": 11.728684807256236,
+          "initial_ratio_low_fast_body_fast": 0.35264730912063635,
+          "confirmed_s": 11.760657596371882,
+          "status": "accepted",
+          "confirmation_hop": 2206,
+          "confirmation_ratio": 2.310201708825723,
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 2287,
+          "candidate_s": 12.192290249433107,
+          "initial_ratio_low_fast_body_fast": 0.31614454977262174,
+          "confirmed_s": 12.202947845804989,
+          "status": "accepted",
+          "confirmation_hop": 2289,
+          "confirmation_ratio": 4.432424867181927,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2377,
+          "candidate_s": 12.6718820861678,
+          "initial_ratio_low_fast_body_fast": 0.9208187279964043,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 2464,
+          "candidate_s": 13.13548752834467,
+          "initial_ratio_low_fast_body_fast": 0.940407597053114,
+          "confirmed_s": 13.140816326530611,
+          "status": "accepted",
+          "confirmation_hop": 2465,
+          "confirmation_ratio": 4.37903059636183,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2553,
+          "candidate_s": 13.609750566893425,
+          "initial_ratio_low_fast_body_fast": 1.0219559620425738,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 2640,
+          "candidate_s": 14.073356009070295,
+          "initial_ratio_low_fast_body_fast": 1.6145123495842526,
+          "confirmed_s": 14.084013605442177,
+          "status": "accepted",
+          "confirmation_hop": 2642,
+          "confirmation_ratio": 14.104409581719711,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2729,
+          "candidate_s": 14.547619047619047,
+          "initial_ratio_low_fast_body_fast": 0.4651461516845556,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 2771,
+          "candidate_s": 14.77142857142857,
+          "initial_ratio_low_fast_body_fast": 0.44337227273183083,
+          "confirmed_s": 14.803401360544218,
+          "status": "accepted",
+          "confirmation_hop": 2777,
+          "confirmation_ratio": 3.618103602600842,
+          "classification": "excluded_unresolved_ending"
+        }
+      ],
+      "ablation": {
+        "qualification": "Local counterfactual evidence; it does not prove instrument causality.",
+        "stems": {
+          "bass": {
+            "input_sha256": "40b011be4f20aeb2f10b00268cde062ecd224ee8b03f0256192f67777a8d10e5",
+            "ablation_path": "/Users/peterkiemann/.cache/manifold/kick-rejection-trial-2026-10-09/bad_guy_128bpm__without_bass.wav",
+            "ablation_sha256": "3d83b720acdf447d1c03053c4a0fd232336c1f9d20d0d72e3dca2730c653cec4",
+            "sample_rate": 44100,
+            "event_times_s": [
+              0.005328798185941043,
+              0.4849206349206349,
+              0.9485260770975057,
+              1.4174603174603175,
+              1.8863945578231291,
+              2.355328798185941,
+              2.824263038548753,
+              3.2931972789115647,
+              3.756802721088435,
+              4.231065759637188,
+              4.694671201814059,
+              5.168934240362812,
+              5.632539682539683,
+              6.106802721088435,
+              6.570408163265306,
+              7.044671201814059,
+              7.508276643990929,
+              7.982539682539683,
+              8.446145124716553,
+              8.920408163265305,
+              9.384013605442178,
+              9.85827664399093,
+              10.3218820861678,
+              10.790816326530612,
+              11.259750566893423,
+              11.734013605442177,
+              12.197619047619048,
+              12.6718820861678,
+              13.13548752834467,
+              13.609750566893425,
+              14.073356009070295,
+              14.547619047619047,
+              14.776757369614513
+            ]
+          },
+          "drums": {
+            "input_sha256": "a49757285e1b2e94ae92bd5bbcecf50c3f3fe914114a561c05a62ec02dba6dae",
+            "ablation_path": "/Users/peterkiemann/.cache/manifold/kick-rejection-trial-2026-10-09/bad_guy_128bpm__without_drums.wav",
+            "ablation_sha256": "72cd07aa9edf59a839bc4252acbf8101cd5eb3bae7a51ffb3e72f373ea095506",
+            "sample_rate": 44100,
+            "event_times_s": [
+              0.010657596371882086,
+              0.16519274376417234,
+              0.23979591836734693,
+              0.3463718820861678,
+              0.5968253968253968,
+              0.8419501133786849,
+              1.103061224489796,
+              1.1936507936507936,
+              1.5400226757369615,
+              1.6359410430839003,
+              1.7798185941043083,
+              2.1368480725623584,
+              2.477891156462585,
+              2.573809523809524,
+              2.723015873015873,
+              3.0534013605442176,
+              3.1333333333333333,
+              3.4104308390022675,
+              3.6502267573696145,
+              3.9912698412698413,
+              4.34297052154195,
+              4.406916099773243,
+              4.59342403628118,
+              4.934467120181406,
+              5.291496598639456,
+              5.387414965986395,
+              5.536621315192744,
+              5.8776643990929704,
+              6.229365079365079,
+              6.463832199546485,
+              6.730272108843537,
+              6.804875283446712,
+              7.161904761904762,
+              7.40702947845805,
+              7.673469387755102,
+              7.753401360544218,
+              8.110430839002268,
+              8.339569160997732,
+              8.68061224489796,
+              9.037641723356009,
+              9.277437641723356,
+              9.623809523809523,
+              9.970181405895692,
+              10.225963718820863,
+              10.47108843537415,
+              10.567006802721089,
+              10.918707482993197,
+              11.153174603174604,
+              11.504875283446712,
+              11.85124716553288,
+              12.091043083900226,
+              12.437414965986395,
+              12.783786848072562,
+              12.858390022675737,
+              13.034240362811792,
+              13.375283446712018,
+              13.721655328798185,
+              13.801587301587302,
+              13.961451247165533,
+              14.217233560090703,
+              14.3078231292517,
+              14.66485260770975
+            ]
+          },
+          "vocals": {
+            "input_sha256": "f7469ece996e493764a4af013ea4107cb65825dbd0ce6e8d060cd48934d1db15",
+            "ablation_path": "/Users/peterkiemann/.cache/manifold/kick-rejection-trial-2026-10-09/bad_guy_128bpm__without_vocals.wav",
+            "ablation_sha256": "e5e580fd783306aa13de74efcb59fcb5cb3f0b3c15b2f7a754a241c671cc09c7",
+            "sample_rate": 44100,
+            "event_times_s": [
+              0.005328798185941043,
+              0.4849206349206349,
+              0.9485260770975057,
+              1.4174603174603175,
+              1.8863945578231291,
+              2.355328798185941,
+              2.818934240362812,
+              3.2931972789115647,
+              3.756802721088435,
+              4.231065759637188,
+              4.694671201814059,
+              5.168934240362812,
+              5.632539682539683,
+              6.106802721088435,
+              6.570408163265306,
+              7.044671201814059,
+              7.508276643990929,
+              7.982539682539683,
+              8.446145124716553,
+              8.915079365079364,
+              9.384013605442178,
+              9.85827664399093,
+              10.3218820861678,
+              10.796145124716553,
+              11.163832199546485,
+              11.259750566893423,
+              11.728684807256236,
+              12.192290249433107,
+              12.6718820861678,
+              13.13548752834467,
+              13.609750566893425,
+              14.073356009070295,
+              14.547619047619047,
+              14.771428571428572
+            ]
+          },
+          "others": {
+            "input_sha256": "dbf504ffcb702c38143ed80574594ba0504d8ea502a0d3ec4c9b831259b416e1",
+            "ablation_path": "/Users/peterkiemann/.cache/manifold/kick-rejection-trial-2026-10-09/bad_guy_128bpm__without_others.wav",
+            "ablation_sha256": "fedb85f27b9d9c5869692e23853dfcfabbd887698a35d59ab4f69cf0352e13f3",
+            "sample_rate": 44100,
+            "event_times_s": [
+              0.005328798185941043,
+              0.4849206349206349,
+              0.9485260770975057,
+              1.4174603174603175,
+              1.8863945578231291,
+              2.355328798185941,
+              2.818934240362812,
+              3.2931972789115647,
+              3.756802721088435,
+              4.231065759637188,
+              4.694671201814059,
+              5.168934240362812,
+              5.632539682539683,
+              6.106802721088435,
+              6.570408163265306,
+              7.044671201814059,
+              7.508276643990929,
+              7.982539682539683,
+              8.446145124716553,
+              8.920408163265305,
+              9.384013605442178,
+              9.85827664399093,
+              10.3218820861678,
+              10.796145124716553,
+              11.259750566893423,
+              11.734013605442177,
+              12.197619047619048,
+              12.6718820861678,
+              13.13548752834467,
+              13.609750566893425,
+              14.073356009070295,
+              14.547619047619047,
+              14.771428571428572
+            ]
+          }
+        },
+        "event_evidence": [
+          {
+            "candidate_s": 0.005328798185941043,
+            "classification": "excluded_clip_boundary",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 7.070591099057619e-06,
+              "drums": 0.9999647722253528,
+              "vocals": 8.573966687722271e-09,
+              "others": 2.814860958139162e-05
+            },
+            "ablations_removing_event_within_30ms": []
+          },
+          {
+            "candidate_s": 0.4849206349206349,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.003157578004084075,
+              "drums": 0.9964781486483844,
+              "vocals": 7.49682569084026e-11,
+              "others": 0.00036427327256330626
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 0.9485260770975057,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.015313185407430215,
+              "drums": 0.9837293101031129,
+              "vocals": 9.424349526337341e-10,
+              "others": 0.0009575035470218615
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 1.4174603174603175,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.017398563394329946,
+              "drums": 0.9815341476749792,
+              "vocals": 1.2788000980495735e-10,
+              "others": 0.0010672888028107723
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 1.8863945578231291,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.0065489711994772435,
+              "drums": 0.9927328170809878,
+              "vocals": 1.5345498134732034e-10,
+              "others": 0.0007182115660798982
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 2.355328798185941,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.029494189829173192,
+              "drums": 0.9694456342439897,
+              "vocals": 8.426514453674037e-11,
+              "others": 0.0010601758425720545
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 2.818934240362812,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.022325792100912376,
+              "drums": 0.9767931384259118,
+              "vocals": 1.662310754507854e-10,
+              "others": 0.0008810693069446396
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 3.2931972789115647,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.007003335715628812,
+              "drums": 0.9925681169752733,
+              "vocals": 9.50561229713707e-11,
+              "others": 0.00042854721404178597
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 3.756802721088435,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.04223916152270131,
+              "drums": 0.956141169297043,
+              "vocals": 2.1350033725934024e-09,
+              "others": 0.0016196670452523966
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 4.231065759637188,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.009424913447143036,
+              "drums": 0.9903794419814611,
+              "vocals": 3.1056305583689227e-11,
+              "others": 0.00019564454033954532
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 4.694671201814059,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.03377478486563846,
+              "drums": 0.9643826277184707,
+              "vocals": 4.696647755615921e-10,
+              "others": 0.0018425869462259591
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 5.168934240362812,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.023048706036654515,
+              "drums": 0.9766247475299998,
+              "vocals": 3.4404547628524936e-11,
+              "others": 0.0003265463989410726
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 5.632539682539683,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.020044532368009616,
+              "drums": 0.9779668741392321,
+              "vocals": 1.995182459841536e-10,
+              "others": 0.0019885932932400033
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 6.106802721088435,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.004090716923825168,
+              "drums": 0.9957114548925862,
+              "vocals": 1.1099500195622961e-10,
+              "others": 0.00019782807259359047
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 6.570408163265306,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.02747600950930391,
+              "drums": 0.9708166347179115,
+              "vocals": 1.7737643252035293e-10,
+              "others": 0.0017073555954081796
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 7.044671201814059,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.007752323975987594,
+              "drums": 0.9919473371938121,
+              "vocals": 1.2028609063043266e-10,
+              "others": 0.00030033870991410074
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 7.508276643990929,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.026743199138318473,
+              "drums": 0.9723556130949826,
+              "vocals": 2.850743206246136e-10,
+              "others": 0.0009011874816245786
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 7.982539682539683,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.004678198639720271,
+              "drums": 0.9952479373372245,
+              "vocals": 1.4671890732278155e-09,
+              "others": 7.386255586610723e-05
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 8.446145124716553,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.02300397547502962,
+              "drums": 0.9755750637452564,
+              "vocals": 4.255727307622368e-10,
+              "others": 0.0014209603541413458
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 8.915079365079364,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.027547074545641807,
+              "drums": 0.971457713149019,
+              "vocals": 6.117124043096598e-10,
+              "others": 0.0009952116936268714
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 9.384013605442178,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.0210812651607507,
+              "drums": 0.9777405122324795,
+              "vocals": 1.0345106724774953e-09,
+              "others": 0.0011782215722590636
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 9.85827664399093,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.018792769789007457,
+              "drums": 0.9807698599922634,
+              "vocals": 3.6967576782044e-10,
+              "others": 0.0004373698490532999
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 10.3218820861678,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.0278713066974808,
+              "drums": 0.9712787128147568,
+              "vocals": 1.4012004062566963e-09,
+              "others": 0.0008499790865621187
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 10.796145124716553,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.003305089470373519,
+              "drums": 0.9964482968503041,
+              "vocals": 9.439096979410569e-11,
+              "others": 0.0002466135849313864
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 11.163832199546485,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.8074461624783763,
+              "drums": 5.03402023922184e-06,
+              "vocals": 5.770624561526377e-10,
+              "others": 0.19254880292432194
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass",
+              "others"
+            ]
+          },
+          {
+            "candidate_s": 11.259750566893423,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.02431767482383768,
+              "drums": 0.9738136972848715,
+              "vocals": 3.4403530060890867e-10,
+              "others": 0.0018686275472555073
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 11.728684807256236,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.02336924158900163,
+              "drums": 0.9763395788145551,
+              "vocals": 2.38317531754356e-10,
+              "others": 0.000291179358125766
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 12.192290249433107,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.05480860364983394,
+              "drums": 0.9408831160235474,
+              "vocals": 5.662878438378447e-10,
+              "others": 0.004308279760330919
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 12.6718820861678,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.009650311971929615,
+              "drums": 0.9902519570638867,
+              "vocals": 1.5119843366728619e-10,
+              "others": 9.773081298518827e-05
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 13.13548752834467,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.022613192610719667,
+              "drums": 0.9762581374257215,
+              "vocals": 2.822298757453135e-05,
+              "others": 0.00110044697598427
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 13.609750566893425,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.0031379515929654237,
+              "drums": 0.9965332740798943,
+              "vocals": 1.0752666662726805e-07,
+              "others": 0.00032866680047365386
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 14.073356009070295,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.0173460319647281,
+              "drums": 0.9813329482438681,
+              "vocals": 1.6799541798645279e-09,
+              "others": 0.001321018111449619
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 14.547619047619047,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.004100700536086847,
+              "drums": 0.9957070421857036,
+              "vocals": 9.095839878875214e-10,
+              "others": 0.0001922563686255027
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 14.771428571428572,
+            "classification": "excluded_unresolved_ending",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.09512780038585504,
+              "drums": 0.8985697716615237,
+              "vocals": 7.929919500848448e-10,
+              "others": 0.006302427159629251
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          }
+        ],
+        "scored_extra_summary": [
+          {
+            "candidate_s": 0.4849206349206349,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.003157578004084075,
+              "drums": 0.9964781486483844,
+              "vocals": 7.49682569084026e-11,
+              "others": 0.00036427327256330626
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 1.4174603174603175,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.017398563394329946,
+              "drums": 0.9815341476749792,
+              "vocals": 1.2788000980495735e-10,
+              "others": 0.0010672888028107723
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 2.355328798185941,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.029494189829173192,
+              "drums": 0.9694456342439897,
+              "vocals": 8.426514453674037e-11,
+              "others": 0.0010601758425720545
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 3.2931972789115647,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.007003335715628812,
+              "drums": 0.9925681169752733,
+              "vocals": 9.50561229713707e-11,
+              "others": 0.00042854721404178597
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 4.231065759637188,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.009424913447143036,
+              "drums": 0.9903794419814611,
+              "vocals": 3.1056305583689227e-11,
+              "others": 0.00019564454033954532
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 5.168934240362812,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.023048706036654515,
+              "drums": 0.9766247475299998,
+              "vocals": 3.4404547628524936e-11,
+              "others": 0.0003265463989410726
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 6.106802721088435,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.004090716923825168,
+              "drums": 0.9957114548925862,
+              "vocals": 1.1099500195622961e-10,
+              "others": 0.00019782807259359047
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 7.044671201814059,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.007752323975987594,
+              "drums": 0.9919473371938121,
+              "vocals": 1.2028609063043266e-10,
+              "others": 0.00030033870991410074
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 7.982539682539683,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.004678198639720271,
+              "drums": 0.9952479373372245,
+              "vocals": 1.4671890732278155e-09,
+              "others": 7.386255586610723e-05
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 8.915079365079364,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.027547074545641807,
+              "drums": 0.971457713149019,
+              "vocals": 6.117124043096598e-10,
+              "others": 0.0009952116936268714
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 9.85827664399093,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.018792769789007457,
+              "drums": 0.9807698599922634,
+              "vocals": 3.6967576782044e-10,
+              "others": 0.0004373698490532999
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 10.796145124716553,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.003305089470373519,
+              "drums": 0.9964482968503041,
+              "vocals": 9.439096979410569e-11,
+              "others": 0.0002466135849313864
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 11.163832199546485,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.8074461624783763,
+              "drums": 5.03402023922184e-06,
+              "vocals": 5.770624561526377e-10,
+              "others": 0.19254880292432194
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass",
+              "others"
+            ]
+          },
+          {
+            "candidate_s": 11.728684807256236,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.02336924158900163,
+              "drums": 0.9763395788145551,
+              "vocals": 2.38317531754356e-10,
+              "others": 0.000291179358125766
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 12.6718820861678,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.009650311971929615,
+              "drums": 0.9902519570638867,
+              "vocals": 1.5119843366728619e-10,
+              "others": 9.773081298518827e-05
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 13.609750566893425,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.0031379515929654237,
+              "drums": 0.9965332740798943,
+              "vocals": 1.0752666662726805e-07,
+              "others": 0.00032866680047365386
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 14.547619047619047,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.004100700536086847,
+              "drums": 0.9957070421857036,
+              "vocals": 9.095839878875214e-10,
+              "others": 0.0001922563686255027
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "track": "feel_the_vibration_174bpm",
+      "sample_rate": 48000,
+      "hop_samples": 256,
+      "duration_s": 13.241395833333334,
+      "input_sha256": {
+        "mix": "57458b322198b9c12ac821180874466a6636c15dda56d33bc29d616f46f80533",
+        "labels": "922be87c9a6a9eb03002b68ce5f87915e1fec4652921795c20cf6975a2bc21e8"
+      },
+      "original_score": {
+        "labels": 15,
+        "scored_triggers": 17,
+        "excluded": [
+          {
+            "reason": "clip_boundary",
+            "start_s": 0.0,
+            "end_s": 0.25,
+            "trigger_times_s": [
+              0.016
+            ]
+          }
+        ],
+        "accuracy_by_tolerance_ms": {
+          "35": {
+            "matched": 3,
+            "missed": 12,
+            "extra": 14,
+            "missed_times_s": [
+              1.03,
+              1.645,
+              2.685,
+              3.305,
+              4.96,
+              5.995,
+              6.615,
+              7.65,
+              9.925,
+              10.965,
+              11.58,
+              12.62
+            ],
+            "extra_times_s": [
+              0.9013333333333333,
+              1.0666666666666667,
+              1.6906666666666668,
+              2.7253333333333334,
+              3.344,
+              5.013333333333334,
+              6.032,
+              6.661333333333333,
+              7.690666666666667,
+              9.968,
+              11.013333333333334,
+              11.637333333333334,
+              12.288,
+              12.666666666666666
+            ]
+          },
+          "50": {
+            "matched": 13,
+            "missed": 2,
+            "extra": 4,
+            "missed_times_s": [
+              4.96,
+              11.58
+            ],
+            "extra_times_s": [
+              0.9013333333333333,
+              5.013333333333334,
+              11.637333333333334,
+              12.288
+            ]
+          },
+          "70": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 2,
+            "missed_times_s": [],
+            "extra_times_s": [
+              0.9013333333333333,
+              12.288
+            ]
+          }
+        },
+        "association_early_35_late_200_ms": {
+          "matched": 15,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 2,
+          "pairs": [
+            {
+              "attack_s": 1.03,
+              "available_s": 1.0666666666666667,
+              "delay_ms": 36.667
+            },
+            {
+              "attack_s": 1.645,
+              "available_s": 1.6906666666666668,
+              "delay_ms": 45.667
+            },
+            {
+              "attack_s": 2.685,
+              "available_s": 2.7253333333333334,
+              "delay_ms": 40.333
+            },
+            {
+              "attack_s": 3.305,
+              "available_s": 3.344,
+              "delay_ms": 39.0
+            },
+            {
+              "attack_s": 4.34,
+              "available_s": 4.373333333333333,
+              "delay_ms": 33.333
+            },
+            {
+              "attack_s": 4.96,
+              "available_s": 5.013333333333334,
+              "delay_ms": 53.333
+            },
+            {
+              "attack_s": 5.995,
+              "available_s": 6.032,
+              "delay_ms": 37.0
+            },
+            {
+              "attack_s": 6.615,
+              "available_s": 6.661333333333333,
+              "delay_ms": 46.333
+            },
+            {
+              "attack_s": 7.65,
+              "available_s": 7.690666666666667,
+              "delay_ms": 40.667
+            },
+            {
+              "attack_s": 8.275,
+              "available_s": 8.309333333333333,
+              "delay_ms": 34.333
+            },
+            {
+              "attack_s": 9.305,
+              "available_s": 9.338666666666667,
+              "delay_ms": 33.667
+            },
+            {
+              "attack_s": 9.925,
+              "available_s": 9.968,
+              "delay_ms": 43.0
+            },
+            {
+              "attack_s": 10.965,
+              "available_s": 11.013333333333334,
+              "delay_ms": 48.333
+            },
+            {
+              "attack_s": 11.58,
+              "available_s": 11.637333333333334,
+              "delay_ms": 57.333
+            },
+            {
+              "attack_s": 12.62,
+              "available_s": 12.666666666666666,
+              "delay_ms": 46.667
+            }
+          ],
+          "possible_duplicate_times_s": [],
+          "median_ms": 40.67,
+          "p90_ms": 53.33
+        }
+      },
+      "ratio_growth_score": {
+        "labels": 15,
+        "scored_triggers": 16,
+        "excluded": [
+          {
+            "reason": "clip_boundary",
+            "start_s": 0.0,
+            "end_s": 0.25,
+            "trigger_times_s": [
+              0.026666666666666665
+            ]
+          }
+        ],
+        "accuracy_by_tolerance_ms": {
+          "35": {
+            "matched": 0,
+            "missed": 15,
+            "extra": 16,
+            "missed_times_s": [
+              1.03,
+              1.645,
+              2.685,
+              3.305,
+              4.34,
+              4.96,
+              5.995,
+              6.615,
+              7.65,
+              8.275,
+              9.305,
+              9.925,
+              10.965,
+              11.58,
+              12.62
+            ],
+            "extra_times_s": [
+              0.9226666666666666,
+              1.0773333333333333,
+              1.7173333333333334,
+              2.7466666666666666,
+              3.365333333333333,
+              4.394666666666667,
+              5.024,
+              6.053333333333333,
+              6.672,
+              7.701333333333333,
+              8.330666666666666,
+              9.354666666666667,
+              9.984,
+              11.024,
+              11.648,
+              12.677333333333333
+            ]
+          },
+          "50": {
+            "matched": 2,
+            "missed": 13,
+            "extra": 14,
+            "missed_times_s": [
+              1.645,
+              2.685,
+              3.305,
+              4.34,
+              4.96,
+              5.995,
+              6.615,
+              7.65,
+              8.275,
+              9.925,
+              10.965,
+              11.58,
+              12.62
+            ],
+            "extra_times_s": [
+              0.9226666666666666,
+              1.7173333333333334,
+              2.7466666666666666,
+              3.365333333333333,
+              4.394666666666667,
+              5.024,
+              6.053333333333333,
+              6.672,
+              7.701333333333333,
+              8.330666666666666,
+              9.984,
+              11.024,
+              11.648,
+              12.677333333333333
+            ]
+          },
+          "70": {
+            "matched": 14,
+            "missed": 1,
+            "extra": 2,
+            "missed_times_s": [
+              1.645
+            ],
+            "extra_times_s": [
+              0.9226666666666666,
+              1.7173333333333334
+            ]
+          }
+        },
+        "association_early_35_late_200_ms": {
+          "matched": 15,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 1,
+          "pairs": [
+            {
+              "attack_s": 1.03,
+              "available_s": 1.0773333333333333,
+              "delay_ms": 47.333
+            },
+            {
+              "attack_s": 1.645,
+              "available_s": 1.7173333333333334,
+              "delay_ms": 72.333
+            },
+            {
+              "attack_s": 2.685,
+              "available_s": 2.7466666666666666,
+              "delay_ms": 61.667
+            },
+            {
+              "attack_s": 3.305,
+              "available_s": 3.365333333333333,
+              "delay_ms": 60.333
+            },
+            {
+              "attack_s": 4.34,
+              "available_s": 4.394666666666667,
+              "delay_ms": 54.667
+            },
+            {
+              "attack_s": 4.96,
+              "available_s": 5.024,
+              "delay_ms": 64.0
+            },
+            {
+              "attack_s": 5.995,
+              "available_s": 6.053333333333333,
+              "delay_ms": 58.333
+            },
+            {
+              "attack_s": 6.615,
+              "available_s": 6.672,
+              "delay_ms": 57.0
+            },
+            {
+              "attack_s": 7.65,
+              "available_s": 7.701333333333333,
+              "delay_ms": 51.333
+            },
+            {
+              "attack_s": 8.275,
+              "available_s": 8.330666666666666,
+              "delay_ms": 55.667
+            },
+            {
+              "attack_s": 9.305,
+              "available_s": 9.354666666666667,
+              "delay_ms": 49.667
+            },
+            {
+              "attack_s": 9.925,
+              "available_s": 9.984,
+              "delay_ms": 59.0
+            },
+            {
+              "attack_s": 10.965,
+              "available_s": 11.024,
+              "delay_ms": 59.0
+            },
+            {
+              "attack_s": 11.58,
+              "available_s": 11.648,
+              "delay_ms": 68.0
+            },
+            {
+              "attack_s": 12.62,
+              "available_s": 12.677333333333333,
+              "delay_ms": 57.333
+            }
+          ],
+          "possible_duplicate_times_s": [],
+          "median_ms": 58.33,
+          "p90_ms": 68.0
+        }
+      },
+      "candidate_decisions": [
+        {
+          "candidate_hop": 2,
+          "candidate_s": 0.016,
+          "initial_ratio_low_fast_body_fast": 0.10746227978762503,
+          "confirmed_s": 0.026666666666666665,
+          "status": "accepted",
+          "confirmation_hop": 4,
+          "confirmation_ratio": 0.639099786590689,
+          "classification": "excluded_clip_boundary"
+        },
+        {
+          "candidate_hop": 168,
+          "candidate_s": 0.9013333333333333,
+          "initial_ratio_low_fast_body_fast": 1.3640037310380768,
+          "confirmed_s": 0.9226666666666666,
+          "status": "accepted",
+          "confirmation_hop": 172,
+          "confirmation_ratio": 5.764101142745456,
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 199,
+          "candidate_s": 1.0666666666666667,
+          "initial_ratio_low_fast_body_fast": 0.36324787656086793,
+          "confirmed_s": 1.0773333333333333,
+          "status": "accepted",
+          "confirmation_hop": 201,
+          "confirmation_ratio": 1.5961187099174419,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 316,
+          "candidate_s": 1.6906666666666665,
+          "initial_ratio_low_fast_body_fast": 1.0334028918749731,
+          "confirmed_s": 1.7173333333333334,
+          "status": "accepted",
+          "confirmation_hop": 321,
+          "confirmation_ratio": 8.329260706774102,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 510,
+          "candidate_s": 2.7253333333333334,
+          "initial_ratio_low_fast_body_fast": 0.8741700362047866,
+          "confirmed_s": 2.7466666666666666,
+          "status": "accepted",
+          "confirmation_hop": 514,
+          "confirmation_ratio": 5.099082804111292,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 626,
+          "candidate_s": 3.344,
+          "initial_ratio_low_fast_body_fast": 0.7181864022915869,
+          "confirmed_s": 3.365333333333333,
+          "status": "accepted",
+          "confirmation_hop": 630,
+          "confirmation_ratio": 5.50343455115777,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 819,
+          "candidate_s": 4.373333333333333,
+          "initial_ratio_low_fast_body_fast": 0.35720248005723204,
+          "confirmed_s": 4.394666666666667,
+          "status": "accepted",
+          "confirmation_hop": 823,
+          "confirmation_ratio": 2.952937216548218,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 939,
+          "candidate_s": 5.013333333333333,
+          "initial_ratio_low_fast_body_fast": 1.983963162402349,
+          "confirmed_s": 5.024,
+          "status": "accepted",
+          "confirmation_hop": 941,
+          "confirmation_ratio": 8.537180501157753,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1130,
+          "candidate_s": 6.032,
+          "initial_ratio_low_fast_body_fast": 0.5072529791871777,
+          "confirmed_s": 6.053333333333333,
+          "status": "accepted",
+          "confirmation_hop": 1134,
+          "confirmation_ratio": 3.9351247371047933,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1248,
+          "candidate_s": 6.661333333333333,
+          "initial_ratio_low_fast_body_fast": 0.7115493625991387,
+          "confirmed_s": 6.672,
+          "status": "accepted",
+          "confirmation_hop": 1250,
+          "confirmation_ratio": 4.9786853481787485,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1441,
+          "candidate_s": 7.690666666666666,
+          "initial_ratio_low_fast_body_fast": 0.576897738535365,
+          "confirmed_s": 7.701333333333333,
+          "status": "accepted",
+          "confirmation_hop": 1443,
+          "confirmation_ratio": 3.258362937971241,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1557,
+          "candidate_s": 8.309333333333333,
+          "initial_ratio_low_fast_body_fast": 0.8553775996792119,
+          "confirmed_s": 8.330666666666666,
+          "status": "accepted",
+          "confirmation_hop": 1561,
+          "confirmation_ratio": 8.488140545545775,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1750,
+          "candidate_s": 9.338666666666667,
+          "initial_ratio_low_fast_body_fast": 0.47181937149807557,
+          "confirmed_s": 9.354666666666667,
+          "status": "accepted",
+          "confirmation_hop": 1753,
+          "confirmation_ratio": 4.732732447975704,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1868,
+          "candidate_s": 9.968,
+          "initial_ratio_low_fast_body_fast": 0.6566190192754303,
+          "confirmed_s": 9.984,
+          "status": "accepted",
+          "confirmation_hop": 1871,
+          "confirmation_ratio": 3.246704975462718,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2064,
+          "candidate_s": 11.013333333333334,
+          "initial_ratio_low_fast_body_fast": 2.3506591336620977,
+          "confirmed_s": 11.024,
+          "status": "accepted",
+          "confirmation_hop": 2066,
+          "confirmation_ratio": 10.052252876330213,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2181,
+          "candidate_s": 11.637333333333332,
+          "initial_ratio_low_fast_body_fast": 2.6060662207573038,
+          "confirmed_s": 11.648,
+          "status": "accepted",
+          "confirmation_hop": 2183,
+          "confirmation_ratio": 16.106949188931754,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2303,
+          "candidate_s": 12.288,
+          "initial_ratio_low_fast_body_fast": 4.021518233580963,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 2374,
+          "candidate_s": 12.666666666666666,
+          "initial_ratio_low_fast_body_fast": 1.1109459463121925,
+          "confirmed_s": 12.677333333333333,
+          "status": "accepted",
+          "confirmation_hop": 2376,
+          "confirmation_ratio": 6.588120875881925,
+          "classification": "matched_association"
+        }
+      ]
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "sample_rate": 48000,
+      "hop_samples": 256,
+      "duration_s": 13.241395833333334,
+      "input_sha256": {
+        "mix": "26163ae92e4b7aaf74cafc6a5fff3b6bad2a566a60474bb8b8b53386add18514",
+        "labels": "a29b9892456588294efbf6f506da912d4f2d996fc105f9551b1b9d6db4077f4e"
+      },
+      "original_score": {
+        "labels": 12,
+        "scored_triggers": 25,
+        "excluded": [
+          {
+            "reason": "clip_boundary",
+            "start_s": 0.0,
+            "end_s": 0.25,
+            "trigger_times_s": [
+              0.005333333333333333
+            ]
+          },
+          {
+            "reason": "unresolved_ending",
+            "start_s": 12.935,
+            "end_s": 13.241395833333334,
+            "trigger_times_s": [
+              13.04,
+              13.104
+            ]
+          }
+        ],
+        "accuracy_by_tolerance_ms": {
+          "35": {
+            "matched": 11,
+            "missed": 1,
+            "extra": 14,
+            "missed_times_s": [
+              12.62
+            ],
+            "extra_times_s": [
+              1.2906666666666666,
+              1.712,
+              1.92,
+              2.5493333333333332,
+              3.184,
+              5.2,
+              5.642666666666667,
+              6.026666666666666,
+              6.272,
+              7.9093333333333335,
+              8.325333333333333,
+              8.538666666666666,
+              9.744,
+              11.808
+            ]
+          },
+          "50": {
+            "matched": 11,
+            "missed": 1,
+            "extra": 14,
+            "missed_times_s": [
+              12.62
+            ],
+            "extra_times_s": [
+              1.2906666666666666,
+              1.712,
+              1.92,
+              2.5493333333333332,
+              3.184,
+              5.2,
+              5.642666666666667,
+              6.026666666666666,
+              6.272,
+              7.9093333333333335,
+              8.325333333333333,
+              8.538666666666666,
+              9.744,
+              11.808
+            ]
+          },
+          "70": {
+            "matched": 11,
+            "missed": 1,
+            "extra": 14,
+            "missed_times_s": [
+              12.62
+            ],
+            "extra_times_s": [
+              1.2906666666666666,
+              1.712,
+              1.92,
+              2.5493333333333332,
+              3.184,
+              5.2,
+              5.642666666666667,
+              6.026666666666666,
+              6.272,
+              7.9093333333333335,
+              8.325333333333333,
+              8.538666666666666,
+              9.744,
+              11.808
+            ]
+          }
+        },
+        "association_early_35_late_200_ms": {
+          "matched": 11,
+          "unmatched_labels": 1,
+          "unmatched_triggers": 14,
+          "pairs": [
+            {
+              "attack_s": 2.07,
+              "available_s": 2.0853333333333333,
+              "delay_ms": 15.333
+            },
+            {
+              "attack_s": 3.315,
+              "available_s": 3.328,
+              "delay_ms": 13.0
+            },
+            {
+              "attack_s": 4.555,
+              "available_s": 4.570666666666667,
+              "delay_ms": 15.667
+            },
+            {
+              "attack_s": 5.38,
+              "available_s": 5.386666666666667,
+              "delay_ms": 6.667
+            },
+            {
+              "attack_s": 6.62,
+              "available_s": 6.634666666666667,
+              "delay_ms": 14.667
+            },
+            {
+              "attack_s": 8.69,
+              "available_s": 8.698666666666666,
+              "delay_ms": 8.667
+            },
+            {
+              "attack_s": 9.935,
+              "available_s": 9.946666666666667,
+              "delay_ms": 11.667
+            },
+            {
+              "attack_s": 10.555,
+              "available_s": 10.56,
+              "delay_ms": 5.0
+            },
+            {
+              "attack_s": 11.175,
+              "available_s": 11.189333333333334,
+              "delay_ms": 14.333
+            },
+            {
+              "attack_s": 12.005,
+              "available_s": 12.005333333333333,
+              "delay_ms": 0.333
+            },
+            {
+              "attack_s": 12.825,
+              "available_s": 12.848,
+              "delay_ms": 23.0
+            }
+          ],
+          "possible_duplicate_times_s": [],
+          "median_ms": 13.0,
+          "p90_ms": 15.67
+        }
+      },
+      "ratio_growth_score": {
+        "labels": 12,
+        "scored_triggers": 13,
+        "excluded": [
+          {
+            "reason": "clip_boundary",
+            "start_s": 0.0,
+            "end_s": 0.25,
+            "trigger_times_s": [
+              0.016
+            ]
+          },
+          {
+            "reason": "unresolved_ending",
+            "start_s": 12.935,
+            "end_s": 13.241395833333334,
+            "trigger_times_s": [
+              13.066666666666666,
+              13.114666666666666
+            ]
+          }
+        ],
+        "accuracy_by_tolerance_ms": {
+          "35": {
+            "matched": 11,
+            "missed": 1,
+            "extra": 2,
+            "missed_times_s": [
+              12.62
+            ],
+            "extra_times_s": [
+              9.770666666666667,
+              11.84
+            ]
+          },
+          "50": {
+            "matched": 11,
+            "missed": 1,
+            "extra": 2,
+            "missed_times_s": [
+              12.62
+            ],
+            "extra_times_s": [
+              9.770666666666667,
+              11.84
+            ]
+          },
+          "70": {
+            "matched": 11,
+            "missed": 1,
+            "extra": 2,
+            "missed_times_s": [
+              12.62
+            ],
+            "extra_times_s": [
+              9.770666666666667,
+              11.84
+            ]
+          }
+        },
+        "association_early_35_late_200_ms": {
+          "matched": 11,
+          "unmatched_labels": 1,
+          "unmatched_triggers": 2,
+          "pairs": [
+            {
+              "attack_s": 2.07,
+              "available_s": 2.096,
+              "delay_ms": 26.0
+            },
+            {
+              "attack_s": 3.315,
+              "available_s": 3.3386666666666667,
+              "delay_ms": 23.667
+            },
+            {
+              "attack_s": 4.555,
+              "available_s": 4.581333333333333,
+              "delay_ms": 26.333
+            },
+            {
+              "attack_s": 5.38,
+              "available_s": 5.4079999999999995,
+              "delay_ms": 28.0
+            },
+            {
+              "attack_s": 6.62,
+              "available_s": 6.64,
+              "delay_ms": 20.0
+            },
+            {
+              "attack_s": 8.69,
+              "available_s": 8.709333333333333,
+              "delay_ms": 19.333
+            },
+            {
+              "attack_s": 9.935,
+              "available_s": 9.957333333333333,
+              "delay_ms": 22.333
+            },
+            {
+              "attack_s": 10.555,
+              "available_s": 10.576,
+              "delay_ms": 21.0
+            },
+            {
+              "attack_s": 11.175,
+              "available_s": 11.2,
+              "delay_ms": 25.0
+            },
+            {
+              "attack_s": 12.005,
+              "available_s": 12.032,
+              "delay_ms": 27.0
+            },
+            {
+              "attack_s": 12.825,
+              "available_s": 12.858666666666666,
+              "delay_ms": 33.667
+            }
+          ],
+          "possible_duplicate_times_s": [],
+          "median_ms": 25.0,
+          "p90_ms": 28.0
+        }
+      },
+      "candidate_decisions": [
+        {
+          "candidate_hop": 0,
+          "candidate_s": 0.005333333333333333,
+          "initial_ratio_low_fast_body_fast": 0.03105792883957953,
+          "confirmed_s": 0.016,
+          "status": "accepted",
+          "confirmation_hop": 2,
+          "confirmation_ratio": 0.4423114213668257,
+          "classification": "excluded_clip_boundary"
+        },
+        {
+          "candidate_hop": 241,
+          "candidate_s": 1.2906666666666666,
+          "initial_ratio_low_fast_body_fast": 0.2612114310419702,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 320,
+          "candidate_s": 1.712,
+          "initial_ratio_low_fast_body_fast": 0.6455345595015233,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 359,
+          "candidate_s": 1.92,
+          "initial_ratio_low_fast_body_fast": 0.5066016004218983,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 390,
+          "candidate_s": 2.0853333333333333,
+          "initial_ratio_low_fast_body_fast": 0.3917634658589613,
+          "confirmed_s": 2.096,
+          "status": "accepted",
+          "confirmation_hop": 392,
+          "confirmation_ratio": 5.274946344131288,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 477,
+          "candidate_s": 2.5493333333333332,
+          "initial_ratio_low_fast_body_fast": 0.6309953037759435,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 596,
+          "candidate_s": 3.1839999999999997,
+          "initial_ratio_low_fast_body_fast": 2.4561215160539343,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 623,
+          "candidate_s": 3.328,
+          "initial_ratio_low_fast_body_fast": 0.5276858390091422,
+          "confirmed_s": 3.3386666666666667,
+          "status": "accepted",
+          "confirmation_hop": 625,
+          "confirmation_ratio": 6.348999110815471,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 856,
+          "candidate_s": 4.570666666666667,
+          "initial_ratio_low_fast_body_fast": 1.0274817609591926,
+          "confirmed_s": 4.581333333333333,
+          "status": "accepted",
+          "confirmation_hop": 858,
+          "confirmation_ratio": 8.94138899521256,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 974,
+          "candidate_s": 5.2,
+          "initial_ratio_low_fast_body_fast": 2.2551532526171023,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1009,
+          "candidate_s": 5.386666666666667,
+          "initial_ratio_low_fast_body_fast": 0.6142508328439388,
+          "confirmed_s": 5.4079999999999995,
+          "status": "accepted",
+          "confirmation_hop": 1013,
+          "confirmation_ratio": 7.261123361874156,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1057,
+          "candidate_s": 5.642666666666666,
+          "initial_ratio_low_fast_body_fast": 0.8205946939716469,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1129,
+          "candidate_s": 6.026666666666666,
+          "initial_ratio_low_fast_body_fast": 0.48782050933071547,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1175,
+          "candidate_s": 6.271999999999999,
+          "initial_ratio_low_fast_body_fast": 0.8726669697746257,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1243,
+          "candidate_s": 6.634666666666666,
+          "initial_ratio_low_fast_body_fast": 0.15282478945546601,
+          "confirmed_s": 6.64,
+          "status": "accepted",
+          "confirmation_hop": 1244,
+          "confirmation_ratio": 1.2132236398300584,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1482,
+          "candidate_s": 7.909333333333333,
+          "initial_ratio_low_fast_body_fast": 0.5119346756267895,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1560,
+          "candidate_s": 8.325333333333333,
+          "initial_ratio_low_fast_body_fast": 0.4200517748458413,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1600,
+          "candidate_s": 8.538666666666666,
+          "initial_ratio_low_fast_body_fast": 0.8599872334736306,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1630,
+          "candidate_s": 8.698666666666666,
+          "initial_ratio_low_fast_body_fast": 0.20025984690324575,
+          "confirmed_s": 8.709333333333333,
+          "status": "accepted",
+          "confirmation_hop": 1632,
+          "confirmation_ratio": 1.3049063617585277,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1826,
+          "candidate_s": 9.744,
+          "initial_ratio_low_fast_body_fast": 1.9917082031826636,
+          "confirmed_s": 9.770666666666667,
+          "status": "accepted",
+          "confirmation_hop": 1831,
+          "confirmation_ratio": 9.323978301680729,
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1864,
+          "candidate_s": 9.946666666666667,
+          "initial_ratio_low_fast_body_fast": 0.5175408139052929,
+          "confirmed_s": 9.957333333333333,
+          "status": "accepted",
+          "confirmation_hop": 1866,
+          "confirmation_ratio": 3.29316537817515,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1979,
+          "candidate_s": 10.56,
+          "initial_ratio_low_fast_body_fast": 0.2814767115800581,
+          "confirmed_s": 10.576,
+          "status": "accepted",
+          "confirmation_hop": 1982,
+          "confirmation_ratio": 3.422454247347387,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2097,
+          "candidate_s": 11.189333333333334,
+          "initial_ratio_low_fast_body_fast": 0.5011660434093451,
+          "confirmed_s": 11.2,
+          "status": "accepted",
+          "confirmation_hop": 2099,
+          "confirmation_ratio": 5.909883101675494,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2213,
+          "candidate_s": 11.808,
+          "initial_ratio_low_fast_body_fast": 2.6315478426806895,
+          "confirmed_s": 11.84,
+          "status": "accepted",
+          "confirmation_hop": 2219,
+          "confirmation_ratio": 44.6090979976736,
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 2250,
+          "candidate_s": 12.005333333333333,
+          "initial_ratio_low_fast_body_fast": 1.9043294886694881,
+          "confirmed_s": 12.032,
+          "status": "accepted",
+          "confirmation_hop": 2255,
+          "confirmation_ratio": 10.250897301160679,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2408,
+          "candidate_s": 12.847999999999999,
+          "initial_ratio_low_fast_body_fast": 1.398782075621944,
+          "confirmed_s": 12.858666666666666,
+          "status": "accepted",
+          "confirmation_hop": 2410,
+          "confirmation_ratio": 9.279210162163256,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2444,
+          "candidate_s": 13.04,
+          "initial_ratio_low_fast_body_fast": 2.3077958272993118,
+          "confirmed_s": 13.066666666666666,
+          "status": "accepted",
+          "confirmation_hop": 2449,
+          "confirmation_ratio": 19.57716407441526,
+          "classification": "excluded_unresolved_ending"
+        },
+        {
+          "candidate_hop": 2456,
+          "candidate_s": 13.104,
+          "initial_ratio_low_fast_body_fast": 1.7105729620478876,
+          "confirmed_s": 13.114666666666666,
+          "status": "accepted",
+          "confirmation_hop": 2458,
+          "confirmation_ratio": 8.802854204991176,
+          "classification": "excluded_unresolved_ending"
+        }
+      ],
+      "ablation": {
+        "qualification": "Local counterfactual evidence; it does not prove instrument causality.",
+        "stems": {
+          "bass": {
+            "input_sha256": "0fa7340c25cc367712b7ada6022054086b5e57becf2caccbfb934a07f3077dff",
+            "ablation_path": "/Users/peterkiemann/.cache/manifold/kick-rejection-trial-2026-10-09/inhale_exhale_145bpm__without_bass.wav",
+            "ablation_sha256": "35fcc23c263a182cd390a6dd39cb7c9ccc2cf3bb3505c8ca47b1d73baa4889f3",
+            "sample_rate": 48000,
+            "event_times_s": [
+              0.005333333333333333,
+              2.0853333333333333,
+              3.328,
+              4.570666666666667,
+              5.397333333333333,
+              6.634666666666667,
+              8.698666666666666,
+              9.770666666666667,
+              9.946666666666667,
+              10.570666666666666,
+              11.189333333333334,
+              12.016,
+              12.64,
+              12.842666666666666,
+              13.050666666666666
+            ]
+          },
+          "drums": {
+            "input_sha256": "c0b34bd127de7d334d14c28c4069eb90b3b68ee75a95c2c4452ce973c97e6597",
+            "ablation_path": "/Users/peterkiemann/.cache/manifold/kick-rejection-trial-2026-10-09/inhale_exhale_145bpm__without_drums.wav",
+            "ablation_sha256": "3eba5d54fe95ee9c5f8621c8fe720eac857c0a9c745f5b6c1119a183dac7104a",
+            "sample_rate": 48000,
+            "event_times_s": [
+              0.010666666666666666,
+              0.08,
+              0.17066666666666666,
+              1.28,
+              1.712,
+              1.92,
+              2.2186666666666666,
+              2.538666666666667,
+              3.184,
+              4.634666666666667,
+              5.2,
+              5.6,
+              5.850666666666666,
+              6.026666666666666,
+              6.256,
+              7.898666666666666,
+              8.325333333333333,
+              8.533333333333333,
+              8.832,
+              9.162666666666667,
+              10.693333333333333,
+              11.301333333333334,
+              11.808
+            ]
+          },
+          "vocals": {
+            "input_sha256": "9f1a208162b40c338cac20c0f118e4db5c44345c23d7e50ca56b74bfc6e4d88f",
+            "ablation_path": "/Users/peterkiemann/.cache/manifold/kick-rejection-trial-2026-10-09/inhale_exhale_145bpm__without_vocals.wav",
+            "ablation_sha256": "52b70446504e2189ede4d76cad8ce51e7f0810e5923baf6fe29f88b52c6e62ab",
+            "sample_rate": 48000,
+            "event_times_s": [
+              0.005333333333333333,
+              1.2906666666666666,
+              1.712,
+              1.92,
+              2.0853333333333333,
+              2.5493333333333332,
+              3.184,
+              3.328,
+              4.570666666666667,
+              5.2,
+              5.386666666666667,
+              5.642666666666667,
+              6.026666666666666,
+              6.272,
+              6.634666666666667,
+              7.9093333333333335,
+              8.325333333333333,
+              8.538666666666666,
+              8.698666666666666,
+              9.744,
+              9.946666666666667,
+              10.56,
+              11.189333333333334,
+              11.808,
+              12.005333333333333,
+              12.848,
+              13.04,
+              13.104
+            ]
+          },
+          "others": {
+            "input_sha256": "474f82d98f416c1a29ae1e10bbd8b7c345674376c22dbffd6f61f4e9fa39d7ab",
+            "ablation_path": "/Users/peterkiemann/.cache/manifold/kick-rejection-trial-2026-10-09/inhale_exhale_145bpm__without_others.wav",
+            "ablation_sha256": "a2969598ca2e70975b70179597110a2379672afb92c39a8bbb08cf0cb701c99d",
+            "sample_rate": 48000,
+            "event_times_s": [
+              0.005333333333333333,
+              1.2906666666666666,
+              1.712,
+              1.92,
+              2.0853333333333333,
+              2.5493333333333332,
+              3.1733333333333333,
+              3.328,
+              4.570666666666667,
+              5.2,
+              5.386666666666667,
+              5.642666666666667,
+              6.021333333333334,
+              6.272,
+              6.634666666666667,
+              7.9093333333333335,
+              8.325333333333333,
+              8.538666666666666,
+              8.698666666666666,
+              9.744,
+              9.946666666666667,
+              10.570666666666666,
+              11.189333333333334,
+              11.84,
+              12.005333333333333,
+              12.848,
+              13.04,
+              13.104
+            ]
+          }
+        },
+        "event_evidence": [
+          {
+            "candidate_s": 0.005333333333333333,
+            "classification": "excluded_clip_boundary",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 7.838559948858623e-06,
+              "drums": 0.9999515124348849,
+              "vocals": 5.335781587392098e-08,
+              "others": 4.059564735030057e-05
+            },
+            "ablations_removing_event_within_30ms": []
+          },
+          {
+            "candidate_s": 1.2906666666666666,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9983602973429742,
+              "drums": 1.032634506332539e-09,
+              "vocals": 0.0014734817819130502,
+              "others": 0.000166219842478193
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 1.712,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9978825729895727,
+              "drums": 1.1307995187906206e-09,
+              "vocals": 0.001964557406744254,
+              "others": 0.00015286847288347252
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 1.92,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9999604185255073,
+              "drums": 5.809716118823229e-06,
+              "vocals": 2.5017040757449704e-07,
+              "others": 3.3521587966286206e-05
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 2.0853333333333333,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.002468010647880214,
+              "drums": 0.9971893460861916,
+              "vocals": 4.800563620872781e-08,
+              "others": 0.00034259526029198773
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 2.5493333333333332,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9998582244989775,
+              "drums": 7.342651651849013e-05,
+              "vocals": 1.916779035822949e-06,
+              "others": 6.643220546820045e-05
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 3.184,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.989879340136147,
+              "drums": 1.87525520313961e-09,
+              "vocals": 0.008357949359542994,
+              "others": 0.0017627086290549
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 3.328,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 7.363528192996126e-07,
+              "drums": 0.9998332534562936,
+              "vocals": 6.269197566075896e-05,
+              "others": 0.00010331821522625436
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 4.570666666666667,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 1.0668650611898388e-05,
+              "drums": 0.9999160028254191,
+              "vocals": 6.61077617032592e-08,
+              "others": 7.326241620721456e-05
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 5.2,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9880005359945715,
+              "drums": 0.0010323613874248393,
+              "vocals": 4.88185082634385e-07,
+              "others": 0.010966614432921046
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 5.386666666666667,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.09440247314149865,
+              "drums": 0.8977390289109433,
+              "vocals": 7.920863511781402e-07,
+              "others": 0.007857705861206878
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 5.642666666666667,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.8404167901267675,
+              "drums": 3.981325573413999e-09,
+              "vocals": 0.0035264266809953543,
+              "others": 0.15605677921091154
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass",
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 6.026666666666666,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.47784344197821677,
+              "drums": 5.0129226650573466e-08,
+              "vocals": 1.1970029922936796e-06,
+              "others": 0.5221553108895642
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 6.272,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.5984313884249068,
+              "drums": 1.4498904825779116e-06,
+              "vocals": 0.0009416098153581887,
+              "others": 0.4006255518692524
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 6.634666666666667,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.000167163143275152,
+              "drums": 0.9994405397342092,
+              "vocals": 0.0002706906538763997,
+              "others": 0.00012160646863928545
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 7.9093333333333335,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9987173363052404,
+              "drums": 1.3939255875095796e-09,
+              "vocals": 0.0007797275210244377,
+              "others": 0.0005029347798095789
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 8.325333333333333,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9969054387276118,
+              "drums": 3.157162057868389e-10,
+              "vocals": 0.002886585184667511,
+              "others": 0.00020797577200435535
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 8.538666666666666,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9994329044319814,
+              "drums": 2.571689868552907e-05,
+              "vocals": 2.409426069020762e-06,
+              "others": 0.0005389692432641419
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 8.698666666666666,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.041752725337397496,
+              "drums": 0.9567592647309707,
+              "vocals": 1.5303770715697974e-07,
+              "others": 0.0014878568939246106
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 9.744,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.21529135937024355,
+              "drums": 0.7840817676776122,
+              "vocals": 0.0002141543674189042,
+              "others": 0.00041271858472535317
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 9.946666666666667,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.00029103396842931076,
+              "drums": 0.9995871859218446,
+              "vocals": 0.00010519042166310476,
+              "others": 1.658968806298936e-05
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 10.56,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.10716480921959357,
+              "drums": 0.8688582461164001,
+              "vocals": 0.0001742875601914881,
+              "others": 0.0238026571038149
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 11.189333333333334,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.0067779585863408385,
+              "drums": 0.9923606457913207,
+              "vocals": 5.891959041998584e-09,
+              "others": 0.000861389730379474
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 11.808,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9825073417962485,
+              "drums": 0.0029910446207089664,
+              "vocals": 0.008235052029532461,
+              "others": 0.006266561553510068
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass",
+              "others"
+            ]
+          },
+          {
+            "candidate_s": 12.005333333333333,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.6697860900351755,
+              "drums": 0.3218202224931117,
+              "vocals": 0.004493079439509701,
+              "others": 0.003900608032203148
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 12.848,
+            "classification": "matched_association",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.01632461974663996,
+              "drums": 0.9830117114993735,
+              "vocals": 0.0002081991702939421,
+              "others": 0.0004554695836926908
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 13.04,
+            "classification": "excluded_unresolved_ending",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.7263533272250432,
+              "drums": 0.25952063231847183,
+              "vocals": 0.008530841682275527,
+              "others": 0.005595198774209557
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 13.104,
+            "classification": "excluded_unresolved_ending",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.10258066260963146,
+              "drums": 0.7950379224783668,
+              "vocals": 0.0003865592316033649,
+              "others": 0.10199485568039841
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass",
+              "drums"
+            ]
+          }
+        ],
+        "scored_extra_summary": [
+          {
+            "candidate_s": 1.2906666666666666,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9983602973429742,
+              "drums": 1.032634506332539e-09,
+              "vocals": 0.0014734817819130502,
+              "others": 0.000166219842478193
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 1.712,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9978825729895727,
+              "drums": 1.1307995187906206e-09,
+              "vocals": 0.001964557406744254,
+              "others": 0.00015286847288347252
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 1.92,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9999604185255073,
+              "drums": 5.809716118823229e-06,
+              "vocals": 2.5017040757449704e-07,
+              "others": 3.3521587966286206e-05
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 2.5493333333333332,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9998582244989775,
+              "drums": 7.342651651849013e-05,
+              "vocals": 1.916779035822949e-06,
+              "others": 6.643220546820045e-05
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 3.184,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.989879340136147,
+              "drums": 1.87525520313961e-09,
+              "vocals": 0.008357949359542994,
+              "others": 0.0017627086290549
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 5.2,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9880005359945715,
+              "drums": 0.0010323613874248393,
+              "vocals": 4.88185082634385e-07,
+              "others": 0.010966614432921046
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 5.642666666666667,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.8404167901267675,
+              "drums": 3.981325573413999e-09,
+              "vocals": 0.0035264266809953543,
+              "others": 0.15605677921091154
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass",
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 6.026666666666666,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.47784344197821677,
+              "drums": 5.0129226650573466e-08,
+              "vocals": 1.1970029922936796e-06,
+              "others": 0.5221553108895642
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 6.272,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.5984313884249068,
+              "drums": 1.4498904825779116e-06,
+              "vocals": 0.0009416098153581887,
+              "others": 0.4006255518692524
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 7.9093333333333335,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9987173363052404,
+              "drums": 1.3939255875095796e-09,
+              "vocals": 0.0007797275210244377,
+              "others": 0.0005029347798095789
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 8.325333333333333,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9969054387276118,
+              "drums": 3.157162057868389e-10,
+              "vocals": 0.002886585184667511,
+              "others": 0.00020797577200435535
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 8.538666666666666,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9994329044319814,
+              "drums": 2.571689868552907e-05,
+              "vocals": 2.409426069020762e-06,
+              "others": 0.0005389692432641419
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass"
+            ]
+          },
+          {
+            "candidate_s": 9.744,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.21529135937024355,
+              "drums": 0.7840817676776122,
+              "vocals": 0.0002141543674189042,
+              "others": 0.00041271858472535317
+            },
+            "ablations_removing_event_within_30ms": [
+              "drums"
+            ]
+          },
+          {
+            "candidate_s": 11.808,
+            "classification": "scored_extra",
+            "stem_power_proportions_low_plus_body_fast": {
+              "bass": 0.9825073417962485,
+              "drums": 0.0029910446207089664,
+              "vocals": 0.008235052029532461,
+              "others": 0.006266561553510068
+            },
+            "ablations_removing_event_within_30ms": [
+              "bass",
+              "others"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "track": "tears_140bpm",
+      "sample_rate": 48000,
+      "hop_samples": 256,
+      "duration_s": 13.241395833333334,
+      "input_sha256": {
+        "mix": "49c7c4ee799e93690e4023665b332c617f0fa170314a83d05c79a2c675d5b334",
+        "labels": "f3ce02e72f191bd53bc86c611fce2efe56a55db4cb19b6f1434bdba80ce28576"
+      },
+      "original_score": {
+        "labels": 10,
+        "scored_triggers": 17,
+        "excluded": [],
+        "accuracy_by_tolerance_ms": {
+          "35": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 7,
+            "missed_times_s": [],
+            "extra_times_s": [
+              0.4266666666666667,
+              0.6986666666666667,
+              5.045333333333334,
+              5.872,
+              7.061333333333334,
+              8.314666666666668,
+              12.757333333333333
+            ]
+          },
+          "50": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 7,
+            "missed_times_s": [],
+            "extra_times_s": [
+              0.4266666666666667,
+              0.6986666666666667,
+              5.045333333333334,
+              5.872,
+              7.061333333333334,
+              8.314666666666668,
+              12.757333333333333
+            ]
+          },
+          "70": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 7,
+            "missed_times_s": [],
+            "extra_times_s": [
+              0.4266666666666667,
+              0.6986666666666667,
+              5.045333333333334,
+              5.872,
+              7.061333333333334,
+              8.314666666666668,
+              12.757333333333333
+            ]
+          }
+        },
+        "association_early_35_late_200_ms": {
+          "matched": 10,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 7,
+          "pairs": [
+            {
+              "attack_s": 0.005,
+              "available_s": 0.010666666666666666,
+              "delay_ms": 5.667
+            },
+            {
+              "attack_s": 2.07,
+              "available_s": 2.0906666666666665,
+              "delay_ms": 20.667
+            },
+            {
+              "attack_s": 3.315,
+              "available_s": 3.328,
+              "delay_ms": 13.0
+            },
+            {
+              "attack_s": 5.385,
+              "available_s": 5.397333333333333,
+              "delay_ms": 12.333
+            },
+            {
+              "attack_s": 6.62,
+              "available_s": 6.629333333333333,
+              "delay_ms": 9.333
+            },
+            {
+              "attack_s": 8.695,
+              "available_s": 8.709333333333333,
+              "delay_ms": 14.333
+            },
+            {
+              "attack_s": 9.935,
+              "available_s": 9.962666666666667,
+              "delay_ms": 27.667
+            },
+            {
+              "attack_s": 12.0,
+              "available_s": 12.021333333333333,
+              "delay_ms": 21.333
+            },
+            {
+              "attack_s": 12.415,
+              "available_s": 12.426666666666666,
+              "delay_ms": 11.667
+            },
+            {
+              "attack_s": 12.83,
+              "available_s": 12.853333333333333,
+              "delay_ms": 23.333
+            }
+          ],
+          "possible_duplicate_times_s": [],
+          "median_ms": 13.67,
+          "p90_ms": 23.33
+        }
+      },
+      "ratio_growth_score": {
+        "labels": 10,
+        "scored_triggers": 14,
+        "excluded": [],
+        "accuracy_by_tolerance_ms": {
+          "35": {
+            "matched": 8,
+            "missed": 2,
+            "extra": 6,
+            "missed_times_s": [
+              6.62,
+              9.935
+            ],
+            "extra_times_s": [
+              0.44266666666666665,
+              6.656,
+              7.072,
+              8.330666666666666,
+              9.973333333333333,
+              12.773333333333333
+            ]
+          },
+          "50": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 4,
+            "missed_times_s": [],
+            "extra_times_s": [
+              0.44266666666666665,
+              7.072,
+              8.330666666666666,
+              12.773333333333333
+            ]
+          },
+          "70": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 4,
+            "missed_times_s": [],
+            "extra_times_s": [
+              0.44266666666666665,
+              7.072,
+              8.330666666666666,
+              12.773333333333333
+            ]
+          }
+        },
+        "association_early_35_late_200_ms": {
+          "matched": 10,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 4,
+          "pairs": [
+            {
+              "attack_s": 0.005,
+              "available_s": 0.016,
+              "delay_ms": 11.0
+            },
+            {
+              "attack_s": 2.07,
+              "available_s": 2.1013333333333333,
+              "delay_ms": 31.333
+            },
+            {
+              "attack_s": 3.315,
+              "available_s": 3.3386666666666667,
+              "delay_ms": 23.667
+            },
+            {
+              "attack_s": 5.385,
+              "available_s": 5.4079999999999995,
+              "delay_ms": 23.0
+            },
+            {
+              "attack_s": 6.62,
+              "available_s": 6.656,
+              "delay_ms": 36.0
+            },
+            {
+              "attack_s": 8.695,
+              "available_s": 8.714666666666666,
+              "delay_ms": 19.667
+            },
+            {
+              "attack_s": 9.935,
+              "available_s": 9.973333333333333,
+              "delay_ms": 38.333
+            },
+            {
+              "attack_s": 12.0,
+              "available_s": 12.032,
+              "delay_ms": 32.0
+            },
+            {
+              "attack_s": 12.415,
+              "available_s": 12.442666666666666,
+              "delay_ms": 27.667
+            },
+            {
+              "attack_s": 12.83,
+              "available_s": 12.863999999999999,
+              "delay_ms": 34.0
+            }
+          ],
+          "possible_duplicate_times_s": [],
+          "median_ms": 29.5,
+          "p90_ms": 36.0
+        }
+      },
+      "candidate_decisions": [
+        {
+          "candidate_hop": 1,
+          "candidate_s": 0.010666666666666666,
+          "initial_ratio_low_fast_body_fast": 0.030134338195590502,
+          "confirmed_s": 0.016,
+          "status": "accepted",
+          "confirmation_hop": 2,
+          "confirmation_ratio": 0.18293226670868676,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 79,
+          "candidate_s": 0.42666666666666664,
+          "initial_ratio_low_fast_body_fast": 1.4334738072300697,
+          "confirmed_s": 0.44266666666666665,
+          "status": "accepted",
+          "confirmation_hop": 82,
+          "confirmation_ratio": 10.885707595924828,
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 130,
+          "candidate_s": 0.6986666666666667,
+          "initial_ratio_low_fast_body_fast": 2.646785719559259,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 391,
+          "candidate_s": 2.0906666666666665,
+          "initial_ratio_low_fast_body_fast": 0.6864860907872599,
+          "confirmed_s": 2.1013333333333333,
+          "status": "accepted",
+          "confirmation_hop": 393,
+          "confirmation_ratio": 8.143823437844489,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 623,
+          "candidate_s": 3.328,
+          "initial_ratio_low_fast_body_fast": 0.2809766236036068,
+          "confirmed_s": 3.3386666666666667,
+          "status": "accepted",
+          "confirmation_hop": 625,
+          "confirmation_ratio": 1.1873128821777057,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 945,
+          "candidate_s": 5.045333333333333,
+          "initial_ratio_low_fast_body_fast": 1.2048619233466105,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1011,
+          "candidate_s": 5.397333333333333,
+          "initial_ratio_low_fast_body_fast": 0.35951312044606454,
+          "confirmed_s": 5.4079999999999995,
+          "status": "accepted",
+          "confirmation_hop": 1013,
+          "confirmation_ratio": 2.5826767090224076,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1100,
+          "candidate_s": 5.872,
+          "initial_ratio_low_fast_body_fast": 2.418899964201071,
+          "confirmed_s": null,
+          "status": "rejected_timeout",
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1242,
+          "candidate_s": 6.629333333333333,
+          "initial_ratio_low_fast_body_fast": 0.5198108696758424,
+          "confirmed_s": 6.656,
+          "status": "accepted",
+          "confirmation_hop": 1247,
+          "confirmation_ratio": 5.203282209021941,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1323,
+          "candidate_s": 7.061333333333333,
+          "initial_ratio_low_fast_body_fast": 6.435837269385402,
+          "confirmed_s": 7.072,
+          "status": "accepted",
+          "confirmation_hop": 1325,
+          "confirmation_ratio": 27.123953265267406,
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1558,
+          "candidate_s": 8.314666666666666,
+          "initial_ratio_low_fast_body_fast": 2.794357522714695,
+          "confirmed_s": 8.330666666666666,
+          "status": "accepted",
+          "confirmation_hop": 1561,
+          "confirmation_ratio": 22.796582799858726,
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 1632,
+          "candidate_s": 8.709333333333333,
+          "initial_ratio_low_fast_body_fast": 0.31389663845319504,
+          "confirmed_s": 8.714666666666666,
+          "status": "accepted",
+          "confirmation_hop": 1633,
+          "confirmation_ratio": 1.5840871768037923,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 1867,
+          "candidate_s": 9.962666666666665,
+          "initial_ratio_low_fast_body_fast": 3.6653021300713036,
+          "confirmed_s": 9.973333333333333,
+          "status": "accepted",
+          "confirmation_hop": 1869,
+          "confirmation_ratio": 26.610936189757997,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2253,
+          "candidate_s": 12.021333333333333,
+          "initial_ratio_low_fast_body_fast": 0.5617225749281031,
+          "confirmed_s": 12.032,
+          "status": "accepted",
+          "confirmation_hop": 2255,
+          "confirmation_ratio": 4.463759827752162,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2329,
+          "candidate_s": 12.426666666666666,
+          "initial_ratio_low_fast_body_fast": 0.2390314444383676,
+          "confirmed_s": 12.442666666666666,
+          "status": "accepted",
+          "confirmation_hop": 2332,
+          "confirmation_ratio": 1.9025496605733,
+          "classification": "matched_association"
+        },
+        {
+          "candidate_hop": 2391,
+          "candidate_s": 12.757333333333333,
+          "initial_ratio_low_fast_body_fast": 1.5267118272569513,
+          "confirmed_s": 12.773333333333333,
+          "status": "accepted",
+          "confirmation_hop": 2394,
+          "confirmation_ratio": 13.6058660708478,
+          "classification": "scored_extra"
+        },
+        {
+          "candidate_hop": 2409,
+          "candidate_s": 12.853333333333333,
+          "initial_ratio_low_fast_body_fast": 0.8518138011435181,
+          "confirmed_s": 12.863999999999999,
+          "status": "accepted",
+          "confirmation_hop": 2411,
+          "confirmation_ratio": 11.896789327064727,
+          "classification": "matched_association"
+        }
+      ]
+    }
+  ]
+}

@@ -76,6 +76,48 @@ Recorded evidence: `tools/audio_analysis/eval/scoreboard/kick_attack_trial_2026-
 The report includes working-source and binary hashes; its base revision alone
 does not identify uncommitted prototype source.
 
+**Non-kick rejection trial — rejected; original prototype unchanged.**
+Offline stem subtraction identifies bass-dependent events in 13/14 scored
+Inhale extras: removing bass eliminates a firing within ±30 ms of each original
+event. Bad Guy has 16/17 drum-dependent extras and one dependent on bass/others.
+These are detector counterfactuals, not proof of instrument identity; resampling
+the stems is an offline diagnostic and is not part of the proposed live path.
+
+The tested rule requires low/body power ratio to grow fourfold within 35 ms of
+a prototype candidate. It emits at the confirming hop, with no backdating.
+Wider-association extras fall from 40 to 9, including Inhale 14→2 and Bad Guy
+17→2. However, associated Apricots labels fall from 14 to 7, and Feel's median
+availability slips to 58.33 ms. Overall ±50 ms matches fall from 63 to 41/66.
+A mandatory low-band descent therefore fails this development pack under the
+current provisional visual labels. It must not become a live veto. No thresholds
+were swept to repair these results.
+
+Reproduce the diagnosis and fixed-rule comparison with
+`tools/audio_analysis/eval/kick_attack_rejection.py --audio-root <audio>
+--harness target/debug/examples/kick_attack_probe --out-dir /tmp/kick-rejection
+--report /tmp/kick-rejection.json`. Recorded results are in
+`tools/audio_analysis/eval/scoreboard/kick_rejection_trial_2026-10-09.json`.
+
+Independent Astra checks also reject this gate: all seven Apricots misses fail
+on drums alone at the same candidate times, and similar drum waveforms receive
+opposite decisions. No evidence justified removing those labels. Two past-only
+48 ms spectral-innovation gates were also rejected: low-band share retained
+49/66 timely matches with 36 extras; tonal-concentration rejection retained
+59/66 with 34 extras, losing four previously timely kicks. Both retain all
+17 Bad Guy extras. Their retained timestamps are unchanged; this is evidence
+loss, not an added-delay result. Scratch scripts, JSON and Apricots plots are
+preserved locally under
+`~/.cache/manifold/audio-rejection-research-2026-10-09/`.
+
+The parallel non-kick code audit found that Snare/Hats/Bass chips map to
+Transients × Mid/High/Low, not instrument classifiers. Next evaluations need
+separate reviewed snare/hat labels (including coincident hits), and raw-versus-
+shaped measurements of synthetic wobble/growl/note changes plus real passages.
+Default modulation release is 120 ms; pitch holds during dropout. These need
+musical-response checks, not just feature jitter measurements. A separate
+static UI/runtime mismatch needs reproduction: Step/Random Kick/Transient
+actions bypass Attack/Release while the drawer still offers those controls.
+
 ## 1. Running it
 
 ```
