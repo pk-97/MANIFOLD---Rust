@@ -762,9 +762,9 @@ def _execute_cleanup(targets, repo, *, disk_path=None, reserve_bytes=0,
                      free_check=None, manifest=None, dry_run=False):
     """The sole deletion executor: registry, reservation, Cargo locks, then scan.
 
-    Direct app/test launches do not participate in Cargo's lock. Keep deps and
-    examples even in apparently idle slots: a process snapshot cannot exclude
-    a future open. Only rustc-owned metadata is eligible under the Cargo lock.
+    Direct app/test launches do not participate in Cargo's lock. Keep compiled
+    artifacts and the Cargo metadata needed to reuse them. Only known
+    incremental sessions are eligible under the Cargo lock.
     """
     roots = registered_worktrees(repo)
     if not roots:
@@ -814,8 +814,12 @@ def _execute_cleanup(targets, repo, *, disk_path=None, reserve_bytes=0,
             for kind, _mtime, path, entries, target in sorted(units):
                 if disk_path is not None and available >= reserve_bytes and sizes[target] <= cap_bytes:
                     continue
-                if path.relative_to(target).parts[1] in ("deps", "examples"):
-                    message = f"KEEP deps/examples in {target}: direct launches have no exclusion lock"
+                subtree = path.relative_to(target).parts[1]
+                if subtree != "incremental":
+                    if subtree in ("deps", "examples"):
+                        message = f"KEEP deps/examples in {target}: direct launches have no exclusion lock"
+                    else:
+                        message = f"KEEP Cargo metadata in {target}: only incremental sessions are reclaimable"
                     if message not in reported:
                         failures.append(message)
                         reported.add(message)
