@@ -16,6 +16,7 @@ import codecs
 import contextlib
 import contextvars
 import importlib.util
+import io
 import json
 import math
 import os
@@ -550,9 +551,9 @@ def _main(stack):
         if exit_ and args.fail_fast:
             return refuse(repo, base_sha, results)
 
-    # a. design-status
+    # a. design-status: execute and fingerprint the same base pinned at start.
     exit_, out, err, duration = run_check("design-status",
-        ["python3", ".claude/hooks/design_status_check.py", args.base, "HEAD"],
+        ["python3", ".claude/hooks/design_status_check.py", base_sha, "HEAD"],
         cwd=repo, timeout=300)
     tail = (out + err).rstrip().splitlines()[-20:]
     status = "PASS" if exit_ == 0 else "FAIL"
@@ -810,16 +811,24 @@ def _main(stack):
                         results.append(('FAIL', 'stable-inputs', None,
                                         ['proof inputs changed before reuse']))
                         return refuse(repo, base_sha, results)
-                spent = sum(p.record['seconds'] for p, run in zip(proof_passes, plan.runs())
-                            if run['budgeted'])
-                if spent > gpu_scope.LANDING_BUDGET_S:
-                    print(f"GPU-PROOFS BUDGET: OVER ({spent:.0f}s > "
-                          f"{gpu_scope.LANDING_BUDGET_S}s in reused passing proofs)")
+                import gpu_proofs_gate
+                timings = [row for passed, run in zip(proof_passes, plan.runs())
+                           for row in gpu_proofs_gate.receipt_timings(passed, run)]
+                summary = io.StringIO()
+                with contextlib.redirect_stdout(summary):
+                    exit_ = gpu_proofs_gate.print_summary(
+                        '', 0, timings, gpu_scope.LANDING_BUDGET_S, [], repo / 'Cargo.toml',
+                        gpu_proofs_gate.unmeasured_heavy(timings),
+                        gpu_proofs_gate.unknown_target_timings(timings))
+                print(summary.getvalue(), end='', flush=True)
+                if exit_:
+                    RAN_EVERY_CHECK.set(False)
                 deferred = [line for line in plan.describe().splitlines()
                             if line.startswith('GPU-PROOFS DEFERRED:')]
                 for line in deferred:
                     print(line, flush=True)
-                exit_, out, err, duration = 0, '\n'.join(['[REUSED] gpu-proofs', *deferred]), '', 0.0
+                out = '\n'.join(['[REUSED] gpu-proofs', summary.getvalue(), *deferred])
+                err, duration = '', 0.0
             else:
                 exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
                 for line in out.splitlines():

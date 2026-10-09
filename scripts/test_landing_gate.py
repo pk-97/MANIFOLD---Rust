@@ -137,6 +137,9 @@ class SlowTestParsingTests(unittest.TestCase):
 
 class LandingTests(unittest.TestCase):
     def setUp(self):
+        self._gpu_queue_tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(
+            os.environ, {"MANIFOLD_GPU_QUEUE_DIR": self._gpu_queue_tmp}))
         self.enterContext(patch.object(landing_gate.gpu_scope, "learned_times_path", return_value=None))
 
     checks = ["tooling", "design-status", "ignored-tests", "deny",
@@ -800,6 +803,31 @@ class LandingTests(unittest.TestCase):
 
 
 class NightlyQueueTests(unittest.TestCase):
+    def setUp(self):
+        self._gpu_queue_tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(
+            os.environ, {"MANIFOLD_GPU_QUEUE_DIR": self._gpu_queue_tmp}))
+
+    def test_live_parent_reservation_is_outside_test_queue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            live_queue = Path(directory)
+            trunk_health.gpu_queue.reserve(
+                "water-campaign", "GPU proof window", 60, directory=live_queue)
+            # Simulate the environment inherited from a live campaign, then
+            # enter each fixture exactly as unittest does before a test.
+            with patch.dict(os.environ, {"MANIFOLD_GPU_QUEUE_DIR": directory}):
+                for test_class in (LandingTests, NightlyQueueTests):
+                    fixture = test_class()
+                    try:
+                        fixture.setUp()
+                        self.assertNotEqual(trunk_health.gpu_queue.queue_dir(), live_queue)
+                        self.assertEqual(trunk_health.gpu_queue.reservation(), {})
+                    finally:
+                        fixture.doCleanups()
+            self.assertEqual(
+                trunk_health.gpu_queue.reservation(live_queue)["owner"],
+                "water-campaign")
+
     def test_gpu_legs_yield_between_checks_and_use_nightly_priority(self):
         held = False
         events = []

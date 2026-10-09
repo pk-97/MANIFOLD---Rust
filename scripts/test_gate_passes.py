@@ -168,6 +168,107 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(result[0], proofs.INPUTS_CHANGED)
         self.assertFalse(landing.RAN_EVERY_CHECK.get())
 
+    def test_moving_main_during_design_check_keeps_pinned_diff_identity(self):
+        original = cache.command_pass
+        seen = []
+
+        def moving_main(repo, label, cmd):
+            passed = original(repo, label, cmd)
+            if label == 'design-status':
+                seen.append(cmd[-2])
+                # Only the remote-tracking ref changes, not branch inputs.
+                self.git('branch', '-f', 'origin/main', 'HEAD')
+                self.assertTrue(passed.unchanged())
+            return passed
+
+        base = self.git('merge-base', 'origin/main', 'HEAD')
+        with patch.object(cache, 'command_pass', side_effect=moving_main):
+            self.assertEqual(self.run_landing()[0], 0)
+        self.assertEqual(seen, [base])
+
+    def test_pinned_flow_merge_base_ignores_remote_ref_movement(self):
+        base = self.git('merge-base', 'origin/main', 'HEAD')
+        cmd = ['python3', 'scripts/run_ui_flows.py', '--touched', f'{base}...HEAD']
+        passed = cache.command_pass(self.repo, 'flow-gate', cmd)
+        self.git('branch', '-f', 'origin/main', 'HEAD')
+        self.assertIsNot(passed.save(0), False)
+        self.assertTrue(cache.command_pass(self.repo, 'flow-gate', cmd).reused())
+
+    def test_policy_red_retains_timings_and_rechecks_without_execution(self):
+        argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
+                '--package', 'manifold-nodes', '--test', 'gpu_proofs', '--budget', '1']
+        table = self.repo / 'scripts/gpu_test_times.json'
+        self.write('scripts/gpu_test_times.json', '{"tests": {}}')
+
+        def measured(manifest, filters, skips, targets, full, lib, timings, *rest):
+            timings.append(('slow', 80, 'gpu_proofs', 'ok'))
+            return 0, ''
+
+        run_spec = dict(package='manifold-nodes', targets=['gpu_proofs'], lib=False,
+                        filters=[], skips=[], budgeted=True)
+        with patch.object(sys, 'argv', argv), \
+                patch.object(gpu_scope, 'TIMES_PATH', table), \
+                patch.object(proofs, 'build_tests', return_value=0) as build, \
+                patch.object(proofs, 'run_gate', side_effect=measured) as run, \
+                patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()) as hold:
+            self.assertEqual(proofs.main(), 5)
+            saved = cache.proof_pass(self.repo, run_spec)
+            self.assertIsNotNone(saved.record)
+            self.assertEqual(saved.record['timings'][0]['test'], 'slow')
+            for mock in (build, run, hold):
+                mock.reset_mock()
+            self.assertEqual(proofs.main(), 5, 'reuse must not hide the policy red')
+            self.write('scripts/gpu_test_times.json',
+                       '{"tests": {"manifold-nodes/gpu_proofs/slow": 80}}')
+            self.assertEqual(proofs.main(), 0)
+            for mock in (build, run, hold):
+                mock.assert_not_called()
+            self.assertEqual(saved.key, cache.proof_pass(self.repo, run_spec).key)
+            self.write('crates/manifold-nodes/src/lib.rs', 'pub fn changed_input() {}')
+            self.assertIsNone(cache.proof_pass(self.repo, run_spec).record)
+
+    def test_failed_run_keeps_earlier_pass_and_retries_only_failure(self):
+        runs = self.scoped_runs()
+        argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
+                '--path', 'crates/manifold-nodes/src/registry.rs']
+        count = 0
+
+        def execute(*args):
+            nonlocal count
+            count += 1
+            if count == 2:
+                self.assertIsNotNone(cache.proof_pass(self.repo, runs[0]).record,
+                                     'first pass must be published before second run')
+                return 1, 'test result: FAILED. 0 passed; 1 failed;\n'
+            return 0, ''
+
+        with patch.object(sys, 'argv', argv), \
+                patch.object(proofs, 'build_tests', return_value=0), \
+                patch.object(proofs, 'run_gate', side_effect=execute) as run, \
+                patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
+            self.assertNotEqual(proofs.main(), 0)
+            run.reset_mock()
+            self.assertEqual(proofs.main(), 0)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.args[-4], runs[1]['package'])
+
+    def test_landing_reused_proofs_still_enforce_timing_policy(self):
+        self.assertEqual(self.run_landing()[0], 0)
+        run = self.run_spec()
+        passed = cache.proof_pass(self.repo, run)
+        passed.save(0, 80)
+        record = json.loads(passed.path.read_text())
+        record['timings'] = [proofs.timing_entry(
+            run['package'], run['target'], 'missing_allowance', 80, 'ok', True)]
+        passed.path.write_text(json.dumps(record))
+        code, calls, holds, executed = self.run_landing()
+        self.assertNotEqual(code, 0)
+        self.assertEqual((calls, holds, executed), ([], 0, 0))
+        self.assertIsNotNone(cache.proof_pass(self.repo, run).record)
+        transcripts = list((self.repo / 'target/landing-logs').glob('gpu-proofs-*.log'))
+        self.assertTrue(any('GPU-PROOFS TIMING: FAIL' in log.read_text()
+                            for log in transcripts))
+
     def test_failed_execution_with_changed_inputs_is_a_gate_refusal(self):
         self.write('tests/fixtures/ignored.bin', 'before')
         with cache.session():
