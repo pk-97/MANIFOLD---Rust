@@ -209,15 +209,18 @@ def analyzer_tooling(repo, paths):
         })
     # The nested workspace uses Cargo patches, so run measured proofs with a
     # bounded watchdog rather than reusing a root-workspace cache receipt.
-    checks.append({
+    proof = {
         'name': 'analyzer-gpu-proof',
         'argv': ['python3', 'scripts/gpu_proofs_gate.py',
                  '--manifest-path', manifest, '--package',
                  'manifold-analyzer-gui', '--filter',
                  'spectrum_gpu::spectrogram_gpu_tests::', '--budget', '120',
                  '--hang-allowance', '120'],
-        'cwd': str(repo), 'timeout': 600,
-    })
+        'cwd': str(repo), 'timeout': 600, 'phase': 'gpu',
+    }
+    checks.append(dict(proof, name='analyzer-gpu-proof-build',
+                       argv=[*proof['argv'], '--build-only'], phase='build'))
+    checks.append(proof)
     return checks
 
 

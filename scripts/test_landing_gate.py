@@ -148,7 +148,7 @@ class LandingTests(unittest.TestCase):
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None,
                  comment=False, gpu_output=None, proof_cached=False, manifest=None,
-                 nextest_output=None, readiness_errors=(), failure_code=1, test_inventory=None):
+                 nextest_output=None, readiness_errors=(), failure_code=1, test_inventory=None, extra_tooling=()):
         called, commands = [], []
         self.events = events = []
         paths = paths or ["crates/manifold-gpu/src/metal/device.rs"]
@@ -239,7 +239,7 @@ class LandingTests(unittest.TestCase):
             stack.enter_context(patch.object(landing_gate, "run_cmd", side_effect=run))
             def readiness(_repo, selected_paths, _base):
                 from codex_checks import tooling_checks
-                tooling = tooling_checks(root, selected_paths)
+                tooling = tooling_checks(root, selected_paths) + list(extra_tooling)
                 if not selected_paths:
                     return {"packages": [], "dependents": [], "cpu": cpu_scope.Plan(),
                             "gpu": gpu_scope.Plan(), "workspace": None, "errors": [], "flows": [], "tooling": tooling}
@@ -284,6 +284,21 @@ class LandingTests(unittest.TestCase):
             timings = json.loads(timing_log.read_text()) if timing_log.exists() else None
             logs = [p.read_text() for p in (root / "target/landing-logs").glob("*.log")]
             return code, called, timings, commands, logs, output.getvalue(), deps.call_count
+
+    def test_nested_gpu_tooling_builds_before_hold_and_runs_after_cheap_checks(self):
+        tooling = [
+            {'name': 'nested-build', 'argv': ['python3', 'gpu_proofs_gate.py', '--build-only']},
+            {'name': 'nested-proof', 'argv': ['python3', 'gpu_proofs_gate.py'], 'phase': 'gpu'},
+        ]
+        code, called, *_ = self.exercise(paths=['scripts/gate_readiness.py'], extra_tooling=tooling)
+        self.assertEqual(code, 0)
+        hold = next(i for i, event in enumerate(self.events) if event.startswith('hold-enter:'))
+        self.assertLess(self.events.index('gpu-proofs-build'), hold)
+        self.assertGreater(self.events.index('gpu-proofs'), hold)
+        code, called, *_ = self.exercise(paths=['scripts/gate_readiness.py'], extra_tooling=tooling, failed='tooling')
+        self.assertNotEqual(code, 0)
+        self.assertNotIn('gpu-proofs', called)
+        self.assertFalse(any(event.startswith('hold-enter:') for event in self.events))
 
     def test_nextest_timings_keep_full_output_on_pass_and_failure(self):
         stdout = 'PASS [12.3s] manifold-nodes stdout_test'

@@ -583,7 +583,10 @@ def _main(stack):
 
     # Execute the tooling selection already validated by readiness.
     tooling = readiness['tooling']
+    gpu_tooling = [check for check in tooling if check.get('phase') == 'gpu']
     for check in tooling:
+        if check.get('phase') == 'gpu':
+            continue
         exit_, out, err, duration = run_check(
             check["name"], check["argv"], cwd=repo,
             timeout=check.get("timeout", 120))
@@ -796,7 +799,7 @@ def _main(stack):
     proofs_pending = run_gpu and not proof_cached and "gpu-proofs" not in unbuilt
     if expensive_blocked(args, results):
         return refuse(repo, base_sha, results)
-    if pending_tests or (flows_pending and "flow-gate" not in unbuilt) or proofs_pending:
+    if pending_tests or (flows_pending and "flow-gate" not in unbuilt) or proofs_pending or gpu_tooling:
         print("[gpu-queue] taking the GPU lock for the flow-gate, tests and gpu-proofs legs", flush=True)
         started = time.monotonic()
         stack.enter_context(gpu_queue.hold("landing_gate flows+tests+gpu-proofs", out=sys.stdout))
@@ -832,6 +835,18 @@ def _main(stack):
         skip(results, "flow-gate", "flow-gate-build failed")
     elif flow_leg() == "FAIL" and args.fail_fast:
         return finish(repo, base_sha, results)
+
+    # Nested-workspace proofs were compiled above and share this GPU hold.
+    for check in gpu_tooling:
+        exit_, out, err, duration = run_check(
+            check["name"], check["argv"], cwd=repo,
+            timeout=check.get("timeout", 120))
+        tail = (out + err).rstrip().splitlines()[-20:]
+        status = "PASS" if exit_ == 0 else "FAIL"
+        results.append((status, check["name"], duration, tail))
+        print_result(check["name"], status, duration, tail if exit_ else None)
+        if exit_ and args.fail_fast:
+            return finish(repo, base_sha, results)
 
     # g. gpu-proofs
     if touches_gpu:

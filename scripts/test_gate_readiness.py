@@ -227,7 +227,7 @@ class P1PlannerTests(unittest.TestCase):
     def test_analyzer_paths_select_nested_checks_with_long_build_timeout(self):
         paths = ['plugins/manifold-analyzer-gui/shaders/spectrum_line.wgsl']
         checks = gate_readiness.analyzer_tooling(ROOT, paths)
-        self.assertEqual(len(checks), 10)
+        self.assertEqual(len(checks), 11)
         self.assertTrue(all(check['timeout'] == 600 for check in checks))
         self.assertTrue(any(
             check['argv'][:2] == ['cargo', 'check']
@@ -242,8 +242,14 @@ class P1PlannerTests(unittest.TestCase):
             'precision_tests::', 'spectrum_worker::',
         })
         proof = next(check for check in checks if check['name'] == 'analyzer-gpu-proof')
-        self.assertEqual(proof['argv'][-3:], [
-            'spectrum_gpu::spectrogram_gpu_tests::', '--budget', '120'])
+        self.assertEqual(proof['argv'][-5:], [
+            'spectrum_gpu::spectrogram_gpu_tests::', '--budget', '120',
+            '--hang-allowance', '120'])
+        self.assertEqual(proof['phase'], 'gpu')
+        build = next(check for check in checks
+                     if check['name'] == 'analyzer-gpu-proof-build')
+        self.assertEqual(build['argv'], [*proof['argv'], '--build-only'])
+        self.assertEqual(build['phase'], 'build')
 
     def test_analyzer_paths_are_removed_only_from_root_gpu_planning(self):
         workspace = SimpleNamespace(
