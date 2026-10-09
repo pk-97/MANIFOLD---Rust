@@ -982,7 +982,9 @@ What the remaining errors are, from stems only:
 - Midnight: H18 misses 9 of 47 labels with a fresh kick-stem attack but 30 of 51
   without one (27 carry a drums-stem low attack, 20 no stem low attack, 4 bass
   only). The kick stem is loud but not rising there: retriggers over sustain or
-  another layer. **Whether these are kicks needs Peter's listening verdict.**
+  another layer. **Whether these are kicks needs Peter's listening verdict**
+  (BUG-7rngq (Midnight kick-stem label decision); the Bad Guy definition is
+  BUG-sa3n3 (kick lane and Bad Guy bass-line fires)).
 - Heavy: 55 of 115 clean kick-stem attacks are missed; masking plus cutoff
   transfer, not label source.
 
