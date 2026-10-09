@@ -50,3 +50,19 @@ def self_features(p, shape, level, emit_s, window_s):
     res = np.zeros_like(out)
     res[order] = out
     return res
+
+
+def relative_levels(p, levels, emit_s, window_s):
+    """Each level column minus its p ** POWER weighted mean over the same causal window (0 without history)."""
+    order = np.argsort(emit_s, kind='stable')
+    lv, em = np.asarray(levels, dtype=np.float64)[order], np.asarray(emit_s)[order]
+    w = np.clip(p[order], 0, 1) ** POWER
+    cw = np.concatenate([[0.0], np.cumsum(w)])
+    cwv = np.vstack([np.zeros(lv.shape[1]), np.cumsum(w[:, None] * lv, axis=0)])
+    i = np.arange(len(p))
+    j = np.searchsorted(em, em - window_s, side='left')
+    sw = (cw[i] - cw[j])[:, None]
+    out = np.where(sw > 1e-9, lv - (cwv[i] - cwv[j]) / np.maximum(sw, 1e-12), 0.0)
+    res = np.zeros_like(out)
+    res[order] = out
+    return res

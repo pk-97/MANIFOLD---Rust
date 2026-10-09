@@ -70,6 +70,7 @@ def main():
         r = g.records[t]
         return self_features(nested[key], shape[t], r['features'][:, 0], r['emit_s'], window)
     out = {}
+    saved = {}
     for name, cols, window in CONFIGS:
         cols = list(cols)
         outcome, cuts = {}, {}
@@ -81,7 +82,8 @@ def main():
                 inner[v] = m.predict_proba(train[v][:, cols])[:, 1]
             th, _ = choose(g, inner)
             m = fit2(g, train, list(train), cols)
-            outcome[o] = score(g, o, m.predict_proba(sf(o, o, window)[:, cols])[:, 1], th)
+            saved[f'{name}|{o}'] = m.predict_proba(sf(o, o, window)[:, cols])[:, 1]
+            outcome[o] = score(g, o, saved[f'{name}|{o}'], th)
             cuts[o] = th
             print(name, 'outer', o, flush=True)
         s = summarise(g, outcome)
@@ -94,6 +96,7 @@ def main():
         print(line(name + ' new', new), flush=True)
         print('   per track', [f"{k[:8]} {v['matched']}/{v['labels']}+{v['extra']}" for k, v in s['per_track'].items()], flush=True)
     (GOAL / f'results_selfsim_{base}.json').write_text(json.dumps(out, indent=1, default=float))
+    np.savez(GOAL / f'selfsim_outer_{base}.npz', **saved)
 
 
 if __name__ == '__main__':
