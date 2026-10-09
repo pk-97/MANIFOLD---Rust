@@ -1,0 +1,1144 @@
+{
+  "date": "2026-10-09",
+  "status": "No integration justified by this fixed first measurement; prototype unchanged.",
+  "reference": "Duxbury, Bello, Davies and Sandler, Complex Domain Onset Detection for Musical Signals, DAFx 2003, equations 7-11: https://dafx.de/paper-archive/2003/pdfs/dafx81.pdf",
+  "settings": {
+    "window": "Trailing Hann, 2048 samples at 48 kHz, duration scaled at native rate.",
+    "prediction": "Previous magnitude with phase extrapolated as 2*previous phase - phase two hops ago.",
+    "primary": "Sum of complex prediction distances over 45-2000 Hz divided by current-plus-previous magnitude sum in that band. Raw distance also retained, but not substituted after seeing results.",
+    "numerical_floor": "Normalized zero when denominator/Hann-window-sum <= 1e-12. First two outputs zero. Full predictor history requires FFT length plus two hops.",
+    "firing": "Maximum normalized error in preceding 20 ms, including actual native prototype firing hop. No lookahead, event retiming, additional wait or new trigger rule.",
+    "missed": "Maximum normalized error from visual label through +20/+35/+50 ms. Also shift that interval -20/0/+20 ms to inspect alignment sensitivity. These oracle windows do not implement event detection."
+  },
+  "corpus": {
+    "development_tracks": 7,
+    "labels": 130,
+    "baseline_matched_50ms": 103,
+    "baseline_missed_50ms": 27,
+    "baseline_extra_50ms": 50,
+    "firing_groups": "102 tight hits with full history plus one startup hit; two wider late-associated events; 48 unmatched events. Secondary negatives are 60 RMS-hybrid fires in reviewed kick-free master passages; these are not added to baseline extras.",
+    "held_out_untouched": [
+      "Miracle",
+      "Heavy On Mind"
+    ]
+  },
+  "conclusions": [
+    "One shared low-score rejection threshold cannot remove any of the 48 unmatched baseline events or 60 hybrid kick-free events while preserving every existing full-history tight hit in this development set. This is an optimistic label-informed bound, not a proposed threshold.",
+    "Late Night fails the hoped-for ghost separation: hit median 0.215 versus hybrid kick-free median 0.204, with overlapping ranges. Its within-track ranking AUC is 0.522, approximately uninformative in this sample.",
+    "Midnight shows better within-track separation (AUC 0.947 against hybrid ghosts), but that does not transfer to Late Night or establish generalisation. No track-specific settings were chosen.",
+    "Bad Guy unwanted attacks produce stronger novelty than kicks: median 0.515 versus 0.286. Prediction error measures changes, not instrument identity.",
+    "There is evidence near missed events: the Inhale 12.620 s label has a nominal peak at +20 ms; the two late Feel hits have peaks at about +25-27 ms. These are oracle-selected peaks, not recovered triggers.",
+    "Late Night missed-event maxima remain inside kick-free background ranges, and their strongest nominal peaks occur around +39-49 ms. More generic onset sensitivity does not solve those rolls safely.",
+    "At 50 ms, missed-label versus kick-free-window ranking is 0.866 pooled, but relies on known onset windows, overlaps substantially and is sensitive to label alignment. It must not be presented as 86.6% kick accuracy.",
+    "The measurement passes causal/numerical checks and looks useful on synthetic kicks, yet fails as a universal kick confirmation cue in these real mixtures. Do not add another threshold to the live detector on this evidence."
+  ],
+  "validation": {
+    "focused_tests": 9,
+    "native_reference_event_lists_replayed_exactly": 7,
+    "source_and_audio_hashes_recorded": true,
+    "checks": "Causal prefixes, batch invariance, silence, gain invariance, analytic phase/amplitude changes, waveform transient contrast, exact window deadlines, evidence expiry and pairwise-ranking ties."
+  },
+  "runtime": {
+    "feature_only_python_cpu_ratio_range": [
+      0.0030604946426844434,
+      0.006544256773610322
+    ],
+    "limit": "Single-run batch feature extraction throughput only; no native callback allocation or deadline guarantee, no app/GPU change."
+  },
+  "firing_summary": {
+    "hits_with_full_history": {
+      "count": 102,
+      "min": 0.07990446795183975,
+      "p10": 0.17758415353530538,
+      "median": 0.2423001990367033,
+      "p90": 0.3831008318630903,
+      "max": 0.7942856222357126
+    },
+    "warmup_hits": 1,
+    "unmatched": {
+      "count": 48,
+      "min": 0.15848752476257502,
+      "p10": 0.1833202683940732,
+      "median": 0.29556447330498203,
+      "p90": 0.5610654941675339,
+      "max": 0.9482486971255771
+    },
+    "late": {
+      "count": 2,
+      "min": 0.26809198565882403,
+      "p10": 0.27474995882710906,
+      "median": 0.30138185150024915,
+      "p90": 0.32801374417338924,
+      "max": 0.3346717173416743
+    },
+    "hybrid_kick_free": {
+      "count": 60,
+      "min": 0.16518786425979118,
+      "p10": 0.18172148619553344,
+      "median": 0.20336483282363663,
+      "p90": 0.23740630397798504,
+      "max": 0.25748548900661805
+    },
+    "hit_vs_unmatched_auc": 0.38112745098039214,
+    "hit_vs_hybrid_kick_free_auc": 0.7393790849673203,
+    "optimistic_preserve_all_hits_bound": {
+      "min_hit_score": 0.07990446795183975,
+      "unmatched_below_min": 0,
+      "hybrid_ghosts_below_min": 0
+    }
+  },
+  "label_summary": {
+    "20": {
+      "distributions": {
+        "caught": {
+          "count": 103,
+          "min": 0.13306239565778907,
+          "p10": 0.17759096376519382,
+          "median": 0.2724822408841791,
+          "p90": 0.4309135638140153,
+          "max": 0.8271332668470949
+        },
+        "missed_50ms": {
+          "count": 27,
+          "min": 0.17501964232759262,
+          "p10": 0.18657808846529758,
+          "median": 0.2494333357929087,
+          "p90": 0.32120492391035116,
+          "max": 0.35489439497430914
+        },
+        "kick_free": {
+          "count": 480,
+          "min": 0.14831875546856824,
+          "p10": 0.17490881830950814,
+          "median": 0.20222521457547676,
+          "p90": 0.23411488826681204,
+          "max": 0.2901988179568297
+        }
+      },
+      "missed_vs_kick_free_auc": 0.7719907407407407
+    },
+    "35": {
+      "distributions": {
+        "caught": {
+          "count": 103,
+          "min": 0.1781606032401912,
+          "p10": 0.20293550571944788,
+          "median": 0.2876522755661932,
+          "p90": 0.4309135638140153,
+          "max": 0.8271332668470949
+        },
+        "missed_50ms": {
+          "count": 27,
+          "min": 0.18921155648290505,
+          "p10": 0.2068646008758733,
+          "median": 0.25838522499562394,
+          "p90": 0.3273661189970499,
+          "max": 0.35489439497430914
+        },
+        "kick_free": {
+          "count": 480,
+          "min": 0.15678080742364037,
+          "p10": 0.1854535181864114,
+          "median": 0.21227607798475906,
+          "p90": 0.24394830323627867,
+          "max": 0.2901988179568297
+        }
+      },
+      "missed_vs_kick_free_auc": 0.794212962962963
+    },
+    "50": {
+      "distributions": {
+        "caught": {
+          "count": 103,
+          "min": 0.18982801408731026,
+          "p10": 0.2304868935859942,
+          "median": 0.28793527926033113,
+          "p90": 0.4309135638140153,
+          "max": 0.8271332668470949
+        },
+        "missed_50ms": {
+          "count": 27,
+          "min": 0.20338449912547135,
+          "p10": 0.22207453401121865,
+          "median": 0.25838522499562394,
+          "p90": 0.3273661189970499,
+          "max": 0.35489439497430914
+        },
+        "kick_free": {
+          "count": 480,
+          "min": 0.15678080742364037,
+          "p10": 0.18981850237821396,
+          "median": 0.21574145502927156,
+          "p90": 0.24767925741735966,
+          "max": 0.2901988179568297
+        }
+      },
+      "missed_vs_kick_free_auc": 0.8661265432098766
+    }
+  },
+  "tracks": [
+    {
+      "track": "apricots_128bpm",
+      "audio_path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/apricots_128bpm/mix.wav",
+      "audio_sha256": "fde3593f372875579a15b95d80cb1d4408971ba62dd80b84110623eecbba28c4",
+      "sample_rate": 48000,
+      "hop": 256,
+      "firing_summary": {
+        "hits_with_full_history": {
+          "count": 14,
+          "min": 0.13649355890341594,
+          "p10": 0.16204960698294155,
+          "median": 0.20173461792188566,
+          "p90": 0.24086379034684716,
+          "max": 0.2869381408623457
+        },
+        "warmup_hits": 0,
+        "unmatched": {
+          "count": 0
+        },
+        "late": {
+          "count": 0
+        },
+        "hybrid_kick_free": {
+          "count": 0
+        },
+        "hit_vs_unmatched_auc": null,
+        "hit_vs_hybrid_kick_free_auc": null,
+        "optimistic_preserve_all_hits_bound": {
+          "min_hit_score": 0.13649355890341594,
+          "unmatched_below_min": 0,
+          "hybrid_ghosts_below_min": 0
+        }
+      },
+      "feature_cpu_per_audio_second": 0.0030668216939616455,
+      "missed_evidence": []
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "audio_path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/bad_guy_128bpm/mix.wav",
+      "audio_sha256": "351ad2f07dc5778690b8f04c0af12c1acc8f83fdb3c253fc988e26a433cff7a8",
+      "sample_rate": 44100,
+      "hop": 235,
+      "firing_summary": {
+        "hits_with_full_history": {
+          "count": 15,
+          "min": 0.17305378203231395,
+          "p10": 0.21127474065655658,
+          "median": 0.28596421511084075,
+          "p90": 0.3291337828696906,
+          "max": 0.3472195474284407
+        },
+        "warmup_hits": 0,
+        "unmatched": {
+          "count": 17,
+          "min": 0.3253158801302001,
+          "p10": 0.36427077883786185,
+          "median": 0.5153047828868643,
+          "p90": 0.5611235360141317,
+          "max": 0.5800868299531462
+        },
+        "late": {
+          "count": 0
+        },
+        "hybrid_kick_free": {
+          "count": 0
+        },
+        "hit_vs_unmatched_auc": 0.011764705882352941,
+        "hit_vs_hybrid_kick_free_auc": null,
+        "optimistic_preserve_all_hits_bound": {
+          "min_hit_score": 0.17305378203231395,
+          "unmatched_below_min": 0,
+          "hybrid_ghosts_below_min": 0
+        }
+      },
+      "feature_cpu_per_audio_second": 0.006544256773610322,
+      "missed_evidence": []
+    },
+    {
+      "track": "feel_the_vibration_174bpm",
+      "audio_path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/feel_the_vibration_174bpm/mix.wav",
+      "audio_sha256": "57458b322198b9c12ac821180874466a6636c15dda56d33bc29d616f46f80533",
+      "sample_rate": 48000,
+      "hop": 256,
+      "firing_summary": {
+        "hits_with_full_history": {
+          "count": 13,
+          "min": 0.21199397898081068,
+          "p10": 0.22799472413916275,
+          "median": 0.278511375789715,
+          "p90": 0.3182186023606249,
+          "max": 0.34401246678248687
+        },
+        "warmup_hits": 0,
+        "unmatched": {
+          "count": 2,
+          "min": 0.19050958536408613,
+          "p10": 0.1913259975062422,
+          "median": 0.19459164607486648,
+          "p90": 0.19785729464349075,
+          "max": 0.19867370678564683
+        },
+        "late": {
+          "count": 2,
+          "min": 0.26809198565882403,
+          "p10": 0.27474995882710906,
+          "median": 0.30138185150024915,
+          "p90": 0.32801374417338924,
+          "max": 0.3346717173416743
+        },
+        "hybrid_kick_free": {
+          "count": 0
+        },
+        "hit_vs_unmatched_auc": 1.0,
+        "hit_vs_hybrid_kick_free_auc": null,
+        "optimistic_preserve_all_hits_bound": {
+          "min_hit_score": 0.21199397898081068,
+          "unmatched_below_min": 2,
+          "hybrid_ghosts_below_min": 0
+        }
+      },
+      "feature_cpu_per_audio_second": 0.0030904596852987876,
+      "missed_evidence": [
+        {
+          "label_s": 4.96,
+          "normalized_peak_20_35_50ms": [
+            0.2046577387857418,
+            0.2883889881921656,
+            0.2883889881921656
+          ],
+          "peak_delay_20_35_50ms": [
+            16.0,
+            26.667,
+            26.667
+          ],
+          "shifted_50ms_peak_range": [
+            0.2883889881921656,
+            0.2883889881921656
+          ]
+        },
+        {
+          "label_s": 11.58,
+          "normalized_peak_20_35_50ms": [
+            0.3233322396379204,
+            0.3431953124383682,
+            0.3431953124383682
+          ],
+          "peak_delay_20_35_50ms": [
+            20.0,
+            25.333,
+            25.333
+          ],
+          "shifted_50ms_peak_range": [
+            0.3431953124383682,
+            0.3431953124383682
+          ]
+        }
+      ]
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "audio_path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/inhale_exhale_145bpm/mix.wav",
+      "audio_sha256": "26163ae92e4b7aaf74cafc6a5fff3b6bad2a566a60474bb8b8b53386add18514",
+      "sample_rate": 48000,
+      "hop": 256,
+      "firing_summary": {
+        "hits_with_full_history": {
+          "count": 11,
+          "min": 0.07990446795183975,
+          "p10": 0.15389147514621124,
+          "median": 0.38614419457281596,
+          "p90": 0.6328639921210507,
+          "max": 0.7942856222357126
+        },
+        "warmup_hits": 0,
+        "unmatched": {
+          "count": 14,
+          "min": 0.16278414768869823,
+          "p10": 0.2083701935010166,
+          "median": 0.2614722943508311,
+          "p90": 0.3567020473867924,
+          "max": 0.422816939239404
+        },
+        "late": {
+          "count": 0
+        },
+        "hybrid_kick_free": {
+          "count": 0
+        },
+        "hit_vs_unmatched_auc": 0.6493506493506493,
+        "hit_vs_hybrid_kick_free_auc": null,
+        "optimistic_preserve_all_hits_bound": {
+          "min_hit_score": 0.07990446795183975,
+          "unmatched_below_min": 0,
+          "hybrid_ghosts_below_min": 0
+        }
+      },
+      "feature_cpu_per_audio_second": 0.003141662746406084,
+      "missed_evidence": [
+        {
+          "label_s": 12.62,
+          "normalized_peak_20_35_50ms": [
+            0.29711639194426714,
+            0.29711639194426714,
+            0.29711639194426714
+          ],
+          "peak_delay_20_35_50ms": [
+            20.0,
+            20.0,
+            20.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.29711639194426714,
+            0.29711639194426714
+          ]
+        }
+      ]
+    },
+    {
+      "track": "tears_140bpm",
+      "audio_path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/tears_140bpm/mix.wav",
+      "audio_sha256": "49c7c4ee799e93690e4023665b332c617f0fa170314a83d05c79a2c675d5b334",
+      "sample_rate": 48000,
+      "hop": 256,
+      "firing_summary": {
+        "hits_with_full_history": {
+          "count": 9,
+          "min": 0.10575560159434634,
+          "p10": 0.18304188385158884,
+          "median": 0.43580002064812284,
+          "p90": 0.5361493455963393,
+          "max": 0.5513452296370398
+        },
+        "warmup_hits": 1,
+        "unmatched": {
+          "count": 7,
+          "min": 0.16198913128423106,
+          "p10": 0.16472276979211825,
+          "median": 0.23944671898247863,
+          "p90": 0.8945257819123502,
+          "max": 0.9482486971255771
+        },
+        "late": {
+          "count": 0
+        },
+        "hybrid_kick_free": {
+          "count": 0
+        },
+        "hit_vs_unmatched_auc": 0.49206349206349204,
+        "hit_vs_hybrid_kick_free_auc": null,
+        "optimistic_preserve_all_hits_bound": {
+          "min_hit_score": 0.10575560159434634,
+          "unmatched_below_min": 0,
+          "hybrid_ghosts_below_min": 0
+        }
+      },
+      "feature_cpu_per_audio_second": 0.003169756461349894,
+      "missed_evidence": []
+    },
+    {
+      "track": "late_night",
+      "audio_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav",
+      "audio_sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+      "sample_rate": 48000,
+      "hop": 256,
+      "firing_summary": {
+        "hits_with_full_history": {
+          "count": 23,
+          "min": 0.15225797482191347,
+          "p10": 0.17764856462090983,
+          "median": 0.21452022324631892,
+          "p90": 0.24170678063483814,
+          "max": 0.28829236735667485
+        },
+        "warmup_hits": 0,
+        "unmatched": {
+          "count": 8,
+          "min": 0.15848752476257502,
+          "p10": 0.1585640602088788,
+          "median": 0.2060420259415556,
+          "p90": 0.24172860754702238,
+          "max": 0.2856798136854589
+        },
+        "late": {
+          "count": 0
+        },
+        "hybrid_kick_free": {
+          "count": 49,
+          "min": 0.16518786425979118,
+          "p10": 0.18487853391781858,
+          "median": 0.20447769913127103,
+          "p90": 0.2380068155223008,
+          "max": 0.25748548900661805
+        },
+        "hit_vs_unmatched_auc": 0.6032608695652174,
+        "hit_vs_hybrid_kick_free_auc": 0.5217391304347826,
+        "optimistic_preserve_all_hits_bound": {
+          "min_hit_score": 0.15225797482191347,
+          "unmatched_below_min": 0,
+          "hybrid_ghosts_below_min": 0
+        }
+      },
+      "feature_cpu_per_audio_second": 0.0030604946426844434,
+      "missed_evidence": [
+        {
+          "label_s": 204.45,
+          "normalized_peak_20_35_50ms": [
+            0.20699848709945845,
+            0.22445270246962967,
+            0.2396494888658148
+          ],
+          "peak_delay_20_35_50ms": [
+            3.333,
+            24.667,
+            46.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.22445270246962967,
+            0.2396494888658148
+          ]
+        },
+        {
+          "label_s": 204.59,
+          "normalized_peak_20_35_50ms": [
+            0.22366796257188826,
+            0.22366796257188826,
+            0.23141836823496262
+          ],
+          "peak_delay_20_35_50ms": [
+            12.667,
+            12.667,
+            39.333
+          ],
+          "shifted_50ms_peak_range": [
+            0.22366796257188826,
+            0.23141836823496262
+          ]
+        },
+        {
+          "label_s": 204.725,
+          "normalized_peak_20_35_50ms": [
+            0.1826278864388864,
+            0.1902662483626595,
+            0.2511378792833908
+          ],
+          "peak_delay_20_35_50ms": [
+            16.333,
+            21.667,
+            48.333
+          ],
+          "shifted_50ms_peak_range": [
+            0.1902662483626595,
+            0.2511378792833908
+          ]
+        },
+        {
+          "label_s": 207.78,
+          "normalized_peak_20_35_50ms": [
+            0.17501964232759262,
+            0.21031735040202698,
+            0.23647579460136708
+          ],
+          "peak_delay_20_35_50ms": [
+            17.333,
+            22.667,
+            44.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.21031735040202698,
+            0.23647579460136708
+          ]
+        },
+        {
+          "label_s": 210.28,
+          "normalized_peak_20_35_50ms": [
+            0.21139121054028068,
+            0.21139121054028068,
+            0.2244856007474981
+          ],
+          "peak_delay_20_35_50ms": [
+            13.333,
+            13.333,
+            45.333
+          ],
+          "shifted_50ms_peak_range": [
+            0.21139121054028068,
+            0.2244856007474981
+          ]
+        },
+        {
+          "label_s": 210.975,
+          "normalized_peak_20_35_50ms": [
+            0.18921155648290505,
+            0.18921155648290505,
+            0.2567766217544652
+          ],
+          "peak_delay_20_35_50ms": [
+            11.667,
+            11.667,
+            49.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.23389976370334042,
+            0.2567766217544652
+          ]
+        }
+      ]
+    },
+    {
+      "track": "midnight_patience",
+      "audio_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav",
+      "audio_sha256": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2",
+      "sample_rate": 48000,
+      "hop": 256,
+      "firing_summary": {
+        "hits_with_full_history": {
+          "count": 17,
+          "min": 0.204132239648323,
+          "p10": 0.22453094474236177,
+          "median": 0.2641487901207267,
+          "p90": 0.31834127238229354,
+          "max": 0.3348637480043394
+        },
+        "warmup_hits": 0,
+        "unmatched": {
+          "count": 0
+        },
+        "late": {
+          "count": 0
+        },
+        "hybrid_kick_free": {
+          "count": 11,
+          "min": 0.1723055648058241,
+          "p10": 0.17603817795002302,
+          "median": 0.19938462013823136,
+          "p90": 0.22145082146058134,
+          "max": 0.2501845074714198
+        },
+        "hit_vs_unmatched_auc": null,
+        "hit_vs_hybrid_kick_free_auc": 0.946524064171123,
+        "optimistic_preserve_all_hits_bound": {
+          "min_hit_score": 0.204132239648323,
+          "unmatched_below_min": 0,
+          "hybrid_ghosts_below_min": 7
+        }
+      },
+      "feature_cpu_per_audio_second": 0.0030839012395518016,
+      "missed_evidence": [
+        {
+          "label_s": 116.96,
+          "normalized_peak_20_35_50ms": [
+            0.27985262009179945,
+            0.27985262009179945,
+            0.27985262009179945
+          ],
+          "peak_delay_20_35_50ms": [
+            10.667,
+            10.667,
+            10.667
+          ],
+          "shifted_50ms_peak_range": [
+            0.2634906902246832,
+            0.27985262009179945
+          ]
+        },
+        {
+          "label_s": 117.87,
+          "normalized_peak_20_35_50ms": [
+            0.30410741524345086,
+            0.30410741524345086,
+            0.30410741524345086
+          ],
+          "peak_delay_20_35_50ms": [
+            12.667,
+            12.667,
+            12.667
+          ],
+          "shifted_50ms_peak_range": [
+            0.24695273710577936,
+            0.30410741524345086
+          ]
+        },
+        {
+          "label_s": 118.21,
+          "normalized_peak_20_35_50ms": [
+            0.2127506136302089,
+            0.22145694351525044,
+            0.22145694351525044
+          ],
+          "peak_delay_20_35_50ms": [
+            14.0,
+            30.0,
+            30.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.22145694351525044,
+            0.22145694351525044
+          ]
+        },
+        {
+          "label_s": 118.55,
+          "normalized_peak_20_35_50ms": [
+            0.21617936790209294,
+            0.2224862610085308,
+            0.2224862610085308
+          ],
+          "peak_delay_20_35_50ms": [
+            15.333,
+            26.0,
+            26.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.2224862610085308,
+            0.2224862610085308
+          ]
+        },
+        {
+          "label_s": 118.89,
+          "normalized_peak_20_35_50ms": [
+            0.2494333357929087,
+            0.2494333357929087,
+            0.2494333357929087
+          ],
+          "peak_delay_20_35_50ms": [
+            0.667,
+            0.667,
+            0.667
+          ],
+          "shifted_50ms_peak_range": [
+            0.21973467258993085,
+            0.2494333357929087
+          ]
+        },
+        {
+          "label_s": 119.69,
+          "normalized_peak_20_35_50ms": [
+            0.2968499185584523,
+            0.2968499185584523,
+            0.2968499185584523
+          ],
+          "peak_delay_20_35_50ms": [
+            11.333,
+            11.333,
+            11.333
+          ],
+          "shifted_50ms_peak_range": [
+            0.2489026127975388,
+            0.2968499185584523
+          ]
+        },
+        {
+          "label_s": 121.505,
+          "normalized_peak_20_35_50ms": [
+            0.2998760555577426,
+            0.2998760555577426,
+            0.2998760555577426
+          ],
+          "peak_delay_20_35_50ms": [
+            15.0,
+            15.0,
+            15.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.2384796266644186,
+            0.2998760555577426
+          ]
+        },
+        {
+          "label_s": 121.845,
+          "normalized_peak_20_35_50ms": [
+            0.24436707883084952,
+            0.25838522499562394,
+            0.25838522499562394
+          ],
+          "peak_delay_20_35_50ms": [
+            16.333,
+            21.667,
+            21.667
+          ],
+          "shifted_50ms_peak_range": [
+            0.25838522499562394,
+            0.25838522499562394
+          ]
+        },
+        {
+          "label_s": 122.19,
+          "normalized_peak_20_35_50ms": [
+            0.2094006433078029,
+            0.2094006433078029,
+            0.21232843738822832
+          ],
+          "peak_delay_20_35_50ms": [
+            18.0,
+            18.0,
+            50.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.2094006433078029,
+            0.21232843738822832
+          ]
+        },
+        {
+          "label_s": 122.53,
+          "normalized_peak_20_35_50ms": [
+            0.272724378123745,
+            0.272724378123745,
+            0.272724378123745
+          ],
+          "peak_delay_20_35_50ms": [
+            14.0,
+            14.0,
+            14.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.23017672306392242,
+            0.272724378123745
+          ]
+        },
+        {
+          "label_s": 123.32,
+          "normalized_peak_20_35_50ms": [
+            0.2827423952652511,
+            0.2827423952652511,
+            0.2827423952652511
+          ],
+          "peak_delay_20_35_50ms": [
+            13.333,
+            13.333,
+            13.333
+          ],
+          "shifted_50ms_peak_range": [
+            0.2530811355827438,
+            0.2827423952652511
+          ]
+        },
+        {
+          "label_s": 124.0,
+          "normalized_peak_20_35_50ms": [
+            0.31978671342530496,
+            0.31978671342530496,
+            0.31978671342530496
+          ],
+          "peak_delay_20_35_50ms": [
+            16.0,
+            16.0,
+            16.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.253829163841276,
+            0.31978671342530496
+          ]
+        },
+        {
+          "label_s": 124.91,
+          "normalized_peak_20_35_50ms": [
+            0.2989643415294572,
+            0.2989643415294572,
+            0.2989643415294572
+          ],
+          "peak_delay_20_35_50ms": [
+            12.667,
+            12.667,
+            12.667
+          ],
+          "shifted_50ms_peak_range": [
+            0.24783016788911344,
+            0.2989643415294572
+          ]
+        },
+        {
+          "label_s": 125.14,
+          "normalized_peak_20_35_50ms": [
+            0.35489439497430914,
+            0.35489439497430914,
+            0.35489439497430914
+          ],
+          "peak_delay_20_35_50ms": [
+            12.0,
+            12.0,
+            12.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.24582683282932444,
+            0.35489439497430914
+          ]
+        },
+        {
+          "label_s": 125.48,
+          "normalized_peak_20_35_50ms": [
+            0.22878068473211527,
+            0.23472693747438775,
+            0.23472693747438775
+          ],
+          "peak_delay_20_35_50ms": [
+            18.667,
+            29.333,
+            29.333
+          ],
+          "shifted_50ms_peak_range": [
+            0.23472693747438775,
+            0.23472693747438775
+          ]
+        },
+        {
+          "label_s": 125.83,
+          "normalized_peak_20_35_50ms": [
+            0.17804001682935405,
+            0.20306053722797893,
+            0.20338449912547135
+          ],
+          "peak_delay_20_35_50ms": [
+            10.0,
+            20.667,
+            47.333
+          ],
+          "shifted_50ms_peak_range": [
+            0.20306053722797893,
+            0.2461660474084627
+          ]
+        },
+        {
+          "label_s": 126.17,
+          "normalized_peak_20_35_50ms": [
+            0.25286636665877793,
+            0.25286636665877793,
+            0.25286636665877793
+          ],
+          "peak_delay_20_35_50ms": [
+            6.0,
+            6.0,
+            6.0
+          ],
+          "shifted_50ms_peak_range": [
+            0.24646701295011803,
+            0.25286636665877793
+          ]
+        },
+        {
+          "label_s": 126.96,
+          "normalized_peak_20_35_50ms": [
+            0.3387352273546672,
+            0.3387352273546672,
+            0.3387352273546672
+          ],
+          "peak_delay_20_35_50ms": [
+            10.667,
+            10.667,
+            10.667
+          ],
+          "shifted_50ms_peak_range": [
+            0.24072750999061626,
+            0.3387352273546672
+          ]
+        }
+      ]
+    }
+  ],
+  "controls": [
+    {
+      "signal": "stationary_bass",
+      "sample_rate": 44100,
+      "settled": {
+        "count": 694,
+        "min": 0.0244715809089421,
+        "p10": 0.025609610778172677,
+        "median": 0.035989001142363364,
+        "p90": 0.042529240040272365,
+        "max": 0.043903651467157724
+      },
+      "onset_peak_50ms_values": []
+    },
+    {
+      "signal": "wobbling_bass",
+      "sample_rate": 44100,
+      "settled": {
+        "count": 694,
+        "min": 0.022841259047192024,
+        "p10": 0.03912720265185861,
+        "median": 0.0875224148588134,
+        "p90": 0.1427544745572633,
+        "max": 0.16472944816108004
+      },
+      "onset_peak_50ms_values": []
+    },
+    {
+      "signal": "isolated_kicks",
+      "sample_rate": 44100,
+      "settled": {
+        "count": 694,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.0,
+        "p90": 0.14083445508215917,
+        "max": 1.0
+      },
+      "onset_peak_50ms_values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "signal": "rapid_kicks",
+      "sample_rate": 44100,
+      "settled": {
+        "count": 694,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.0,
+        "p90": 0.14681898827478887,
+        "max": 1.0
+      },
+      "onset_peak_50ms_values": [
+        1.0,
+        0.3684724625488562,
+        0.34272482671519316,
+        0.3815298367395945,
+        0.3367097439604641,
+        0.3856891093086377,
+        0.3292929020940915,
+        0.38682354814253306
+      ]
+    },
+    {
+      "signal": "kicks_over_bass",
+      "sample_rate": 44100,
+      "settled": {
+        "count": 694,
+        "min": 0.0244715809089421,
+        "p10": 0.026287164059268054,
+        "median": 0.03954671142976996,
+        "p90": 0.11291941798503298,
+        "max": 0.21680865111689956
+      },
+      "onset_peak_50ms_values": [
+        0.21680865111689956,
+        0.21573336600326762,
+        0.20748979763332362,
+        0.19404013543810758
+      ]
+    },
+    {
+      "signal": "stationary_bass",
+      "sample_rate": 48000,
+      "settled": {
+        "count": 694,
+        "min": 0.024607345026911878,
+        "p10": 0.02570173012000913,
+        "median": 0.03626747486622582,
+        "p90": 0.04278777686913505,
+        "max": 0.044129531590942045
+      },
+      "onset_peak_50ms_values": []
+    },
+    {
+      "signal": "wobbling_bass",
+      "sample_rate": 48000,
+      "settled": {
+        "count": 694,
+        "min": 0.02794557940330704,
+        "p10": 0.039509806718143456,
+        "median": 0.08764714977664687,
+        "p90": 0.14337738074679782,
+        "max": 0.16264776265996542
+      },
+      "onset_peak_50ms_values": []
+    },
+    {
+      "signal": "isolated_kicks",
+      "sample_rate": 48000,
+      "settled": {
+        "count": 694,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.0,
+        "p90": 0.13946932206423482,
+        "max": 1.0
+      },
+      "onset_peak_50ms_values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "signal": "rapid_kicks",
+      "sample_rate": 48000,
+      "settled": {
+        "count": 694,
+        "min": 0.0,
+        "p10": 0.0,
+        "median": 0.0,
+        "p90": 0.14742599295115963,
+        "max": 1.0
+      },
+      "onset_peak_50ms_values": [
+        1.0,
+        0.3402412509296628,
+        0.37272786532549623,
+        0.3430006749406457,
+        0.38343645018468314,
+        0.33353492380107125,
+        0.38775785793663764,
+        0.34171446889607016
+      ]
+    },
+    {
+      "signal": "kicks_over_bass",
+      "sample_rate": 48000,
+      "settled": {
+        "count": 694,
+        "min": 0.024607345026912107,
+        "p10": 0.026609149080289433,
+        "median": 0.03958385551291868,
+        "p90": 0.11349924406458824,
+        "max": 0.21758595942667833
+      },
+      "onset_peak_50ms_values": [
+        0.21758595942667833,
+        0.2081141649810083,
+        0.19379974322951357,
+        0.2114039091878912
+      ]
+    }
+  ],
+  "sources_sha256": {
+    "run_kick_complex_audit.py": "0d2db32fc100a42ab45daa8f0b36b0a7f74d1b6c8f7a12f6cd1153f05328e17a",
+    "kick_complex_onset.py": "b41da92628a674475f4c7dbd74ee6de36e7aa10bb6a4429295f69ea94caedf55",
+    "kick_tonal_experiment.py": "ae6a66426616273ed9f33a460d5e5b8407f91b82681133108e235b01967d76f7",
+    "kick_attack_rejection.py": "cb5e8ad261f64ae5b6e3bafce2f232e14ec99bb3fc54c0599f113dcfaed6a144",
+    "kick_dsp_experiments.py": "e5595079d48ef086e0731ac871f9c4fc07c53e7de87e2796f51cbe5c3983dd3b",
+    "kick_hybrid_experiment.py": "9f16149655e367952cab586b2e89d900d5ca3bcb07e0cf5cbead4fa2ecd42aa8",
+    "run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615",
+    "live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2",
+    "master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145"
+  },
+  "labels_sha256": {
+    "inhale_exhale_145bpm.csv": "a29b9892456588294efbf6f506da912d4f2d996fc105f9551b1b9d6db4077f4e",
+    "bad_guy_128bpm.csv": "d657d298ad98bee09e048922b465de4b4a69386a1482d8327be3207a37444ef7",
+    "attack_review.csv": "b29e872c8a8ec9d05902c7f76bc68b5a16399fc9cf0fd1ef669c598c8711a9ae",
+    "feel_the_vibration_174bpm.csv": "922be87c9a6a9eb03002b68ce5f87915e1fec4652921795c20cf6975a2bc21e8",
+    "apricots_128bpm.csv": "fa38b535e88b55580df3f90956935420070d95fb89441b30e625b1cdce45b163",
+    "tears_140bpm.csv": "f3ce02e72f191bd53bc86c611fce2efe56a55db4cb19b6f1434bdba80ce28576",
+    "bad_guy_128bpm.repair.json": "0d9f007d02da46f93dff1168ff321379a57310ab97397626812080389d955f11",
+    "master_passages_2026-10-09.json": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c"
+  },
+  "hybrid_report_sha256": "4c7d9b54e1595479e4d6e942d253ef8961402fee3ee912cf23185bcb7bbe4616",
+  "raw_report": {
+    "path": "/Users/peterkiemann/.cache/manifold/kick-complex-2026-10-09/audit-final.json",
+    "sha256": "7c8eefe77e52ea0353ff9686d88d782984a6fdba65aeaf1684a5e2977ceb60c3"
+  },
+  "limitations": [
+    "Development tracks and provisional visual labels; no held-out or independent listening validation.",
+    "Primary range 45-2000 Hz, 2048-at-48k trailing Hann window, normalized complex error; not the unnormalized full-spectrum paper pipeline.",
+    "No lookahead or deliberate wait; trailing Hann still weights older samples and can spread/delay evidence. Actual hop availability is retained.",
+    "Pairwise AUC and label-preserving bounds are descriptive, not classifier accuracy or generalisation estimates. Per-track bounds are not proposed song-specific settings.",
+    "Label-guided peak windows are oracle diagnostics, not online onset localization. Peaks may belong to other sounds or offsets.",
+    "Positive label windows also have -20/0/+20 ms alignment sensitivity; shifted windows are not evidence of a fixed latency guarantee. Startup hits remain baseline hits but are separate from full-history feature comparisons.",
+    "Baseline unmatched events exclude wider late associations but do not establish source identity. Hybrid kick-free events are secondary negatives and may overlap baseline events; never add their counts.",
+    "CPU measurement covers Python batch feature extraction only, not native callback deadlines or full app latency.",
+    "No detector mutation, threshold selection or beat/template model. Miracle and Heavy On Mind remain untouched."
+  ],
+  "reproduce": "PYTHONPATH=tools/audio_analysis python3 -m eval.run_kick_complex_audit --audio-root PATH --hybrid-report ~/.cache/manifold/kick-hybrid-2026-10-09/mixes-presence.json --out PATH. Requires reviewed original mixes and two masters. Feature arrays are saved next to the raw report."
+}

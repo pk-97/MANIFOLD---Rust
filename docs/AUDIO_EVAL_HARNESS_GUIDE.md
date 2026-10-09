@@ -284,6 +284,20 @@ recording, not random windows of the same song. If held-out results influence
 another revision, those recordings become development data and fresh material
 is needed for an independent generalisation claim.
 
+**Complex-domain audit, 2026-10-09 — measurement only:** a fixed causal
+45–2000 Hz predictor uses previous magnitude and extrapolated phase, with a
+2048-at-48k trailing Hann window. Its normalized error does not provide a safe
+universal low-score veto: retaining all existing full-history tight hits leaves
+all 48 wider-unmatched baseline events and all 60 secondary hybrid kick-free
+events. The latter overlap baseline events and must not be added to that count.
+Midnight's ghost separation does not transfer to Late Night; Bad Guy's unwanted
+attacks often have stronger novelty than its kicks. Evidence near missed kicks
+uses label-guided windows and is not recovered detector recall. Nine focused
+tests pass and all seven native v5 event lists replay exactly. No trigger rule
+or app code changed. See
+`tools/audio_analysis/eval/scoreboard/kick_complex_audit_2026-10-09.json` for
+per-track results, timing sensitivity, limitations and reproduction instructions.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
