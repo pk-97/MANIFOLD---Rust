@@ -51,8 +51,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize,
 
 // Initial render-target size; `SpectrumGpuRenderer::ensure_size` resizes every
 // frame to match the current rect × pixels_per_point for pixel-perfect output.
-const INITIAL_SPECTRUM_W: u32 = 900;
-const INITIAL_SPECTRUM_H: u32 = 450;
+const INITIAL_SPECTRUM_W: u32 = 1100;
+const INITIAL_SPECTRUM_H: u32 = 700;
 
 // Hard caps on the GPU texture. 4K scenarios are well within this.
 const MAX_SPECTRUM_W: u32 = 4096;
@@ -891,8 +891,8 @@ pub struct AnalyzerGuiShared {
 /// Defaults the grab handle snaps back to on double-click. The drag
 /// only clamps to keep the handle on-screen; any panel may collapse
 /// to zero to let one of the four figures go full-window.
-const RIGHT_COLUMN_WIDTH_DEFAULT: f32 = 200.0;
-const TOP_FRACTION_DEFAULT: f32 = 0.5;
+const RIGHT_COLUMN_WIDTH_DEFAULT: f32 = 350.0;
+const TOP_FRACTION_DEFAULT: f32 = 0.6;
 
 fn publish_if_size_matches(mailbox: &Mutex<Vec<f32>>, src: &[f32]) -> bool {
     let Some(mut guard) = mailbox.try_lock() else {
@@ -3392,7 +3392,7 @@ fn draw_right_column(ui: &mut egui::Ui, state: &mut EditorState) {
 /// Floating grab handle at the 2×2 cross. Dragging adjusts both axes
 /// of the grid at once: horizontal drag resizes the right column,
 /// vertical drag moves the top/bottom split. Double-click resets to
-/// the defaults (200 px, 50/50). Rendered as a top-level `Area` so
+/// the defaults (350 px, 60/40). Rendered as a top-level `Area` so
 /// the hit test isn't eaten by whichever panel owns the underlying
 /// pixel.
 fn draw_layout_grab_handle(ctx: &egui::Context, state: &EditorState) {
@@ -3612,9 +3612,16 @@ fn draw_loudness_panel(ui: &mut egui::Ui, state: &mut EditorState) {
                 }
                 None => (None, egui::Color32::from_gray(120)),
             };
-            ui.vertical(|ui| {
-                draw_loudness_readouts(ui, &snap, ref_analysis, ref_color);
-            });
+            // Saved DAW windows and manually collapsed panels can be shorter
+            // than the readouts. Keep every existing measurement reachable.
+            egui::ScrollArea::vertical()
+                .max_height(total_avail.y.max(0.0))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        draw_loudness_readouts(ui, &snap, ref_analysis, ref_color);
+                    });
+                });
         });
     });
 }
