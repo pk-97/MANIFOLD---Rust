@@ -3,6 +3,9 @@
 
 Usage: run_kick_goal_selfsim2.py BASE
 
+Writes nested_{BASE}_{config}.npz in the nested_{BASE}.npz layout, so a
+config can be stacked again by passing BASE_config.
+
 Why: R2 (five self features, 20 s) lifted pooled F1 .585 -> .749 and Cold
 165 -> 397/642, but short clips lost kicks (Apricots 14 -> 12, Tears 11 -> 9):
 no history early in a clip. Predeclared configs (columns of one matrix):
@@ -59,6 +62,7 @@ def main():
             for v in train:
                 m = fit2(g, train, [u for u in train if u != v], cols)
                 inner[v] = m.predict_proba(train[v][:, cols])[:, 1]
+                saved[f'{name}|{o}|{v}'] = inner[v]
             th, _ = choose(g, inner)
             m = fit2(g, train, list(train), cols)
             saved[f'{name}|{o}'] = m.predict_proba(matrix(o, o)[:, cols])[:, 1]
@@ -73,7 +77,8 @@ def main():
             print(line(f'{name} {k}', out[name][k]), flush=True)
         print('   per track', [f"{k[:8]} {v['matched']}/{v['labels']}+{v['extra']}" for k, v in s['per_track'].items()], flush=True)
     (GOAL / f'results_selfsim2_{base}.json').write_text(json.dumps(out, indent=1, default=float))
-    np.savez(GOAL / f'selfsim2_outer_{base}.npz', **saved)
+    for name, _ in CONFIGS:
+        np.savez(GOAL / f'nested_{base}_{name}.npz', **{k[len(name) + 1:]: v for k, v in saved.items() if k.startswith(name + '|')})
 
 
 if __name__ == '__main__':
