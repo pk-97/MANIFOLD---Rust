@@ -2,9 +2,9 @@
 //! (docs/WHITEWATER_STAGE_FUSION_DESIGN.md P0, invariant I1). Every
 //! simulation tick's `pool_out`, `state_out`, `counts_out` and four
 //! populations are hashed whole and held to a golden recorded before any
-//! stage change. Comparison never writes. `MANIFOLD_RECORD_GOLDEN=1` records
-//! a candidate next to the golden instead, only from a clean tree whose
-//! renderer sources match [`BASE`]; promoting it is a manual rename.
+//! stage change. This module performs a read-only comparison against the
+//! shipped golden. The historical recorder was retired after its pinned
+//! pre-T1 source path was found to be unavailable.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::GpuBuffer;
@@ -23,10 +23,6 @@ use manifold_node_engine::scene::transform::Transform;
 use manifold_node_engine::water::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
 
 const GOLDEN: &str = "whitewater_tick_golden.txt";
-const CANDIDATE: &str = "whitewater_tick_golden.candidate.txt";
-/// The commit the golden belongs to: main before any whitewater stage
-/// change. Recording refuses when the renderer's non-test sources differ.
-const BASE: &str = "1a7fe1437";
 
 
 
@@ -166,50 +162,6 @@ fn compaction_moves_a_survivor() -> (usize, u32) {
     (slot, state[0])
 }
 
-fn git(args: &[&str]) -> std::process::Output {
-    std::process::Command::new("git").args(["-C", env!("CARGO_MANIFEST_DIR")]).args(args).output().expect("git runs")
-}
-
-/// Writes the candidate golden, refusing a dirty tree, an unavailable HEAD
-/// or renderer sources that differ from [`BASE`].
-fn record_candidate(lines: &[String]) {
-    let head = git(&["rev-parse", "HEAD"]);
-    assert!(head.status.success(), "HEAD unavailable; refusing to record");
-    let sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
-    assert_eq!(sha.len(), 40, "HEAD unavailable; refusing to record");
-    let status = git(&["status", "--porcelain", "--untracked-files=all"]);
-    assert!(status.status.success(), "git status failed; refusing to record");
-    let dirty: Vec<String> =
-        String::from_utf8_lossy(&status.stdout).lines().filter(|l| !l.ends_with(CANDIDATE)).map(str::to_string).collect();
-    assert!(dirty.is_empty(), "dirty tree; refusing to record:\n{}", dirty.join("\n"));
-    let base = git(&["rev-parse", "--verify", &format!("{BASE}^{{commit}}")]);
-    assert!(base.status.success(), "pinned base {BASE} unavailable; refusing to record");
-    const MODULES: &str = "src/node_graph/primitives/mod.rs";
-    let changed = git(&["diff", "--quiet", BASE, "HEAD", "--", "src", ":(exclude)*_tests.rs", ":(exclude)**/tests/**", &format!(":(exclude){MODULES}")]);
-    assert!(changed.status.success(), "renderer sources differ from the pinned base {BASE}; refusing to record");
-    // The module list may differ only by this test's own registration, at
-    // one fixed place after a complete declaration, byte for byte: the
-    // allowed cfg can neither land on another module nor take over an
-    // existing attribute.
-    let file_at = |rev: &str| {
-        let shown = git(&["show", &format!("{rev}:crates/manifold-nodes/{MODULES}")]);
-        assert!(shown.status.success(), "git show {rev}:{MODULES} failed; refusing to record");
-        shown.stdout
-    };
-    let base_modules = String::from_utf8(file_at(BASE)).expect("utf-8 module list");
-    let anchor = "\nmod whitewater_scene_tests;\n";
-    assert_eq!(base_modules.matches(anchor).count(), 1, "the registration anchor moved; refusing to record");
-    let registered = base_modules.replacen(
-        anchor, &format!("{anchor}#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod whitewater_golden_tests;\n"), 1);
-    assert!(file_at("HEAD") == registered.as_bytes(), "{MODULES} differs from {BASE} beyond this test's registration; refusing to record");
-    let header = format!(
-        "# Whitewater per-tick golden (whitewater_tick_state_matches_golden)\n# base {BASE}\n# sha {sha}\n# fixtures: shipped GPU FLIP Dam Break 64; all emitters; all emitters at budget 1000; {TICKS} ticks each after restart\n# line: fixture tick N port bytes FNV-1a-64 over the whole buffer\n"
-    );
-    let path = format!("{}/tests/fixtures/{CANDIDATE}", env!("CARGO_MANIFEST_DIR"));
-    std::fs::write(&path, header + &lines.join("\n") + "\n").expect("candidate writes");
-    println!("recorded {} fingerprints at {sha} into {CANDIDATE}; promote by renaming it to {GOLDEN}", lines.len());
-}
-
 /// Every tick of the shipped Dam Break, the all-emitters fixture and the
 /// all-emitters fixture at a 1000-particle budget (the overflow case), bit
 /// for bit against the golden; and the constructed compaction case.
@@ -234,10 +186,6 @@ fn whitewater_tick_state_matches_golden() {
     }
     for (i, event) in EVENTS.iter().enumerate() {
         assert!(coverage.iter().any(|(_, seen)| seen[i].is_some()), "no fixture reached {event} in {TICKS} ticks");
-    }
-    if std::env::var("MANIFOLD_RECORD_GOLDEN").is_ok_and(|v| v == "1") {
-        record_candidate(&lines);
-        return;
     }
     let path = format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"));
     let golden = std::fs::read_to_string(&path).expect("golden fixture reads");
