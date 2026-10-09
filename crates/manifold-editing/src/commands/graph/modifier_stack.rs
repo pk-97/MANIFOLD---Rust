@@ -4,74 +4,24 @@
 //! performs the project transaction and keeps the generator's other live
 //! parameter state reversible.
 
-use std::borrow::Cow;
 use std::fmt;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
 use manifold_core::scene_modifier_edit::{
-    SceneModifierEditError, SceneModifierGraphEdit, delete_scene_modifier,
+    SceneModifierEditError, delete_scene_modifier,
     duplicate_scene_modifiers, insert_scene_modifier, move_scene_modifier, remove_scene_modifiers,
     reorder_scene_modifiers, retarget_scene_modifier, set_scene_modifier_preparation_param,
 };
 use manifold_core::scene_modifier_preset::{
     SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneTargetSelection,
 };
-use manifold_core::{GraphTarget, NodeId, PresetTypeId};
+use manifold_core::{GraphTarget, NodeId};
+use manifold_core::scene_graph_edit::{SceneGraphEdit, SceneGraphEditError};
 
 use crate::command::Command;
 
-use super::{InstanceLayerSnapshot, prune_instance_params};
-
-/// Copy every host-side value and modulation entry addressed by a source
-/// modifier macro. The graph candidate has already minted the destination
-/// metadata; this keeps duplication's runtime state in the same transaction.
-fn duplicate_runtime_parameter_state(
-    host: &mut manifold_core::effects::PresetInstance,
-    remaps: &[(String, String)],
-) {
-    let params: Vec<_> = remaps
-        .iter()
-        .filter_map(|(source, destination)| {
-            host.params.get(source).map(|param| {
-                let mut copy = param.clone();
-                copy.spec.id = destination.clone();
-                copy
-            })
-        })
-        .collect();
-    for param in params {
-        if !host.params.contains(param.id()) {
-            host.params.push(param);
-        }
-    }
-
-    macro_rules! duplicate_entries {
-        ($field:ident) => {
-            if let Some(entries) = host.$field.as_mut() {
-                let copies: Vec<_> = remaps
-                    .iter()
-                    .filter_map(|(source, destination)| {
-                        entries
-                            .iter()
-                            .find(|entry| entry.param_id.as_ref() == source)
-                            .map(|entry| {
-                                let mut copy = entry.clone();
-                                copy.param_id = Cow::Owned(destination.clone());
-                                copy
-                            })
-                    })
-                    .collect();
-                entries.extend(copies);
-            }
-        };
-    }
-    duplicate_entries!(drivers);
-    duplicate_entries!(envelopes);
-    duplicate_entries!(ableton_mappings);
-    duplicate_entries!(audio_mods);
-    duplicate_entries!(automation_lanes);
-}
+use crate::scene_transaction::{SceneGraphRejection, SceneGraphTransaction};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SceneModifierStackError {
@@ -82,6 +32,7 @@ pub enum SceneModifierStackError {
     StaleOwner,
     Noop,
     Pure(SceneModifierEditError),
+    Preparation(SceneGraphEditError),
 }
 
 impl fmt::Display for SceneModifierStackError {
@@ -102,6 +53,7 @@ impl fmt::Display for SceneModifierStackError {
             ),
             Self::Noop => write!(f, "scene modifier edit makes no change"),
             Self::Pure(error) => error.fmt(f),
+            Self::Preparation(error) => error.fmt(f),
         }
     }
 }
@@ -114,155 +66,50 @@ impl From<SceneModifierEditError> for SceneModifierStackError {
     }
 }
 
-#[derive(Debug)]
-struct StackTransaction {
+// Modifier builders keep their typed errors and generator-only admission.
+fn prepare_modifier_transaction<F>(
+    project: &Project,
     owner: GraphTarget,
-    expected_graph: Option<EffectGraphDef>,
-    expected_generator_type: PresetTypeId,
-    before_resolved: EffectGraphDef,
-    candidate: EffectGraphDef,
-    removed_param_ids: Vec<String>,
-    parameter_id_remaps: Vec<(String, String)>,
-    previous_layer: Option<InstanceLayerSnapshot>,
-    applied: bool,
-    last_error: Option<SceneModifierStackError>,
+    owner_default: &EffectGraphDef,
     description: &'static str,
+    edit: F,
+) -> Result<SceneGraphTransaction, SceneModifierStackError>
+where
+    F: FnOnce(&EffectGraphDef) -> Result<SceneGraphEdit, SceneModifierEditError>,
+{
+    if !matches!(owner, GraphTarget::Generator(_)) {
+        return Err(SceneModifierStackError::UnsupportedOwner);
+    }
+    project.graph_target_owner(&owner).ok_or(SceneModifierStackError::MissingOwner)?;
+    let before = project.graph_for_target(&owner, Some(owner_default))
+        .ok_or(SceneModifierStackError::MissingOwnerGraph)?;
+    let candidate = edit(before)?;
+    SceneGraphTransaction::prepare(project, owner, owner_default, description, |_| Ok(candidate))
+        .map_err(SceneModifierStackError::Preparation)
 }
 
-impl StackTransaction {
-    fn prepare<F>(
-        project: &Project,
-        owner: GraphTarget,
-        owner_default: &EffectGraphDef,
-        description: &'static str,
-        edit: F,
-    ) -> Result<Self, SceneModifierStackError>
-    where
-        F: FnOnce(&EffectGraphDef) -> Result<SceneModifierGraphEdit, SceneModifierEditError>,
-    {
-        if !matches!(owner, GraphTarget::Generator(_)) {
-            return Err(SceneModifierStackError::UnsupportedOwner);
-        }
-        let host = project
-            .graph_target_owner(&owner)
-            .ok_or(SceneModifierStackError::MissingOwner)?;
-        let before_resolved = project
-            .graph_for_target(&owner, Some(owner_default))
-            .ok_or(SceneModifierStackError::MissingOwnerGraph)?
-            .clone();
-        let result = edit(&before_resolved)?;
-        Ok(Self {
-            owner,
-            expected_graph: host.graph.clone(),
-            expected_generator_type: host.generator_type().clone(),
-            before_resolved,
-            candidate: result.graph,
-            removed_param_ids: result.removed_param_ids,
-            parameter_id_remaps: result.parameter_id_remaps,
-            previous_layer: None,
-            applied: false,
-            last_error: None,
-            description,
-        })
-    }
+fn modifier_error(transaction: &SceneGraphTransaction) -> Option<&SceneModifierStackError> {
+    Some(match transaction.error()? {
+        SceneGraphRejection::MissingOwner => &SceneModifierStackError::MissingOwner,
+        SceneGraphRejection::PresetTypeChanged => &SceneModifierStackError::GeneratorTypeChanged,
+        SceneGraphRejection::StaleOwner => &SceneModifierStackError::StaleOwner,
+        SceneGraphRejection::Noop => &SceneModifierStackError::Noop,
+    })
+}
 
-    fn prepared_graph(&self) -> &EffectGraphDef {
-        &self.candidate
-    }
-
-    fn rejection_reason(&self) -> Option<&str> {
-        match self.last_error.as_ref()? {
-            SceneModifierStackError::Noop => None,
-            SceneModifierStackError::UnsupportedOwner => {
-                Some("Scene modifiers require a generator owner")
-            }
-            SceneModifierStackError::MissingOwner => Some("Generator owner is no longer present"),
-            SceneModifierStackError::MissingOwnerGraph => {
-                Some("Generator graph no longer resolves")
-            }
-            SceneModifierStackError::GeneratorTypeChanged => {
-                Some("Generator type changed while preparing this edit")
-            }
-            SceneModifierStackError::StaleOwner => {
-                Some("Generator graph changed while preparing this edit")
-            }
-            SceneModifierStackError::Pure(_) => Some("Scene modifier graph edit is invalid"),
-        }
-    }
-
-    fn reject(&mut self, error: SceneModifierStackError) {
-        self.last_error = Some(error);
-        self.applied = false;
-    }
-
-    fn execute(&mut self, project: &mut Project) {
-        let Some(host) = project.graph_target_owner_mut(&self.owner) else {
-            self.reject(SceneModifierStackError::MissingOwner);
-            return;
-        };
-        if host.generator_type() != &self.expected_generator_type {
-            self.reject(SceneModifierStackError::GeneratorTypeChanged);
-            return;
-        }
-        if host.graph != self.expected_graph {
-            self.reject(SceneModifierStackError::StaleOwner);
-            return;
-        }
-        if self.candidate == self.before_resolved {
-            self.reject(SceneModifierStackError::Noop);
-            return;
-        }
-        if self.previous_layer.is_none() {
-            self.previous_layer = Some(InstanceLayerSnapshot::capture(host));
-        }
-        duplicate_runtime_parameter_state(host, &self.parameter_id_remaps);
-        let metadata_changed =
-            self.before_resolved.preset_metadata != self.candidate.preset_metadata;
-        host.graph = Some(self.candidate.clone());
-        if metadata_changed {
-            prune_instance_params(host, &self.removed_param_ids);
-            host.refresh_manifest_from_graph();
-        }
-        host.bump_graph_structure_version();
-        self.last_error = None;
-        self.applied = true;
-    }
-
-    fn undo(&mut self, project: &mut Project) {
-        if !self.applied {
-            return;
-        }
-        let Some(host) = project.graph_target_owner_mut(&self.owner) else {
-            self.reject(SceneModifierStackError::MissingOwner);
-            return;
-        };
-        if host.generator_type() != &self.expected_generator_type
-            || host.graph.as_ref() != Some(&self.candidate)
-        {
-            self.reject(SceneModifierStackError::StaleOwner);
-            return;
-        }
-        host.graph = self.expected_graph.clone();
-        if let Some(snapshot) = self.previous_layer.take() {
-            snapshot.restore(host);
-        }
-        host.bump_graph_structure_version();
-        self.applied = false;
-    }
-
-    fn was_applied(&self) -> bool {
-        self.applied
-    }
-
-    fn error(&self) -> Option<&SceneModifierStackError> {
-        self.last_error.as_ref()
+fn modifier_rejection_reason(transaction: &SceneGraphTransaction) -> Option<&'static str> {
+    match transaction.error()? {
+        SceneGraphRejection::MissingOwner => Some("Generator owner is no longer present"),
+        SceneGraphRejection::PresetTypeChanged => Some("Generator type changed while preparing this edit"),
+        SceneGraphRejection::StaleOwner => Some("Generator graph changed while preparing this edit"),
+        SceneGraphRejection::Noop => None,
     }
 }
 
 /// Insert a prepared scene modifier into a generator graph.
 #[derive(Debug)]
 pub struct InsertSceneModifierCommand {
-    transaction: StackTransaction,
+    transaction: SceneGraphTransaction,
 }
 
 impl InsertSceneModifierCommand {
@@ -274,7 +121,7 @@ impl InsertSceneModifierCommand {
         instance: SceneModifierInstanceDef,
     ) -> Result<Self, SceneModifierStackError> {
         Ok(Self {
-            transaction: StackTransaction::prepare(
+            transaction: prepare_modifier_transaction(
                 project,
                 owner,
                 owner_default,
@@ -289,7 +136,7 @@ impl InsertSceneModifierCommand {
     }
 
     pub fn error(&self) -> Option<&SceneModifierStackError> {
-        self.transaction.error()
+        modifier_error(&self.transaction)
     }
 }
 
@@ -311,14 +158,14 @@ impl Command for InsertSceneModifierCommand {
         self.transaction.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
-        self.transaction.rejection_reason()
+        modifier_rejection_reason(&self.transaction)
     }
 }
 
 /// Delete a prepared scene modifier from a generator graph.
 #[derive(Debug)]
 pub struct DeleteSceneModifierCommand {
-    transaction: StackTransaction,
+    transaction: SceneGraphTransaction,
 }
 
 impl DeleteSceneModifierCommand {
@@ -329,7 +176,7 @@ impl DeleteSceneModifierCommand {
         id: NodeId,
     ) -> Result<Self, SceneModifierStackError> {
         Ok(Self {
-            transaction: StackTransaction::prepare(
+            transaction: prepare_modifier_transaction(
                 project,
                 owner,
                 owner_default,
@@ -343,7 +190,7 @@ impl DeleteSceneModifierCommand {
         self.transaction.prepared_graph()
     }
     pub fn error(&self) -> Option<&SceneModifierStackError> {
-        self.transaction.error()
+        modifier_error(&self.transaction)
     }
 }
 
@@ -365,14 +212,14 @@ impl Command for DeleteSceneModifierCommand {
         self.transaction.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
-        self.transaction.rejection_reason()
+        modifier_rejection_reason(&self.transaction)
     }
 }
 
 /// Replace the complete prepared modifier stack order in one transaction.
 #[derive(Debug)]
 pub struct ReorderSceneModifiersCommand {
-    transaction: StackTransaction,
+    transaction: SceneGraphTransaction,
 }
 
 impl ReorderSceneModifiersCommand {
@@ -383,7 +230,7 @@ impl ReorderSceneModifiersCommand {
         order: Vec<NodeId>,
     ) -> Result<Self, SceneModifierStackError> {
         Ok(Self {
-            transaction: StackTransaction::prepare(
+            transaction: prepare_modifier_transaction(
                 project,
                 owner,
                 owner_default,
@@ -397,7 +244,7 @@ impl ReorderSceneModifiersCommand {
         self.transaction.prepared_graph()
     }
     pub fn error(&self) -> Option<&SceneModifierStackError> {
-        self.transaction.error()
+        modifier_error(&self.transaction)
     }
 }
 
@@ -418,7 +265,7 @@ impl Command for ReorderSceneModifiersCommand {
         self.transaction.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
-        self.transaction.rejection_reason()
+        modifier_rejection_reason(&self.transaction)
     }
 }
 
@@ -426,7 +273,7 @@ impl Command for ReorderSceneModifiersCommand {
 /// parameter identities and copied runtime controls.
 #[derive(Debug)]
 pub struct DuplicateSceneModifiersCommand {
-    transaction: StackTransaction,
+    transaction: SceneGraphTransaction,
 }
 
 impl DuplicateSceneModifiersCommand {
@@ -437,7 +284,7 @@ impl DuplicateSceneModifiersCommand {
         selected: Vec<NodeId>,
     ) -> Result<Self, SceneModifierStackError> {
         Ok(Self {
-            transaction: StackTransaction::prepare(
+            transaction: prepare_modifier_transaction(
                 project,
                 owner,
                 owner_default,
@@ -451,7 +298,7 @@ impl DuplicateSceneModifiersCommand {
         self.transaction.prepared_graph()
     }
     pub fn error(&self) -> Option<&SceneModifierStackError> {
-        self.transaction.error()
+        modifier_error(&self.transaction)
     }
 }
 
@@ -472,14 +319,14 @@ impl Command for DuplicateSceneModifiersCommand {
         self.transaction.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
-        self.transaction.rejection_reason()
+        modifier_rejection_reason(&self.transaction)
     }
 }
 
 /// Remove several modifiers as one atomic, undoable graph edit.
 #[derive(Debug)]
 pub struct RemoveSceneModifiersCommand {
-    transaction: StackTransaction,
+    transaction: SceneGraphTransaction,
 }
 
 impl RemoveSceneModifiersCommand {
@@ -490,7 +337,7 @@ impl RemoveSceneModifiersCommand {
         selected: Vec<NodeId>,
     ) -> Result<Self, SceneModifierStackError> {
         Ok(Self {
-            transaction: StackTransaction::prepare(
+            transaction: prepare_modifier_transaction(
                 project,
                 owner,
                 owner_default,
@@ -504,7 +351,7 @@ impl RemoveSceneModifiersCommand {
         self.transaction.prepared_graph()
     }
     pub fn error(&self) -> Option<&SceneModifierStackError> {
-        self.transaction.error()
+        modifier_error(&self.transaction)
     }
 }
 
@@ -525,14 +372,14 @@ impl Command for RemoveSceneModifiersCommand {
         self.transaction.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
-        self.transaction.rejection_reason()
+        modifier_rejection_reason(&self.transaction)
     }
 }
 
 /// Move a prepared scene modifier to a final stack index.
 #[derive(Debug)]
 pub struct MoveSceneModifierCommand {
-    transaction: StackTransaction,
+    transaction: SceneGraphTransaction,
 }
 
 impl MoveSceneModifierCommand {
@@ -544,7 +391,7 @@ impl MoveSceneModifierCommand {
         index: usize,
     ) -> Result<Self, SceneModifierStackError> {
         Ok(Self {
-            transaction: StackTransaction::prepare(
+            transaction: prepare_modifier_transaction(
                 project,
                 owner,
                 owner_default,
@@ -558,7 +405,7 @@ impl MoveSceneModifierCommand {
         self.transaction.prepared_graph()
     }
     pub fn error(&self) -> Option<&SceneModifierStackError> {
-        self.transaction.error()
+        modifier_error(&self.transaction)
     }
 }
 
@@ -580,7 +427,7 @@ impl Command for MoveSceneModifierCommand {
         self.transaction.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
-        self.transaction.rejection_reason()
+        modifier_rejection_reason(&self.transaction)
     }
 }
 
@@ -588,7 +435,7 @@ impl Command for MoveSceneModifierCommand {
 /// frames. The core candidate helper preserves surviving frames exactly.
 #[derive(Debug)]
 pub struct RetargetSceneModifierCommand {
-    transaction: StackTransaction,
+    transaction: SceneGraphTransaction,
 }
 
 impl RetargetSceneModifierCommand {
@@ -601,7 +448,7 @@ impl RetargetSceneModifierCommand {
         mesh_frames: Vec<SceneMeshReferenceFrame>,
     ) -> Result<Self, SceneModifierStackError> {
         Ok(Self {
-            transaction: StackTransaction::prepare(
+            transaction: prepare_modifier_transaction(
                 project,
                 owner,
                 owner_default,
@@ -615,7 +462,7 @@ impl RetargetSceneModifierCommand {
         self.transaction.prepared_graph()
     }
     pub fn error(&self) -> Option<&SceneModifierStackError> {
-        self.transaction.error()
+        modifier_error(&self.transaction)
     }
 }
 
@@ -637,7 +484,7 @@ impl Command for RetargetSceneModifierCommand {
         self.transaction.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
-        self.transaction.rejection_reason()
+        modifier_rejection_reason(&self.transaction)
     }
 }
 
@@ -646,7 +493,7 @@ impl Command for RetargetSceneModifierCommand {
 /// resolved owner graph, just like structural modifier edits.
 #[derive(Debug)]
 pub struct SetSceneModifierPreparationParamCommand {
-    transaction: StackTransaction,
+    transaction: SceneGraphTransaction,
 }
 
 impl SetSceneModifierPreparationParamCommand {
@@ -659,7 +506,7 @@ impl SetSceneModifierPreparationParamCommand {
         value: f32,
     ) -> Result<Self, SceneModifierStackError> {
         Ok(Self {
-            transaction: StackTransaction::prepare(
+            transaction: prepare_modifier_transaction(
                 project,
                 owner,
                 owner_default,
@@ -674,7 +521,7 @@ impl SetSceneModifierPreparationParamCommand {
     }
 
     pub fn error(&self) -> Option<&SceneModifierStackError> {
-        self.transaction.error()
+        modifier_error(&self.transaction)
     }
 }
 
@@ -696,16 +543,17 @@ impl Command for SetSceneModifierPreparationParamCommand {
         self.transaction.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
-        self.transaction.rejection_reason()
+        modifier_rejection_reason(&self.transaction)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
+    use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::{BindingDef, BindingTarget};
     use manifold_core::effects::ParamConvert;
-    use std::borrow::Cow;
 
     use manifold_core::ableton_mapping::{
         AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AbletonParamMapping,

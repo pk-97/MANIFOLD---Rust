@@ -216,19 +216,6 @@ impl Drop for GpuBuffer {
 }
 
 impl GpuBuffer {
-    /// Wrap an existing Metal buffer.
-    pub fn from_raw(raw: Retained<ProtocolObject<dyn MTLBuffer>>, size: u64) -> Self {
-        let ptr = unsafe { raw.contents() };
-        let ptr = ptr.as_ptr() as *mut u8;
-        Self {
-            raw,
-            size,
-            mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
-            retire: None,
-            residency: None,
-        }
-    }
-
     /// Persistent mapped pointer (shared-memory buffers only).
     /// Direct CPU→GPU writes with zero API overhead.
     pub fn mapped_ptr(&self) -> Option<*mut u8> {
@@ -394,7 +381,8 @@ pub struct GpuRenderPipeline {
 
 impl GpuRenderPipeline {
     /// Raw Metal render pipeline state reference.
-    pub fn raw_state(&self) -> &ProtocolObject<dyn MTLRenderPipelineState> {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub(super) fn raw_state(&self) -> &ProtocolObject<dyn MTLRenderPipelineState> {
         &self.state
     }
 }

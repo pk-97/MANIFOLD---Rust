@@ -412,7 +412,7 @@ impl GpuDevice {
     }
 
     /// Raw Metal command queue reference (for advanced interop).
-    pub fn raw_queue(&self) -> &ProtocolObject<dyn MTLCommandQueue> {
+    pub(super) fn raw_queue(&self) -> &ProtocolObject<dyn MTLCommandQueue> {
         &self.queue
     }
 

@@ -11,5 +11,4 @@ mod physics_collection;
 mod physics_impulses;
 mod preset_thumbnail;
 mod registered_assets;
-#[cfg(feature = "gpu-proofs")]
-pub(crate) mod whitewater_io;
+mod whitewater_io;

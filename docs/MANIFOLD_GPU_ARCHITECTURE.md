@@ -30,7 +30,7 @@ manifold-gpu/
     ├── texture_pool.rs — frame-stamped MTLHeap-backed texture recycling
     ├── archive.rs      — MTLBinaryArchive (compiled pipeline binaries on disk)
     ├── metalfx.rs      — MetalFX Spatial scaler
-    └── mps.rs          — MPS kernels (blur, Sobel, scale, histogram, reduction, ...)
+    └── fft.rs          — MPSGraph FFT plans used by spectral ocean primitives
 ```
 
 **CVDisplayLink** lives in `manifold-app/src/display_link.rs`, not in manifold-gpu — each window owns its own display link.

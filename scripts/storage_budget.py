@@ -625,7 +625,7 @@ def process_snapshot():
     """
     try:
         result = subprocess.run(
-            ["lsof", "-n", "-P", "-FpcfnDi"],
+            ["lsof", "-n", "-P", "-FpcfnDit"],
             capture_output=True, text=True, timeout=20, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -645,7 +645,13 @@ def process_snapshot():
             return
         occupied.update((opened, *opened.parents))
         if "D" in record and "i" in record:
-            identities.add((int(record["D"], 16), int(record["i"])))
+            if record.get("t") != "PSXSEM":
+                identities.add((int(record["D"], 16), int(record["i"])))
+        elif record.get("t") == "PSXSEM":
+            # POSIX semaphore names are reported as absolute paths, but are
+            # kernel objects rather than filesystem paths.  Keep their path
+            # occupancy veto above while avoiding a filesystem identity lookup.
+            return
         else:
             # Some lsof file kinds omit inode fields. Resolve their pathname
             # when possible; missing local filesystem identity fails closed.
@@ -661,7 +667,7 @@ def process_snapshot():
                 record = {}
             if line[0] == "p":
                 pid = line[1:]
-            elif line[0] in ("f", "n", "D", "i"):
+            elif line[0] in ("f", "n", "D", "i", "t"):
                 record[line[0]] = line[1:]
         flush()
     except (OSError, RuntimeError, ValueError):

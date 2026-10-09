@@ -45,7 +45,7 @@ fn prepare(
     command: &ToggleNodeParamExposeCommand,
     project: &Project,
 ) -> Option<(
-    manifold_core::scene_modifier_edit::SceneModifierGraphEdit,
+    manifold_core::scene_graph_edit::SceneGraphEdit,
     Vec<String>,
 )> {
     let GraphTarget::SceneModifier { modifier_id, .. } = &command.target else {

@@ -9,21 +9,11 @@ use std::fmt;
 use crate::NodeId;
 use crate::effect_graph_def::{BindingDef, BindingTarget, EffectGraphDef, StringBindingDef};
 use crate::effects::ParamConvert;
+use crate::scene_graph_edit::SceneGraphEdit;
 use crate::scene_modifier_preset::{
     SceneMeshReferenceFrame, SceneModifierInstanceDef, SceneNodeRef, SceneTargetSelection,
     validate_scene_modifier_schema,
 };
-
-/// Result of one stack edit. `graph` is always a complete cloned owner;
-/// runtime mapping cleanup consumes the reported parameter IDs after commit.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SceneModifierGraphEdit {
-    pub graph: EffectGraphDef,
-    pub removed_param_ids: Vec<String>,
-    /// Host parameter ids whose runtime state should be copied to a duplicated
-    /// modifier. Each pair is `(source_id, duplicate_id)`.
-    pub parameter_id_remaps: Vec<(String, String)>,
-}
 
 /// Rejections from pure scene-modifier graph edits.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,7 +145,7 @@ pub fn insert_scene_modifier(
     owner: &EffectGraphDef,
     index: usize,
     instance: SceneModifierInstanceDef,
-) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+) -> Result<SceneGraphEdit, SceneModifierEditError> {
     if index > owner.scene_modifiers.len() {
         return Err(SceneModifierEditError::IndexOutOfRange {
             index,
@@ -178,7 +168,7 @@ pub fn insert_scene_modifier(
     graph.scene_modifiers.insert(index, instance);
     let graph = reconcile_scene_modifier_parameters(&graph, &id)?.graph;
     validate(&graph)?;
-    Ok(SceneModifierGraphEdit {
+    Ok(SceneGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
         parameter_id_remaps: Vec::new(),
@@ -189,7 +179,7 @@ pub fn insert_scene_modifier(
 pub fn delete_scene_modifier(
     owner: &EffectGraphDef,
     id: &NodeId,
-) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+) -> Result<SceneGraphEdit, SceneModifierEditError> {
     if !owner.scene_modifiers.iter().any(|item| &item.id == id) {
         return Err(SceneModifierEditError::MissingModifier { id: id.to_string() });
     }
@@ -246,14 +236,14 @@ pub fn delete_scene_modifier(
             !remove
         });
         validate(&graph)?;
-        return Ok(SceneModifierGraphEdit {
+        return Ok(SceneGraphEdit {
             graph,
             removed_param_ids,
             parameter_id_remaps: Vec::new(),
         });
     }
     validate(&graph)?;
-    Ok(SceneModifierGraphEdit {
+    Ok(SceneGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
         parameter_id_remaps: Vec::new(),
@@ -267,7 +257,7 @@ pub fn delete_scene_modifier(
 pub fn reconcile_scene_modifier_parameters(
     owner: &EffectGraphDef,
     id: &NodeId,
-) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+) -> Result<SceneGraphEdit, SceneModifierEditError> {
     let mut matches = owner.scene_modifiers.iter().filter(|item| &item.id == id);
     let instance = matches
         .next()
@@ -386,7 +376,7 @@ pub fn reconcile_scene_modifier_parameters(
             },
         });
     }
-    Ok(SceneModifierGraphEdit {
+    Ok(SceneGraphEdit {
         graph,
         removed_param_ids,
         parameter_id_remaps: Vec::new(),
@@ -402,7 +392,7 @@ pub fn set_scene_modifier_preparation_param(
     id: &NodeId,
     param_id: &str,
     value: f32,
-) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+) -> Result<SceneGraphEdit, SceneModifierEditError> {
     let mut matches = owner.scene_modifiers.iter().filter(|item| &item.id == id);
     let instance = matches
         .next()
@@ -518,7 +508,7 @@ pub fn set_scene_modifier_preparation_param(
         });
     }
     validate(&graph)?;
-    Ok(SceneModifierGraphEdit {
+    Ok(SceneGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
         parameter_id_remaps: Vec::new(),
@@ -531,7 +521,7 @@ pub fn move_scene_modifier(
     owner: &EffectGraphDef,
     id: &NodeId,
     index: usize,
-) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+) -> Result<SceneGraphEdit, SceneModifierEditError> {
     let len = owner.scene_modifiers.len();
     if index >= len {
         return Err(SceneModifierEditError::IndexOutOfRange { index, len });
@@ -549,7 +539,7 @@ pub fn move_scene_modifier(
         graph.scene_modifiers.insert(index, item);
     }
     validate(&graph)?;
-    Ok(SceneModifierGraphEdit {
+    Ok(SceneGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
         parameter_id_remaps: Vec::new(),
@@ -562,7 +552,7 @@ pub fn move_scene_modifier(
 pub fn reorder_scene_modifiers(
     owner: &EffectGraphDef,
     order: &[NodeId],
-) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+) -> Result<SceneGraphEdit, SceneModifierEditError> {
     if order.len() != owner.scene_modifiers.len() {
         return Err(SceneModifierEditError::InvalidModifierOrder {
             detail: format!(
@@ -592,7 +582,7 @@ pub fn reorder_scene_modifiers(
     let mut graph = owner.clone();
     graph.scene_modifiers = reordered;
     validate(&graph)?;
-    Ok(SceneModifierGraphEdit {
+    Ok(SceneGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
         parameter_id_remaps: Vec::new(),
@@ -605,7 +595,7 @@ pub fn reorder_scene_modifiers(
 pub fn remove_scene_modifiers(
     owner: &EffectGraphDef,
     selected: &[NodeId],
-) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+) -> Result<SceneGraphEdit, SceneModifierEditError> {
     if selected.is_empty() {
         return Err(SceneModifierEditError::EmptyModifierSelection);
     }
@@ -674,14 +664,14 @@ pub fn remove_scene_modifiers(
             !remove
         });
         validate(&graph)?;
-        return Ok(SceneModifierGraphEdit {
+        return Ok(SceneGraphEdit {
             graph,
             removed_param_ids,
             parameter_id_remaps: Vec::new(),
         });
     }
     validate(&graph)?;
-    Ok(SceneModifierGraphEdit {
+    Ok(SceneGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
         parameter_id_remaps: Vec::new(),
@@ -694,7 +684,7 @@ pub fn remove_scene_modifiers(
 pub fn duplicate_scene_modifiers(
     owner: &EffectGraphDef,
     selected: &[NodeId],
-) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+) -> Result<SceneGraphEdit, SceneModifierEditError> {
     if selected.is_empty() {
         return Err(SceneModifierEditError::EmptyModifierSelection);
     }
@@ -908,7 +898,7 @@ pub fn duplicate_scene_modifiers(
         graph = reconcile_scene_modifier_parameters(&graph, id)?.graph;
     }
     validate(&graph)?;
-    Ok(SceneModifierGraphEdit {
+    Ok(SceneGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
         parameter_id_remaps: remaps,
@@ -922,7 +912,7 @@ pub fn retarget_scene_modifier(
     id: &NodeId,
     targets: SceneTargetSelection,
     mesh_frames: Vec<SceneMeshReferenceFrame>,
-) -> Result<SceneModifierGraphEdit, SceneModifierEditError> {
+) -> Result<SceneGraphEdit, SceneModifierEditError> {
     let modifier = owner
         .scene_modifiers
         .iter()
@@ -951,7 +941,7 @@ pub fn retarget_scene_modifier(
     updated.targets = targets;
     updated.mesh_frames = mesh_frames;
     validate(&graph)?;
-    Ok(SceneModifierGraphEdit {
+    Ok(SceneGraphEdit {
         graph,
         removed_param_ids: Vec::new(),
         parameter_id_remaps: Vec::new(),
