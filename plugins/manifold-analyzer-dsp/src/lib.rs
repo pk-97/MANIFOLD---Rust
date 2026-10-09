@@ -5,11 +5,13 @@
 //! contract that lets the CLI verify DSP correctness without a DAW.
 
 mod loudness;
+mod median;
+pub use median::P2Quantile;
 pub mod reference;
 mod stereo_analyzer;
 
 pub use loudness::{
-    IntegratedScratch, LoudnessMeter, LoudnessSnapshot, compute_integrated_and_lra,
+    IntegratedScratch, LoudnessBlock, LoudnessMeter, LoudnessSnapshot, compute_integrated_and_lra,
 };
 pub use reference::{
     REF_FREQ_MAX, REF_FREQ_MIN, REF_POINTS, RefAnalysis, RefEnvelope, RefEnvelopeAtFft, RefError,

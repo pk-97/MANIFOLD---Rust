@@ -1001,7 +1001,7 @@ The effect presets are listed in section 5.
 
 ## 6. Generators
 
-All shipping generators are JSON-defined sub-graphs at [`assets/generator-presets/`](../crates/manifold-nodes/assets/generator-presets/), running from `system.generator_input` to `system.final_output`. Zero `inventory::submit!` generators remain; [`crates/manifold-nodes/src/generators/`](../crates/manifold-nodes/src/generators/) is now runtime infrastructure only (loader, registry, mesh/line pipelines, math, stateful base).
+All shipping generators are JSON-defined sub-graphs at [`assets/generator-presets/`](../crates/manifold-nodes/assets/generator-presets/), running from `system.generator_input` to `system.final_output`. The [catalog registry](../crates/manifold-nodes/src/registry.rs) owns generator lookup. Shared mesh, line and state helpers live in [`manifold-node-engine`](../crates/manifold-node-engine/src/).
 
 ### 6.1 JSON-defined
 

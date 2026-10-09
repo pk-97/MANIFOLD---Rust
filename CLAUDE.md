@@ -74,7 +74,7 @@ The content thread owns `PlaybackEngine`, `EditingService`, `ContentPipeline`, a
 | `manifold-audio` | Audio capture behind one `CaptureBackend` trait → lock-free ring + off-RT analysis worker (`docs/AUDIO_INFRASTRUCTURE.md` section 11, `docs/AUDIO_MODULATION_DESIGN.md`) |
 | `manifold-app` | winit entry, Application, ContentThread, ContentPipeline |
 
-Dependencies: `foundation` and `gpu` have none; `core` depends only on `foundation`. `editing`/`playback`/`io` depend on `core`. **`ui` depends on `foundation` only** — mutations leave as `PanelAction` values translated to commands app-side; UI-reachable shared types go in `foundation`. `nodes` links the engine and image/scene leaves; it has no dependency on app, UI, IO, editing or compositor. `compositor` consumes the engine and rendering leaves; `ui-paint` owns UI GPU painting; `media` on `core`+`playback`+`gpu`; `led` on `gpu`; `app` on all.
+Dependencies: `foundation` and `gpu` have none; `core` depends only on `foundation`. `editing`/`playback`/`io` depend on `core`. **`ui` depends on `foundation` only** — mutations leave as `PanelAction` values translated to commands app-side; UI-reachable shared types go in `foundation`. Workspace dependencies: `node-engine` on `core`+`fluids`+`foundation`+`gpu`+`physics`+`playback`; `nodes` on `core`+`fluids`+`foundation`+`gpu`+`native`+`node-engine`+`nodes-image`+`nodes-scene`+`physics`+`playback`; `nodes-image` on `core`+`foundation`+`gpu`+`native`+`node-engine`+`physics`; `nodes-scene` on `core`+`foundation`+`gpu`+`node-engine`; `compositor` on `core`+`gpu`+`node-engine`+`playback`; `ui-paint` on `foundation`+`gpu`+`ui`; `media` on `core`+`playback`+`gpu`; `led` on `gpu`; `app` on all.
 
 ## Invariants
 

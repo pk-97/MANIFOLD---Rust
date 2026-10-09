@@ -1,3 +1,8 @@
+//! Node catalog and bundled presets.
+//! Links the image and scene families and owns preset loading, catalog tools
+//! and tests that span families.
+//! Never depends on UI, editing, IO, the app, compositor or UI paint.
+
 use manifold_node_engine::load::preset_loader;
 use manifold_nodes_image as _;
 use manifold_nodes_scene as _;
