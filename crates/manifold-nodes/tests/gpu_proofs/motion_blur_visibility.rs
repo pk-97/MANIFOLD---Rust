@@ -119,6 +119,8 @@ fn scene_json_with_enabled(shutter_angle: f32, enabled: bool) -> String {
         {{"fromNode":30,"fromPort":"out","toNode":31,"toPort":"in"}},
         {{"fromNode":31,"fromPort":"out","toNode":99,"toPort":"in"}}
         ],"presetMetadata":{{
+            "id":"MotionBlurVisibility", "displayName":"Motion Blur Visibility",
+            "category":"Scene", "oscPrefix":"motion_blur_visibility",
             "params":[{{
                 "id":"mb_enabled", "name":"Enabled", "min":0.0,
                 "max":1.0, "defaultValue":{enabled_value}, "isToggle":true
@@ -129,7 +131,7 @@ fn scene_json_with_enabled(shutter_angle: f32, enabled: bool) -> String {
                 "target":{{"kind":"node","nodeId":"mb","param":"enabled"}},
                 "convert":{{"type":"BoolThreshold"}}
             }}]
-        }}}}}}"#
+        }}}}"#
     )
 }
 
