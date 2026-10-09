@@ -96,12 +96,25 @@ dated E1–E6 record above describes the original implementation.
   min/mag filters and explicit no-mip/nearest-mip/linear-mip choices travel with
   each texture family. Extension maps use manual sampling to stay within Metal's
   sampler limit. Sets above UV1 produce an import warning and use UV0.
+- Base and clearcoat roughness are bounded after texture multiplication. GGX
+  evaluation preserves the finite narrow lobe at minimum supported roughness;
+  anisotropic normalization has no absolute denominator floor that flattens
+  valid sharp highlights. Inactive clearcoat does not evaluate its direct lobe.
+- Texture sources decode only their selected image on two reusable CPU workers.
+  Identical live decodes share immutable pixels after resolving and hashing the
+  source bytes; each new request observes edited or missing dependencies.
+  Queue saturation remains pending without blocking the content thread.
+  Import dimensions and runtime pixels use the same WebP source selection.
+  Grayscale-alpha images preserve luminance in RGB and the authored alpha.
 - Specular weight controls F0 and F90. The diffuse energy split uses the largest
   Fresnel component. Clearcoat applies its Fresnel once and uses the geometric
   normal unless a coat map is present. Iridescence uses each direct light's V·H;
   its view reflectance is converted to the equivalent input for split-sum IBL.
 - Anisotropy uses `alphaT = mix(roughness², 1, strength²)` and
-  `alphaB = roughness²`. Its tangent frame follows the authored mesh tangent,
+  `alphaB = roughness²`. Base direct lighting uses height-correlated Smith
+  visibility in both the isotropic and anisotropic cases, preserving continuity
+  at zero strength. Clearcoat retains its separate geometry approximation.
+  The anisotropy tangent frame follows the authored mesh tangent,
   with the normal texture's coordinates used for derivative reconstruction
   when authored tangents are absent. Environment anisotropy remains a bent-normal
   approximation.
@@ -114,13 +127,17 @@ dated E1–E6 record above describes the original implementation.
   already drawn behind it. Opaque-depth RT lighting never substitutes into a
   transparent surface at a different depth. Refraction still uses screen-space
   projection and object-level sorting; this does not provide arbitrary nested
-  dielectric transport.
+  dielectric transport. Authored volume thickness includes both object scale
+  and the absolute per-instance scale for refraction and absorption.
+  Geometry-derived thickness is already in world units and is not scaled again.
 - Raster and RT transform normals by the inverse transpose; tangents use the
   model's linear transform and determinant handedness. RT base colour and MR
   samples multiply factors; secondary hits use normal mapping, specular weight
   and colour maps, and the material's dielectric F0/F90. Metals suppress diffuse
   energy; unlit hits terminate with their colour and emission. Primary reflection
   rays use anisotropic GGX with the actual hit instance's tangent frame.
+  A clearcoat-only normal map reconstructs its frame from that map's selected
+  UV set and transform when mesh tangents are absent.
 - `MeshVertex` is now 80 bytes: position/normal, UV0/UV1, tangent and RGBA
   `COLOR_0`. Missing colours are white. Interpolation and deformation preserve
   colour; base colour and cutout alpha multiply it. Mesh decode caches use a new

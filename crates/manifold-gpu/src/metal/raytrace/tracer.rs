@@ -69,6 +69,8 @@ const SUBSURFACE_BINDING_COUNT: usize = 10 + MAX_RT_MATERIAL_TEXTURES;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SubsurfaceReconstructionParams {
     inv_view_proj: [[f32; 4]; 4],
+    previous_view_proj: [[f32; 4]; 4],
+    previous_inv_view_proj: [[f32; 4]; 4],
     size: [u32; 2],
     reset: u32,
     max_history: u32,
@@ -78,7 +80,13 @@ struct SubsurfaceReconstructionParams {
     _pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<SubsurfaceReconstructionParams>() == 96);
+const _: () = {
+    assert!(std::mem::size_of::<SubsurfaceReconstructionParams>() == 224);
+    assert!(std::mem::offset_of!(SubsurfaceReconstructionParams, previous_view_proj) == 64);
+    assert!(std::mem::offset_of!(SubsurfaceReconstructionParams, previous_inv_view_proj) == 128);
+    assert!(std::mem::offset_of!(SubsurfaceReconstructionParams, size) == 192);
+    assert!(std::mem::offset_of!(SubsurfaceReconstructionParams, step) == 208);
+};
 
 fn subsurface_reconstruction_params_bytes(params: &SubsurfaceReconstructionParams) -> &[u8] {
     bytemuck::bytes_of(params)
@@ -820,6 +828,10 @@ impl RtPipelines {
                 (4, SlotKind::Texture),
                 (5, SlotKind::Texture),
                 (6, SlotKind::Texture),
+                (7, SlotKind::Texture),
+                (8, SlotKind::Texture),
+                (9, SlotKind::Texture),
+                (10, SlotKind::Texture),
             ]),
         );
         let subsurface_filter_pipeline = compile_pipeline(
@@ -1235,6 +1247,11 @@ impl MetalShadowRayTracer {
         environment: &GpuTexture,
         raw_output: &GpuTexture,
         guide: &GpuTexture,
+        guide_read: &GpuTexture,
+        depth_read: &GpuTexture,
+        depth_write: &GpuTexture,
+        previous_view_proj: [[f32; 4]; 4],
+        previous_inv_view_proj: [[f32; 4]; 4],
         history_read: &GpuTexture,
         history_write: &GpuTexture,
         count_read: &GpuTexture,
@@ -1342,6 +1359,8 @@ impl MetalShadowRayTracer {
 
         let reconstruction = SubsurfaceReconstructionParams {
             inv_view_proj: params.inv_view_proj,
+            previous_view_proj,
+            previous_inv_view_proj,
             size: params.render_size,
             reset: u32::from(reset),
             max_history: 64,
@@ -1361,6 +1380,10 @@ impl MetalShadowRayTracer {
                 GpuBinding::Texture { binding: 4, texture: count_read },
                 GpuBinding::Texture { binding: 5, texture: count_write },
                 GpuBinding::Texture { binding: 6, texture: output },
+                GpuBinding::Texture { binding: 7, texture: depth },
+                GpuBinding::Texture { binding: 8, texture: guide_read },
+                GpuBinding::Texture { binding: 9, texture: depth_read },
+                GpuBinding::Texture { binding: 10, texture: depth_write },
             ],
             dispatch_groups_2d(params.render_size, SHADOW_WORKGROUP),
             "node.render_scene subsurface reconstruct",
