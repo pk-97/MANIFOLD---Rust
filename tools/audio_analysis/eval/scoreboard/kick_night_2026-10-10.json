@@ -1,7 +1,7 @@
 {
  "status": "development research, no candidate promoted; reserved Waypoints / Know You're There untouched",
  "date": "2026-10-10",
- "source_commit": "e00e83d583542c5271201394f6948296b0a2ec77",
+ "source_commit": "021af5b05f69e10e07e09e1f8b2b4ceac7210069",
  "labels": 381,
  "tolerance_primary_ms": 70,
  "reference": {
@@ -62,6 +62,7 @@
    "variants": [
     {
      "name": "baseline_linear15+glide",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        68,
@@ -76,6 +77,11 @@
        88
       ]
      },
+     "delay_ms": [
+      42.0,
+      53.333,
+      151.0
+     ],
      "kick_free_core_fires": 10,
      "acceptance": {
       "counts_ok": false,
@@ -311,6 +317,7 @@
     },
     {
      "name": "h18_.25+glide",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        71,
@@ -325,6 +332,11 @@
        90
       ]
      },
+     "delay_ms": [
+      42.415,
+      54.342,
+      167.333
+     ],
      "kick_free_core_fires": 8,
      "acceptance": {
       "counts_ok": false,
@@ -452,6 +464,7 @@
     },
     {
      "name": "h16_kernel+glide",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        63,
@@ -466,6 +479,11 @@
        91
       ]
      },
+     "delay_ms": [
+      43.333,
+      54.603,
+      167.333
+     ],
      "kick_free_core_fires": 1,
      "acceptance": {
       "counts_ok": false,
@@ -640,6 +658,7 @@
    "variants": [
     {
      "name": "p90",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        22,
@@ -654,6 +673,11 @@
        39
       ]
      },
+     "delay_ms": [
+      44.348,
+      56.199799999999996,
+      70.0
+     ],
      "kick_free_core_fires": 14,
      "acceptance": {
       "counts_ok": false,
@@ -1115,6 +1139,7 @@
     },
     {
      "name": "p99",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        11,
@@ -1129,6 +1154,11 @@
        46
       ]
      },
+     "delay_ms": [
+      44.348,
+      55.2132,
+      65.828
+     ],
      "kick_free_core_fires": 20,
      "acceptance": {
       "counts_ok": false,
@@ -1746,6 +1776,7 @@
     },
     {
      "name": "block_max_median",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        43,
@@ -1760,6 +1791,11 @@
        71
       ]
      },
+     "delay_ms": [
+      43.285,
+      55.2547,
+      70.0
+     ],
      "kick_free_core_fires": 16,
      "acceptance": {
       "counts_ok": false,
@@ -2128,6 +2164,7 @@
    "variants": [
     {
      "name": "h16_gated_linear",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        38,
@@ -2142,6 +2179,11 @@
        94
       ]
      },
+     "delay_ms": [
+      45.333,
+      55.0,
+      72.0
+     ],
      "kick_free_core_fires": 0,
      "acceptance": {
       "counts_ok": false,
@@ -2203,6 +2245,7 @@
     },
     {
      "name": "h18_gated_linear",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        39,
@@ -2217,6 +2260,11 @@
        97
       ]
      },
+     "delay_ms": [
+      45.6965,
+      56.0333,
+      81.0
+     ],
      "kick_free_core_fires": 0,
      "acceptance": {
       "counts_ok": false,
@@ -2280,6 +2328,7 @@
     },
     {
      "name": "h16_gated_h18",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        40,
@@ -2294,6 +2343,11 @@
        96
       ]
      },
+     "delay_ms": [
+      45.0,
+      56.0,
+      167.333
+     ],
      "kick_free_core_fires": 1,
      "acceptance": {
       "counts_ok": false,
@@ -2379,6 +2433,7 @@
    "variants": [
     {
      "name": "h18_gate_glide_lowfit",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        40,
@@ -2393,6 +2448,11 @@
        90
       ]
      },
+     "delay_ms": [
+      45.176,
+      56.7756,
+      183.333
+     ],
      "kick_free_core_fires": 0,
      "acceptance": {
       "counts_ok": false,
@@ -2456,6 +2516,7 @@
     },
     {
      "name": "h16_gate_glide_lowfit",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        35,
@@ -2470,6 +2531,11 @@
        86
       ]
      },
+     "delay_ms": [
+      45.333,
+      56.1665,
+      70.333
+     ],
      "kick_free_core_fires": 1,
      "acceptance": {
       "counts_ok": true,
@@ -2543,6 +2609,7 @@
     },
     {
      "name": "h18_gate_glide_allfit_control",
+     "fast_fires": null,
      "tol_ms": {
       "35": [
        47,
@@ -2557,6 +2624,11 @@
        86
       ]
      },
+     "delay_ms": [
+      44.333,
+      54.120000000000005,
+      70.333
+     ],
      "kick_free_core_fires": 0,
      "acceptance": {
       "counts_ok": false,
@@ -2639,8 +2711,347 @@
      }
     }
    ]
+  },
+  "h23": {
+   "rule": {
+    "hypothesis": "H23",
+    "l2": 0.01,
+    "evidence_s": [
+     0.015,
+     0.02,
+     0.025
+    ],
+    "selection": "T_fast maximises inner 35 ms matches with inner wide extras and kick-free fires <= H18 alone",
+    "acceptance": "70 ms within 2 matches and 0 extras of H18, cores clear, 50 ms +20 or median delay -10 ms",
+    "expected_failure": "weak fast scores; few kicks qualify without new extras"
+   },
+   "rule_sha256": "07cfd988130260a4e46191dfe79938e90d19b009ad97e53ce5c0a36458bd8740",
+   "variants": [
+    {
+     "name": "evidence_0.015s",
+     "fast_fires": {
+      "apricots_128bpm": [
+       0,
+       10
+      ],
+      "bad_guy_128bpm": [
+       2,
+       59
+      ],
+      "feel_the_vibration_174bpm": [
+       0,
+       16
+      ],
+      "inhale_exhale_145bpm": [
+       7,
+       15
+      ],
+      "tears_140bpm": [
+       2,
+       18
+      ],
+      "late_night": [
+       0,
+       190
+      ],
+      "midnight_patience": [
+       18,
+       350
+      ],
+      "miracle": [
+       0,
+       75
+      ],
+      "heavy_on_mind": [
+       1,
+       170
+      ]
+     },
+     "tol_ms": {
+      "35": [
+       47,
+       303
+      ],
+      "50": [
+       186,
+       164
+      ],
+      "70": [
+       262,
+       89
+      ]
+     },
+     "delay_ms": [
+      45.333,
+      55.666000000000004,
+      81.0
+     ],
+     "kick_free_core_fires": 0,
+     "acceptance": {
+      "within_70": true,
+      "cores_clear": true,
+      "timing": false,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       10,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       42
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       9,
+       4
+      ],
+      "tears_140bpm": [
+       10,
+       8
+      ],
+      "late_night": [
+       67,
+       0
+      ],
+      "midnight_patience": [
+       49,
+       29
+      ],
+      "miracle": [
+       26,
+       0
+      ],
+      "heavy_on_mind": [
+       61,
+       6
+      ]
+     },
+     "lost_vs_baseline": null
+    },
+    {
+     "name": "evidence_0.02s",
+     "fast_fires": {
+      "apricots_128bpm": [
+       0,
+       10
+      ],
+      "bad_guy_128bpm": [
+       17,
+       59
+      ],
+      "feel_the_vibration_174bpm": [
+       2,
+       16
+      ],
+      "inhale_exhale_145bpm": [
+       5,
+       15
+      ],
+      "tears_140bpm": [
+       7,
+       18
+      ],
+      "late_night": [
+       2,
+       190
+      ],
+      "midnight_patience": [
+       18,
+       350
+      ],
+      "miracle": [
+       3,
+       75
+      ],
+      "heavy_on_mind": [
+       7,
+       170
+      ]
+     },
+     "tol_ms": {
+      "35": [
+       54,
+       296
+      ],
+      "50": [
+       187,
+       163
+      ],
+      "70": [
+       262,
+       89
+      ]
+     },
+     "delay_ms": [
+      45.088,
+      55.3303,
+      81.0
+     ],
+     "kick_free_core_fires": 0,
+     "acceptance": {
+      "within_70": true,
+      "cores_clear": true,
+      "timing": false,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       10,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       42
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       9,
+       4
+      ],
+      "tears_140bpm": [
+       10,
+       8
+      ],
+      "late_night": [
+       67,
+       0
+      ],
+      "midnight_patience": [
+       49,
+       29
+      ],
+      "miracle": [
+       26,
+       0
+      ],
+      "heavy_on_mind": [
+       61,
+       6
+      ]
+     },
+     "lost_vs_baseline": null
+    },
+    {
+     "name": "evidence_0.025s",
+     "fast_fires": {
+      "apricots_128bpm": [
+       0,
+       10
+      ],
+      "bad_guy_128bpm": [
+       23,
+       59
+      ],
+      "feel_the_vibration_174bpm": [
+       6,
+       16
+      ],
+      "inhale_exhale_145bpm": [
+       7,
+       15
+      ],
+      "tears_140bpm": [
+       7,
+       18
+      ],
+      "late_night": [
+       2,
+       190
+      ],
+      "midnight_patience": [
+       61,
+       350
+      ],
+      "miracle": [
+       3,
+       75
+      ],
+      "heavy_on_mind": [
+       9,
+       170
+      ]
+     },
+     "tol_ms": {
+      "35": [
+       65,
+       285
+      ],
+      "50": [
+       190,
+       160
+      ],
+      "70": [
+       262,
+       89
+      ]
+     },
+     "delay_ms": [
+      44.667,
+      55.2547,
+      81.0
+     ],
+     "kick_free_core_fires": 0,
+     "acceptance": {
+      "within_70": true,
+      "cores_clear": true,
+      "timing": false,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       10,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       42
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       9,
+       4
+      ],
+      "tears_140bpm": [
+       10,
+       8
+      ],
+      "late_night": [
+       67,
+       0
+      ],
+      "midnight_patience": [
+       49,
+       29
+      ],
+      "miracle": [
+       26,
+       0
+      ],
+      "heavy_on_mind": [
+       61,
+       6
+      ]
+     },
+     "lost_vs_baseline": null
+    }
+   ]
   }
  },
+ "decisions_for_peter": [
+  "BUG-7rngq Midnight labels without kick-stem attack",
+  "BUG-sa3n3 Bad Guy bass-line fires"
+ ],
  "h22_first_run_void": "in-place training-mask edit leaked across folds; archived under h22/void_mask_mutation_run",
  "validation": {
   "midpoint|baseline": {

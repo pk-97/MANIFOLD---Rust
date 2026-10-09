@@ -29,7 +29,9 @@ def trial(h):
     rows = []
     for v in t['variants']:
         s = v['summary']
-        rows.append(dict(name=v['name'], tol_ms={k: [x['matched'], x['extra']] for k, x in s['tol'].items()},
+        rows.append(dict(name=v.get('name', f"evidence_{v.get('evidence_s')}s"), fast_fires=v.get('fast_fires'),
+                         tol_ms={k: [x['matched'], x['extra']] for k, x in s['tol'].items()},
+                         delay_ms=[s['delay_p50'], s['delay_p90'], s['delay_max']],
                          kick_free_core_fires=s['kick_free_extras'], acceptance=v['acceptance'],
                          per_track={k: x[:2] for k, x in s['per_track'].items()},
                          lost_vs_baseline=v.get('lost_vs_baseline')))
@@ -45,7 +47,8 @@ def main():
         reference=dict(baseline=[223, 89], h16=[285, 90, '1 core fire'], h18=[262, 89, 'loses Inhale 5.38/6.62']),
         miss_causes_h18=diag['h18']['miss_causes_total'],
         oracle_per_song_cutoff_diagnostic={k: diag[k]['oracle_total'] for k in diag},
-        hypotheses={h: trial(h) for h in ('h19', 'h20', 'h21', 'h22')},
+        hypotheses={h: trial(h) for h in ('h19', 'h20', 'h21', 'h22', 'h23')},
+        decisions_for_peter=['BUG-7rngq Midnight labels without kick-stem attack', 'BUG-sa3n3 Bad Guy bass-line fires'],
         h22_first_run_void='in-place training-mask edit leaked across folds; archived under h22/void_mask_mutation_run',
         validation=load('validation.json'), extra_passages=load('extra_passages.json'),
         relabel=load('relabel_summary.json'), glide_cpu=load('glide_meta.json'),

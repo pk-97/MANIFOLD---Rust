@@ -1000,6 +1000,7 @@ the 42.6 ms evidence window sets the earliest emission.
 | H20 past-only upper-anchor cutoff (p90 / p99 / block-max median, 8 s) on H18 | 146+39 / 88+46 / 184+71, 14–20 core fires | Scores alone cannot tell masked kicks from absent kicks. |
 | H21 kernel gated by its own support act/(act+5), fallback linear / linear / H18 | 239+94 / **240+97** / 258+96 | Kernel-lost kicks sit in low support (median activity 0.7 vs 13.8 for recoveries); gating restores retention but re-admits low-support extras. |
 | H22 H21 gate with linear+glide fallback fitted on low-support candidates / same with H16 / control fitted on all | **256+90** / 250+86 / 229+86 | Inside low support glide points the physical way in every song; main config: zero core fires, ≤1 baseline loss per track, one extra over the count rule. Control fails, so the conditioning matters. |
+| H23 early path: the 15 features over 15 / 20 / 25 ms fire confident kicks early, H18 decides the rest, one shared refractory | 262+89 on all three; 35 ms 47 / 54 / 65 (H18 42) | Safe: 70 ms unchanged, cores clear. Only 3–13% of fires qualify early (~16 ms sooner); fails the declared +20 at 50 ms or −10 ms median bar. Second feature pass costs 0.8% of a core in Python. |
 
 H22 main versus H18: original 174 135+72 vs 138+68; added 207 121+18 vs
 124+21; D2 28/32+2 with one fire in the Late Night sustained-bass core vs 26/32+0;
