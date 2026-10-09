@@ -39,7 +39,7 @@ from gate_policy import (
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
     GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, CATALOG_PACKAGE, GPU_CONTRACT_TARGETS,
-    GPU_FILTER_TARGETS, gpu_filter_target, is_inert_plan_path,
+    GPU_FILTER_TARGETS, is_inert_plan_path,
 )
 from gate_workspace import Workspace
 
@@ -241,14 +241,15 @@ class Plan:
                          'filters': [prefix] if prefix else [], 'skips': [], 'budgeted': False})
         available = {(run['package'], run['target']) for run in runs}
         for name in self.final_filters():
-            owner = gpu_filter_target(name)
+            owner = GPU_FILTER_TARGETS.get(name)
             if owner is not None and owner not in available:
                 raise ValueError(f'GPU filter {name!r} has no runnable Cargo owner: {owner[0]}/{owner[1]}')
         # Unknown filters keep their current coverage. Whole selections and
         # the folded glTF harness retain their independent selection rules.
         return [run for run in runs
                 if not run['filters'] or (route and route[:2] == (run['package'], run['target']))
-                or any(gpu_filter_target(name) in (None, (run['package'], run['target']))
+                or any(name not in GPU_FILTER_TARGETS
+                       or GPU_FILTER_TARGETS[name] == (run['package'], run['target'])
                        for name in run['filters'])]
 
     def describe(self):

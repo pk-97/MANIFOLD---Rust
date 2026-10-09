@@ -229,6 +229,12 @@ impl GeneratorRegistry {
         None
     }
 
+    pub fn known_type_ids(&self) -> Vec<manifold_core::PresetTypeId> {
+        let mut out: Vec<manifold_core::PresetTypeId> =
+            bundled_preset_type_ids(PresetKind::Generator).collect();
+        out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        out
+    }
 }
 
 /// Prepare each registered primitive through its node hook, then compile its

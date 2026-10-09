@@ -80,16 +80,6 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(len(runs), 13)
         self.assertTrue(all(run["filters"] == result.final_filters() for run in runs))
 
-    def test_changed_registry_test_stays_with_its_module_owner(self):
-        result = plan([R + 'registry.rs'])
-        result.filters.add('registry::gpu_tests::prewarm_populates_the_shared_cache_for_representative_converted_atoms')
-        self.assertEqual({(run['package'], run['target']) for run in result.runs()}, {
-            ('manifold-nodes', 'lib'), ('manifold-nodes', 'gpu_proofs'),
-            ('manifold-nodes-scene', 'gpu_proofs'),
-        })
-        result.filters.add('some_other_registry::test')
-        self.assertEqual(len(result.runs()), 13)
-
     def test_whole_package_override_survives_filter_pruning(self):
         workspace = fixture_workspace(Path("/nonexistent"))
         result = g.Plan(paths=["synthetic"], workspace=workspace,

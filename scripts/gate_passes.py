@@ -405,10 +405,11 @@ def proof_pass(repo, run):
     passed = Pass(repo, 'gpu-proofs', lambda: (rust_paths(Path(repo).resolve(), [package]),
                                              identity, True))
     if passed.record:
-        from gate_policy import gpu_filter_target
-        required = [name for name in run['filters'] if (owner := gpu_filter_target(name))
-                    and owner[0] == package
-                    and (owner[1] in (run['targets'] or []) or (owner[1] == 'lib' and run['lib']))]
+        from gate_policy import GPU_FILTER_TARGETS
+        required = [name for name in run['filters'] if name in GPU_FILTER_TARGETS
+                    and GPU_FILTER_TARGETS[name][0] == package
+                    and (GPU_FILTER_TARGETS[name][1] in (run['targets'] or [])
+                         or (GPU_FILTER_TARGETS[name][1] == 'lib' and run['lib']))]
         names = [row.get('test', '') for row in passed.record.get('timings', [])
                  if isinstance(row, dict) and row.get('status') == 'ok']
         if any(not any(name in test for test in names) for name in required):

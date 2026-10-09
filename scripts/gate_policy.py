@@ -78,8 +78,8 @@ SMOKE_FILTERS = [
     "gbuffer_depth::gbuffer_depth_conformance",
 ]
 
-# Filters whose Cargo owner has been audited. Module prefixes include descendants.
-# Plan.runs may prune a filtered harness only when every selected filter is in this table and none
+# Exact filters whose Cargo owner has been audited.  Plan.runs may prune a
+# filtered harness only when every selected filter is in this table and none
 # belongs to that harness; unknown filters conservatively keep the old run.
 GPU_FILTER_TARGETS = {
     "alpha_contract::effects_preserve_transparency": ("manifold-nodes", "gpu_proofs"),
@@ -89,12 +89,7 @@ GPU_FILTER_TARGETS = {
         ("manifold-nodes-scene", "gpu_proofs"),
     "bundled_presets::": ("manifold-nodes", "lib"),
     "bundled_generator_presets::": ("manifold-nodes", "lib"),
-    "registry::": ("manifold-nodes", "lib"),
 }
-
-def gpu_filter_target(name):
-    return next((owner for prefix, owner in GPU_FILTER_TARGETS.items()
-                 if name == prefix or (prefix.endswith('::') and name.startswith(prefix))), None)
 
 # Graph runtime + freeze compiler.
 RUNTIME_FILTERS = [
