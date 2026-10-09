@@ -6,12 +6,36 @@ tracker, presence, transients) must pass through before touching the live path.
 Design context: [AUDIO_OBJECT_TRACKING_DESIGN.md](AUDIO_OBJECT_TRACKING_DESIGN.md).
 Written so a session with NO prior context can run, read, and judge results.
 
-**2026-10-09 audit note:** the historical scores and claims below have not been
-revalidated against current code. `bad_guy` now has a mix reconstructed from
-its unchanged stems and matching label timebases; its previous scores and
-per-track calibration are stale. See `tests/fixtures/audio_labels/README.md`
-and BUG-qtd. Audit onset definitions and raw delivery latency before using
-this pack to judge detector improvements.
+**2026-10-09 audit note:** the active pack now has 66 corrected visual kick
+estimates (14/15/15/12/10); `attack_review.csv` preserves the one duplicate,
+four clip-boundary events, and two ambiguous ending hits as provenance and
+excluded-event registry. Primary scoring must exclude [0, 0.250] seconds for
+`clip_boundary` and [estimated_attack_s - 0.100, EOF] for `needs_listening`,
+reporting those categories separately. `bad_guy` has a mix reconstructed from
+its unchanged stems and matching label timebases; all previous scores and
+per-track calibration are stale. No auditory validation is claimed. See
+`tests/fixtures/audio_labels/README.md` and BUG-qtd.
+
+Reproduce the corrected five-full-mix Kick baseline from a worktree:
+
+```sh
+CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 cargo build -p manifold-audio --example mod_harness
+python3 tools/audio_analysis/eval/live_kick_baseline.py \
+  --harness target/debug/examples/mod_harness \
+  --audio-root '/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio' \
+  --out-dir /tmp/live-kick-baseline \
+  --report /tmp/live-kick-baseline.json
+```
+
+This uses the unchanged live `StreamingSendAnalyzer`, default settings, and
+native-rate full mixes. It scores one-to-one matches at ±35/50/70 ms (50 ms
+primary) and records uncertain/boundary-region triggers separately. Raw
+availability is `(kick_hop + 1) * hop_samples / sample_rate`, not the old
+zero-based plot time and not a latency-corrected timestamp. The separate
+-35/+200 ms association diagnostic measures late nearby triggers and possible
+duplicates without improving the tight accuracy score. It does not establish
+which sound caused a trigger or measure capture/UI/display delay. Results:
+`tools/audio_analysis/eval/scoreboard/live_kick_2026-10-09.json`.
 
 ## 1. Running it
 
