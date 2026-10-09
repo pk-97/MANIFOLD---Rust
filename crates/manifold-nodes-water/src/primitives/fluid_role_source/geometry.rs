@@ -12,7 +12,8 @@ use manifold_physics::TriangleMesh;
 use super::{CompoundPreparation, WiredPreparation};
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::platonic::{platonic_mesh, platonic_points};
-use manifold_node_engine::scene::physics_mesh::{MeshSelection, load_compound_materials, transform_vertices};
+use manifold_node_engine::scene::physics_mesh::{MeshSelection, transform_vertices};
+use crate::physics_mesh::load_compound_materials;
 use manifold_node_engine::scene::transform::Transform;
 use crate::physics_mesh::prepare_colliders;
 

@@ -169,7 +169,7 @@ Forbidden edges, normal and build dependencies (dev-deps may cross downward only
 | INV-4 Emitted WGSL is byte-identical | `fused_wgsl_snapshot_unchanged` + `freeze/reference.rs` goldens, unmodified, green at every landing that touches `freeze/` or a primitive file (CPU test, seconds) |
 | INV-5 No test is lost in a move | `scripts/test_census.py` (P0 deliverable; `cargo nextest list --workspace --message-format json` → multiset of test names with the crate prefix stripped) equal before and after each landing, drift printed by name |
 | INV-6 Decomposed files do not regrow across the move | `godfile_regrowth.rs` CEILINGS rows re-pathed in the same landing; the test is green before push |
-| INV-7 Built-ins are exactly the D11 list | `builtins_match_registry` in `manifold-node-engine`: the engine crate's registered factories outside `water::primitives` equal the D11 list. |
+| INV-7 Built-ins are exactly the D11 list | `builtins_match_registry` in `manifold-node-engine`: the engine crate's production node factories equal the D11 list (system boundaries and test-only fixtures are separate). |
 | INV-8 Load migrations run in the committed order | `migration_order_matches_table` + LiveSchool round-trip |
 | INV-9 No per-frame change | Move phases: none needed (bodies unchanged, proven by INV-2). P5: `MANIFOLD_RENDER_TRACE=1` run on the water demo project, no frame > 20 ms |
 
@@ -262,6 +262,11 @@ These remain generic engine operations; water borrows them without native
 types entering the engine. The instance uploader retains its private state and
 dispatch helper. Test-only access exposes the existing document registration
 and a dimension setter; executor observations reuse existing runtime access.
+A production build without testkit found one more generic boundary:
+`scene::mesh_source::MeshSource::load_vertices` must be public. The compound
+material parser/loader and part-port names have only water consumers, so they
+move unchanged into water's existing `physics_mesh` module and stay private
+within that crate. Test builds had hidden these reaches by enabling testkit.
 Macro imports and relative includes are corrected separately from the move.
 The empty image integration harness is removed after its three tests move to
 the catalog. The workspace census also exposed the scene/water viewport proof;
@@ -274,7 +279,15 @@ primitive modules from `node_graph::primitives::` to `primitives::`, and adds
 `contracts::` to `particle_pipeline_integration::`. The viewport proof retains
 its binary and module names. Twelve focused CPU contracts pass, including
 layering, runtime history/resize guards and unchanged fused WGSL. Behavioral
-GPU gates, path-policy updates and landing remain required.
+GPU gates and landing remain required. Path policy now follows the water crate,
+including catalog cross-family proofs; the 3,723 timing measurements are
+unchanged. The four pressure reference files also move unchanged in
+`146c35dc8` under `docs/crate-moves/t2-pressure-fixtures`; both verifiers pass
+with zero residue. Runtime fixture paths now resolve in the owning crate.
+The catalog matches, and five migration/LiveSchool serialization contracts
+pass against the existing project fixture. The preset validator's Shatter
+host now supplies Physics through the existing PhysicsSolids fixture, using
+real imported mesh metadata; all 112 bundled presets now pass validation.
 
 #### P5 preparation seam (verified 2026-10-09 at `d5d226167`)
 

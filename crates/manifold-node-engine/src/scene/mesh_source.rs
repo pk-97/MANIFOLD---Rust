@@ -21,11 +21,10 @@ pub enum MeshSource {
 }
 
 impl MeshSource {
-manifold_core::testkit_visible! {
     /// Load the immutable, local-space triangle-list vertices described by this
     /// source.  Selectors are validated here so every geometry consumer uses
     /// the same source contract before applying its own fixed transform.
-    pub(crate) fn load_vertices(&self) -> Result<Vec<MeshVertex>, String> {
+    pub fn load_vertices(&self) -> Result<Vec<MeshVertex>, String> {
         let (shape, radius) = match self {
             Self::Cube { size } => {
                 if !size.is_finite() || *size <= 0.0 {
@@ -72,7 +71,6 @@ manifold_core::testkit_visible! {
         }
         Ok(vertices)
     }
-}
 }
 
 #[cfg(test)]

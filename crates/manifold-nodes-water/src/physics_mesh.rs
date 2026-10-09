@@ -1,8 +1,80 @@
 //! Native convex collider preparation for imported mesh geometry.
 
+use std::path::Path;
+
+use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::mesh::MeshVertex;
-use manifold_node_engine::scene::physics_mesh::fragments;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::scene::physics_mesh::{MeshSelection, fragments, transform_vertices};
+use manifold_node_engine::scene::transform::Transform;
 use crate::physics::ColliderGeometry;
+
+pub(crate) const PART_PORTS: [&str; 64] = [
+    "part_0", "part_1", "part_2", "part_3", "part_4", "part_5", "part_6", "part_7", "part_8",
+    "part_9", "part_10", "part_11", "part_12", "part_13", "part_14", "part_15", "part_16",
+    "part_17", "part_18", "part_19", "part_20", "part_21", "part_22", "part_23", "part_24",
+    "part_25", "part_26", "part_27", "part_28", "part_29", "part_30", "part_31", "part_32",
+    "part_33", "part_34", "part_35", "part_36", "part_37", "part_38", "part_39", "part_40",
+    "part_41", "part_42", "part_43", "part_44", "part_45", "part_46", "part_47", "part_48",
+    "part_49", "part_50", "part_51", "part_52", "part_53", "part_54", "part_55", "part_56",
+    "part_57", "part_58", "part_59", "part_60", "part_61", "part_62", "part_63",
+];
+
+pub(crate) fn parse_compound_materials(
+    ctx: &EffectNodeContext<'_, '_>,
+) -> Result<([Option<i32>; 64], bool), String> {
+    let Some(table) = ctx
+        .params
+        .get("compound_materials")
+        .and_then(ParamValue::as_table)
+    else {
+        return Ok(([None; 64], false));
+    };
+    if table.col_count() != 2 {
+        return Err("compound_materials must have rows shaped [slot, material_index]".into());
+    }
+    let mut materials = [None; 64];
+    for row in table.rows() {
+        let slot = row[0];
+        let material = row[1];
+        if !slot.is_finite() || slot.fract() != 0.0 || !(0.0..64.0).contains(&slot) {
+            return Err("compound_materials contains a slot outside 0..63".into());
+        }
+        if !material.is_finite()
+            || material.fract() != 0.0
+            || !((i32::MIN as f32)..=(i32::MAX as f32)).contains(&material)
+        {
+            return Err("compound_materials contains an invalid material index".into());
+        }
+        let slot = slot as usize;
+        if materials[slot].is_some() {
+            return Err(format!("compound_materials contains duplicate slot {slot}"));
+        }
+        materials[slot] = Some(material as i32);
+    }
+    Ok((materials, true))
+}
+
+pub(crate) fn load_compound_materials(
+    path: &Path,
+    selection: MeshSelection,
+    materials: [Option<i32>; 64],
+    part_transforms: [Transform; 64],
+) -> Result<Vec<MeshVertex>, String> {
+    let mut vertices = Vec::new();
+    for slot in 0..64 {
+        let Some(material) = materials[slot] else {
+            continue;
+        };
+        let mut part = selection.with_material(material).load(path)?;
+        transform_vertices(&mut part, part_transforms[slot])?;
+        vertices.extend(part);
+    }
+    if vertices.is_empty() {
+        return Err("compound material selection produced no geometry".into());
+    }
+    Ok(vertices)
+}
 
 /// Spatially fitted convex parts. This is approximate collision geometry; the
 /// scan itself is unchanged. Thin/open scan surfaces get a small explicit shell
