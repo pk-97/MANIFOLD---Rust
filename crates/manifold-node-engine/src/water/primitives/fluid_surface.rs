@@ -15,6 +15,7 @@ use crate::exec::instance_upload::InstanceSnapshotUpload;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::water::physics::{RigidImpulseTargets, RigidSceneObservation};
 use crate::water::physics_events::ResolvedNodeImpulse;
+use crate::water::node::{PhysicsNode, PhysicsNodeRegistration};
 use crate::primitive::Primitive;
 use manifold_fluids::{LiquidOptions, SurfaceOptions, WhitewaterOptions};
 use manifold_physics::FieldValue;
@@ -220,6 +221,101 @@ crate::primitive! {
     },
 }
 
+impl PhysicsNode for FluidSurface {
+    fn set_physics_source_identity(&mut self, identity: Result<[u8; 32], String>) {
+        self.runtime.set_source_identity(identity);
+    }
+
+    fn set_physics_project_tempo(&mut self, tempo: Option<&crate::runtime::preset_context::ProjectTempo>) {
+        self.runtime.set_project_tempo(tempo);
+    }
+
+    fn set_coupled_physics(&mut self, enabled: bool) {
+        if self.coupled_mode == enabled {
+            return;
+        }
+        self.coupled_mode = enabled;
+        self.runtime.clear();
+        self.empty_particle_frame = None;
+        self.coupled_observation = None;
+        self.coupled_error = None;
+        self.coupled_previous_reset = None;
+    }
+
+    fn set_coupled_rigid_inputs(
+        &mut self,
+        observation: Option<&RigidSceneObservation>,
+        colliders: RigidImpulseTargets,
+        error: Option<&str>,
+    ) {
+        self.set_coupled_physics(true);
+        self.coupled_observation = observation.cloned();
+        self.coupled_colliders = colliders;
+        self.coupled_error = error.map(str::to_owned);
+    }
+
+    fn coupled_rigid_frame(&self) -> Option<&crate::water::fluid::CoupledRigidFrame> {
+        if !self.coupled_mode || self.role_pending || self.domain_failure {
+            return None;
+        }
+        if self.coupled_observation.is_none() || self.coupled_error.is_some() {
+            return None;
+        }
+        self.runtime.coupled_rigid_frame()
+    }
+
+    fn physics_impulse_epoch(&self) -> Option<u64> {
+        self.runtime.impulse_epoch()
+    }
+
+    fn physics_impulse_stamp(
+        &self,
+        transport: manifold_core::Seconds,
+        sequence: u64,
+    ) -> Result<manifold_physics::input::EventStamp, String> {
+        if self.role_pending {
+            return Err("Liquid Surface: cannot capture an impulse while inputs are pending".into());
+        }
+        if self.domain_failure {
+            return Err("Liquid Surface: cannot capture an impulse after a domain failure".into());
+        }
+        self.runtime.impulse_stamp(transport, sequence)
+    }
+
+    fn enqueue_physics_impulse(
+        &mut self,
+        stamp: manifold_physics::input::EventStamp,
+        impulse: ResolvedNodeImpulse,
+    ) -> Result<manifold_physics::TickStamp, String> {
+        self.runtime.enqueue_scene_impulse(stamp, impulse)
+    }
+
+    fn drain_physics_impulses(
+        &mut self,
+        consume: &mut dyn FnMut(
+            manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>,
+        ),
+    ) {
+        for event in self.runtime.drain_scene_impulses() {
+            consume(event);
+        }
+    }
+
+    fn fluid_domain_snapshot(&self) -> Option<FluidDomainSnapshot> {
+        let mut snapshot = self.runtime.domain_snapshot();
+        if self.role_pending {
+            snapshot.state = FluidDomainState::PendingInputs;
+            snapshot.accepted_layout = None;
+        } else if self.domain_failure {
+            snapshot.state = FluidDomainState::Failed;
+            snapshot.accepted_layout = None;
+        }
+        Some(snapshot)
+    }
+}
+
+inventory::submit! { PhysicsNodeRegistration::new::<FluidSurface>() }
+
 impl FluidSurface {
     fn report_failure(
         domain_failure: &mut bool,
@@ -262,14 +358,6 @@ impl Primitive for FluidSurface {
         }
     }
 
-    fn set_physics_source_identity(&mut self, identity: Result<[u8; 32], String>) {
-        self.runtime.set_source_identity(identity);
-    }
-
-    fn set_physics_project_tempo(&mut self, tempo: Option<&crate::runtime::preset_context::ProjectTempo>) {
-        self.runtime.set_project_tempo(tempo);
-    }
-
     fn clear_state(&mut self) {
         self.runtime.clear();
         self.empty_particle_frame = None;
@@ -278,81 +366,6 @@ impl Primitive for FluidSurface {
         self.coupled_observation = None;
         self.coupled_error = None;
         self.coupled_previous_reset = None;
-    }
-    fn set_coupled_physics(&mut self, enabled: bool) {
-        if self.coupled_mode == enabled {
-            return;
-        }
-        self.coupled_mode = enabled;
-        self.runtime.clear();
-        self.empty_particle_frame = None;
-        self.coupled_observation = None;
-        self.coupled_error = None;
-        self.coupled_previous_reset = None;
-    }
-    fn set_coupled_rigid_inputs(
-        &mut self,
-        observation: Option<&RigidSceneObservation>,
-        colliders: RigidImpulseTargets,
-        error: Option<&str>,
-    ) {
-        self.set_coupled_physics(true);
-        self.coupled_observation = observation.cloned();
-        self.coupled_colliders = colliders;
-        self.coupled_error = error.map(str::to_owned);
-    }
-    fn coupled_rigid_frame(&self) -> Option<&crate::water::fluid::CoupledRigidFrame> {
-        if !self.coupled_mode || self.role_pending || self.domain_failure {
-            return None;
-        }
-        if self.coupled_observation.is_none() || self.coupled_error.is_some() {
-            return None;
-        }
-        self.runtime.coupled_rigid_frame()
-    }
-    fn physics_impulse_epoch(&self) -> Option<u64> {
-        self.runtime.impulse_epoch()
-    }
-    fn physics_impulse_stamp(
-        &self,
-        transport: manifold_core::Seconds,
-        sequence: u64,
-    ) -> Result<manifold_physics::input::EventStamp, String> {
-        if self.role_pending {
-            return Err("Liquid Surface: cannot capture an impulse while inputs are pending".into());
-        }
-        if self.domain_failure {
-            return Err("Liquid Surface: cannot capture an impulse after a domain failure".into());
-        }
-        self.runtime.impulse_stamp(transport, sequence)
-    }
-    fn enqueue_physics_impulse(
-        &mut self,
-        stamp: manifold_physics::input::EventStamp,
-        impulse: ResolvedNodeImpulse,
-    ) -> Result<manifold_physics::TickStamp, String> {
-        self.runtime.enqueue_scene_impulse(stamp, impulse)
-    }
-    fn drain_physics_impulses(
-        &mut self,
-        consume: &mut dyn FnMut(
-            manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>,
-        ),
-    ) {
-        for event in self.runtime.drain_scene_impulses() {
-            consume(event);
-        }
-    }
-    fn fluid_domain_snapshot(&self) -> Option<FluidDomainSnapshot> {
-        let mut snapshot = self.runtime.domain_snapshot();
-        if self.role_pending {
-            snapshot.state = FluidDomainState::PendingInputs;
-            snapshot.accepted_layout = None;
-        } else if self.domain_failure {
-            snapshot.state = FluidDomainState::Failed;
-            snapshot.accepted_layout = None;
-        }
-        Some(snapshot)
     }
     fn warmup_pending(&self) -> bool {
         !self.domain_failure && (self.role_pending || self.runtime.warmup_pending())
@@ -986,7 +999,7 @@ mod tests {
             let mut fluid = FluidSurface::new();
             run_mock_with_scalars(&mut fluid, &params, &[(name, f32::INFINITY)], 0.0, &mut errors);
             assert!(errors.iter().any(|error| error.contains("gravity")), "wired {name}: {errors:?}");
-            assert_eq!(Primitive::fluid_domain_snapshot(&fluid).unwrap().state, FluidDomainState::Failed);
+            assert_eq!(PhysicsNode::fluid_domain_snapshot(&fluid).unwrap().state, FluidDomainState::Failed);
         }
     }
 
@@ -1042,7 +1055,7 @@ mod tests {
                 "{value}: {errors:?}"
             );
             assert_eq!(
-                Primitive::fluid_domain_snapshot(&fluid).unwrap().state,
+                PhysicsNode::fluid_domain_snapshot(&fluid).unwrap().state,
                 FluidDomainState::Failed
             );
         }
@@ -1055,8 +1068,8 @@ mod tests {
         let mut errors = Vec::new();
         let params = coupled_params();
         let first = coupled_observation(0.0, 1.0, 0.0);
-        Primitive::set_coupled_physics(&mut fluid, true);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_physics(&mut fluid, true);
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&first),
             RigidImpulseTargets::default(),
@@ -1068,10 +1081,10 @@ mod tests {
             fluid.runtime.domain_snapshot().state,
             FluidDomainState::Ready
         );
-        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+        assert!(PhysicsNode::coupled_rigid_frame(&fluid).is_some());
 
         let second = coupled_observation(1.0 / 60.0, 2.0, 0.0);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&second),
             RigidImpulseTargets::default(),
@@ -1088,9 +1101,9 @@ mod tests {
         // A speed edit starts at its observation; the preceding interval
         // retains speed 1, then the next interval advances at shared speed 2.
         assert!((fluid.runtime.simulation_time() - 1.0 / 60.0).abs() < 1e-8);
-        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+        assert!(PhysicsNode::coupled_rigid_frame(&fluid).is_some());
         let third = coupled_observation(2.0 / 60.0, 2.0, 0.0);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&third),
             RigidImpulseTargets::default(),
@@ -1099,7 +1112,7 @@ mod tests {
         run_mock_with_scalars(&mut fluid, &params, &[("speed", 2.0)], 2.0 / 60.0, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
         assert!((fluid.runtime.simulation_time() - 3.0 / 60.0).abs() < 1e-8);
-        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+        assert!(PhysicsNode::coupled_rigid_frame(&fluid).is_some());
     }
 
     #[test]
@@ -1109,8 +1122,8 @@ mod tests {
         let params = coupled_params();
         let mut errors = Vec::new();
         let first = coupled_observation(0.0, 1.0, 0.0);
-        Primitive::set_coupled_physics(&mut fluid, true);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_physics(&mut fluid, true);
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&first),
             RigidImpulseTargets::default(),
@@ -1122,7 +1135,7 @@ mod tests {
         let initial_epoch = fluid.runtime.domain_snapshot().epoch;
 
         let second = coupled_observation(1.0 / 60.0, 2.0, 0.0);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&second),
             RigidImpulseTargets::default(),
@@ -1137,7 +1150,7 @@ mod tests {
         );
         assert_eq!(fluid.runtime.simulation_time(), initial_time);
         assert_eq!(fluid.runtime.domain_snapshot().epoch, initial_epoch);
-        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+        assert!(PhysicsNode::coupled_rigid_frame(&fluid).is_none());
 
         errors.clear();
         run_mock_with_scalars(
@@ -1154,7 +1167,7 @@ mod tests {
             "{errors:?}"
         );
         assert_eq!(fluid.runtime.simulation_time(), initial_time);
-        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+        assert!(PhysicsNode::coupled_rigid_frame(&fluid).is_none());
 
         errors.clear();
         run_mock_with_scalars(&mut fluid, &params, &[("speed", 2.0)], 1.0 / 60.0, &mut errors);
@@ -1162,9 +1175,9 @@ mod tests {
         // A speed edit starts at its observation; the preceding interval
         // retains speed 1, then the next interval advances at shared speed 2.
         assert!((fluid.runtime.simulation_time() - 1.0 / 60.0).abs() < 1e-8);
-        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+        assert!(PhysicsNode::coupled_rigid_frame(&fluid).is_some());
         let third = coupled_observation(2.0 / 60.0, 2.0, 0.0);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&third),
             RigidImpulseTargets::default(),
@@ -1173,7 +1186,7 @@ mod tests {
         run_mock_with_scalars(&mut fluid, &params, &[("speed", 2.0)], 2.0 / 60.0, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
         assert!((fluid.runtime.simulation_time() - 3.0 / 60.0).abs() < 1e-8);
-        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+        assert!(PhysicsNode::coupled_rigid_frame(&fluid).is_some());
     }
 
     #[test]
@@ -1182,21 +1195,21 @@ mod tests {
         let mut fluid = FluidSurface::new();
         let params = coupled_params();
         let mut errors = Vec::new();
-        Primitive::set_coupled_physics(&mut fluid, true);
+        PhysicsNode::set_coupled_physics(&mut fluid, true);
         run_mock(&mut fluid, &params, 0.0, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
         assert_ne!(
             fluid.runtime.domain_snapshot().state,
             FluidDomainState::Ready
         );
-        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+        assert!(PhysicsNode::coupled_rigid_frame(&fluid).is_none());
         assert_eq!(
-            Primitive::fluid_domain_snapshot(&fluid).unwrap().state,
+            PhysicsNode::fluid_domain_snapshot(&fluid).unwrap().state,
             FluidDomainState::PendingInputs
         );
 
         let observation = coupled_observation(0.0, 1.0, 0.0);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&observation),
             RigidImpulseTargets::default(),
@@ -1204,10 +1217,10 @@ mod tests {
         );
         run_mock(&mut fluid, &params, 0.0, &mut errors);
         assert_eq!(
-            Primitive::fluid_domain_snapshot(&fluid).unwrap().state,
+            PhysicsNode::fluid_domain_snapshot(&fluid).unwrap().state,
             FluidDomainState::Failed
         );
-        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+        assert!(PhysicsNode::coupled_rigid_frame(&fluid).is_none());
         assert!(
             errors
                 .iter()
@@ -1222,8 +1235,8 @@ mod tests {
         let mut params = coupled_params();
         let mut errors = Vec::new();
         let first = coupled_observation(0.0, 1.0, 0.0);
-        Primitive::set_coupled_physics(&mut fluid, true);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_physics(&mut fluid, true);
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&first),
             RigidImpulseTargets::default(),
@@ -1234,7 +1247,7 @@ mod tests {
         let initial_epoch = fluid.runtime.domain_snapshot().epoch;
 
         let world_reset = coupled_observation(1.0 / 60.0, 1.0, 1.0);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&world_reset),
             RigidImpulseTargets::default(),
@@ -1246,7 +1259,7 @@ mod tests {
         }
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(fluid.runtime.domain_snapshot().epoch, initial_epoch);
-        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+        assert!(PhysicsNode::coupled_rigid_frame(&fluid).is_none());
 
         run_mock(&mut fluid, &params, 1.0 / 60.0, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
@@ -1255,7 +1268,7 @@ mod tests {
 
         params.insert(Cow::Borrowed("reset"), ParamValue::Float(1.0));
         let same_world_reset = coupled_observation(2.0 / 60.0, 1.0, 1.0);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&same_world_reset),
             RigidImpulseTargets::default(),
@@ -1273,8 +1286,8 @@ mod tests {
         let mut params = coupled_params();
         let mut errors = Vec::new();
         let observation = coupled_observation(0.25, 1.0, 0.0);
-        Primitive::set_coupled_physics(&mut fluid, true);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_physics(&mut fluid, true);
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&observation),
             RigidImpulseTargets::default(),
@@ -1286,7 +1299,7 @@ mod tests {
 
         params.insert(Cow::Borrowed("liquid_density"), ParamValue::Float(-1.0));
         let valid = coupled_observation(0.0, 1.0, 0.0);
-        Primitive::set_coupled_rigid_inputs(
+        PhysicsNode::set_coupled_rigid_inputs(
             &mut fluid,
             Some(&valid),
             RigidImpulseTargets::default(),
@@ -1294,7 +1307,7 @@ mod tests {
         );
         run_mock(&mut fluid, &params, 0.0, &mut errors);
         assert!(errors.iter().any(|error| error.contains("density")));
-        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+        assert!(PhysicsNode::coupled_rigid_frame(&fluid).is_none());
     }
 
     #[test]
@@ -1362,7 +1375,7 @@ mod tests {
         node.runtime
             .observe(settings, controls, Seconds::ZERO, 1.0, 0.0)
             .expect("native fluid initialization");
-        let epoch = EffectNode::physics_impulse_epoch(&node).expect("native impulse epoch");
+        let epoch = PhysicsNode::physics_impulse_epoch(&node).expect("native impulse epoch");
         let stamp = EventStamp {
             epoch,
             time: Seconds::ZERO,
@@ -1380,12 +1393,14 @@ mod tests {
 
         {
             let graph_node: &mut dyn EffectNode = &mut node;
-            assert!(graph_node
+            let native = crate::water::node::get_mut(graph_node)
+                .expect("FluidSurface has a native PhysicsNode registration");
+            assert!(native
                 .enqueue_physics_impulse(stamp, wrong)
                 .expect_err("wrong target must be rejected before queue admission")
                 .contains("rigid"));
             assert_eq!(
-                graph_node
+                native
                     .enqueue_physics_impulse(stamp, valid)
                     .expect("same producer sequence must remain valid")
                     .tick,
@@ -1400,7 +1415,9 @@ mod tests {
 
         let mut receipts = Vec::new();
         let graph_node: &mut dyn EffectNode = &mut node;
-        graph_node.drain_physics_impulses(&mut |event| receipts.push(event));
+        crate::water::node::get_mut(graph_node)
+            .expect("FluidSurface has a native PhysicsNode registration")
+            .drain_physics_impulses(&mut |event| receipts.push(event));
         assert_eq!(receipts.len(), 1);
         let receipt = receipts.pop().expect("one fluid receipt");
         assert_eq!(receipt.source, stamp);
@@ -1408,7 +1425,9 @@ mod tests {
         assert_eq!(receipt.lateness, Seconds::ZERO);
         assert_eq!(receipt.value.field, field);
         assert_eq!(receipt.value.target, ImpulseTarget::Fluid);
-        graph_node.drain_physics_impulses(&mut |_| panic!("receipt drained twice"));
+        crate::water::node::get_mut(graph_node)
+            .expect("FluidSurface has a native PhysicsNode registration")
+            .drain_physics_impulses(&mut |_| panic!("receipt drained twice"));
     }
 
     #[test]
@@ -1467,7 +1486,7 @@ mod tests {
             let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None)
                 .with_errors(&mut errors);
             Primitive::run(&mut fluid, &mut ctx);
-            let snapshot = Primitive::fluid_domain_snapshot(&fluid).unwrap();
+            let snapshot = PhysicsNode::fluid_domain_snapshot(&fluid).unwrap();
             if resolution.is_finite() {
                 assert!(errors.is_empty(), "{errors:?}");
                 assert_eq!(snapshot.state, FluidDomainState::Ready);
@@ -1507,23 +1526,23 @@ mod tests {
         fluid.domain_failure = false;
         fluid.runtime.advance(true).unwrap();
         assert_eq!(
-            Primitive::fluid_domain_snapshot(&fluid).unwrap().state,
+            PhysicsNode::fluid_domain_snapshot(&fluid).unwrap().state,
             FluidDomainState::Ready
         );
 
         fluid.role_pending = true;
-        let pending = Primitive::fluid_domain_snapshot(&fluid).unwrap();
+        let pending = PhysicsNode::fluid_domain_snapshot(&fluid).unwrap();
         assert_eq!(pending.state, FluidDomainState::PendingInputs);
         assert!(pending.accepted_layout.is_none());
 
         fluid.role_pending = false;
         fluid.domain_failure = true;
-        let failed = Primitive::fluid_domain_snapshot(&fluid).unwrap();
+        let failed = PhysicsNode::fluid_domain_snapshot(&fluid).unwrap();
         assert_eq!(failed.state, FluidDomainState::Failed);
         assert!(failed.accepted_layout.is_none());
 
         fluid.clear_state();
-        let reset = Primitive::fluid_domain_snapshot(&fluid).unwrap();
+        let reset = PhysicsNode::fluid_domain_snapshot(&fluid).unwrap();
         assert_eq!(reset.state, FluidDomainState::Initializing);
         assert!(reset.accepted_layout.is_none());
     }
@@ -1658,7 +1677,7 @@ mod tests {
                 assert_eq!(named, rejected && particle_port, "mode {mode} {outputs:?}: {errors:?}");
                 if named {
                     assert_eq!(
-                        Primitive::fluid_domain_snapshot(&fluid).unwrap().state,
+                        PhysicsNode::fluid_domain_snapshot(&fluid).unwrap().state,
                         FluidDomainState::Failed
                     );
                 }

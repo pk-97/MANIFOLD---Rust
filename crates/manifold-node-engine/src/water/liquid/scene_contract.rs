@@ -44,10 +44,11 @@ fn has_param(node: &dyn EffectNode, name: &str, ty: ParamType) -> bool {
     node.parameters().iter().any(|param| param.name == name && param.ty == ty)
 }
 
-/// A fresh domain that does not route liquid impulses answers with the
-/// trait's default ("does not accept"). Any other answer, including "the
+/// A fresh domain that does not route liquid impulses has no native interface
+/// or answers with its default ("does not accept"). Any other answer, including "the
 /// clock has not started", means the hook routes them.
 fn routes_fluid_impulses(node: &mut dyn EffectNode) -> bool {
+    let Some(node) = crate::water::node::get_mut(node) else { return false; };
     let stamp = EventStamp { epoch: 0, time: Seconds(0.0), sequence: 0 };
     let impulse = ResolvedNodeImpulse {
         field: FieldValue::uniform([1.0, 0.0, 0.0]).expect("uniform field"),

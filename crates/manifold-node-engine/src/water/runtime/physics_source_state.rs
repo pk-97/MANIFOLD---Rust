@@ -9,6 +9,7 @@
 use {manifold_core::effect_graph_def::EffectGraphDef, crate::persistence::PrimitiveRegistry, super::physics_source_controls, super::physics_sources};
 use crate::scene::source_asset::SourceAssetIdentity;
 use crate::{graph::Graph, exec::effect_node::NodeInstanceId, parameters::ParamValue};
+use crate::water::node;
 use manifold_core::NodeId;
 use manifold_core::effects::PresetInstance;
 use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
@@ -165,11 +166,12 @@ impl InstalledSource {
             }
         };
         self.published = Some(published);
-        graph
+        let node_instance = graph
             .get_node_mut(self.node)
-            .expect("prepared fluid exists")
-            .node
-            .set_physics_source_identity(identity);
+            .expect("prepared fluid exists");
+        if let Some(native) = node::get_mut(node_instance.node.as_mut()) {
+            native.set_physics_source_identity(identity);
+        }
     }
 }
 
@@ -302,8 +304,9 @@ impl PhysicsSourceState {
                     if id.as_str().starts_with(prefix)
                         && let Some(node) = graph.get_node_mut(*node)
                         && node.node.type_id().as_str() == FLIP_DOMAIN_TYPE_ID
+                        && let Some(native) = node::get_mut(node.node.as_mut())
                     {
-                        node.node.set_physics_source_identity(Err(error.clone()));
+                        native.set_physics_source_identity(Err(error.clone()));
                     }
                 }
             }

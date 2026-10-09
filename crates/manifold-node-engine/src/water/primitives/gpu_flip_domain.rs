@@ -37,6 +37,7 @@ use crate::water::liquid::{EXACT_F32_COUNT, ROLE_PORTS, WATER_DENSITY};
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::water::physics::{RigidImpulseTargets, RigidSceneInputs, RigidSceneObservation, offline_simulation};
 use crate::water::physics_events::ResolvedNodeImpulse;
+use crate::water::node::{PhysicsNode, PhysicsNodeRegistration};
 use crate::primitive::Primitive;
 use crate::scene::transform::Transform;
 
@@ -540,49 +541,6 @@ impl Primitive for GpuFlipDomain {
         self.clock.restart();
     }
 
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
-        self.fields.request_samples(&self.clock, from, until, out);
-        self.bodies.request_samples(&self.clock, from, until, out);
-        if self.coupled.mode {
-            self.coupled.scenes.request(&self.clock, from, until, out);
-        }
-    }
-
-    fn set_coupled_physics(&mut self, enabled: bool) {
-        if self.coupled.mode != enabled {
-            self.coupled.mode = enabled;
-            self.clear_state();
-        }
-    }
-
-    fn set_coupled_rigid_inputs(
-        &mut self,
-        observation: Option<&RigidSceneObservation>,
-        colliders: RigidImpulseTargets,
-        error: Option<&str>,
-    ) {
-        // A replay sample records the scene at a tick's start; a pending one
-        // records nothing, and `run` closes the sample.
-        if crate::water::physics::authored_sample_only() {
-            if let Some(observation) = observation.filter(|_| error.is_none()) {
-                self.coupled.scenes.observe(observation.transport.0, Some(&observation.inputs));
-            }
-            return;
-        }
-        self.set_coupled_physics(true);
-        self.coupled.observation = observation.cloned();
-        self.coupled.colliders = colliders;
-        self.coupled.error = error.map(str::to_owned);
-    }
-
-    fn coupled_rigid_frame(&self) -> Option<&CoupledRigidFrame> {
-        let coupled = &self.coupled;
-        if !coupled.mode || self.role_pending || coupled.failed || coupled.observation.is_none() || coupled.error.is_some() {
-            return None;
-        }
-        coupled.owner.as_ref().map(LiquidRigidOwner::frame)
-    }
-
     // While an input is pending the liquid holds its last good frame.
     fn runs_with_pending_inputs(&self) -> bool {
         true
@@ -680,6 +638,52 @@ impl Primitive for GpuFlipDomain {
         }
     }
 
+}
+
+impl PhysicsNode for GpuFlipDomain {
+    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+        self.fields.request_samples(&self.clock, from, until, out);
+        self.bodies.request_samples(&self.clock, from, until, out);
+        if self.coupled.mode {
+            self.coupled.scenes.request(&self.clock, from, until, out);
+        }
+    }
+
+    fn set_coupled_physics(&mut self, enabled: bool) {
+        if self.coupled.mode != enabled {
+            self.coupled.mode = enabled;
+            self.clear_state();
+        }
+    }
+
+    fn set_coupled_rigid_inputs(
+        &mut self,
+        observation: Option<&RigidSceneObservation>,
+        colliders: RigidImpulseTargets,
+        error: Option<&str>,
+    ) {
+        // A replay sample records the scene at a tick's start; a pending one
+        // records nothing, and `run` closes the sample.
+        if crate::water::physics::authored_sample_only() {
+            if let Some(observation) = observation.filter(|_| error.is_none()) {
+                self.coupled.scenes.observe(observation.transport.0, Some(&observation.inputs));
+            }
+            return;
+        }
+        self.set_coupled_physics(true);
+        self.coupled.observation = observation.cloned();
+        self.coupled.colliders = colliders;
+        self.coupled.error = error.map(str::to_owned);
+    }
+
+    fn coupled_rigid_frame(&self) -> Option<&CoupledRigidFrame> {
+        let coupled = &self.coupled;
+        if !coupled.mode || self.role_pending || coupled.failed || coupled.observation.is_none() || coupled.error.is_some() {
+            return None;
+        }
+        coupled.owner.as_ref().map(LiquidRigidOwner::frame)
+    }
+
     fn physics_impulse_epoch(&self) -> Option<u64> {
         self.impulses.epoch()
     }
@@ -718,6 +722,8 @@ impl Primitive for GpuFlipDomain {
         self.impulses.drain_discarded(consume);
     }
 }
+
+inventory::submit! { PhysicsNodeRegistration::new::<GpuFlipDomain>() }
 
 impl GpuFlipDomain {
     /// This frame's outputs, or None while a collider's distance lattice is

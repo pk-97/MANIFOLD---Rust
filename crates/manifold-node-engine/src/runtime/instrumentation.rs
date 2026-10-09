@@ -183,7 +183,8 @@ impl PresetRuntime {
         };
         for (node_id, instance) in &slot.node_map {
             if let Some(snapshot) = self.graph.get_node(*instance)
-                .and_then(|node| node.node.fluid_domain_snapshot())
+                .and_then(|node| crate::water::node::get(node.node.as_ref()))
+                .and_then(|node| node.fluid_domain_snapshot())
             {
                 output.push((node_id.clone(), snapshot));
             }

@@ -28,10 +28,12 @@ impl Executor {
             .node_pair_mut(plan.steps()[pair.fluid_step].node, rigid_step.node)
             .expect("compiled coupled participants exist");
         if !complete {
-            fluid
-                .node
-                .set_coupled_rigid_inputs(None, pair.colliders, None);
-            rigid.node.accept_coupled_rigid_frame(None);
+            if let Some(native) = crate::water::node::get_mut(fluid.node.as_mut()) {
+                native.set_coupled_rigid_inputs(None, pair.colliders, None);
+            }
+            if let Some(native) = crate::water::node::get_mut(rigid.node.as_mut()) {
+                native.accept_coupled_rigid_frame(None);
+            }
             return;
         }
 
@@ -70,11 +72,17 @@ impl Executor {
             })
             .unwrap_or(&rigid.params);
         let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, None);
-        let result = rigid.node.capture_coupled_rigid(&mut ctx);
-        fluid.node.set_coupled_rigid_inputs(
-            rigid.node.rigid_scene_observation(),
-            pair.colliders,
-            result.as_ref().err().map(String::as_str),
-        );
+        let result = match crate::water::node::get_mut(rigid.node.as_mut()) {
+            Some(native) => native.capture_coupled_rigid(&mut ctx),
+            None => Err("Node does not support coupled rigid input capture".into()),
+        };
+        if let Some(native) = crate::water::node::get_mut(fluid.node.as_mut()) {
+            native.set_coupled_rigid_inputs(
+                crate::water::node::get(rigid.node.as_ref())
+                    .and_then(|rigid| rigid.rigid_scene_observation()),
+                pair.colliders,
+                result.as_ref().err().map(String::as_str),
+            );
+        }
     }
 }

@@ -7,6 +7,7 @@ pub mod fluid_particles;
 pub mod fluid_role;
 pub mod liquid;
 pub mod matter;
+pub mod node;
 pub mod physics;
 pub mod physics_events;
 pub mod physics_metrics;

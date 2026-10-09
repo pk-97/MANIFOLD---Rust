@@ -132,13 +132,14 @@ fn paired_frame_for(runtime: &PresetRuntime, fluid_id: &NodeId) -> CoupledRigidF
         .instance_by_node_id(fluid_id)
         .expect("generated fluid runtime node");
     let node = runtime.graph.get_node(fluid).expect("generated fluid node");
+    let node = node::get(node.node.as_ref()).expect("native fluid fixture");
     assert!(
-        node.node.coupled_rigid_frame().is_some(),
+        node.coupled_rigid_frame().is_some(),
         "completed paired native frame: {:?}; {:?}",
-        node.node.fluid_domain_snapshot(),
+        node.fluid_domain_snapshot(),
         runtime.scene_viewport_errors()
     );
-    node.node.coupled_rigid_frame().unwrap().clone()
+    node.coupled_rigid_frame().unwrap().clone()
 }
 
 fn execute_authored_frame(runtime: &mut PresetRuntime, seconds: f64) {
@@ -224,11 +225,8 @@ fn paired_frame(runtime: &PresetRuntime) -> CoupledRigidFrame {
         .graph
         .instance_by_node_id(&NodeId::new("fluid"))
         .unwrap();
-    runtime
-        .graph
-        .get_node(fluid)
-        .unwrap()
-        .node
+    node::get(runtime.graph.get_node(fluid).unwrap().node.as_ref())
+        .expect("native fluid fixture")
         .coupled_rigid_frame()
         .expect("completed paired native frame")
         .clone()
@@ -236,7 +234,8 @@ fn paired_frame(runtime: &PresetRuntime) -> CoupledRigidFrame {
 
 fn observed_fluid_time(runtime: &PresetRuntime, fluid_id: &NodeId, transport: f64) -> Seconds {
     let fluid = runtime.graph.instance_by_node_id(fluid_id).unwrap();
-    runtime.graph.get_node(fluid).unwrap().node
+    node::get(runtime.graph.get_node(fluid).unwrap().node.as_ref())
+        .expect("native fluid fixture")
         .physics_impulse_stamp(Seconds(transport), 0)
         .expect("accepted fluid clock observation").time
 }
@@ -252,11 +251,8 @@ fn assert_visible_pair(runtime: &PresetRuntime, frame: &CoupledRigidFrame) {
         .instance_by_node_id(&NodeId::new("world"))
         .unwrap();
     assert!(
-        runtime
-            .graph
-            .get_node(world)
-            .unwrap()
-            .node
+        node::get(runtime.graph.get_node(world).unwrap().node.as_ref())
+            .expect("native world fixture")
             .physics_impulse_epoch()
             .is_none(),
         "the rigid publisher must not own another native simulation"
@@ -277,7 +273,8 @@ fn coupled_graph_preview_holds_pair_then_offline_drains_without_double_advanceme
         loop {
             runtime.execute_frame(time(0.0));
             assert!(runtime.scene_viewport_errors().is_empty(), "{:?}", runtime.scene_viewport_errors());
-            if runtime.graph.get_node(fluid).unwrap().node.coupled_rigid_frame().is_some() {
+            if node::get(runtime.graph.get_node(fluid).unwrap().node.as_ref())
+                .expect("native fluid fixture").coupled_rigid_frame().is_some() {
                 break;
             }
             assert!(std::time::Instant::now() < deadline, "initial paired frame timed out");

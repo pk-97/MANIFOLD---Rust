@@ -58,16 +58,6 @@ impl EffectNode for TickedLiquid {
     fn parameters(&self) -> &[ParamDef] {
         &[]
     }
-    /// Like the liquid's field history: request each tick start in
-    /// `(from, until]`; the first sample at or after it records that tick.
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
-        let mut tick = (from * TICK_RATE + 1e-9).floor() + 1.0;
-        while tick / TICK_RATE <= until + 1e-12 {
-            out.push(tick / TICK_RATE);
-            self.1.push(tick / TICK_RATE);
-            tick += 1.0;
-        }
-    }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         if !manifold_node_engine::water::physics::authored_sample_only() {
             return;
@@ -85,6 +75,23 @@ impl EffectNode for TickedLiquid {
             ticks.extend(self.1.drain(..reached).map(|tick| (tick, force)));
         });
     }
+}
+
+impl manifold_node_engine::water::node::PhysicsNode for TickedLiquid {
+    /// Like the liquid's field history: request each tick start in
+    /// `(from, until]`; the first sample at or after it records that tick.
+    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+        let mut tick = (from * TICK_RATE + 1e-9).floor() + 1.0;
+        while tick / TICK_RATE <= until + 1e-12 {
+            out.push(tick / TICK_RATE);
+            self.1.push(tick / TICK_RATE);
+            tick += 1.0;
+        }
+    }
+}
+
+inventory::submit! {
+    manifold_node_engine::water::node::PhysicsNodeRegistration::new::<TickedLiquid>()
 }
 
 const LIQUID: &str = manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;

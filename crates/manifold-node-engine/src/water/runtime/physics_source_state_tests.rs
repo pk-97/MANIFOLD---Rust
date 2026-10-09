@@ -1,7 +1,8 @@
-//! Exercise source installation through the EffectNode contract with card-local IDs.
+//! Exercise source installation through the registered native interface with card-local IDs.
 use super::physics_source_state::PhysicsSourceState;
 use super::physics_sources::PhysicsSourceGraph;
 use crate::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, graph::Graph, ports::NodeInput, exec::effect_node::NodeInstanceId, ports::NodeOutput, parameters::ParamDef, parameters::ParamValue};
+use crate::water::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_core::{NodeId, PresetTypeId, effects::PresetInstance};
 use std::cell::RefCell;
 
@@ -41,11 +42,16 @@ impl EffectNode for SourceObserver {
         &*PARAMETERS
     }
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+}
+
+impl PhysicsNode for SourceObserver {
     fn set_physics_source_identity(&mut self, identity: Identity) {
         OBSERVED.with(|observed| observed.borrow_mut()[self.0] = Some(identity));
         PUBLICATIONS.with(|count| count.borrow_mut()[self.0] += 1);
     }
 }
+
+inventory::submit! { PhysicsNodeRegistration::new::<SourceObserver>() }
 
 #[test]
 fn string_observations_are_scoped_retained_and_reinstalled_after_rebuild() {

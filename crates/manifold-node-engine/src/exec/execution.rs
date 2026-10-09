@@ -2578,7 +2578,12 @@ impl Executor {
                 let (fluid, rigid) = graph
                     .node_pair_mut(step.node, plan.steps()[pair.rigid_step].node)
                     .expect("compiled coupled participants exist");
-                rigid.node.accept_coupled_rigid_frame(fluid.node.coupled_rigid_frame());
+                if let Some(native) = crate::water::node::get_mut(rigid.node.as_mut()) {
+                    native.accept_coupled_rigid_frame(
+                        crate::water::node::get(fluid.node.as_ref())
+                            .and_then(|fluid| fluid.coupled_rigid_frame()),
+                    );
+                }
             }
 
             // Storage freshness advances independently of semantic content:

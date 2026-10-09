@@ -5,6 +5,7 @@ use crate::exec::instance_upload::InstanceSnapshotUpload;
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::water::physics::{BODY_PORTS, MAX_BODIES, MAX_COPIES, POSE_PORTS, ResolvedRigidImpulse, RigidBody, RigidSceneInputs, RigidSceneObservation, RigidSimulation};
 use crate::water::physics_events::{map_rigid_receipt, ImpulseTarget, ResolvedNodeImpulse};
+use crate::water::node::{PhysicsNode, PhysicsNodeRegistration};
 use crate::primitive::Primitive;
 use manifold_physics::FieldValue;
 use std::borrow::Cow;
@@ -542,103 +543,6 @@ impl Primitive for PhysicsWorldNode {
         self.rigid_scene_observation = None;
         self.coupled_frame_ready = false;
     }
-    fn set_coupled_physics(&mut self, enabled: bool) {
-        if self.coupled_mode == enabled {
-            return;
-        }
-        self.coupled_mode = enabled;
-        self.simulation = RigidSimulation::default();
-        self.rigid_scene_observation = None;
-        self.coupled_frame_ready = false;
-        self.coupled_frame = enabled.then(|| CoupledRigidFrame {
-            copies: Vec::with_capacity(MAX_COPIES),
-            ..CoupledRigidFrame::default()
-        });
-    }
-    fn rigid_scene_observation(&self) -> Option<&RigidSceneObservation> {
-        self.rigid_scene_observation.as_ref()
-    }
-    fn physics_impulse_epoch(&self) -> Option<u64> {
-        if self.coupled_mode {
-            return None;
-        }
-        self.simulation.impulse_epoch()
-    }
-    fn physics_impulse_stamp(
-        &self,
-        transport: manifold_core::Seconds,
-        sequence: u64,
-    ) -> Result<manifold_physics::input::EventStamp, String> {
-        if self.coupled_mode {
-            return Err("Physics World coupled mode has no private impulse clock".into());
-        }
-        self.simulation.impulse_stamp(transport, sequence)
-    }
-    fn enqueue_physics_impulse(
-        &mut self,
-        stamp: manifold_physics::input::EventStamp,
-        impulse: ResolvedNodeImpulse,
-    ) -> Result<manifold_physics::TickStamp, String> {
-        if self.coupled_mode {
-            return Err("Physics World coupled mode routes impulses through the paired fluid worker".into());
-        }
-        let ImpulseTarget::Rigid(targets) = impulse.target else {
-            return Err("Physics World cannot accept a fluid impulse".into());
-        };
-        self.simulation.enqueue_impulse(
-            stamp,
-            ResolvedRigidImpulse {
-                field: impulse.field,
-                targets,
-            },
-        )
-    }
-    fn drain_physics_impulses(
-        &mut self,
-        consume: &mut dyn FnMut(
-            manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>,
-        ),
-    ) {
-        if self.coupled_mode {
-            return;
-        }
-        for event in self.simulation.drain_applied_impulses() {
-            map_rigid_receipt(event, consume);
-        }
-    }
-    fn capture_coupled_rigid(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
-        self.set_coupled_physics(true);
-        self.rigid_scene_observation = None;
-        self.coupled_frame_ready = false;
-        let Some(observation) = self.resolve_rigid_scene_observation(ctx, true)? else {
-            ctx.mark_outputs_pending();
-            return Ok(());
-        };
-        self.rigid_scene_observation = Some(observation);
-        Ok(())
-    }
-    fn accept_coupled_rigid_frame(&mut self, frame: Option<&CoupledRigidFrame>) {
-        if !self.coupled_mode {
-            return;
-        }
-        let Some(frame) = frame else {
-            self.coupled_frame_ready = false;
-            return;
-        };
-        assert!(
-            frame.copies.len() <= MAX_COPIES,
-            "CoupledRigidFrame copies exceed MAX_COPIES"
-        );
-        let retained = self.coupled_frame.get_or_insert_with(|| CoupledRigidFrame {
-            copies: Vec::with_capacity(MAX_COPIES),
-            ..CoupledRigidFrame::default()
-        });
-        retained.stamp = frame.stamp;
-        retained.poses = frame.poses;
-        retained.copies.clear();
-        retained.copies.extend_from_slice(&frame.copies);
-        self.coupled_frame_ready = true;
-    }
     // While a body is pending the simulation clock holds instead of jumping
     // when the body lands; coupled mode publishes the liquid's frame.
     fn runs_with_pending_inputs(&self) -> bool {
@@ -747,6 +651,116 @@ impl Primitive for PhysicsWorldNode {
         }
     }
 }
+
+impl PhysicsNode for PhysicsWorldNode {
+    fn set_coupled_physics(&mut self, enabled: bool) {
+        if self.coupled_mode == enabled {
+            return;
+        }
+        self.coupled_mode = enabled;
+        self.simulation = RigidSimulation::default();
+        self.rigid_scene_observation = None;
+        self.coupled_frame_ready = false;
+        self.coupled_frame = enabled.then(|| CoupledRigidFrame {
+            copies: Vec::with_capacity(MAX_COPIES),
+            ..CoupledRigidFrame::default()
+        });
+    }
+
+    fn rigid_scene_observation(&self) -> Option<&RigidSceneObservation> {
+        self.rigid_scene_observation.as_ref()
+    }
+
+    fn physics_impulse_epoch(&self) -> Option<u64> {
+        if self.coupled_mode {
+            return None;
+        }
+        self.simulation.impulse_epoch()
+    }
+
+    fn physics_impulse_stamp(
+        &self,
+        transport: manifold_core::Seconds,
+        sequence: u64,
+    ) -> Result<manifold_physics::input::EventStamp, String> {
+        if self.coupled_mode {
+            return Err("Physics World coupled mode has no private impulse clock".into());
+        }
+        self.simulation.impulse_stamp(transport, sequence)
+    }
+
+    fn enqueue_physics_impulse(
+        &mut self,
+        stamp: manifold_physics::input::EventStamp,
+        impulse: ResolvedNodeImpulse,
+    ) -> Result<manifold_physics::TickStamp, String> {
+        if self.coupled_mode {
+            return Err("Physics World coupled mode routes impulses through the paired fluid worker".into());
+        }
+        let ImpulseTarget::Rigid(targets) = impulse.target else {
+            return Err("Physics World cannot accept a fluid impulse".into());
+        };
+        self.simulation.enqueue_impulse(
+            stamp,
+            ResolvedRigidImpulse {
+                field: impulse.field,
+                targets,
+            },
+        )
+    }
+
+    fn drain_physics_impulses(
+        &mut self,
+        consume: &mut dyn FnMut(
+            manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>,
+        ),
+    ) {
+        if self.coupled_mode {
+            return;
+        }
+        for event in self.simulation.drain_applied_impulses() {
+            map_rigid_receipt(event, consume);
+        }
+    }
+
+    fn capture_coupled_rigid(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
+        self.set_coupled_physics(true);
+        self.rigid_scene_observation = None;
+        self.coupled_frame_ready = false;
+        let Some(observation) = self.resolve_rigid_scene_observation(ctx, true)? else {
+            ctx.mark_outputs_pending();
+            return Ok(());
+        };
+        self.rigid_scene_observation = Some(observation);
+        Ok(())
+    }
+
+    fn accept_coupled_rigid_frame(&mut self, frame: Option<&CoupledRigidFrame>) {
+        if !self.coupled_mode {
+            return;
+        }
+        let Some(frame) = frame else {
+            self.coupled_frame_ready = false;
+            return;
+        };
+        assert!(
+            frame.copies.len() <= MAX_COPIES,
+            "CoupledRigidFrame copies exceed MAX_COPIES"
+        );
+        let retained = self.coupled_frame.get_or_insert_with(|| CoupledRigidFrame {
+            copies: Vec::with_capacity(MAX_COPIES),
+            ..CoupledRigidFrame::default()
+        });
+        retained.stamp = frame.stamp;
+        retained.poses = frame.poses;
+        retained.copies.clear();
+        retained.copies.extend_from_slice(&frame.copies);
+        self.coupled_frame_ready = true;
+    }
+}
+
+inventory::submit! { PhysicsNodeRegistration::new::<PhysicsWorldNode>() }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -916,11 +930,16 @@ mod tests {
         let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
         let graph_node: &mut dyn EffectNode = node;
         if coupled {
-            let _ = graph_node.capture_coupled_rigid(&mut ctx);
+            let native = crate::water::node::get_mut(graph_node)
+                .expect("PhysicsWorldNode has a native PhysicsNode registration");
+            let _ = native.capture_coupled_rigid(&mut ctx);
         } else {
             graph_node.evaluate(&mut ctx);
         }
-        graph_node.rigid_scene_observation().cloned()
+        crate::water::node::get(graph_node)
+            .expect("PhysicsWorldNode has a native PhysicsNode registration")
+            .rigid_scene_observation()
+            .cloned()
     }
 
     fn evaluate_coupled_outputs(
@@ -1152,8 +1171,10 @@ mod tests {
         assert_eq!(observation.transport, Seconds::ZERO);
         assert!(node.simulation.native_world().is_none());
         let graph_node: &mut dyn EffectNode = &mut node;
-        assert!(graph_node.physics_impulse_epoch().is_none());
-        assert!(graph_node
+        let native = crate::water::node::get(graph_node)
+            .expect("PhysicsWorldNode has a native PhysicsNode registration");
+        assert!(native.physics_impulse_epoch().is_none());
+        assert!(native
             .physics_impulse_stamp(Seconds::ZERO, 0)
             .is_err());
 
@@ -1182,7 +1203,7 @@ mod tests {
     #[test]
     fn coupled_pending_capture_keeps_reserved_copies_and_publishes_nothing() {
         let mut node = PhysicsWorldNode::new();
-        Primitive::set_coupled_physics(&mut node, true);
+        PhysicsNode::set_coupled_physics(&mut node, true);
         let capacity = node
             .coupled_frame
             .as_ref()
@@ -1229,7 +1250,9 @@ mod tests {
             ..crate::scene::transform::Transform::default()
         });
         let graph_node: &mut dyn EffectNode = &mut node;
-        graph_node.accept_coupled_rigid_frame(Some(&frame));
+        crate::water::node::get_mut(graph_node)
+            .expect("PhysicsWorldNode has a native PhysicsNode registration")
+            .accept_coupled_rigid_frame(Some(&frame));
         let (pose, active_count) = evaluate_coupled_outputs(&mut node);
         assert_eq!(pose.expect("published pose").pos, [7.0, 8.0, 9.0]);
         assert_eq!(active_count, Some(ParamValue::Float(1.0)));
@@ -1253,7 +1276,7 @@ mod tests {
         .expect("coupled capture observation");
         let mut frame = CoupledRigidFrame::default();
         frame.copies.push(crate::scene::transform::Transform::default());
-        EffectNode::accept_coupled_rigid_frame(&mut node, Some(&frame));
+        PhysicsNode::accept_coupled_rigid_frame(&mut node, Some(&frame));
         EffectNode::clear_state(&mut node);
         assert!(node.coupled_mode);
         assert!(node.rigid_scene_observation.is_none());
@@ -1272,7 +1295,7 @@ mod tests {
         node.simulation
             .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
             .expect("native rigid world initialization");
-        let epoch = EffectNode::physics_impulse_epoch(&node).expect("native impulse epoch");
+        let epoch = PhysicsNode::physics_impulse_epoch(&node).expect("native impulse epoch");
         let stamp = EventStamp {
             epoch,
             time: Seconds::ZERO,
@@ -1293,12 +1316,14 @@ mod tests {
 
         {
             let graph_node: &mut dyn EffectNode = &mut node;
-            assert!(graph_node
+            let native = crate::water::node::get_mut(graph_node)
+                .expect("PhysicsWorldNode has a native PhysicsNode registration");
+            assert!(native
                 .enqueue_physics_impulse(stamp, wrong)
                 .expect_err("wrong target must be rejected before queue admission")
                 .contains("fluid"));
             assert_eq!(
-                graph_node
+                native
                     .enqueue_physics_impulse(stamp, valid)
                     .expect("same producer sequence must remain valid"),
                 manifold_physics::TickStamp { epoch, tick: 0 }
@@ -1311,7 +1336,9 @@ mod tests {
 
         let mut receipts = Vec::new();
         let graph_node: &mut dyn EffectNode = &mut node;
-        graph_node.drain_physics_impulses(&mut |event| receipts.push(event));
+        crate::water::node::get_mut(graph_node)
+            .expect("PhysicsWorldNode has a native PhysicsNode registration")
+            .drain_physics_impulses(&mut |event| receipts.push(event));
         assert_eq!(receipts.len(), 1);
         let receipt = receipts.pop().expect("one rigid receipt");
         assert_eq!(receipt.source, stamp);
@@ -1325,7 +1352,9 @@ mod tests {
                 copies: false,
             })
         );
-        graph_node.drain_physics_impulses(&mut |_| panic!("receipt drained twice"));
+        crate::water::node::get_mut(graph_node)
+            .expect("PhysicsWorldNode has a native PhysicsNode registration")
+            .drain_physics_impulses(&mut |_| panic!("receipt drained twice"));
     }
 }
 

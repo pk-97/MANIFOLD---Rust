@@ -379,6 +379,45 @@ host modulation, field composition, shared geometry and recycled body slots.
 The compiler also found the three payload accesses inside `physics_carry`'s
 macro; those use the same storage API. No full water GPU parity claim yet.
 
+#### P5 native node interface
+
+Move the 15 native methods from `Primitive` and `EffectNode` into one water-owned
+`water::node::PhysicsNode: Send` trait, retaining their signatures and defaults:
+`fluid_domain_snapshot`, `rigid_scene_observation`, `set_coupled_physics`,
+`set_physics_project_tempo`, `request_physics_samples`,
+`set_physics_source_identity`, `capture_coupled_rigid`,
+`set_coupled_rigid_inputs`, `coupled_rigid_frame`, `accept_coupled_rigid_frame`,
+`physics_impulse_epoch`, `physics_impulse_stamp`, `enqueue_physics_impulse`,
+`drain_physics_impulses`, and `drain_discarded_impulses`.
+Asset-path/provenance methods remain on the generic traits: scene and image
+sources also implement them. Native solvers and payload types do not move.
+
+Reuse `EffectNode`'s blanket `AsAny`, adding its ordinary mutable counterpart
+`as_any_mut(&mut self) -> &mut dyn Any`. Water collects
+`PhysicsNodeRegistration::new<T: EffectNode + PhysicsNode + 'static>()` through
+inventory. Each entry holds its Rust `TypeId` and two checked cast functions.
+`get(&dyn EffectNode) -> Option<&dyn PhysicsNode>` and
+`get_mut(&mut dyn EffectNode) -> Option<&mut dyn PhysicsNode>` borrow the existing
+node; they never create another node or box. An immutable `AHashMap` indexes the
+registrations, rejecting duplicates. Water's existing `physics_sample_steps`
+construction pass initializes that index before live evaluation.
+
+The four production implementations are `PhysicsWorldNode`, `FluidSurface`,
+`GpuFlipDomain` and `MatterDomain`. Move their native method bodies unchanged to
+`impl PhysicsNode`; each registers once. Move the two synthetic implementations
+with their existing tests. Optional observations and broadcasts skip nodes with
+no native interface; validated impulse recipients require it and preserve their
+existing error paths. Concrete tests invoke `PhysicsNode` directly; graph-facing
+tests continue exercising registered dispatch and receipt ordering.
+
+Rejected: opaque `Any` event messages, because they discard typed admission and
+receipt contracts; keeping native defaults on generic traits, because that
+retains the dependency being removed. The cost is one registration lookup and
+checked cast when accessing a native interface. No mutable shared state, frame
+allocations, numerical changes or new clock. Generic coupled scheduling and
+runtime state separation must still remove the remaining engine calls into
+water before the crate move; this interface is not a completed extraction.
+
 Phasing-completeness check: every D1 crate appears in exactly one phase's deliverables (ui-paint P1a, graph P1, image/scene/compositor P2, nodes P3, water P5); D5 P0; D6 P3; D7 P1/P2; D8 P4; D10 P0; D11 P0; D12 P1a; INV-5's script P0; measurement P4.
 
 ---

@@ -6,6 +6,7 @@ use manifold_physics::FieldValue;
 
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::exec::effect_node::FrameTime;
+use manifold_node_engine::water::node;
 use manifold_node_engine::water::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
 use manifold_node_engine::{parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry};
 
@@ -491,6 +492,7 @@ fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
         .instance_by_node_id(&NodeId::new("world_b"))
         .unwrap();
     let node = &mut runtime.graph.get_node_mut(second).unwrap().node;
+    let node = node::get_mut(node.as_mut()).expect("native world fixture");
     let epoch = node.physics_impulse_epoch().unwrap();
     for sequence in 0..256 {
         node.enqueue_physics_impulse(

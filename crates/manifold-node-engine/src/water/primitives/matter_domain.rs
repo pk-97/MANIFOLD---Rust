@@ -32,6 +32,7 @@ use crate::water::matter::{MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_so
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::water::physics::{RigidImpulseTargets, RigidSceneInputs, RigidSceneObservation, offline_simulation};
 use crate::water::physics_events::ResolvedNodeImpulse;
+use crate::water::node::{PhysicsNode, PhysicsNodeRegistration};
 use crate::primitive::Primitive;
 use crate::exec::substeps::{SubstepClockOutput, SubstepInterval};
 use crate::scene::transform::Transform;
@@ -662,6 +663,9 @@ impl Primitive for MatterDomain {
         self.clock.restart();
     }
 
+}
+
+impl PhysicsNode for MatterDomain {
     fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
         self.fields.request_samples(&self.clock, from, until, out);
         self.bodies.request_samples(&self.clock, from, until, out);
@@ -744,6 +748,8 @@ impl Primitive for MatterDomain {
         self.impulses.drain_discarded(consume);
     }
 }
+
+inventory::submit! { PhysicsNodeRegistration::new::<MatterDomain>() }
 
 impl MatterDomain {
     /// Keep the reaction and the provided body, shape and atlas buffers

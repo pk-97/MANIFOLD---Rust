@@ -169,13 +169,10 @@ fn fluid_graph_cache_ignores_appearance_but_rejects_authored_force_edits() {
             .graph
             .instance_by_node_id(&NodeId::new("fluid"))
             .unwrap();
-        runtime
-            .graph
-            .get_node(fluid)
-            .unwrap()
-            .node
+        crate::water::node::get(runtime.graph.get_node(fluid).unwrap().node.as_ref())
+            .expect("native fluid fixture")
             .fluid_domain_snapshot()
-            .unwrap()
+            .expect("accepted fluid domain")
             .state
     };
     playback.execute_frame(time(0.1));
@@ -254,13 +251,10 @@ fn fluid_graph_cache_validates_host_controls_without_treating_effectives_as_edit
             .graph
             .instance_by_node_id(&NodeId::new("fluid"))
             .unwrap();
-        runtime
-            .graph
-            .get_node(fluid)
-            .unwrap()
-            .node
+        crate::water::node::get(runtime.graph.get_node(fluid).unwrap().node.as_ref())
+            .expect("native fluid fixture")
             .fluid_domain_snapshot()
-            .unwrap()
+            .expect("accepted fluid domain")
     };
     let apply = |runtime: &mut PresetRuntime, instance: &PresetInstance| {
         runtime.set_physics_source_instance(Some(instance));

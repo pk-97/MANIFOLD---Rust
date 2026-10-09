@@ -340,16 +340,12 @@ manifold_core::testkit_visible! {
                 colliders,
             });
         }
-        self.nodes
-            .get_mut(&fluid)
-            .expect("validated coupled fluid node")
-            .node
-            .set_coupled_physics(true);
-        self.nodes
-            .get_mut(&rigid)
-            .expect("validated coupled rigid node")
-            .node
-            .set_coupled_physics(true);
+        for id in [fluid, rigid] {
+            let instance = self.nodes.get_mut(&id).expect("validated coupled node");
+            if let Some(native) = crate::water::node::get_mut(instance.node.as_mut()) {
+                native.set_coupled_physics(true);
+            }
+        }
         Ok(())
     }
 
@@ -402,8 +398,9 @@ manifold_core::testkit_visible! {
                 .iter()
                 .any(|other| other.fluid == surviving || other.rigid == surviving)
                 && let Some(inst) = self.nodes.get_mut(&surviving)
+                && let Some(native) = crate::water::node::get_mut(inst.node.as_mut())
             {
-                inst.node.set_coupled_physics(false);
+                native.set_coupled_physics(false);
             }
         }
         Some(removed)

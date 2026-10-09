@@ -10,6 +10,7 @@ use manifold_physics::{FieldValue, TickStamp};
 
 use crate::{exec::effect_node::FrameTime, runtime::PresetRuntime};
 use crate::water::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
+use crate::water::node;
 use crate::{exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId};
 
 struct Recipient {
@@ -65,7 +66,10 @@ impl PreparedSceneImpulse {
 impl CapturedSceneImpulse {
     pub(super) fn has_stale_epoch(&self, graph: &crate::graph::Graph) -> bool {
         self.source.is_some() && self.recipients.iter().zip(&self.stamps).any(|(recipient, stamp)| {
-            graph.get_node(recipient.instance).and_then(|node| node.node.physics_impulse_epoch())
+            graph
+                .get_node(recipient.instance)
+                .and_then(|node| node::get(node.node.as_ref()))
+                .and_then(|native| native.physics_impulse_epoch())
                 .is_some_and(|epoch| epoch != stamp.epoch)
         })
     }
@@ -116,7 +120,11 @@ impl PresetRuntime {
             captured,
             source,
             sequence,
-            |_, node, transport, sequence| node.physics_impulse_stamp(transport, sequence),
+            |_, effect_node, transport, sequence| {
+                let native = node::get(effect_node)
+                    .ok_or_else(|| "node does not expose a native impulse clock".to_owned())?;
+                native.physics_impulse_stamp(transport, sequence)
+            },
         )
     }
 
@@ -287,7 +295,8 @@ impl PresetRuntime {
         self.capture_scene_impulse_with_stamp(
             binding, captured, source, sequence,
             |id, node, transport, sequence| {
-                let epoch = node.physics_impulse_epoch()
+                let epoch = node::get(node)
+                    .and_then(|native| native.physics_impulse_epoch())
                     .ok_or_else(|| format!("Impulse: `{id}` is not initialized"))?;
                 Ok(EventStamp { epoch, time: map_time(id, transport)?, sequence })
             },
@@ -376,7 +385,8 @@ impl PresetRuntime {
             if self
                 .graph
                 .get_node(recipient.instance)
-                .and_then(|node| node.node.physics_impulse_epoch())
+                .and_then(|node| node::get(node.node.as_ref()))
+                .and_then(|native| native.physics_impulse_epoch())
                 != Some(stamp.epoch)
             {
                 return Err(format!(
@@ -398,7 +408,9 @@ impl PresetRuntime {
                 .graph
                 .get_node_mut(recipient.instance)
                 .expect("validated recipient");
-            *planned = Some(node.node.enqueue_physics_impulse(
+            let native = node::get_mut(node.node.as_mut())
+                .ok_or_else(|| "node does not accept physics impulses".to_owned())?;
+            *planned = Some(native.enqueue_physics_impulse(
                 stamp,
                 ResolvedNodeImpulse {
                     field: field.clone(),
@@ -417,8 +429,9 @@ impl PresetRuntime {
     ) {
         for node in self.graph.nodes_mut() {
             let id = &node.node_id;
-            node.node
-                .drain_physics_impulses(&mut |event| consume(id, event));
+            if let Some(native) = node::get_mut(node.node.as_mut()) {
+                native.drain_physics_impulses(&mut |event| consume(id, event));
+            }
         }
     }
 
@@ -427,7 +440,9 @@ impl PresetRuntime {
     pub fn drain_discarded_scene_impulses(&mut self, mut consume: impl FnMut(&NodeId, EventStamp)) {
         for node in self.graph.nodes_mut() {
             let id = &node.node_id;
-            node.node.drain_discarded_impulses(&mut |stamp| consume(id, stamp));
+            if let Some(native) = node::get_mut(node.node.as_mut()) {
+                native.drain_discarded_impulses(&mut |stamp| consume(id, stamp));
+            }
         }
     }
 }

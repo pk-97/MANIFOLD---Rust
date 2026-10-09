@@ -120,13 +120,10 @@ fn state(runtime: &PresetRuntime) -> FluidDomainState {
         .graph
         .instance_by_node_id(&NodeId::new("fluid"))
         .unwrap();
-    runtime
-        .graph
-        .get_node(fluid)
-        .unwrap()
-        .node
+    crate::water::node::get(runtime.graph.get_node(fluid).unwrap().node.as_ref())
+        .expect("native fluid fixture")
         .fluid_domain_snapshot()
-        .unwrap()
+        .expect("accepted fluid domain")
         .state
 }
 

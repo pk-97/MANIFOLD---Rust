@@ -13,6 +13,7 @@ use manifold_core::Seconds;
 use crate::scene::boundary_nodes::GENERATOR_INPUT_TYPE_ID;
 use crate::exec::effect_node::ParamValues;
 use crate::water::physics::{PhysicsHistoryDrainScope, offline_simulation};
+use crate::water::node;
 use crate::runtime::preset_context::ProjectTempo;
 use manifold_core::audio_mod::HopValue;
 use manifold_core::effects::PresetInstance;
@@ -235,6 +236,7 @@ pub(crate) fn physics_sample_steps(
     graph: &Graph,
     plan: &ExecutionPlan,
 ) -> Result<Option<Vec<bool>>, String> {
+    node::initialize();
     use std::collections::HashSet;
 
     let replays_history = |type_id: &str| {
@@ -325,7 +327,9 @@ impl PresetRuntime {
         // map did not change. The node dirty-checks its retained source.
         if self.physics_sample_steps.is_some() {
             for instance in self.graph.nodes_mut() {
-                instance.node.set_physics_project_tempo(tempo);
+                if let Some(native) = node::get_mut(instance.node.as_mut()) {
+                    native.set_physics_project_tempo(tempo);
+                }
             }
         }
         for view in &mut self.math_views {
@@ -471,9 +475,13 @@ impl PresetRuntime {
         // comes from its own simulated time, whatever the display rate.
         inputs.tick_times.clear();
         for instance in self.graph.nodes_mut() {
-            instance
-                .node
-                .request_physics_samples(previous.seconds.0, current.seconds.0, &mut inputs.tick_times);
+            if let Some(native) = node::get_mut(instance.node.as_mut()) {
+                native.request_physics_samples(
+                    previous.seconds.0,
+                    current.seconds.0,
+                    &mut inputs.tick_times,
+                );
+            }
         }
         inputs.tick_times.sort_by(f64::total_cmp);
         let mut tick_index = 0;
