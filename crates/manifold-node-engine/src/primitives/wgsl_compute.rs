@@ -43,7 +43,7 @@ use std::sync::OnceLock;
 use ahash::{AHashMap, AHashSet};
 use manifold_gpu::{GpuAddressMode, GpuBinding, GpuComputePipeline, GpuSampler, GpuTextureFormat};
 
-use crate::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires};
+use crate::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, NodeRequires, intern_dynamic_name};
 use crate::freeze::classify::{CapacityExpr, FusionKind};
 use crate::freeze::markers::Marker;
 use crate::scene::mesh_change::{MeshOutputRule, PreparedMeshOutputRule, PreparedMeshRevisionRule};
@@ -107,11 +107,9 @@ pub struct WgslCompute {
     /// `Source` for a fragment-form node, `Boundary` (the opaque-kernel default)
     /// for a full-kernel node. Returned by the [`EffectNode::fusion_kind`] impl.
     fusion_kind: FusionKind,
-    /// Leaked fragment body (the verbatim `fn body(...)` fragment) returned by
-    /// [`EffectNode::wgsl_body`]. `None` for a full-kernel node. Leaked because
-    /// the trait returns `&'static str` (an atom's body is normally an
-    /// `include_str!`); bounded by distinct fragment sources in a session.
-    fusion_body: Option<&'static str>,
+    /// Authored `fn body(...)` fragment, borrowed by the freeze compiler.
+    /// `None` for a full-kernel node.
+    fusion_body: Option<String>,
 
     // Derived from naga on `set_wgsl_source` / `new`:
     inputs: Vec<NodeInput>,
@@ -120,11 +118,7 @@ pub struct WgslCompute {
     bindings: Vec<BindingSlot>,
     uniform_layout: Option<UniformLayout>,
     workgroup_size: [u32; 3],
-    aliased_pairs: Vec<(String, String)>,
-    /// Long-lived &str view of `aliased_pairs`, returned by the
-    /// `aliased_array_io` trait method. Rebuilt on every parse so
-    /// references stay valid for `&self` borrows.
-    aliased_view: Vec<(&'static str, &'static str)>,
+    aliased_pairs: Vec<(&'static str, &'static str)>,
     /// Output port names that should be sized to canvas dims by the
     /// chain pre-allocator. Currently every `Array<atomic<u32>>`
     /// accumulator output gets this treatment, matching the convention
@@ -141,12 +135,6 @@ pub struct WgslCompute {
     /// Survives `reparse` — the JSON-side scale describes the
     /// PORT, not the WGSL.
     output_canvas_scales: AHashMap<String, (u32, u32)>,
-    /// String arena backing the leaked `&'static str`s used by port
-    /// declarations and the aliased_view. Each parse leaks fresh
-    /// strings; bounded by distinct port names across the process
-    /// lifetime (acceptable — port names come from WGSL identifiers
-    /// and a session uses a small finite set).
-    _leaked_strings: Vec<&'static str>,
     output_formats: AHashMap<String, GpuTextureFormat>,
     /// Which output port determines dispatch geometry. Defaults to the
     /// first storage texture output, falling back to the first array
@@ -227,10 +215,10 @@ pub struct WgslCompute {
     /// [`Self::inputs`] in declaration order (the `input_access_of` contract).
     /// Empty (the trait default) when the source carries no markers — every
     /// hand-authored kernel keeps its prior conservative-filtering treatment.
-    input_access_view: &'static [crate::freeze::classify::InputAccess],
+    input_access: Vec<crate::freeze::classify::InputAccess>,
     /// Ports named by `// @precision_critical:` markers — the fused kernel
     /// re-declares the D6(a) fp32 request its members would have made unfused.
-    precision_critical_view: &'static [&'static str],
+    precision_critical_inputs: Vec<&'static str>,
 }
 
 #[derive(Clone, Debug)]
@@ -373,10 +361,8 @@ impl WgslCompute {
             uniform_layout: None,
             workgroup_size: [1, 1, 1],
             aliased_pairs: Vec::new(),
-            aliased_view: Vec::new(),
             canvas_sized_outputs: Vec::new(),
             output_canvas_scales: AHashMap::new(),
-            _leaked_strings: Vec::new(),
             output_formats: AHashMap::new(),
             dispatch_port: None,
             sampler_address_mode: GpuAddressMode::ClampToEdge,
@@ -393,8 +379,8 @@ impl WgslCompute {
             compile_failed: false,
             uniform_scratch: Vec::new(),
             last_logged_uniforms: AHashMap::new(),
-            input_access_view: &[],
-            precision_critical_view: &[],
+            input_access: Vec::new(),
+            precision_critical_inputs: Vec::new(),
         };
         node.reparse(DEFAULT_WGSL.to_string());
         node
@@ -426,8 +412,8 @@ impl WgslCompute {
         // Synthesize the standalone kernel from those, then run the EXISTING
         // introspection on it — so the compile/dispatch/uniform-packing path is
         // byte-identical to a hand-authored kernel. The fragment text is kept in
-        // `fragment_source` (round-trip) and the body is leaked for the freeze
-        // compiler's `wgsl_body()`. Fail closed: a fragment that doesn't
+        // `fragment_source` (round-trip); the node owns the body borrowed by the
+        // freeze compiler's `wgsl_body()`. Fail closed: a fragment that doesn't
         // synthesize/parse leaves the node compile-failed (renders nothing — a
         // clear load error check-presets surfaces), never a broken card.
         let fragment = FusionFragment::parse(&source);
@@ -488,7 +474,7 @@ impl WgslCompute {
         self.dispatch_count_param = parsed.dispatch_count_param;
         self.fused_output_capacity = parsed.fused_output_capacity;
         self.derived_uniform_members = parsed.derived_uniform_members;
-        // P7/D8: rebuild the leaked access/precision views from the source's
+        // Rebuild access/precision metadata from the source's
         // markers, aligned to the texture inputs in declaration order. No
         // markers → empty slices → identical-to-before trait defaults.
         {
@@ -516,10 +502,10 @@ impl WgslCompute {
                 }
             }
             if access_map.is_empty() && pc_ports.is_empty() {
-                self.input_access_view = &[];
-                self.precision_critical_view = &[];
+                self.input_access.clear();
+                self.precision_critical_inputs.clear();
             } else {
-                let access_vec: Vec<InputAccess> = self
+                self.input_access = self
                     .inputs
                     .iter()
                     .filter(|i| {
@@ -532,32 +518,13 @@ impl WgslCompute {
                     })
                     .map(|i| access_map.get(i.name.as_ref()).copied().unwrap_or_default())
                     .collect();
-                self.input_access_view = Box::leak(access_vec.into_boxed_slice());
-                let pc_vec: Vec<&'static str> = pc_ports
-                    .into_iter()
-                    .map(|p| {
-                        let leaked: &'static str = Box::leak(p.into_boxed_str());
-                        self._leaked_strings.push(leaked);
-                        leaked
-                    })
+                self.precision_critical_inputs = pc_ports
+                    .iter()
+                    .map(|p| intern_dynamic_name(p))
                     .collect();
-                self.precision_critical_view = Box::leak(pc_vec.into_boxed_slice());
             }
         }
 
-        // Rebuild leaked &'static views.
-        self._leaked_strings.clear();
-        self.aliased_view = self
-            .aliased_pairs
-            .iter()
-            .map(|(a, b)| {
-                let la: &'static str = Box::leak(a.clone().into_boxed_str());
-                let lb: &'static str = Box::leak(b.clone().into_boxed_str());
-                self._leaked_strings.push(la);
-                self._leaked_strings.push(lb);
-                (la, lb)
-            })
-            .collect();
         // Atomic-u32 accumulator outputs default to canvas-sized
         // allocation, matching node.draw_particles' convention. The
         // dynamic node has no way to express custom capacity yet —
@@ -569,9 +536,7 @@ impl WgslCompute {
             .iter()
             .filter_map(|b| match &b.kind {
                 BindingKind::StorageAtomicAccumOut { port } => {
-                    let leaked: &'static str = Box::leak(port.clone().into_boxed_str());
-                    self._leaked_strings.push(leaked);
-                    Some(leaked)
+                    Some(intern_dynamic_name(port))
                 }
                 _ => None,
             })
@@ -590,13 +555,12 @@ impl WgslCompute {
         // them — overwrite with the fragment's ParamDefs, whose names, order and
         // count match the synthesized uniform members one-to-one (same PARAMS
         // order both directions), so the layout/port-shadow bindings stay valid.
-        match &fragment {
+        match fragment {
             Some(frag) => {
                 self.fragment_source = Some(source);
                 self.fusion_kind = frag.kind;
-                self.fusion_body =
-                    Some(Box::leak(frag.body.clone().into_boxed_str()) as &'static str);
-                self.params = frag.params.clone();
+                self.fusion_body = Some(frag.body);
+                self.params = frag.params;
 
                 // `generate_standalone` names each texture-input binding
                 // `tex_<name>` and the single output `dst`. Rename the
@@ -613,7 +577,7 @@ impl WgslCompute {
                     if matches!(inp.ty, PortType::Texture2D | PortType::Texture2DTyped(_))
                         && let Some(stripped) = inp.name.strip_prefix("tex_")
                     {
-                        inp.name = Cow::Borrowed(leak_str(stripped));
+                        inp.name = Cow::Borrowed(intern_dynamic_name(stripped));
                     }
                 }
                 for b in &mut self.bindings {
@@ -661,7 +625,7 @@ struct ParsedShader {
     bindings: Vec<BindingSlot>,
     uniform_layout: Option<UniformLayout>,
     workgroup_size: [u32; 3],
-    aliased_pairs: Vec<(String, String)>,
+    aliased_pairs: Vec<(&'static str, &'static str)>,
     output_formats: AHashMap<String, GpuTextureFormat>,
     default_dispatch_port: Option<String>,
     sampler_address_mode: GpuAddressMode,
@@ -766,7 +730,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     let mut params: Vec<ParamDef> = Vec::new();
     let mut bindings: Vec<BindingSlot> = Vec::new();
     let mut uniform_layout: Option<UniformLayout> = None;
-    let mut aliased_pairs: Vec<(String, String)> = Vec::new();
+    let mut aliased_pairs = Vec::new();
     let mut output_formats: AHashMap<String, GpuTextureFormat> = AHashMap::new();
     let mut default_dispatch_port: Option<String> = None;
     let mut first_array_out: Option<String> = None;
@@ -832,7 +796,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                     match class {
                         naga::ImageClass::Sampled { .. } => {
                             inputs.push(NodePort {
-                                name: Cow::Borrowed(leak_str(&name)),
+                                name: Cow::Borrowed(intern_dynamic_name(&name)),
                                 ty: if is_3d { PortType::Texture3D } else { PortType::Texture2D },
                                 kind: PortKind::Input,
                                 required: true,
@@ -849,7 +813,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                             let write_only =
                                 access.contains(naga::StorageAccess::STORE)
                                     && !access.contains(naga::StorageAccess::LOAD);
-                            let port_name = leak_str(&name);
+                            let port_name = intern_dynamic_name(&name);
                             outputs.push(NodePort {
                                 name: Cow::Borrowed(port_name),
                                 ty: PortType::Texture2D,
@@ -921,7 +885,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                     // `node.cast_as_u32` to relabel the wire. wgsl_compute
                     // itself is type-agnostic: the WGSL kernel owns the
                     // per-byte interpretation.
-                    let port_name = leak_str(&name);
+                    let port_name = intern_dynamic_name(&name);
                     // Atomic accumulator: an `array<atomic<u32>>` is
                     // u32-per-slot, so the Channels signature is the
                     // single-channel u32 form that downstream consumers
@@ -956,7 +920,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                     // honoring any `// @channel_skip` markers in the
                     // source.
                     let item = element_to_array_type(element, stride, &module, &skip_map)?;
-                    let port_name = leak_str(&name);
+                    let port_name = intern_dynamic_name(&name);
                     if fused_outputs.contains(&name) {
                         // `// @fused_output` — a fresh OUTPUT-ONLY array (the
                         // buffer-fusion dst). Declared read_write (WGSL has no
@@ -994,7 +958,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                             kind: PortKind::Output,
                             required: false,
                         });
-                        aliased_pairs.push((name.clone(), name.clone()));
+                        aliased_pairs.push((port_name, port_name));
                         if default_dispatch_port.is_none() && first_array_out.is_none() {
                             first_array_out = Some(name.clone());
                         }
@@ -1167,7 +1131,7 @@ fn parse_uniform(
         if name.starts_with("_pad") {
             continue;
         }
-        let pname = leak_str(&name);
+        let pname = intern_dynamic_name(&name);
         let param_ty = match ty {
             UniformMemberType::F32 => ParamType::Float,
             UniformMemberType::I32 | UniformMemberType::U32 => ParamType::Int,
@@ -1281,9 +1245,8 @@ fn element_to_array_type(
 ///   matching size+align via the raw-byte rule in
 ///   `port_types_compatible`.
 ///
-/// The returned slice is `'static` via `Box::leak`. Same justification
-/// as `leak_str`: bounded by the distinct field-name + element-type
-/// combinations across all loaded wgsl_compute shaders in a session.
+/// Channel signatures are interned once per distinct layout because
+/// `ArrayType` stores a static slice and is copied into execution plans.
 fn struct_members_to_specs(
     members: &[naga::StructMember],
     module: &naga::Module,
@@ -1305,17 +1268,12 @@ fn struct_members_to_specs(
         let Some(ty) = naga_type_to_channel_element_type(inner) else {
             return &[];
         };
-        // Leak the field name to a `'static` str so it can both back
-        // the `ChannelName` (hash-keyed) and register against the
-        // runtime debug-name registry. The registration lets editor
-        // tooltips and validator error messages recover "real" /
-        // "_pad0" / etc. instead of showing the raw hex hash.
-        let leaked = leak_str(name);
-        let ch = crate::ports::ChannelName::from_str(leaked);
-        crate::channel_names::register_runtime_name(ch, leaked);
+        let name = intern_dynamic_name(name);
+        let ch = crate::ports::ChannelName::from_str(name);
+        crate::channel_names::register_runtime_name(ch, name);
         specs.push(ChannelSpec { name: ch, ty });
     }
-    Box::leak(specs.into_boxed_slice())
+    crate::channel_names::intern_runtime_specs(specs)
 }
 
 fn naga_type_to_channel_element_type(inner: &naga::TypeInner) -> Option<ChannelElementType> {
@@ -1349,14 +1307,6 @@ fn storage_format_to_gpu(f: naga::StorageFormat) -> Option<GpuTextureFormat> {
         N::Rgba32Float => GpuTextureFormat::Rgba32Float,
         _ => return None,
     })
-}
-
-/// Leak a runtime string to `&'static str`. Used for port names whose
-/// identity comes from WGSL identifiers. Bounded leak: a session
-/// touches only the distinct port-name set across all loaded
-/// presets, which is tiny.
-fn leak_str(s: &str) -> &'static str {
-    Box::leak(s.to_string().into_boxed_str())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1864,7 +1814,7 @@ impl FusionFragment {
                 let name = rest.trim();
                 if !name.is_empty() {
                     inputs.push(NodePort {
-                        name: Cow::Borrowed(leak_str(name)),
+                        name: Cow::Borrowed(intern_dynamic_name(name)),
                         ty: PortType::Texture2D,
                         kind: PortKind::Input,
                         required: true,
@@ -1949,7 +1899,7 @@ fn parse_fusion_param(rest: &str) -> Option<ParamDef> {
         None => (after_eq, None),
     };
     let default: f32 = default_str.trim().parse().ok()?;
-    let name_static = leak_str(name);
+    let name_static = intern_dynamic_name(name);
     Some(ParamDef {
         name: Cow::Borrowed(name_static),
         label: name_static,
@@ -2005,12 +1955,12 @@ impl EffectNode for WgslCompute {
         self.reparse(source.to_string());
     }
 
-    fn input_access(&self) -> &'static [crate::freeze::classify::InputAccess] {
-        self.input_access_view
+    fn input_access(&self) -> &[crate::freeze::classify::InputAccess] {
+        &self.input_access
     }
 
-    fn precision_critical_inputs(&self) -> &'static [&'static str] {
-        self.precision_critical_view
+    fn precision_critical_inputs(&self) -> &[&str] {
+        &self.precision_critical_inputs
     }
 
     fn fusion_kind(&self) -> FusionKind {
@@ -2040,8 +1990,8 @@ impl EffectNode for WgslCompute {
         self.source_pure
     }
 
-    fn wgsl_body(&self) -> Option<&'static str> {
-        self.fusion_body
+    fn wgsl_body(&self) -> Option<&str> {
+        self.fusion_body.as_deref()
     }
 
     fn output_format(&self, port: &str) -> Option<GpuTextureFormat> {
@@ -2073,7 +2023,7 @@ impl EffectNode for WgslCompute {
     }
 
     fn aliased_array_io(&self) -> &[(&str, &str)] {
-        &self.aliased_view
+        &self.aliased_pairs
     }
 
     fn canvas_sized_array_outputs(&self) -> &[&str] {
@@ -2673,6 +2623,16 @@ mod tests {
         assert_eq!(node.params[0].range, Some((0.0, 2.0)));
         // wgsl_source() round-trips the AUTHORED fragment, not the kernel.
         assert_eq!(node.wgsl_source(), Some(fragment_src.as_str()));
+
+        let edited = fragment_src.replace("c.rgb * scale", "c.rgb + scale");
+        node.set_wgsl_source(&edited);
+        assert!(!node.compile_failed);
+        assert!(node.wgsl_body().unwrap().contains("c.rgb + scale"));
+        assert_eq!(node.wgsl_source(), Some(edited.as_str()));
+        node.set_wgsl_source(DEFAULT_WGSL);
+        assert_eq!(node.fusion_kind(), FusionKind::Boundary);
+        assert!(node.wgsl_body().is_none());
+        assert_eq!(node.wgsl_source(), Some(DEFAULT_WGSL));
     }
 
     /// BUG-012: a scalar `@param` author-named `tex_<x>` (a legal but unusual
@@ -3050,6 +3010,17 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_eq!(aliased.len(), 1);
         assert_eq!(aliased[0], ("particles", "particles"));
         assert_eq!(node.workgroup_size, [256, 1, 1]);
+
+        let name = node.aliased_pairs[0].0;
+        let PortType::Array(array) = node.inputs[1].ty else { unreachable!() };
+        node.set_wgsl_source(DEFAULT_WGSL);
+        assert!(node.aliased_array_io().is_empty());
+        node.set_wgsl_source(src);
+        assert!(!node.compile_failed);
+        assert_eq!(node.aliased_array_io(), &[("particles", "particles")]);
+        assert!(std::ptr::eq(name, node.aliased_array_io()[0].0));
+        let PortType::Array(reparsed) = node.inputs[1].ty else { unreachable!() };
+        assert!(std::ptr::eq(array.specs, reparsed.specs));
     }
 
     #[test]
@@ -3537,6 +3508,35 @@ fn cs_main() { _ = as_in[0].life + bs_in[0].life; }
         // Previous shape is retained — the chain keeps working on
         // last-known-good ports until valid WGSL lands.
         assert_eq!(node.outputs.len(), prior_outputs);
+    }
+
+    #[test]
+    fn reparse_replaces_access_and_precision_metadata() {
+        use crate::freeze::classify::InputAccess;
+
+        let kernel = r#"
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+@compute @workgroup_size(8, 8)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    textureStore(dst, vec2<i32>(id.xy), textureLoad(src, vec2<i32>(id.xy), 0));
+}
+"#;
+        let marked = format!("{}\n{}\n{kernel}",
+            Marker::InputAccess { port: "src".into(), token: "gather_texel".into() }.emit(),
+            Marker::PrecisionCritical { port: "src".into() }.emit(),
+        );
+        let mut node = WgslCompute::new();
+        for _ in 0..2 {
+            node.set_wgsl_source(&marked);
+            assert!(!node.compile_failed);
+            assert_eq!(node.input_access(), &[InputAccess::GatherTexel]);
+            assert_eq!(node.precision_critical_inputs(), &["src"]);
+            node.set_wgsl_source(kernel);
+            assert!(!node.compile_failed);
+            assert!(node.input_access().is_empty());
+            assert!(node.precision_critical_inputs().is_empty());
+        }
     }
 }
 

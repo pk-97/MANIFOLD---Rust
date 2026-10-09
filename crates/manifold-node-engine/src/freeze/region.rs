@@ -1519,10 +1519,10 @@ pub(crate) fn dense_buffer_fusion(
 /// atom has no body, or a token's param value isn't a scalar it can bake.
 /// Enum/Bool/Int params bake as `u32` literals (the token comparison form the
 /// specialized pipelines use); Float bakes as a decimal literal.
-pub(crate) fn substituted_body(
-    n: &dyn crate::exec::effect_node::EffectNode,
+pub(crate) fn substituted_body<'a>(
+    n: &'a dyn crate::exec::effect_node::EffectNode,
     node: &EffectGraphNode,
-) -> Option<std::borrow::Cow<'static, str>> {
+) -> Option<std::borrow::Cow<'a, str>> {
     use crate::parameters::ParamValue;
     use manifold_core::effect_graph_def::SerializedParamValue;
 

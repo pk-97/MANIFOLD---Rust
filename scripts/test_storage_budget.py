@@ -215,6 +215,21 @@ def test_lsof_and_cargo_lock_safety():
         with patch.object(sb.subprocess, "run", return_value=lsof_result(lsof)):
             check("unrelated process is idle", sb.target_live_status(target) is False)
 
+        semaphore = "p123\nf3\ntPSXSEM\nn/ableton.live.omessage-factory\n"
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(semaphore)):
+            check("missing POSIX semaphore does not disable snapshot",
+                  sb.target_live_status(target) is False)
+        semaphore_and_file = semaphore + f"f4\nn{file}\n"
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(semaphore_and_file)):
+            check("live cache remains a veto beside POSIX semaphore",
+                  sb.target_live_status(target) is True)
+        for missing in ("p123\nf3\ntREG\nn/missing-cache-file\n",
+                        "p123\nf3\nn/missing-cache-file\n"):
+            with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0, stdout=missing, stderr="")):
+                check("missing filesystem path disables snapshot",
+                      sb.target_live_status(target) is None)
+
         cargo_lock = target / "debug" / ".cargo-lock"
         cargo_lock.write_bytes(b"lock")
         lock_handle = cargo_lock.open("rb")

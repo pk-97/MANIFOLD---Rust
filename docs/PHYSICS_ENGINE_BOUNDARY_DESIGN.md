@@ -1,8 +1,8 @@
 # Physics engine boundary — concrete engines, shared authoring
 
-**Status:** APPROVED · 2026-10-06 · review amendments folded; implementation pending.
+**Status:** IN PROGRESS · 2026-10-09 · P1 implemented after Tier 1, under validation; later phases pending.
 **Prerequisites:** none for P1 or G1a; later phase entries name their dependencies. Water F1b/F2 shipped.
-**Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. This task authorizes documentation only.
+**Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. P1 implementation is authorized by the post-T1 cleanup campaign; later phases retain their entry conditions.
 
 <!-- index: Engine, graph, and authoring boundaries for physics; Water is the first consumer, with shared insertion, controls, and lifecycle. -->
 
@@ -201,35 +201,11 @@ Before: `Step::publish(enc, shape, index)` dereferences `self.outputs.slots[inde
 
 ### 3.2 Dependencies and allocation
 
-P1 adds the entries below to `[bans].deny` in deny.toml, beside the wgpu/metal precedent. Wrappers are legitimate direct parents, not exemptions for protected crates. The additional workspace targets close indirect routes and make UI's foundation-only rule enforceable.
+`deny.toml` is the authoritative allowed-parent list. P1 adds a ban for each of the 22 non-foundation MANIFOLD packages after Tier 1, beside the existing wgpu/Metal policy. Wrappers preserve declared normal, dev, build, optional, and platform-specific parents. Physics, GPU, and UI may depend only on foundation among workspace crates; fluids may also depend on physics. New workspace packages require an explicit policy entry.
 
-```toml
-deny = [
-    { name = "manifold-app", wrappers = ["manifold-app"] },
-    { name = "manifold-audio", wrappers = ["manifold-app", "manifold-recording"] },
-    { name = "manifold-core", wrappers = ["manifold-app", "manifold-audio", "manifold-editing", "manifold-io", "manifold-media", "manifold-playback", "manifold-nodes"] },
-    { name = "manifold-editing", wrappers = ["manifold-app", "manifold-playback", "manifold-nodes"] },
-    { name = "manifold-fluids", wrappers = ["manifold-nodes"] },
-    { name = "manifold-gpu", wrappers = ["manifold-app", "manifold-led", "manifold-media", "manifold-recording", "manifold-nodes", "manifold-spectral"] },
-    { name = "manifold-io", wrappers = ["manifold-app", "manifold-editing", "manifold-playback", "manifold-nodes"] },
-    { name = "manifold-led", wrappers = ["manifold-app"] },
-    { name = "manifold-media", wrappers = ["manifold-app"] },
-    { name = "manifold-native", wrappers = ["manifold-nodes"] },
-    { name = "manifold-physics", wrappers = ["manifold-fluids", "manifold-nodes"] },
-    { name = "manifold-playback", wrappers = ["manifold-app", "manifold-audio", "manifold-media", "manifold-nodes"] },
-    { name = "manifold-profiler", wrappers = ["manifold-profiler"] },
-    { name = "manifold-recording", wrappers = ["manifold-app"] },
-    { name = "manifold-nodes", wrappers = ["manifold-app"] },
-    { name = "manifold-spectral", wrappers = ["manifold-app", "manifold-audio"] },
-    { name = "manifold-ui", wrappers = ["manifold-app", "manifold-nodes"] },
-]
-```
+App uses a self-wrapper sentinel because empty wrappers also ban an unreferenced workspace root. Profiler now has an actual optional app parent. Unused-wrapper warnings remain visible, including parents inactive under the selected features/platform; they are not globally suppressed. The captured resolved graph passes `cargo deny check bans` without a source dependency refactor.
 
-These are additional entries, not a replacement config; each gains the reason "Physics and UI dependency boundaries". App and profiler deliberately use self-wrapper sentinels: empty wrappers ban even an unreferenced workspace root. A self dependency cannot form a valid Cargo graph, so these entries admit no real consumer. The installed cargo-deny emits two `unused-wrapper` warnings; explain those sentinels in comments without globally suppressing warnings. [Cargo-deny wrapper semantics](https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html#wrappers).
-
-**Existing edges that would trip the intended boundary: none.** The exact candidate allowlists passed `cargo deny check --disable-fetch --config <temporary-config> --metadata-path <captured-metadata> --hide-inclusion-graph bans` with exit 0, existing duplicate warnings, and the two explained sentinel warnings. The initial empty-wrapper candidate failed on app/profiler roots; the sentinels fix that config failure, not a source dependency. Legitimate edges that must remain wrapped include renderer → editing (dev), editing/playback/renderer → IO (dev), and audio → playback (dev). No implementation dependency refactor is required today.
-
-The existing landing leg runs `cargo deny check bans` (`scripts/landing_gate.py:487`–`:493`). P1 also adds `dependency_bans_cover_workspace` to its cheap preflight and tests it in `scripts/test_landing_gate.py`: parse workspace manifests and deny.toml; require every non-foundation MANIFOLD package to have a ban entry; reject protected crates in host-wrapper lists; reject UI in every non-foundation wrapper list. This is manifest/config validation, not lexical import policing. It prevents a new workspace package from silently bypassing the boundary. Test normal/dev/build/target examples with mocked manifest data, without invoking Cargo from a test. The actual cargo-deny leg validates resolved edges. G1b adds the new crate and its allowed lower dependencies to this policy.
+The existing landing deny leg validates resolved edges. `dependency_bans_cover_workspace` in `scripts/gate_readiness.py` checks metadata and configuration before builds: require one nonempty ban entry per non-foundation package, reject stale targets/parents, and enforce the protected lower-crate and UI boundaries. Its mocked fixtures in `scripts/test_landing_gate.py` cover dependency kinds and invalid policy entries without invoking Cargo. G1b must extend the policy when its new crate is added.
 
 The workspace dependencies of manifold-physics-gpu are foundation, gpu, physics, and fluids, plus the existing low-level dependencies used by the moved code. No core, editing, playback, UI, app, native Metal API, or renderer service may be imported by isolated numerical modules. `manifold-gpu` continues to own backend access. Native Metal remains the current backend; shader source names do not authorize a wgpu backend.
 
@@ -348,6 +324,8 @@ impl SceneGraphTransaction {
 ```
 
 Execution validates the expected owner/type/graph, commits the candidate and refreshed manifest once, and records one inverse. Rejection leaves graph, instance values, mappings, and undo stack unchanged. Redo reuses the prepared IDs; it must not regenerate them. Existing modifier command structs remain domain actions backed by this transaction. It is not a public second editing service.
+
+P1 reuses `commands::graph::InstanceLayerSnapshot` and moves the existing parameter-copy logic with the transaction. Transactions accept whole effect or generator owners; nested `SceneModifier` targets reject because their graph cannot replace the host graph. Modifier commands retain generator-only admission and typed domain errors. Their four execution rejection cases map to the existing public errors without duplicating transaction state.
 
 `C/scene_template.rs` adds the data-only template and pure insertion function:
 

@@ -16,7 +16,9 @@
 //! in the appropriate category. The `pub const` and the collision-
 //! check coverage are emitted from the same source list — see section 7.5.
 
-use crate::ports::ChannelName;
+use ahash::{AHashMap, AHashSet};
+
+use crate::ports::{ChannelName, ChannelSpec};
 
 /// Generates the `well_known::*` constants and the corresponding hash
 /// collision test from a single source list.
@@ -258,18 +260,17 @@ pub fn debug_name(ch: ChannelName) -> Option<&'static str> {
     {
         return Some(s);
     }
-    runtime_names()
+    runtime_registry()
         .read()
         .expect("runtime channel-name registry poisoned")
+        .names
         .get(&ch)
         .copied()
 }
 
 /// Register a runtime-introduced channel name so [`debug_name`] can
-/// recover its source string. `name` must be `'static` — `wgsl_compute`
-/// already leaks WGSL field names through `leak_str`; callers with a
-/// non-`'static` String should leak via
-/// `Box::leak(s.to_string().into_boxed_str())`.
+/// recover its source string. Callers supply an interned `'static` name;
+/// the WGSL parser owns the interning step before registering its fields.
 ///
 /// Idempotent: re-registering an identical (ch, name) pair is fine.
 /// If a different name registers against the same hash later, the
@@ -279,32 +280,61 @@ pub fn debug_name(ch: ChannelName) -> Option<&'static str> {
 /// each other but the practical risk is the same).
 pub fn register_runtime_name(ch: ChannelName, name: &'static str) {
     // Fast path: already registered with the same name.
-    if let Some(existing) = runtime_names()
+    if let Some(existing) = runtime_registry()
         .read()
         .expect("runtime channel-name registry poisoned")
+        .names
         .get(&ch)
         && *existing == name
     {
         return;
     }
-    runtime_names()
+    runtime_registry()
         .write()
         .expect("runtime channel-name registry poisoned")
+        .names
         .insert(ch, name);
 }
 
-fn runtime_names()
--> &'static std::sync::RwLock<ahash::AHashMap<ChannelName, &'static str>>
-{
+/// Retain one signature per distinct layout for the static, Copy array type API.
+pub(crate) fn intern_runtime_specs(specs: Vec<ChannelSpec>) -> &'static [ChannelSpec] {
+    if specs.is_empty() {
+        return &[];
+    }
+
+    let mut registry = runtime_registry()
+        .write()
+        .expect("runtime channel-name registry poisoned");
+    if let Some(&existing) = registry.specs.get(specs.as_slice()) {
+        return existing;
+    }
+
+    let canonical: &'static [ChannelSpec] = Box::leak(specs.into_boxed_slice());
+    registry.specs.insert(canonical);
+    canonical
+}
+
+struct RuntimeRegistry {
+    names: AHashMap<ChannelName, &'static str>,
+    specs: AHashSet<&'static [ChannelSpec]>,
+}
+
+fn runtime_registry() -> &'static std::sync::RwLock<RuntimeRegistry> {
     static MAP: std::sync::OnceLock<
-        std::sync::RwLock<ahash::AHashMap<ChannelName, &'static str>>,
+        std::sync::RwLock<RuntimeRegistry>,
     > = std::sync::OnceLock::new();
-    MAP.get_or_init(|| std::sync::RwLock::new(ahash::AHashMap::default()))
+    MAP.get_or_init(|| {
+        std::sync::RwLock::new(RuntimeRegistry {
+            names: AHashMap::default(),
+            specs: AHashSet::default(),
+        })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::ChannelElementType;
 
     #[test]
     fn debug_name_recovers_well_known() {
@@ -317,5 +347,38 @@ mod tests {
     fn debug_name_returns_none_for_unknown() {
         let unknown = ChannelName::from_str("not_in_registry_qqq");
         assert_eq!(debug_name(unknown), None);
+    }
+
+    #[test]
+    fn equal_runtime_specs_share_storage() {
+        let specs = vec![ChannelSpec {
+            name: well_known::POSITION,
+            ty: ChannelElementType::Vec3F,
+        }];
+        let first = intern_runtime_specs(specs.clone());
+        let second = intern_runtime_specs(specs);
+        assert!(std::ptr::eq(first, second));
+    }
+
+    #[test]
+    fn different_runtime_spec_layouts_remain_distinct() {
+        let scalar = intern_runtime_specs(vec![ChannelSpec {
+            name: well_known::VALUE,
+            ty: ChannelElementType::F32,
+        }]);
+        let vector = intern_runtime_specs(vec![ChannelSpec {
+            name: well_known::VALUE,
+            ty: ChannelElementType::Vec2F,
+        }]);
+        assert_ne!(scalar, vector);
+        assert!(!std::ptr::eq(scalar, vector));
+    }
+
+    #[test]
+    fn runtime_name_lookup_remains_correct() {
+        let name = "channel_names_runtime_test";
+        let channel = ChannelName::from_str(name);
+        register_runtime_name(channel, name);
+        assert_eq!(debug_name(channel), Some(name));
     }
 }

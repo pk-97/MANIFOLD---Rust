@@ -65,33 +65,9 @@ mod tests {
         );
     }
 
-    /// Every disk-loaded JSON must be parseable. The loader does a
-    /// structural JSON parse and skips malformed files; this is the
-    /// deeper schema check that the bytes round-trip through serde into
-    /// an `EffectGraphDef`.
-    #[test]
-    fn every_bundled_generator_preset_parses() {
-        use manifold_core::effect_graph_def::EffectGraphDef;
-        for (id, json) in GENERATOR_CATALOG.load().entries() {
-            let _: EffectGraphDef = serde_json::from_str(&json).unwrap_or_else(|e| {
-                panic!("bundled generator preset {id}: parse failed: {e}")
-            });
-        }
-    }
-
-    /// Class-level guard for the "Lissajous's clip-trigger toggle
-    /// only drove mux_x, not mux_y" bug. Every binding in every
-    /// bundled preset must reference an outer-card slider that
-    /// actually exists — the `id` shared between [`BindingDef::id`]
-    /// and [`ParamSpecDef::id`] is the rendezvous point.
-    ///
-    /// Why this matters as a sweep test (vs. a per-preset assertion):
-    /// the bug class is "preset author adds a fan-out binding +
-    /// forgets the matching outer slider, OR typos the id". The
-    /// runtime degrades gracefully (warn + drop) but the symptom is
-    /// silent — the inner param sits forever on the binding's
-    /// `default_value`. CI catching it before merge is the only
-    /// safety net that scales to N future presets.
+    /// Every catalog entry must deserialize as an EffectGraphDef, and each
+    /// binding must name an outer-card param. A missing param would leave
+    /// the inner node pinned to its default value.
     #[test]
     fn every_bundled_preset_binding_resolves_to_an_outer_param() {
         use manifold_core::effect_graph_def::EffectGraphDef;

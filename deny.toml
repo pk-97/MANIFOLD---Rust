@@ -70,6 +70,31 @@ wildcards = "warn"
 deny = [
     { name = "wgpu", reason = "CLAUDE.md hard rule: native Metal only via manifold-gpu" },
     { name = "metal", reason = "CLAUDE.md hard rule: use objc2-metal via manifold-gpu" },
+    # Physics and UI dependency boundaries. App's self wrapper is a deliberate
+    # cargo-deny sentinel for the workspace root (and its unused-wrapper warning
+    # is intentional); profiler is wrapped by app.
+    { name = "manifold-app", wrappers = ["manifold-app"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-audio", wrappers = ["manifold-app", "manifold-recording"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-compositor", wrappers = ["manifold-app"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-core", wrappers = ["manifold-app", "manifold-audio", "manifold-compositor", "manifold-editing", "manifold-io", "manifold-media", "manifold-node-engine", "manifold-nodes", "manifold-nodes-image", "manifold-nodes-scene", "manifold-playback"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-editing", wrappers = ["manifold-app", "manifold-playback"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-fluids", wrappers = ["manifold-app", "manifold-node-engine", "manifold-nodes"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-gpu", wrappers = ["manifold-app", "manifold-compositor", "manifold-led", "manifold-media", "manifold-node-engine", "manifold-nodes", "manifold-nodes-image", "manifold-nodes-scene", "manifold-recording", "manifold-spectral", "manifold-ui-paint"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-io", wrappers = ["manifold-app", "manifold-editing", "manifold-playback"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-led", wrappers = ["manifold-app"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-media", wrappers = ["manifold-app"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-native", wrappers = ["manifold-nodes-image"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-node-engine", wrappers = ["manifold-app", "manifold-compositor", "manifold-nodes", "manifold-nodes-image", "manifold-nodes-scene"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-nodes", wrappers = ["manifold-app", "manifold-nodes"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-nodes-image", wrappers = ["manifold-app", "manifold-nodes", "manifold-nodes-image"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-nodes-scene", wrappers = ["manifold-app", "manifold-nodes", "manifold-nodes-scene"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-physics", wrappers = ["manifold-app", "manifold-fluids", "manifold-node-engine", "manifold-nodes", "manifold-nodes-image"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-playback", wrappers = ["manifold-app", "manifold-audio", "manifold-compositor", "manifold-media", "manifold-node-engine", "manifold-nodes"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-profiler", wrappers = ["manifold-app"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-recording", wrappers = ["manifold-app"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-spectral", wrappers = ["manifold-app", "manifold-audio"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-ui", wrappers = ["manifold-app", "manifold-ui-paint"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-ui-paint", wrappers = ["manifold-app"], reason = "Physics and UI dependency boundaries" },
 ]
 
 [sources]

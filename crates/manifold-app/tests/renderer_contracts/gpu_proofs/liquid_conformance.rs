@@ -2208,12 +2208,14 @@ fn liquid_live_frames_never_wait() {
 #[test]
 fn liquid_coupled_live_frame_rate() {
     const BODY_WORDS: usize = std::mem::size_of::<LiquidBody>() / 4;
+    // Reuse GPU pipelines; each case still starts a fresh simulation.
+    let mut clock = Some(Clocked::new());
     for row in running(Check::CoupledLiveFrameRate) {
         for &fixture in Check::CoupledLiveFrameRate.fixtures(row.coupled) {
             for fps in [20u32, 24, 30, 60] {
                 let mut run = LiquidRun::on_fractional(
                     row, scene(row, fixture), 60.0 / f64::from(fps),
-                    true, false, Some(Clocked::new()),
+                    true, false, clock.take(),
                 );
                 let ticks_per_frame = (60 / fps).min(2);
                 let waits_before = FrameClock::waits_on_this_thread();
@@ -2242,6 +2244,7 @@ fn liquid_coupled_live_frame_rate() {
                 assert!(coupling > 1e-4, "{} {fixture:?}: {fps} fps exchanged no body momentum", row.type_id);
                 let accepted = f64::from(fps * ticks_per_frame) * TICK;
                 eprintln!("liquid_coupled_live_frame_rate {} {fixture:?}: {fps} fps accepted {accepted:.6} s in 1 transport s, coupling {coupling:.4e}, waits {waits}", row.type_id);
+                clock = run.clock.take();
             }
         }
     }
@@ -2266,12 +2269,14 @@ fn liquid_live_flip_force_and_coupling_match_accepted_progress() {
             particles: run.read("node.liquid_state", "out"),
         }
     };
+    let mut reference_clock = Some(Clocked::new());
+    let mut grouped_clock = Some(Clocked::new());
     for fps in [20u32, 30] {
-        let make = |stride| LiquidRun::on_fractional(
-            row, def.clone(), stride, true, false, Some(Clocked::new()),
+        let make = |stride, clock| LiquidRun::on_fractional(
+            row, def.clone(), stride, true, false, clock,
         );
-        let mut reference = make(1.0);
-        let mut grouped = make(60.0 / f64::from(fps));
+        let mut reference = make(1.0, reference_clock.take());
+        let mut grouped = make(60.0 / f64::from(fps), grouped_clock.take());
         let initial = grouped.read::<FluidParticle>("node.liquid_state", "out");
         let seeded = initial.iter().filter(|particle| particle.position_radius[3] > 0.0).count();
         assert!(seeded > 0, "{fps} fps: floating-body fixture seeded no water");
@@ -2345,6 +2350,8 @@ fn liquid_live_flip_force_and_coupling_match_accepted_progress() {
         assert_eq!(reference.discarded_receipts(), 0);
         assert_eq!(grouped.discarded_receipts(), 0);
         assert!(coupling > 1e-4, "{fps} fps: no real body momentum exchange");
+        reference_clock = reference.clock.take();
+        grouped_clock = grouped.clock.take();
     }
 }
 

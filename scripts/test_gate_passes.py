@@ -104,6 +104,11 @@ class CacheTests(unittest.TestCase):
         self.git('config', 'user.name', 'Cache test')
         self.write('Cargo.toml', '[workspace]\nmembers = ["crates/*"]\n')
         self.write('Cargo.lock', 'version = 4\n')
+        self.write('deny.toml', '[bans]\ndeny = [\n'
+                   '  { name = "manifold-nodes", wrappers = ["manifold-nodes"] },\n'
+                   '  { name = "manifold-node-engine", wrappers = ["manifold-nodes"] },\n'
+                   '  { name = "manifold-ui-paint", wrappers = ["manifold-ui-paint"] },\n'
+                   ']\n')
         self.write('.gitignore', 'target/\n__pycache__/\n.claude/orchestration/\ntests/fixtures/ignored.bin\n')
         self.write('scripts/ui-flows/manifest.json', '{"flows": {}, "path_triggers": {}}')
         self.write('scripts/codex_regressions.json', '{}\n')
