@@ -2196,6 +2196,7 @@ impl ContentThread {
             self.engine.reconcile_tempo_edit(&map, bpm);
         }
         self.commit_automation_recording(false);
+        self.engine.reconcile_clip_control_bindings();
         false
     }
 }

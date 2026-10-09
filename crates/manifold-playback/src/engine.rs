@@ -215,6 +215,7 @@ pub struct PlaybackEngine {
     sync_heal_scratch: Vec<ActiveClipRef>,
     /// Shared source timing and pending starts, produced only by clip sync.
     clip_controls: crate::clip_controls::ClipControlFrame,
+    clip_bindings_dirty: bool,
     /// Last reconciled beat: controls cover each forward interval once.
     clip_control_cursor: Option<Beats>,
     /// Keep phase coverage back to the last evaluation across out-of-tick syncs.
@@ -340,6 +341,7 @@ impl PlaybackEngine {
             sync_start_scratch: Vec::with_capacity(4),
             sync_heal_scratch: Vec::with_capacity(2),
             clip_controls: crate::clip_controls::ClipControlFrame::default(),
+            clip_bindings_dirty: true,
             clip_control_cursor: None,
             clip_control_sample_start: None,
             modulation_trigger_scratch: crate::modulation::TriggerPulseBuffer::with_capacity(
@@ -458,6 +460,7 @@ impl PlaybackEngine {
         self.project.as_ref()
     }
     pub fn project_mut(&mut self) -> Option<&mut Project> {
+        self.clip_bindings_dirty = true;
         self.project.as_mut()
     }
     pub fn live_clip_manager(&self) -> Option<&LiveClipManager> {
@@ -486,6 +489,21 @@ impl PlaybackEngine {
     pub fn clip_controls(&self) -> &crate::clip_controls::ClipControlFrame {
         &self.clip_controls
     }
+    /// Observe source assignments at the content edit boundary. This does not
+    /// schedule clips or advance responses; it only rejects pre-edit events.
+    pub fn reconcile_clip_control_bindings(&mut self) {
+        if !self.clip_bindings_dirty {
+            return;
+        }
+        if let Some(project) = &self.project {
+            let delivery = &mut self.trigger_delivery;
+            self.clip_controls.reconcile_bindings(project, Beats(self.current_beat), |owner, param| {
+                delivery.cancel_clip_parameter(owner,
+                    manifold_core::audio_trigger::fire_meter_key_for_param("", param));
+            });
+        }
+        self.clip_bindings_dirty = false;
+    }
     /// Read access to the renderers (tests downcast to `StubRenderer`).
     #[doc(hidden)]
     pub fn renderers(&self) -> &[Box<dyn ClipRenderer>] {
@@ -513,6 +531,7 @@ impl PlaybackEngine {
     pub fn split_renderer_project_mut(
         &mut self,
     ) -> (&mut Vec<Box<dyn ClipRenderer>>, Option<&mut Project>) {
+        self.clip_bindings_dirty = true;
         (&mut self.renderers, self.project.as_mut())
     }
 
@@ -565,6 +584,8 @@ impl PlaybackEngine {
         self.last_realtime_now = 0.0;
         self.last_frame_count = 0;
         self.timeline_query_frame = u64::MAX;
+
+        self.reconcile_clip_control_bindings();
 
         // Notify all renderers of the new project (GAP-PLAY-5).
         // Port of C# PlaybackController.LoadProject → renderer.OnProjectLoaded().
@@ -669,12 +690,14 @@ impl PlaybackEngine {
     }
 
     pub fn set_time(&mut self, time_double: Seconds) {
+        self.reconcile_clip_control_bindings();
         self.current_time_double = time_double.0;
         self.current_time = time_double;
         self.update_beat_from_time();
     }
 
     pub fn set_beat(&mut self, beat: Beats) {
+        self.reconcile_clip_control_bindings();
         self.current_beat = beat.0;
     }
 
@@ -848,6 +871,7 @@ impl PlaybackEngine {
             return TickResult::default();
         }
         self.is_ticking = true;
+        self.reconcile_clip_control_bindings();
         self.stopped_this_tick.clear();
 
         if self.project.is_none() {
@@ -894,11 +918,13 @@ impl PlaybackEngine {
     }
 
     fn reset_trigger_delivery(&mut self) {
+        self.reconcile_clip_control_bindings();
         // A lifecycle boundary cancels pulses accepted under the old project /
         // playhead. Epoch exhaustion is latched and surfaced to the caller;
         // there is no wrapping reset that could make old captures ambiguous.
         let _ = self.trigger_delivery.reset();
         self.clip_controls.clear_starts();
+        self.clip_controls.clear_binding_cutoffs();
         self.clip_control_cursor = None;
         self.clip_control_sample_start = None;
         self.completed_control_scratch.clear();
@@ -932,6 +958,7 @@ impl PlaybackEngine {
             Option<&Project>,
         ) -> R,
     ) -> Option<R> {
+        self.reconcile_clip_control_bindings();
         if self.trigger_delivery.failure().is_some() {
             return None;
         }
@@ -1429,6 +1456,7 @@ impl PlaybackEngine {
     pub fn stop_all_clips(&mut self) {
         self.scheduler.reset_controls();
         self.clip_controls.reset();
+        self.clip_bindings_dirty = true;
         self.clip_control_cursor = None;
         self.clip_control_sample_start = None;
         self.completed_control_scratch.clear();
@@ -1599,6 +1627,8 @@ impl PlaybackEngine {
             return false;
         }
 
+        self.reconcile_clip_control_bindings();
+
         let current_beat = Beats(self.current_beat);
         let from = self.clip_control_cursor.filter(|previous| {
             self.is_playing() && *previous <= current_beat
@@ -1679,11 +1709,7 @@ impl PlaybackEngine {
             self.clip_controls.clear_starts();
         }
         if let Some(project) = &self.project {
-            self.clip_controls.retain_sources(|id| project.timeline.layer_index_for_id(id).is_some());
             for layer in &project.timeline.layers {
-                self.clip_controls.set_layer_scope(
-                    layer.layer_id.clone(), layer.layer_type, layer.parent_layer_id.clone(),
-                );
                 // Trigger output has its own mute policy. Parent visibility
                 // and legacy main-clip edge responses do not participate.
                 if layer.is_trigger() && layer.is_muted {

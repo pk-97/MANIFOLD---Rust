@@ -10,6 +10,9 @@ use manifold_core::project::{ClipTriggerLayer, clip_trigger_source_is_eligible};
 use manifold_core::types::LayerType;
 use manifold_core::{Beats, ClipId, LayerId};
 
+mod bindings;
+pub(crate) use bindings::ClipControlStarts;
+
 /// A period during which a clip-control source is active.
 ///
 /// `end_beat: None` is the lifetime of a live MIDI note before NoteOff commits
@@ -31,6 +34,8 @@ pub struct ClipControlStart {
     /// Main clip mute suppresses envelopes; legacy audio clip-edge responses
     /// still observe its start. Source-level mute is applied by the producer.
     pub is_muted: bool,
+    /// Assigned by the producer frame, independent of musical time.
+    pub(crate) sequence: u64,
 }
 
 #[derive(Debug, Default)]
@@ -52,6 +57,8 @@ pub struct ClipControlSourceView<'a> {
 #[derive(Debug, Default)]
 pub struct ClipControlFrame {
     by_source: AHashMap<LayerId, ClipControlSource>,
+    bindings: bindings::ClipControlBindings,
+    next_sequence: u64,
 }
 
 impl ClipControlFrame {
@@ -111,6 +118,8 @@ impl ClipControlFrame {
     /// Drop all source keys and retained storage when replacing a project.
     pub(crate) fn reset(&mut self) {
         self.by_source.clear();
+        self.bindings = Default::default();
+        self.next_sequence = 0;
     }
 
     /// Record an already-scheduled active span for `source_layer`.
@@ -123,7 +132,10 @@ impl ClipControlFrame {
     }
 
     /// Record an already-scheduled clip start for `source_layer`.
-    pub(crate) fn record_start(&mut self, source_layer: LayerId, start: ClipControlStart) {
+    pub(crate) fn record_start(&mut self, source_layer: LayerId, mut start: ClipControlStart) {
+        start.sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.checked_add(1)
+            .expect("clip-control event sequence exhausted");
         self.by_source
             .entry(source_layer)
             .or_default()
@@ -229,6 +241,7 @@ mod tests {
 
     fn start(id: &str, beat: f64) -> ClipControlStart {
         ClipControlStart {
+            sequence: 0,
             clip_id: ClipId::new(id),
             beat: Beats(beat),
             is_muted: false,
@@ -357,7 +370,8 @@ mod tests {
         frame.record_start(layer.clone(), start("a", 1.0));
         frame.finish();
         let starts = frame.starts(&ClipTriggerSource::default(), Some(&layer));
-        assert_eq!(starts, [start("a", 1.0), start("b", 1.0), start("z", 2.0)]);
+        assert_eq!(starts.iter().map(|start| (start.clip_id.as_str(), start.beat.0))
+            .collect::<Vec<_>>(), [("a", 1.0), ("b", 1.0), ("z", 2.0)]);
     }
 
     #[test]

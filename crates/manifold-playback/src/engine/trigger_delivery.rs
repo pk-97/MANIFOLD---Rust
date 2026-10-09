@@ -216,6 +216,16 @@ impl TriggerDeliveryQueue {
         self.pulses.clear();
     }
 
+    /// Reassignment cancels clip impulses already captured for this target;
+    /// its independent audio impulses keep their place in the queue.
+    pub(crate) fn cancel_clip_parameter(&mut self, owner: &manifold_core::EffectId, param: u64) {
+        self.pulses.retain(|captured| {
+            let pulse = &captured.pulse;
+            pulse.owner_id != *owner || pulse.param_key != param
+                || !matches!(pulse.source_stamp, TriggerSourceStamp::Clip { .. })
+        });
+    }
+
     #[cfg(test)]
     fn capacity(&self) -> usize {
         self.pulses.capacity()
@@ -237,6 +247,25 @@ mod tests {
             param_key: sequence,
             source_stamp: crate::modulation::TriggerSourceStamp::Snapshot,
         }
+    }
+
+    #[test]
+    fn source_change_cancels_only_that_parameters_clip_pulses() {
+        let mut queue = TriggerDeliveryQueue::new();
+        let mut clip = pulse(1);
+        clip.kind = crate::modulation::TriggerPulseKind::Parameter;
+        clip.source_stamp = TriggerSourceStamp::Clip {
+            layer_id: LayerId::new("source"), clip_id: ClipId::new("clip"), beat: Beats::ZERO,
+        };
+        let mut audio = clip.clone();
+        audio.source_stamp = TriggerSourceStamp::Snapshot;
+        let mut other = clip.clone();
+        other.param_key = 2;
+        let mut pulses = vec![clip.clone(), audio.clone(), other.clone()];
+        queue.append_batch(&mut pulses, Seconds::ZERO, Beats::ZERO).unwrap();
+        queue.cancel_clip_parameter(&clip.owner_id, clip.param_key);
+        assert_eq!(queue.as_slice().iter().map(|capture| &capture.pulse).collect::<Vec<_>>(),
+            [&audio, &other]);
     }
 
     fn stamped_pulse(

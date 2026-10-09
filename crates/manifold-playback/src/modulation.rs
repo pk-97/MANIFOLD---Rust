@@ -137,7 +137,7 @@ fn apply_instance_envelopes(
         match env.action {
             TriggerAction::Continuous => {}
             TriggerAction::Step { amount, wrap } => {
-                for _ in controls.starts(&p.clip_trigger_source, owner).iter().filter(|start| !start.is_muted) {
+                for _ in controls.parameter_starts(&inst.id, p, owner).iter().filter(|start| !start.is_muted) {
                     let lo = min;
                     let hi = max;
                     let current = env.step_value.unwrap_or(p.base).clamp(lo, hi);
@@ -146,7 +146,7 @@ fn apply_instance_envelopes(
                 }
             }
             TriggerAction::Random => {
-                for _ in controls.starts(&p.clip_trigger_source, owner).iter().filter(|start| !start.is_muted) {
+                for _ in controls.parameter_starts(&inst.id, p, owner).iter().filter(|start| !start.is_muted) {
                     let lo = min;
                     let hi = max;
                     let current = env.step_value.unwrap_or(p.base).clamp(lo, hi);
@@ -749,8 +749,8 @@ fn advance_instance_audio_hops(
         let Some(p) = fx.params.get(m.param_id.as_ref()) else { continue; };
         let info = AudioParamInfo::from(p);
         let clip_starts = if info.accepts_clip_response(m) {
-            controls.starts(&p.clip_trigger_source, layer_id)
-        } else { &[] };
+            controls.parameter_starts(&fx.id, p, layer_id)
+        } else { Default::default() };
         let source_layer = controls.source_layer(&p.clip_trigger_source, layer_id);
         let clip_only = info.has_event_response(m)
             && !m.trigger_mode.unwrap_or(TriggerFireMode::Transient).wants_transient();
@@ -812,7 +812,7 @@ impl ControlClock<'_> {
 
 fn validate_control_interval(
     m: &mut ParameterAudioMod,
-    starts: &[crate::clip_controls::ClipControlStart],
+    starts: crate::clip_controls::ClipControlStarts<'_>,
     audio_count: usize,
     clock: ControlClock<'_>,
 ) -> bool {
@@ -1210,8 +1210,8 @@ fn advance_instance_snapshot_audio(
                 .and_then(|index| snapshot.get(index))
         };
         let starts = if info.accepts_clip_response(m) {
-            controls.starts(&p.clip_trigger_source, layer_id)
-        } else { &[] };
+            controls.parameter_starts(&fx.id, p, layer_id)
+        } else { Default::default() };
         let source_layer = controls.source_layer(&p.clip_trigger_source, layer_id);
         let audio_count = usize::from(features.is_some() && !info.is_trigger_gate);
         if !validate_control_interval(m, starts, audio_count, clock) { continue; }
@@ -1343,6 +1343,7 @@ mod tests {
                 controls.record_start(
                     layer.layer_id.clone(),
                     crate::clip_controls::ClipControlStart {
+                        sequence: 0,
                         is_muted: false,
                         clip_id: manifold_core::ClipId::new("fixture-start"),
                         beat: current_beat,
@@ -1374,6 +1375,7 @@ mod tests {
                 controls.record_start(
                     layer.layer_id.clone(),
                     crate::clip_controls::ClipControlStart {
+                        sequence: 0,
                         is_muted: false,
                         clip_id: manifold_core::ClipId::new("fixture-start"),
                         beat: Beats::ZERO,
@@ -1422,6 +1424,7 @@ mod tests {
                 controls.record_start(
                     layer.layer_id.clone(),
                     crate::clip_controls::ClipControlStart {
+                        sequence: 0,
                         is_muted: false,
                         clip_id: manifold_core::ClipId::new("fixture-start"),
                         beat: current_beat,
@@ -1806,6 +1809,7 @@ mod tests {
         controls.record_start(
             owner,
             crate::clip_controls::ClipControlStart {
+                sequence: 0,
                 is_muted: false,
                 clip_id: manifold_core::ClipId::new("own"),
                 beat: Beats::ZERO,
@@ -1814,6 +1818,7 @@ mod tests {
         controls.record_start(
             lane.clone(),
             crate::clip_controls::ClipControlStart {
+                sequence: 0,
                 is_muted: false,
                 clip_id: manifold_core::ClipId::new("lane"),
                 beat: Beats::ZERO,
@@ -1839,6 +1844,7 @@ mod tests {
         disabled_controls.record_start(
             lane,
             crate::clip_controls::ClipControlStart {
+                sequence: 0,
                 is_muted: false,
                 clip_id: manifold_core::ClipId::new("disabled"),
                 beat: Beats(1.0),
@@ -2060,6 +2066,7 @@ mod tests {
         controls.set_layer_scope(source.clone(), LayerType::Trigger, Some(destination.clone()));
         for (id, beat) in [("first", 0.125), ("second", 0.375)] {
             controls.record_start(source.clone(), crate::clip_controls::ClipControlStart {
+                sequence: 0,
                 clip_id: manifold_core::ClipId::new(id), beat: Beats(beat), is_muted: false,
             });
         }
@@ -2145,6 +2152,7 @@ mod tests {
                             snapshot.hop_batches[0].push(hop).unwrap();
                         } else {
                             controls.record_start(owner.clone(), crate::clip_controls::ClipControlStart {
+                                sequence: 0,
                                 clip_id: manifold_core::ClipId::new(format!("clip-{ordinal}")),
                                 beat: Beats(time * 2.0), is_muted: false,
                             });

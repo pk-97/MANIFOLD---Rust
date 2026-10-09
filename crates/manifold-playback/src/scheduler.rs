@@ -162,6 +162,7 @@ impl ClipScheduler {
             };
             if !is_current && starts && entry.start_beat >= entry.control_from {
                 controls.record_start(entry.layer_id.clone(), ClipControlStart {
+                    sequence: 0,
                     clip_id: entry.clip_id.clone(),
                     beat: entry.start_beat,
                     is_muted: entry.is_muted,
@@ -189,6 +190,7 @@ impl ClipScheduler {
             };
             if starts && entry.start_beat >= entry.control_from {
                 controls.record_start(entry.layer_id.clone(), ClipControlStart {
+                    sequence: 0,
                     clip_id: entry.clip_id.clone(), beat: entry.start_beat,
                     is_muted: entry.is_muted,
                 });

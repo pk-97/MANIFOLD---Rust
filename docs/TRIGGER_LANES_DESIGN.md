@@ -316,6 +316,17 @@ Trigger lane/clip mute removes spans and pending starts without changing schedul
 membership. Parent and group mute do not participate. CPU checks establish
 phase-preserving unmute and no replay of muted starts.
 
+Source edits and restored target availability establish a runtime event cutoff
+in `ClipControlFrame`, keyed by instance and parameter identity. The cutoff uses
+both the edit beat and producer sequence: it rejects queued or late-discovered
+old starts while accepting new starts at the same beat. The parameter remains
+the only authored connection. Content edits reconcile before the next command,
+and mutable project access marks bindings dirty for reconciliation before clock
+advancement, clip synchronization or pulse delivery. Phase sampling is unchanged.
+Changed sources cancel already-captured clip Fire pulses for that parameter;
+independent audio pulses remain. Seek/stop clears the event cutoff with the
+existing transport history boundary.
+
 Back to Arrangement retains the session interval before clearing its authority.
 `ActiveClipRef::control_from` and `ClipControlSpan::control_from` distinguish when
 an interval controls a source from its original clip phase. The resumed arrangement
@@ -323,7 +334,7 @@ cannot overwrite earlier session samples or replay a start from before resumptio
 `session_mode::back_to_arrangement_preserves_control_history_and_phase` reproduces
 the former error and checks repeated transitions, stopped-session gaps and seeking.
 
-Full acceptance below remains open: external-clock discontinuities, source reassignment,
+Full acceptance below remains open: external-clock discontinuities
 and rendered scene timing must be completed before exposing
 trigger lanes. CPU event-order proofs do not establish rendered scene behaviour.
 
