@@ -13,7 +13,7 @@
 
 use super::whitewater_particle_cpu::{Box3, face_index};
 use crate::water::whitewater::{WHITEWATER_ID_LIMIT, WhitewaterParticle};
-use manifold_fluids::WhitewaterSpawn;
+use crate::water::fluid_particles::WhitewaterSpawn;
 
 const BOX_INSET: f32 = 1.625;
 const BOX_EPSILON: f32 = 0.5e-6;

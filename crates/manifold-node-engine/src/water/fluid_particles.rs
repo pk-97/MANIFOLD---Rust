@@ -88,16 +88,38 @@ impl KnownItem for FaceSample {
     const SPECS: &'static [ChannelSpec] = FACE_SAMPLE_SPECS;
 }
 
+/// GPU spawn record, layout-compatible with the native whitewater lifecycle.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct WhitewaterSpawn {
+    /// Scene metres; w is lifetime in seconds, ≤ 0 marks an empty slot.
+    pub position_lifetime: [f32; 4],
+    /// m/s.
+    pub velocity: [f32; 3],
+    /// FLIP's DiffuseParticleType: 0 bubble, 1 foam, 2 spray.
+    pub kind: u32,
+}
+
+const _: () = {
+    use core::mem::{align_of, offset_of, size_of};
+    use manifold_fluids::WhitewaterSpawn as NativeSpawn;
+    assert!(size_of::<WhitewaterSpawn>() == 32);
+    assert!(size_of::<WhitewaterSpawn>() == size_of::<NativeSpawn>());
+    assert!(align_of::<WhitewaterSpawn>() == align_of::<NativeSpawn>());
+    assert!(offset_of!(WhitewaterSpawn, position_lifetime) == offset_of!(NativeSpawn, position_lifetime));
+    assert!(offset_of!(WhitewaterSpawn, velocity) == offset_of!(NativeSpawn, velocity));
+    assert!(offset_of!(WhitewaterSpawn, kind) == offset_of!(NativeSpawn, kind));
+};
+
 /// Std430: position_lifetime Vec4F at 0, velocity Vec3F at 16, kind U32 at
-/// 28; stride 32. The record is manifold_fluids' own, so the GPU spawn atoms
-/// and the lifecycle share one definition (GPU_WHITEWATER_DESIGN.md section 3.4).
+/// 28; stride 32 (GPU_WHITEWATER_DESIGN.md section 3.4).
 pub const WHITEWATER_SPAWN_SPECS: &[ChannelSpec] = &[
     ChannelSpec { name: well_known::POSITION_LIFETIME, ty: ChannelElementType::Vec4F },
     ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
     ChannelSpec { name: well_known::KIND, ty: ChannelElementType::U32 },
 ];
 
-impl KnownItem for manifold_fluids::WhitewaterSpawn {
+impl KnownItem for WhitewaterSpawn {
     const SPECS: &'static [ChannelSpec] = WHITEWATER_SPAWN_SPECS;
 }
 
@@ -168,5 +190,6 @@ mod tests {
         assert_eq!(std430_stride(FLUID_BLOB_SPECS) as usize, std::mem::size_of::<FluidBlob>());
         assert_eq!(std430_stride(CELL_RANGE_SPECS) as usize, std::mem::size_of::<CellRange>());
         assert_eq!(std430_stride(FACE_SAMPLE_SPECS) as usize, std::mem::size_of::<FaceSample>());
+        assert_eq!(std430_stride(WHITEWATER_SPAWN_SPECS) as usize, std::mem::size_of::<WhitewaterSpawn>());
     }
 }

@@ -14,6 +14,8 @@
 use crate::particles::FluidParticle;
 use crate::water::liquid::grid::face_dims;
 #[cfg(test)]
+use crate::water::fluid_particles::WhitewaterSpawn;
+#[cfg(test)]
 use crate::water::whitewater::{CELL_AIR, KnownValue};
 
 /// A whitewater grid as the particle atoms read it.
@@ -311,8 +313,8 @@ fn solid_at(solid: &[f32], grid: &Box3, q: [f32; 3]) -> f32 {
 /// `node.spawn_whitewater` for slot `j`, and the smallest gap between a
 /// dropping test and its threshold, in cells or seconds.
 #[cfg(test)]
-pub(super) fn spawn(j: u32, fields: &SpawnFields<'_>, grid: &Box3, s: Spawn) -> (manifold_fluids::WhitewaterSpawn, f32) {
-    let empty = manifold_fluids::WhitewaterSpawn::default();
+pub(super) fn spawn(j: u32, fields: &SpawnFields<'_>, grid: &Box3, s: Spawn) -> (WhitewaterSpawn, f32) {
+    let empty = WhitewaterSpawn::default();
     let n = (s.emitters as usize).min(fields.offsets.len());
     if n == 0 || s.capacity == 0 {
         return (empty, f32::INFINITY);
@@ -363,13 +365,13 @@ pub(super) fn spawn(j: u32, fields: &SpawnFields<'_>, grid: &Box3, s: Spawn) -> 
     }
     let probe = FluidParticle { position_radius: [p[0], p[1], p[2], 1.0], velocity: [0.0; 3], id: 0 };
     let velocity = sample_faces(probe, fields.faces, fields.face_cells, grid).velocity;
-    (manifold_fluids::WhitewaterSpawn { position_lifetime: [p[0], p[1], p[2], lifetime], velocity, kind: 0 }, margin)
+    (WhitewaterSpawn { position_lifetime: [p[0], p[1], p[2], lifetime], velocity, kind: 0 }, margin)
 }
 
 /// `node.whitewater_type` for one record, and the smallest gap between a
 /// deciding value and its threshold, in cells.
 #[cfg(test)]
-pub(super) fn kind(spawn: manifold_fluids::WhitewaterSpawn, distance: &[f32], cells: &[u32], grid: &Box3) -> (u32, f32) {
+pub(super) fn kind(spawn: WhitewaterSpawn, distance: &[f32], cells: &[u32], grid: &Box3) -> (u32, f32) {
     if spawn.position_lifetime[3] <= 0.0 {
         return (spawn.kind, f32::INFINITY);
     }

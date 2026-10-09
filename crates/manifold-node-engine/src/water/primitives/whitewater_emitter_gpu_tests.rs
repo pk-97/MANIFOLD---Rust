@@ -508,7 +508,7 @@ fn whitewater_dust_lifecycle_values_and_fusion() {
 #[test]
 fn whitewater_fresh_spray_speed_and_dust_typing() {
     use super::whitewater_type::WhitewaterType;
-    use manifold_fluids::WhitewaterSpawn;
+    use crate::water::fluid_particles::WhitewaterSpawn;
     let mut h = Harness::new();
     let spawns = vec![
         WhitewaterSpawn {

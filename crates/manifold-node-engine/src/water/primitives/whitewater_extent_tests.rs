@@ -229,7 +229,7 @@ fn whitewater_particle_extents_at_64() {
     assert_eq!(SpawnWhitewater::new().array_output_capacity("out", &largest, &spawn_inputs), Some(MAX_CAPACITY));
     let typed = WhitewaterType::new().array_output_capacity("out", &params, &[("spawns", slots), ("distance", 343_000), ("cells", 343_000)]);
     assert_eq!(typed, Some(slots), "types hold exactly the spawn slots");
-    assert_eq!(u64::from(MAX_CAPACITY) * std::mem::size_of::<manifold_fluids::WhitewaterSpawn>() as u64, 8_000_000);
+    assert_eq!(u64::from(MAX_CAPACITY) * std::mem::size_of::<crate::water::fluid_particles::WhitewaterSpawn>() as u64, 8_000_000);
     const { assert!(PARTICLE_SLOTS < 16_777_216, "the emitter count is exact in an f32 scalar") };
 
     // A stencil's lower corner runs from −1 (half a cell below the grid's

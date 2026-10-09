@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 
-use manifold_fluids::WhitewaterSpawn;
+use crate::water::fluid_particles::WhitewaterSpawn;
 use manifold_gpu::GpuBinding;
 
 use crate::float_param;

@@ -11,7 +11,7 @@
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
-use manifold_fluids::{WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle, WhitewaterSpawn};
+use manifold_fluids::{WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle};
 use manifold_gpu::GpuBuffer;
 
 use crate::testkit::liquid_surface::{Harness, params, read};
@@ -20,6 +20,7 @@ use crate::gpu::gpu_encoder::GpuEncoder;
 use crate::water::fluid::{TICK, whitewater_fade};
 use crate::particles::FluidParticle;
 use crate::water::liquid::grid::face_len;
+use crate::water::fluid_particles::WhitewaterSpawn;
 use crate::parameters::ParamValue;
 use crate::primitive::Primitive;
 use crate::scene::transform::Transform;
@@ -108,7 +109,7 @@ fn reference(capacity: u32, batches: &[(&[WhitewaterSpawn], u32)]) -> Vec<FluidP
     let mut lifecycle = NativeLifecycle::new(grid(), capacity, 0).expect("lifecycle");
     for &(spawns, ticks) in batches {
         lifecycle.set_fields(&fields.view()).expect("fields");
-        lifecycle.load(spawns).expect("load");
+        lifecycle.load(bytemuck::cast_slice(spawns)).expect("load");
         for _ in 0..ticks {
             lifecycle.step(TICK).expect("step");
         }

@@ -14,7 +14,7 @@ use super::wavecrest_potential::WavecrestPotential;
 use crate::testkit::water_codegen::run;
 use {crate::water::primitives::whitewater_particle_cpu as cpu, super::whitewater_particle_cpu::Box3, super::whitewater_particle_cpu::Crest, super::whitewater_particle_cpu::Emission};
 use super::whitewater_type::WhitewaterType;
-use manifold_fluids::WhitewaterSpawn;
+use crate::water::fluid_particles::WhitewaterSpawn;
 use crate::exec::effect_node::ParamValues;
 use crate::particles::FluidParticle;
 use crate::water::liquid::grid::face_len;

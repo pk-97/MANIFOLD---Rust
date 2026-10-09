@@ -11,7 +11,7 @@
 //! reference structurally — the same particles, in the same order, with the
 //! same counts.
 
-use manifold_fluids::WhitewaterSpawn;
+use crate::water::fluid_particles::WhitewaterSpawn;
 
 use super::emission_count::WAVECREST_RATE;
 use super::energy_potential::{MAX_ENERGY, MIN_ENERGY};

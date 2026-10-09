@@ -226,8 +226,10 @@ Shared WGSL, via `wgsl_includes` (`R/liquid/bodies.rs` precedent): `liquid_faces
 ### 3.4 Committed types and ports
 
 ```rust
-// crates/manifold-fluids/src/whitewater.rs — one definition; the renderer
-// implements KnownItem for it (R/fluid_particles.rs, beside FaceSample).
+// Native ABI: crates/manifold-fluids/src/whitewater.rs.
+// The water graph owns its matching record and KnownItem implementation in
+// water/fluid_particles.rs, with compile-time size, alignment and field-offset
+// equality checks. The lifecycle reads the same mapped GPU bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct WhitewaterSpawn {
