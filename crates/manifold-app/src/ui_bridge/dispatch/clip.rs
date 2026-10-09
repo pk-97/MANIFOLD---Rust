@@ -50,21 +50,14 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         }
         ClipAction::ClipBpmClicked => DispatchResult::handled(),
         ClipAction::ClipWarpToggled => {
-            // Audio warp toggle: off (recorded_bpm 0, native speed) ⇄ on (lock to
-            // the project tempo as a sensible default). One BPM command, which
-            // also rescales the clip's timeline length to hold the audio span.
-            if let Some(clip_id) = &ctx.selection.primary_selected_clip_id {
-                let clip_id = clip_id.clone();
-                let project_bpm = ctx.project.settings.bpm.0;
-                if let Some(clip) = ctx.project.timeline.find_clip_by_id(&clip_id) {
-                    let old_bpm = clip.recorded_bpm;
-                    let new_bpm = if old_bpm > 0.0 { 0.0 } else { project_bpm };
-                    let cmd = ChangeClipRecordedBpmCommand::new(clip_id, old_bpm, new_bpm);
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(ctx.project);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
-                }
+            if let Some(clip_id) = &ctx.selection.primary_selected_clip_id
+                && let Some(clip) = ctx.project.timeline.find_clip_by_id(clip_id)
+            {
+                ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(
+                    ChangeClipRecordedBpmCommand::new_warp(
+                        clip_id.clone(), !clip.is_audio_warp_enabled(),
+                    ),
+                )));
             }
             DispatchResult::structural()
         }

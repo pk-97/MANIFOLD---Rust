@@ -49,12 +49,12 @@ neighbouring systems.
 
 | Seam | Old → new | Inventory/re-derivation |
 |---|---|---|
-| `EffectNode` and `Primitive` | Add default `substep_boundary() -> Option<SubstepBoundaryPorts>`; blanket forwarding | `effect_node.rs`, `primitive.rs`; `rg -n 'impl.*EffectNode|impl.*Primitive' crates/manifold-renderer/src/node_graph` identifies direct implementations, which retain None. |
-| Execution plan | `steps` unchanged; add region metadata/accessor and contraction-aware ordering | `execution_plan.rs::compile`; `rg -n 'plan.steps\(\)|late_capture_steps|hoistable_steps|persistent_resources' crates/manifold-renderer/src` inventories consumers; each must honour repeated-region lifetime or remain frame-only. |
+| `EffectNode` and `Primitive` | Add default `substep_boundary() -> Option<SubstepBoundaryPorts>`; blanket forwarding | `effect_node.rs`, `primitive.rs`; `rg -n 'impl.*EffectNode|impl.*Primitive' crates/manifold-nodes/src/node_graph` identifies direct implementations, which retain None. |
+| Execution plan | `steps` unchanged; add region metadata/accessor and contraction-aware ordering | `execution_plan.rs::compile`; `rg -n 'plan.steps\(\)|late_capture_steps|hoistable_steps|persistent_resources' crates/manifold-nodes/src` inventories consumers; each must honour repeated-region lifetime or remain frame-only. |
 | Executor | Existing public `execute_frame_with_state` retained; add simulation-frame setter; extract ONE existing step evaluator for outer/repeated traversal | `execution.rs::execute_frame_inner`, `compute_live_steps`; `rg -n 'execute_frame_inner|fn execute_|late_capture' crates/manifold-node-engine/src/exec/execution.rs`. No duplicate alternate executor. |
 | Freeze | Preserve membership; never fuse across region border | `node_graph/freeze` classification/partition, lowering and generated step replacement. Re-derive `rg -n 'ExecutionPlan|ExecutionStep|compile\(' crates/manifold-node-engine/src/freeze`. |
 | Host simulation clock | Add `simulation_epoch` getter/explicit increment to PlaybackEngine; add setters on GeneratorRenderer/PresetRuntime/Executor | `engine.rs::seek_to`, project replacement and Play external-alignment branch in `content_commands.rs`; generator call at `content_pipeline.rs`; export contexts at `content_export.rs`. |
-| Headless/warmup host | Existing render calls unchanged; precede with explicit SimulationFrame | `PresetRuntime::render` callers in `src/bin/render_generator_preset.rs`, generator warmup and tests. Re-derive `rg -n 'PresetRuntime|\.render\(' crates/manifold-renderer/src/bin/render_generator_preset.rs crates/manifold-compositor/src/generator_renderer.rs`. |
+| Headless/warmup host | Existing render calls unchanged; precede with explicit SimulationFrame | `PresetRuntime::render` callers in `src/bin/render_generator_preset.rs`, generator warmup and tests. Re-derive `rg -n 'PresetRuntime|\.render\(' crates/manifold-nodes/src/bin/render_generator_preset.rs crates/manifold-compositor/src/generator_renderer.rs`. |
 | Scene input ports | Add the five optional water inputs from design section 7; existing object_N ports unchanged | `primitives/render_scene.rs` input declarations/evaluate/snapshot creation/draw/depth output; SceneVm continues tracing existing scene objects. |
 | Surface filter | Add optional coverage and value-space enum; unwired/default retains old algorithm | `primitives/bilateral_blur.rs`, body shader and its existing reference tests. |
 | GPU gate selection | Preserve existing selections, include water proof when render_scene water work lands | `scripts/landing_gate.py::GPU_PROOFS_SCOPE` currently maps render_scene to `rt_` only; it would miss water tests without an explicit additive selection. |
@@ -129,7 +129,7 @@ deliverables, not tests claimed to exist today. A filtered command that executes
 matching tests is a failure; report the executed count.
 
 ```sh
-cargo clippy --manifest-path "$WATER_WT/Cargo.toml" -p manifold-renderer --tests -- -D warnings
+cargo clippy --manifest-path "$WATER_WT/Cargo.toml" -p manifold-nodes --tests -- -D warnings
 python3 "$WATER_WT/scripts/gpu_proofs_gate.py" --manifest-path "$WATER_WT/Cargo.toml" --filter water_
 ```
 
@@ -168,7 +168,7 @@ guard. Include one
 non-lattice particle fixture and negative velocities; use an analytically affine
 velocity field so the reference cannot merely agree with itself.
 
-**Gate:** `cargo test --manifest-path "$WATER_WT/Cargo.toml" -p manifold-renderer --lib water_`;
+**Gate:** `cargo test --manifest-path "$WATER_WT/Cargo.toml" -p manifold-nodes --lib water_`;
 focused clippy. Expected all matching tests pass and measured quantisation error meets
 design section 8. **Demo: none — L1.** No shader speed or realism claims.
 
@@ -191,7 +191,7 @@ zero steps, 3 substeps vs 3 fixed frames, final output, result ports, reset, dup
 frame, pause, skipped frame and overloaded clock. Test malformed nested/overlapping
 regions, escaped intermediate wires and render nodes inside a region are rejected.
 
-**Gate:** `cargo test --manifest-path "$WATER_WT/Cargo.toml" -p manifold-renderer --lib substeps_`;
+**Gate:** `cargo test --manifest-path "$WATER_WT/Cargo.toml" -p manifold-nodes --lib substeps_`;
 `python3 "$WATER_WT/scripts/gpu_proofs_gate.py" --manifest-path "$WATER_WT/Cargo.toml" --filter substeps_`;
 renderer clippy. Tests include `substeps_frozen_unfrozen_match` and
 `substeps_no_recycle_between_iterations`. Existing feedback behaviour must remain
@@ -216,9 +216,9 @@ Play relocation and continuous sync correction. Stop preserves water. Source-med
 loop is not a global seek. Gaps use per-instance last frame identity, not time deltas
 accumulated while hidden. Fresh seed on generator replacement is explicit.
 
-**Gate:** focused `water_` lib tests in `manifold-playback`, `manifold-renderer` and
+**Gate:** focused `water_` lib tests in `manifold-playback`, `manifold-nodes` and
 `manifold-app` using the same `cargo test --manifest-path ... -p <crate> --lib water_`
-form; clippy `-p manifold-playback -p manifold-renderer -p manifold-app --tests`.
+form; clippy `-p manifold-playback -p manifold-nodes -p manifold-app --tests`.
 `water_lifecycle_seek_stop_export` must test both <1-beat and >1-beat seeks.
 **Demo: none — L1** until S8 exercises the controls through the real app.
 
@@ -340,7 +340,7 @@ by timing CPU submission alone.
 **Checks (new commands are executable only after their named deliverables exist):**
 
 ```sh
-cargo run --manifest-path "$WATER_WT/Cargo.toml" -p manifold-renderer --bin graph_tool -- validate "$WATER_WT/crates/manifold-renderer/assets/generator-presets/WaterPrototype.json" --kind generator
+cargo run --manifest-path "$WATER_WT/Cargo.toml" -p manifold-nodes --bin graph_tool -- validate "$WATER_WT/crates/manifold-nodes/assets/generator-presets/WaterPrototype.json" --kind generator
 python3 "$WATER_WT/scripts/gpu_proofs_gate.py" --manifest-path "$WATER_WT/Cargo.toml" --filter water_
 ```
 

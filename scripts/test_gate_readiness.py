@@ -84,17 +84,20 @@ class P1PlannerTests(unittest.TestCase):
         expected = {(row['package'], row['target'])
                     for row in self.snapshot['feature_targets']
                     if any(path.endswith(f"tests/{row['target']}.rs")
-                           or f"tests/{row['target']}/" in path for path in self.paths)}
+                           or f"tests/{row['target']}/" in path for path in self.paths)
+                    and any(Path(target['src_path']).is_file()
+                            for target in self.workspace.targets(row['package'], 'test')
+                            if target['name'] == row['target'])}
         self.assertTrue(expected, 'feature-transfer assertions must exercise real targets')
         self.assertEqual(plan.gpu_binaries, expected)
-        gpu = gpu_scope.Plan(paths=['fixture'], workspace=self.workspace,
+        gpu = gpu_scope.Plan(paths=['fixture'], workspace=Workspace(ROOT),
                              required_binaries=plan.gpu_binaries, glb=True)
         required_runs = {(run['package'], target): run for run in gpu.runs()
-                         for target in run['targets']}
+                         for target in run['targets'] if run['budgeted']}
         for _, target in expected:
-            expression = f"(package(=manifold-renderer) & binary(={target}))"
+            expression = f"(package(=manifold-nodes) & binary(={target}))"
             self.assertNotIn(expression, plan.filters)
-            self.assertEqual(required_runs[('manifold-renderer', target)]['filters'], [])
+            self.assertEqual(required_runs[('manifold-nodes', target)]['filters'], [])
 
     def test_scoped_empty_mapping_is_red_even_with_nonempty_union(self):
         listing = {"rust-suites": {
@@ -280,7 +283,9 @@ class P1PlannerTests(unittest.TestCase):
         self.assertFalse(gpu.filters)
         self.assertFalse(gpu.unmapped)
         self.assertEqual(gpu.runs(), [])
-        with patch.object(gate_readiness, "Workspace", return_value=self.workspace), \
+        # Readiness checks the live nextest policy, whose harnesses have moved
+        # since this historical P1 metadata snapshot was captured.
+        with patch.object(gate_readiness, "Workspace", return_value=Workspace(ROOT)), \
              patch.object(gate_readiness, "selected_tooling", wraps=gate_readiness.selected_tooling) as tooling:
             ready = gate_readiness.plan(ROOT, paths)
         tooling.assert_called_once_with(ROOT, [])
@@ -294,7 +299,7 @@ class P1PlannerTests(unittest.TestCase):
             ".claude/orchestration/crate-split-other/shaders/example.wgsl", self.workspace))
 
     def test_new_gpu_package_needs_explicit_default_test_group_ownership(self):
-        workspace = copy.deepcopy(self.workspace)
+        workspace = Workspace(ROOT)
         original = workspace.nextest_gpu_filter()
         workspace.packages['synthetic-leaf'] = {'features': {'gpu-proofs': []}, 'targets': []}
         with self.assertRaisesRegex(ValueError, 'ownership unresolved'):

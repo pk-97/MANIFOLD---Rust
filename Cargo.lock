@@ -2263,11 +2263,14 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "arboard",
+ "bytemuck",
  "core-foundation 0.10.1",
  "crossbeam-channel",
  "env_logger",
+ "glam",
  "half",
  "image",
+ "inventory",
  "io-surface",
  "libc",
  "log",
@@ -2275,17 +2278,20 @@ dependencies = [
  "manifold-compositor",
  "manifold-core",
  "manifold-editing",
+ "manifold-fluids",
+ "manifold-foundation",
  "manifold-gpu",
  "manifold-io",
  "manifold-led",
  "manifold-media",
  "manifold-node-engine",
+ "manifold-nodes",
  "manifold-nodes-image",
  "manifold-nodes-scene",
+ "manifold-physics",
  "manifold-playback",
  "manifold-profiler",
  "manifold-recording",
- "manifold-renderer",
  "manifold-spectral",
  "manifold-ui",
  "manifold-ui-paint",
@@ -2490,6 +2496,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "manifold-nodes"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "arc-swap",
+ "arrayvec",
+ "bytemuck",
+ "core-foundation 0.9.4",
+ "core-graphics",
+ "core-text",
+ "glam",
+ "gltf",
+ "half",
+ "image",
+ "inventory",
+ "log",
+ "manifold-core",
+ "manifold-fluids",
+ "manifold-foundation",
+ "manifold-gpu",
+ "manifold-native",
+ "manifold-node-engine",
+ "manifold-nodes",
+ "manifold-nodes-image",
+ "manifold-nodes-scene",
+ "manifold-physics",
+ "manifold-playback",
+ "naga",
+ "objc2 0.6.4",
+ "parking_lot",
+ "png",
+ "serde",
+ "serde_json",
+ "sha2",
+ "syn 2.0.117",
+ "tiff 0.9.1",
+ "zstd",
+]
+
+[[package]]
 name = "manifold-nodes-image"
 version = "0.1.0"
 dependencies = [
@@ -2592,50 +2638,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "manifold-renderer"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "arc-swap",
- "arrayvec",
- "bytemuck",
- "core-foundation 0.9.4",
- "core-graphics",
- "core-text",
- "glam",
- "gltf",
- "half",
- "image",
- "inventory",
- "log",
- "manifold-compositor",
- "manifold-core",
- "manifold-editing",
- "manifold-fluids",
- "manifold-foundation",
- "manifold-gpu",
- "manifold-io",
- "manifold-native",
- "manifold-node-engine",
- "manifold-nodes-image",
- "manifold-nodes-scene",
- "manifold-physics",
- "manifold-playback",
- "manifold-ui",
- "manifold-ui-paint",
- "naga",
- "objc2 0.6.4",
- "parking_lot",
- "png",
- "serde",
- "serde_json",
- "sha2",
- "syn 2.0.117",
- "tiff 0.9.1",
- "zstd",
-]
-
-[[package]]
 name = "manifold-spectral"
 version = "0.1.0"
 dependencies = [
@@ -2666,6 +2668,7 @@ dependencies = [
  "core-graphics",
  "core-text",
  "half",
+ "image",
  "log",
  "manifold-foundation",
  "manifold-gpu",

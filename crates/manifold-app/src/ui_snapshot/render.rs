@@ -1,5 +1,5 @@
 //! Windowless render of a built `UIRoot` to a PNG. Mirrors the proven headless
-//! pattern in `manifold-renderer/tests/...` (`GpuDevice::new()` has no window).
+//! pattern in `manifold-nodes/tests/...` (`GpuDevice::new()` has no window).
 //!
 //! Pass 1 (the panel chrome — headers, ruler, lane backgrounds)
 //! goes through the real cache: build a `UICacheManager`, `ensure_atlas`,

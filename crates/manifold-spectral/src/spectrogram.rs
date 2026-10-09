@@ -327,7 +327,7 @@ impl Spectrogram {
 
 /// GPU-readback proof of the onset-lane path — the real Metal render, not the
 /// mod_harness CPU port. Behind `gpu-proofs` (real device; off by default,
-/// mirroring manifold-renderer's convention).
+/// mirroring manifold-nodes's convention).
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::Spectrogram;

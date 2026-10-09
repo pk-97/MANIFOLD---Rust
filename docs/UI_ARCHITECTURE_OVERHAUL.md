@@ -126,7 +126,7 @@ and how we get there."
 >
 > **Prior:** 1.1 — `NodeId(u32)` + `Option<NodeId>` replaced every `i32`/`-1`, `u32::MAX`, and
 > `usize::MAX` node-id sentinel across `manifold-ui` (foundation + all ~22 panels), `manifold-app`
-> (`ui_root`, `app_render`), and `manifold-renderer` (`ui_renderer`). Scope ~20× the doc's
+> (`ui_root`, `app_render`), and `manifold-nodes` (`ui_renderer`). Scope ~20× the doc's
 > "tree/input/intent" line because the tree API is the universal panel boundary, and it reached into
 > `manifold-app`. Method: foundation by hand → 22-agent edit-only fan-out for the panels →
 > hand-reconciled the cross-file/cross-crate seams.
@@ -187,7 +187,7 @@ Do not chase it.
 
 ### Four rendering models
 1. **Chrome** — UITree nodes → GPU; text is real CoreText shaping → R8 grayscale
-   atlas (`manifold-renderer::text_rasterizer`).
+   atlas (`manifold-nodes::text_rasterizer`).
 2. **Timeline clips** — CPU-painted per-layer pixel buffers → textures. Not nodes.
 3. **Waveforms** — max-pooled MIP chain → CPU-painted per-lane buffers.
 4. **Graph canvas** — immediate-mode, no tree at all.
@@ -609,7 +609,7 @@ not a recovery system.
   size a cell to its text at build time. → `UITree` now owns a `Box<dyn TextMeasure>`
   (`tree.measure_text` / `text_width`), defaulting to an always-on GPU-free
   `HeuristicTextMeasure`; the app installs a CoreText-accurate `CoreTextMeasure`
-  (manifold-renderer, `RefCell<FontManager>`, no GPU) in `UIRoot::new()` so both
+  (manifold-nodes, `RefCell<FontManager>`, no GPU) in `UIRoot::new()` so both
   windows get it. Proof: the footer's static "Q:" label is sized to its measured
   text at build, right-anchored so the glyphs render unchanged (test
   `quantize_label_sized_to_text`). Signature-free: no panel `build()` arg changed —
@@ -800,8 +800,8 @@ pass (see section 0).
 > Sub-design `docs/CANVAS_API_DESIGN.md`. Behaviour-preserving throughout;
 > manifold-ui 330 + manifold-app 91 tests green, clippy `-D warnings` clean, one
 > commit per task. Key constraint recorded in the design doc: the canvas stays
-> in `manifold-app` (it consumes `manifold_renderer` snapshots; `manifold-ui`
-> can't depend on `manifold-renderer`), so 4.2 is a split-in-place, and a crate
+> in `manifold-app` (it consumes `manifold_nodes` snapshots; `manifold-ui`
+> can't depend on `manifold-nodes`), so 4.2 is a split-in-place, and a crate
 > move waits for Phase 5.
 - [x] **4.1** Sub-design-doc: graph-view framework + own command type + sidebar
   boundary. → [`CANVAS_API_DESIGN.md`](CANVAS_API_DESIGN.md).
@@ -941,7 +941,7 @@ pass (see section 0).
 
 ### Phase 8 — Relocate the graph canvas out of `manifold-app` — **COMPLETE (2026-06-23)** (was Canvas-API 4.2)
 > The 4,334-line `graph_canvas/` + its `mapping_popover` now live in
-> `manifold-ui` with **no `manifold-renderer` dependency**. Two renderer ties
+> `manifold-ui` with **no `manifold-nodes` dependency**. Two renderer ties
 > were severed: the graph snapshot (a UI-local mirror + an app translator) and
 > the immediate-mode draw surface (a `Painter` trait the renderer impls for
 > `UIRenderer`). Behaviour-preserving; manifold-ui 368 lib tests (incl. the moved
@@ -972,7 +972,7 @@ pass (see section 0).
   mapping popovers paint through `&mut dyn Painter`. `crate::graph_canvas` /
   `crate::mapping_popover` remain as app-side re-exports of the relocated
   `manifold_ui` modules, so the editor-window glue resolves the historic paths
-  unchanged. _Done:_ the canvas compiles with no `manifold_renderer` dependency
+  unchanged. _Done:_ the canvas compiles with no `manifold_nodes` dependency
   (only doc-comment prose names the mirrored originals) and the editor renders
   identically.
 

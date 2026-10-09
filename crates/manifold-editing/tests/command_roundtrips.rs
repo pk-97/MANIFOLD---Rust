@@ -24,7 +24,7 @@ use manifold_core::marker::TimelineMarker;
 use manifold_core::session::{ClipSequence, Scene, SessionSlot};
 use manifold_core::SceneId;
 
-// Test-only inventory submissions — manifold-renderer isn't linked in editing tests.
+// Test-only inventory submissions — manifold-nodes isn't linked in editing tests.
 use manifold_core::effect_registration::EffectMetadata;
 use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
 
@@ -232,6 +232,8 @@ fn replace_audio_file_undo_restores_source_state_and_generated_clips() {
         Seconds(30.0),
     );
     song.recorded_bpm = 120.0;
+    song.audio_warp_enabled = Some(false);
+    song.audio_bpm_automatic = true;
     let mut detection = AudioClipDetection::new();
     detection.config.quantize_on = false;
     detection.analysis = Some(PercussionAnalysisData::new(
@@ -303,6 +305,8 @@ fn replace_audio_file_undo_restores_source_state_and_generated_clips() {
     assert_eq!(clip.source_duration, Seconds(42.0));
     assert_eq!(clip.in_point, Seconds::ZERO);
     assert_eq!(clip.recorded_bpm, 0.0);
+    assert_eq!(clip.audio_warp_enabled, None);
+    assert!(!clip.audio_bpm_automatic);
     // start_beat / duration_beats untouched by the replace.
     assert_eq!(clip.start_beat, Beats(0.0));
     assert_eq!(clip.duration_beats, Beats(16.0));
@@ -322,6 +326,8 @@ fn replace_audio_file_undo_restores_source_state_and_generated_clips() {
     assert_eq!(clip.source_duration, Seconds(30.0));
     assert_eq!(clip.in_point, Seconds(1.5));
     assert_eq!(clip.recorded_bpm, 120.0);
+    assert_eq!(clip.audio_warp_enabled, Some(false));
+    assert!(clip.audio_bpm_automatic);
     let det = clip.audio_detection.as_ref().expect("detection restored");
     assert!(!det.config.quantize_on);
     assert!(det.analysis.is_some(), "cached analysis restored");
@@ -397,10 +403,9 @@ fn change_clip_recorded_bpm_rescales_audio_clip_length() {
 }
 
 #[test]
-fn change_clip_recorded_bpm_no_rescale_sets_bpm_without_changing_duration() {
-    // BPM detection path: set the recorded BPM without rescaling duration.
-    // The clip's timeline length was set at import time; we're just correcting
-    // the BPM metadata. Duration stays constant, BPM changes, undo restores both.
+fn change_clip_recorded_bpm_detected_preserves_source_span() {
+    // BPM detection updates an already-known detected tempo while preserving
+    // the played source span. Undo restores the complete prior tempo state.
     let mut project = make_test_project();
     let mut audio = TimelineClip::new_audio(
         "/x.wav".into(),
@@ -409,22 +414,122 @@ fn change_clip_recorded_bpm_no_rescale_sets_bpm_without_changing_duration() {
         manifold_core::units::Seconds(0.0),
         manifold_core::units::Seconds(2.0),
     );
-    audio.recorded_bpm = 120.0; // Warp is on
+    audio.recorded_bpm = 120.0;
+    audio.audio_bpm_automatic = true;
     let clip_id = audio.id.clone();
     project.timeline.layers[1].restore_clip(audio);
     project.timeline.rebuild_clip_lookup();
 
-    // Detection finds 128 BPM: set it without rescaling duration
-    let mut cmd = ChangeClipRecordedBpmCommand::new_no_rescale(clip_id.clone(), 120.0, 128.0);
+    // Detection finds 128 BPM: preserve the 2-second source span at the new warp tempo.
+    let mut cmd = ChangeClipRecordedBpmCommand::new_detected(clip_id.clone(), 128.0);
     cmd.execute(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert!((clip.recorded_bpm - 128.0).abs() < 0.01, "BPM updated");
-    assert!((clip.duration_beats.0 - 4.0).abs() < 1e-6, "duration unchanged at 4 beats");
+    assert!((clip.duration_beats.0 - (4.0 * 128.0 / 120.0)).abs() < 1e-6, "source span preserved");
 
     cmd.undo(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert!((clip.recorded_bpm - 120.0).abs() < 0.01, "BPM restored");
+    assert!(clip.audio_bpm_automatic, "detection state restored");
     assert!((clip.duration_beats.0 - 4.0).abs() < 1e-6, "duration still 4 beats");
+}
+
+#[test]
+fn audio_warp_off_and_on_remembers_source_bpm() {
+    let mut project = make_test_project();
+    let mut audio = TimelineClip::new_audio(
+        "/x.wav".into(),
+        Beats(0.0),
+        Beats(4.0),
+        Seconds::ZERO,
+        Seconds(2.0),
+    );
+    audio.recorded_bpm = 128.0;
+    audio.audio_warp_enabled = Some(false);
+    let clip_id = audio.id.clone();
+    project.timeline.layers[1].restore_clip(audio);
+    project.timeline.rebuild_clip_lookup();
+
+    let mut cmd = ChangeClipRecordedBpmCommand::new_warp(clip_id.clone(), true);
+    cmd.execute(&mut project);
+    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
+    assert!(clip.is_audio_warp_enabled());
+    assert_eq!(clip.source_bpm_resolved(), 128.0);
+    cmd.undo(&mut project);
+    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
+    assert!(!clip.is_audio_warp_enabled());
+    assert_eq!(clip.source_bpm_resolved(), 128.0);
+}
+
+#[test]
+fn change_clip_recorded_bpm_preserves_source_span_across_tempo_map() {
+    let mut project = make_test_project();
+    project
+        .tempo_map
+        .add_or_replace_point(Beats(0.0), Bpm(120.0), TempoPointSource::Manual, 0.001);
+    project
+        .tempo_map
+        .add_or_replace_point(Beats(4.0), Bpm(60.0), TempoPointSource::Manual, 0.001);
+    project.tempo_map.ensure_sorted();
+    let audio = TimelineClip::new_audio(
+        "/x.wav".into(),
+        Beats(2.0),
+        Beats(4.0),
+        Seconds::ZERO,
+        Seconds(10.0),
+    );
+    let clip_id = audio.id.clone();
+    project.timeline.layers[1].restore_clip(audio);
+    project.timeline.rebuild_clip_lookup();
+
+    let mut cmd = ChangeClipRecordedBpmCommand::new(clip_id.clone(), 0.0, 60.0);
+    cmd.execute(&mut project);
+    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
+    assert!((clip.duration_beats.0 - 3.0).abs() < 1e-6);
+    cmd.undo(&mut project);
+    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
+    assert_eq!(clip.duration_beats, Beats(4.0));
+}
+
+#[test]
+fn change_clip_recorded_bpm_overlap_undo_redo_restores_neighbour() {
+    let mut project = make_test_project();
+    let target = TimelineClip::new_audio(
+        "/target.wav".into(),
+        Beats(0.0),
+        Beats(4.0),
+        Seconds::ZERO,
+        Seconds(10.0),
+    );
+    let target_id = target.id.clone();
+    let neighbour = TimelineClip::new_audio(
+        "/neighbour.wav".into(),
+        Beats(4.0),
+        Beats(4.0),
+        Seconds::ZERO,
+        Seconds(10.0),
+    );
+    project.timeline.layers[1].restore_clip(target);
+    project.timeline.layers[1].restore_clip(neighbour.clone());
+    project.timeline.rebuild_clip_lookup();
+
+    let mut cmd = ChangeClipRecordedBpmCommand::new(target_id.clone(), 0.0, 240.0);
+    cmd.execute(&mut project);
+    assert_eq!(project.timeline.layers[1].clips.len(), 1);
+    assert!((project.timeline.find_clip_by_id(&target_id).unwrap().duration_beats.0 - 8.0).abs() < 1e-6);
+
+    // UI/content handoff may execute the same command twice; the captured
+    // overlap result must not add another split tail or otherwise rescale.
+    cmd.execute(&mut project);
+    assert_eq!(project.timeline.layers[1].clips.len(), 1);
+
+    cmd.undo(&mut project);
+    assert_eq!(project.timeline.layers[1].clips.len(), 2);
+    assert!(project.timeline.find_clip_by_id(&neighbour.id).is_some());
+
+    cmd.execute(&mut project);
+    assert_eq!(project.timeline.layers[1].clips.len(), 1);
+    assert!(project.timeline.find_clip_by_id(&neighbour.id).is_none());
 }
 
 // ─── Layer Commands ───

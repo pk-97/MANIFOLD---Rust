@@ -21,10 +21,8 @@
 //! Gain is the layer's linear gain, applied identically to both destinations.
 //! Per-clip placement matches live playback: beat-anchored warp (warped clips are
 //! beat-linear; unwarped clips follow the tempo map), the clip `in_point`, and
-//! the decoder `encoder_delay` offset. Per-clip `is_muted` is intentionally NOT
-//! applied — live audio playback doesn't apply it either (`AudioLayerPlayback::update`
-//! gates on layer flags only), so applying it here would diverge from what the
-//! performer hears.
+//! the decoder `encoder_delay` offset. Muted clips contribute silence to both the
+//! master and requested per-layer taps, matching live voice playback.
 //!
 //! Source samples are linearly interpolated, which folds the warp (varispeed)
 //! and the source→output sample-rate conversion into one resample — the same
@@ -162,6 +160,9 @@ pub fn render_export_audio(
         let gain = layer.audio_gain_linear();
 
         for clip in layer.clips.iter().filter(|c| c.is_audio()) {
+            if clip.is_muted {
+                continue;
+            }
             let clip_start_sec =
                 TempoMapConverter::beat_to_seconds(tempo_map, clip.start_beat, bpm).0;
             let clip_end_sec =
@@ -710,6 +711,62 @@ mod tests {
 
         assert_eq!(audio.left, baseline.left, "analysis-only layer altered master left");
         assert_eq!(audio.right, baseline.right, "analysis-only layer altered master right");
+    }
+
+    #[test]
+    fn render_export_audio_muted_clip_is_silent_to_master_and_tap() {
+        let (mut project, _dir) = build_fixture_project();
+        let normal_id = layer_id_named(&project, "Normal");
+        project
+            .timeline
+            .layers
+            .iter_mut()
+            .find(|layer| layer.layer_id == normal_id)
+            .expect("normal layer")
+            .clips[0]
+            .is_muted = true;
+
+        let mut tempo_map = TempoMap::default();
+        let audio = render_export_audio(
+            &project,
+            Beats(2.0),
+            Beats(6.0),
+            Bpm(120.0),
+            &mut tempo_map,
+            std::slice::from_ref(&normal_id),
+        )
+        .expect("render_export_audio should succeed");
+        let tapped = audio
+            .per_layer_mono
+            .get(&normal_id)
+            .expect("muted layer tap entry present");
+        assert!(
+            tapped.iter().all(|&sample| sample == 0.0),
+            "muted clip must be silent in its requested tap"
+        );
+
+        let mut without_normal = Project::default();
+        without_normal.settings.bpm = project.settings.bpm;
+        without_normal.timeline.layers.extend(
+            project
+                .timeline
+                .layers
+                .iter()
+                .filter(|layer| layer.layer_id != normal_id)
+                .cloned(),
+        );
+        let mut baseline_tempo_map = TempoMap::default();
+        let baseline = render_export_audio(
+            &without_normal,
+            Beats(2.0),
+            Beats(6.0),
+            Bpm(120.0),
+            &mut baseline_tempo_map,
+            &[],
+        )
+        .expect("baseline render_export_audio should succeed");
+        assert_eq!(audio.left, baseline.left, "muted clip altered master left");
+        assert_eq!(audio.right, baseline.right, "muted clip altered master right");
     }
 
     #[test]

@@ -263,7 +263,7 @@ fn set_graph_analysis_resolution(instance: &mut PresetInstance, max_dim: i64) {
     if max_dim == 0 {
         return;
     }
-    let mut graph = manifold_renderer::node_graph::bundled_preset_def(instance.effect_type())
+    let mut graph = manifold_nodes::bundled_presets::bundled_preset_def(instance.effect_type())
         .cloned()
         .unwrap_or_else(|| panic!("missing bundled graph for {}", instance.effect_type()));
     fn visit(nodes: &mut [manifold_core::effect_graph_def::EffectGraphNode], max_dim: i64) {

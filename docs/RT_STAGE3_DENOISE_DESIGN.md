@@ -109,14 +109,14 @@ impl RtSpatialDenoise {
 
 ### P1 — Firefly clamp (BUG-mkgh (pre-blur firefly clamp)); branch `lane/rt-firefly-clamp`, lands independently (lane: pro)
 
-- **Entry state:** recon anchors re-verified: output redirect at render_scene.rs:6311-6321; `rt_temporal_color_scratch` ensure block; how `rt_shadows` etc. appear as cardable node params (⚠ VERIFY-AT-IMPL: `rg -n "rt_shadows" crates/manifold-renderer/src` and follow the param declaration).
+- **Entry state:** recon anchors re-verified: output redirect at render_scene.rs:6311-6321; `rt_temporal_color_scratch` ensure block; how `rt_shadows` etc. appear as cardable node params (⚠ VERIFY-AT-IMPL: `rg -n "rt_shadows" crates/manifold-nodes/src` and follow the param declaration).
 - **Read-back:** D2, D3, section 3.2 (`firefly_clamp` kernel), I1/I3/I7; the `atrous_filter` MSL + `AtrousParams` CPU mirror + dispatch precedent (raytrace.rs:2404, 4507-4545, render_scene.rs:6016-6040). Restate the forbidden moves.
 - **Deliverables:** `firefly_clamp` MSL kernel + CPU-mirrored params struct + `tracer.firefly_clamp` method; `rt_firefly_clamp` bool param on `node.render_scene` (default true); scratch redirect + dispatch; gpu-proofs value test (median math vs CPU-computed expected, plus I7's two passthrough cases); unit-level sorting-network median test.
-- **Gate:** `cargo clippy -p manifold-gpu -p manifold-renderer -- -D warnings` clean; `cargo nextest run -p manifold-renderer` green; `scripts/gpu_proofs_gate.py` green (run by lead at review — device contention).
+- **Gate:** `cargo clippy -p manifold-gpu -p manifold-nodes -- -D warnings` clean; `cargo nextest run -p manifold-nodes` green; `scripts/gpu_proofs_gate.py` green (run by lead at review — device contention).
 - **Demo:** headless render of `tests/fixtures/rt/RtEmissiveStrength.manifold` with DoF in the chain, clamp on vs off → scripted pixel-diff (outlier texel count above threshold must drop; stated threshold), PNG pair artifact for Peter (L2).
 - **Performer gesture:** an emissive strobe cue against a dark scene with DoF wide open — the bokeh discs stay the emitters' honest color, no white hot-spots.
 - **Forbidden moves:** clamping when RT didn't render this frame; touching the trace-kernel cap; putting the clamp in a preset JSON; a second scratch allocation per frame.
-- **Test scope:** manifold-gpu + manifold-renderer + gpu-proofs.
+- **Test scope:** manifold-gpu + manifold-nodes + gpu-proofs.
 
 ### P2 — Settings row (lane: v25, mechanical; may run parallel with P1/P3)
 
@@ -135,19 +135,19 @@ impl RtSpatialDenoise {
 - **Deliverables:** `atrous_post` MSL kernel + `AtrousPostParams` CPU mirror + `tracer.atrous_post_pass`; gpu-proofs value test: synthetic noisy irradiance + known moments + known depth/normal → filtered output vs CPU-computed expected (the full weight math mirrored); early-out test (converged texel passes through bit-exact); void passthrough test.
 - **Gate:** clippy `-p manifold-gpu` clean; `scripts/gpu_proofs_gate.py` green (lead runs at review).
 - **Demo:** none — L1 (P4's render is the vertical path).
-- **Forbidden moves:** writing history or moments; a luma stop that ignores variance; `create_compute_pipeline` anywhere in manifold-renderer for this (the kernel lives in manifold-gpu's MSL, like its siblings).
+- **Forbidden moves:** writing history or moments; a luma stop that ignores variance; `create_compute_pipeline` anywhere in manifold-nodes for this (the kernel lives in manifold-gpu's MSL, like its siblings).
 - **Test scope:** manifold-gpu + gpu-proofs.
 
 ### P4 — Wiring + settings consumption (lane: pro)
 
-- **Entry state:** P2 + P3 on the branch. Re-verify: `rg -n "denoise_iterations" crates/manifold-renderer` returns the P2 resolution; the 6433 binding unchanged.
+- **Entry state:** P2 + P3 on the branch. Re-verify: `rg -n "denoise_iterations" crates/manifold-nodes` returns the P2 resolution; the 6433 binding unchanged.
 - **Read-back:** D1, D4, D5, D6, section 3.3 (Dispatch wiring), I1-I5. Restate the forbidden moves.
 - **Deliverables:** `rt_irr_filtered`/`_b` allocation in `ensure_rt_irradiance`; dispatch block after accumulate (gated: tier ≠ Off, accumulated-this-frame, !denoise_active); composite rebinding; I2's history-honesty gpu-proof; I5's bypass proof; I1's Off-identity proof.
-- **Gate:** `scripts/gpu_proofs_gate.py` green (lead runs); `MANIFOLD_RENDER_TRACE=1` run — no frame >20 ms attributable; clippy `-p manifold-renderer` clean.
+- **Gate:** `scripts/gpu_proofs_gate.py` green (lead runs); `MANIFOLD_RENDER_TRACE=1` run — no frame >20 ms attributable; clippy `-p manifold-nodes` clean.
 - **Acceptance demo:** headless render, `tests/fixtures/rt/RtEmissiveStrength.manifold` paused static, denoise Medium vs Off. The rt-capture `irr_full` slot taps the PRE-accumulation `rt_irr_full` (render_scene.rs:6259-6261) — the post-filter never moves it; **add an `irr_accum` capture slot mirroring the `refl_history_write` capture (render_scene.rs:6253-6256)** — the capture block sits right after accumulate, exactly where the new dispatch lands. Report `composite` + `irr_accum` frame-to-frame |delta| (mean, p99.9) both ways. Expectation: composite and irr_accum drop; `irr_full` UNCHANGED (it is the input signal — a drop there would mean the filter reached backwards). PNG pair for Peter (L2).
 - **Performer gesture:** grab a light's intensity and sweep it continuously for 5 s mid-scene — boiling through the gesture fade visibly reduced, no new ghost trail (the filter is spatial, it cannot trail).
 - **Forbidden moves:** a new reset path; filtering when accumulation idled; strength applied inside the weight math (it is a final blend); touching the pre-accumulation `atrous_filter` constants.
-- **Test scope:** manifold-renderer + gpu-proofs.
+- **Test scope:** manifold-nodes + gpu-proofs.
 
 ### P5 — Measure, gate, land (lead, not a lane)
 

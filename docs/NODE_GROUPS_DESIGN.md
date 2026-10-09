@@ -324,7 +324,7 @@ Add `GraphBuildError::Flatten(manifold_core::flatten::FlattenError)`. Both consu
 `persistence::into_graph` (Standalone) and `chain_spec::splice_def_into_chain` (Splice) — inherit
 group support with no changes of their own, because both route through `instantiate_def`.
 
-`check-presets` (`crates/manifold-renderer/src/bin/check_presets.rs`) loads through the same path,
+`check-presets` (`crates/manifold-nodes/src/bin/check_presets.rs`) loads through the same path,
 so it validates grouped presets for free.
 
 ---
@@ -364,7 +364,7 @@ gates; the Liveschool load is the regression backstop.
 - `flatten_is_identity_on_groupless_def` — a flat def in → equal def out (modulo renumbering;
   assert topological equivalence, not literal ids).
 
-**Parity (the headline — manifold-renderer):**
+**Parity (the headline — manifold-nodes):**
 - `grouped_equals_handwired` — build one effect two ways: a hand-flat `Blur+Mix` def, and the
   grouped def from section 4. Assert the flattened grouped def is topologically identical to the hand-flat
   def (same node type_ids, same wire connectivity after handle-normalization). This is the proof
@@ -373,7 +373,7 @@ gates; the Liveschool load is the regression backstop.
 - Optional GPU confirmation: render both through the existing parity harness and assert
   pixel-identical output, if a render-level guarantee is wanted beyond structural equality.
 
-**Integration (manifold-renderer):**
+**Integration (manifold-nodes):**
 - A grouped bundled preset fixture loads through `into_graph` and executes one frame without error
   (extend the existing `bundled_presets` lib test with a grouped entry — note `check-presets` alone
   does **not** execute a GPU frame, per `feedback_check_presets_is_not_runtime`).
@@ -389,7 +389,7 @@ gates; the Liveschool load is the regression backstop.
 
 Each phase is independently committable and test-gated.
 
-- **Phase 0 — baseline & confirm.** Run `cargo test -p manifold-renderer --lib bundled_presets` and
+- **Phase 0 — baseline & confirm.** Run `cargo test -p manifold-nodes --lib bundled_presets` and
   the Liveschool load test green *before* any change. Confirm `from_graph(into_graph(preset))` is a
   topological identity on one existing flat preset (it should be). This establishes the
   before-picture the parity test compares against.
@@ -457,7 +457,7 @@ These shape Phase-1 choices so the deferred work is additive, nothing more:
 ## 11. Risks & open questions
 
 - **Handle delimiter.** This spec reserves `/`. **Confirmed safe 2026-06-01:** a grep of every
-  preset under `crates/manifold-renderer/assets` and every `add_node_named` literal found zero
+  preset under `crates/manifold-nodes/assets` and every `add_node_named` literal found zero
   handles containing `/` (handles are author-chosen identifiers like `uv_transform`, `feedback`,
   `mix`). The flattener should still reject a `/` in a user handle (`ReservedHandleChar`) so the
   invariant is enforced, not just currently-true.
@@ -484,7 +484,7 @@ These shape Phase-1 choices so the deferred work is additive, nothing more:
 - `crates/manifold-core/src/lib.rs` — `pub mod flatten;`.
 - `crates/manifold-node-engine/src/load/graph_loader.rs` — the section 5 insertion + the
   `GraphBuildError::Flatten` variant + its `Display`/mapping.
-- `crates/manifold-renderer/tests/` (or lib) — `grouped_equals_handwired` parity test; grouped
+- `crates/manifold-nodes/tests/` (or lib) — `grouped_equals_handwired` parity test; grouped
   entry in the `bundled_presets` integration test.
 - `assets/effect-presets/<GroupedExample>.json` *(Phase 5)* — the reference grouped document.
 - **Deferred (do not touch now):** `boundary_nodes.rs` (Phase-2 runtime group nodes),

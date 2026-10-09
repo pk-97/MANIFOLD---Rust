@@ -67,7 +67,7 @@ itself; its failure mode *is* the stage failure this design exists to prevent.
 | App integration: acquire → convert → submit in the compositor command buffer; fence signaled in `add_completed_handler` | [content_pipeline.rs:2547-2621](../crates/manifold-app/src/content_pipeline.rs#L2547) | Shipped — the exact sequence the harness replicates |
 | Start/stop command surface | [content_commands.rs:823-861](../crates/manifold-app/src/content_commands.rs#L823), record button at [app_render.rs:1257-1260](../crates/manifold-app/src/app_render.rs#L1257) | Shipped |
 | `AudioConsumer = ringbuf::HeapCons<f32>` — a plain heap ring-buffer consumer | [capture/mod.rs:34](../crates/manifold-audio/src/capture/mod.rs#L34) | Trivially injectable; session only constructs it from a device name today ([session.rs:66-91](../crates/manifold-recording/src/session.rs#L66)) |
-| Feature-gated GPU test precedent (`gpu-proofs`: gated `test_device()`, `[[test]] required-features`) | [manifold-renderer/Cargo.toml:56-69](../crates/manifold-renderer/Cargo.toml#L56) | The pattern Tier 1 mirrors |
+| Feature-gated GPU test precedent (`gpu-proofs`: gated `test_device()`, `[[test]] required-features`) | [manifold-nodes/Cargo.toml:56-69](../crates/manifold-nodes/Cargo.toml#L56) | The pattern Tier 1 mirrors |
 | UI flow driver (L3): resolve widget by name, click, assert | `scripts/ui-flows/select-and-inspect.json` + `cargo xtask ui-snap` | Shipped (UI_AUTOMATION P1–P2) — P3's vehicle |
 | ffprobe / ffmpeg | `/opt/homebrew/bin/` | Present on the rig |
 
@@ -224,10 +224,10 @@ exactly 1 hit).
 
 Lives in `crates/manifold-recording`: a feature-gated `src/proofs.rs` support module
 (pattern writer + oracle; shape like `test_device()` gating at
-[manifold-renderer/src/lib.rs:77](../crates/manifold-renderer/src/lib.rs#L77)) and the
+[manifold-nodes/src/lib.rs:77](../crates/manifold-nodes/src/lib.rs#L77)) and the
 integration test `tests/recording_proofs.rs` (`required-features =
 ["recording-proofs"]`, shape like the renderer's `gpu_proofs` target at
-[manifold-renderer/Cargo.toml:56-62](../crates/manifold-renderer/Cargo.toml#L56)).
+[manifold-nodes/Cargo.toml:56-62](../crates/manifold-nodes/Cargo.toml#L56)).
 
 **Harness frame loop** — the production sequence from
 [content_pipeline.rs:2547-2621](../crates/manifold-app/src/content_pipeline.rs#L2547),
@@ -236,7 +236,7 @@ transcribed: acquire slot (D8 pacing) → dispatch pattern shader into an
 shader) → `add_completed_handler(|| fence.signal())` → commit → `submit_frame_at`
 with the scripted timestamp. GPU device: the crate's own headless `GpuDevice`
 (⚠ VERIFY-AT-IMPL: the exact constructor — read how
-`manifold-renderer/src/lib.rs test_device()` builds one and mirror it).
+`manifold-nodes/src/lib.rs test_device()` builds one and mirror it).
 
 **Pattern spec (committed — the oracle depends on it).** Frame size 640×360. Two
 sync blocks + 24 index bits, one row of 26 blocks, each ~24×64 px (block width =
@@ -351,7 +351,7 @@ this is the instrument-check that catches the next one before it costs a show.
   `Instant::now()`; the section 3.1 call-site inventory count still holds.
 - **Read-back:** this doc section 2–section 4 whole; [format_converter.rs](../crates/manifold-recording/src/format_converter.rs)
   end-to-end; [content_pipeline.rs:2543-2621](../crates/manifold-app/src/content_pipeline.rs#L2543);
-  the `gpu-proofs` wiring in [manifold-renderer/Cargo.toml:56-69](../crates/manifold-renderer/Cargo.toml#L56).
+  the `gpu-proofs` wiring in [manifold-nodes/Cargo.toml:56-69](../crates/manifold-nodes/Cargo.toml#L56).
   Restate the binding decisions (D1–D5, D8), the forbidden moves, and the entry-check
   results before writing code.
 - **Deliverables:** section 3 seams exactly as committed (`submit_frame_at`, `AudioFeed`,

@@ -6,7 +6,7 @@
 **Prerequisites:** none — the seam's P1 and GPU FLIP's full step are on main. This design's P1 is the seam's P10 (Grid outputs).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
-**Reference boundary:** `WaterDamBreakGpu.json` below is the proof-only CPU fixture in `crates/manifold-renderer/tests/fixtures/cpu-flip/`; product water uses `WaterDamBreakGpuFlip`.
+**Reference boundary:** `WaterDamBreakGpu.json` below is the proof-only CPU fixture in `crates/manifold-nodes/tests/fixtures/cpu-flip/`; product water uses `WaterDamBreakGpuFlip`.
 
 Peter, 2026-09-30, on BUG-imy3 (GPU whitewater, solver-agnostic): "move the spawn search to the GPU and reuse FLIP's own foam and bubble code."
 
@@ -22,7 +22,7 @@ A SWASH dam break throws spray off its front, lays foam on breaking crests and c
 
 ## 1. Audit — what exists (verified 2026-09-30)
 
-Extend, don't redesign. `F/` is `crates/manifold-fluids/native/flip_engine/`, `R/` is `crates/manifold-renderer/src/node_graph/`.
+Extend, don't redesign. `F/` is `crates/manifold-fluids/native/flip_engine/`, `R/` is `crates/manifold-nodes/src/node_graph/`.
 
 | Piece | Where | State |
 |---|---|---|
@@ -60,7 +60,7 @@ Extend, don't redesign. `F/` is `crates/manifold-fluids/native/flip_engine/`, `R
 
 ### 1.1 Primitive audit
 
-DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`; reference presets `WaterDamBreakGpu.json` (FLIP whitewater into the three copies objects, ids 44, 47, 50) and `WaterDamBreakMatter.json`, read end to end.
+DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-nodes/src/node_graph/primitives/ -g "*.rs"`; reference presets `WaterDamBreakGpu.json` (FLIP whitewater into the three copies objects, ids 44, 47, 50) and `WaterDamBreakMatter.json`, read end to end.
 
 | Job | Verdict | Nearest existing, and why it isn't it |
 |---|---|---|
@@ -381,7 +381,7 @@ Cost is uncapped by resolution: the direct turbulence gather performs at most 64
 | I12 | The GPU emitter matches FLIP's on the same inputs | `whitewater_emitter_matches_flip` (O2) |
 | I13 | Curvature and distance match FLIP's and the exact field | the O1 tests |
 | I14 | Fused equals unfused | per-atom fused proofs; `scripts/gpu_proofs_gate.py` |
-| I15 | No new lock; one new thread, the lifecycle's | `git diff -U0 origin/feat/fft-water -- crates/manifold-renderer crates/manifold-fluids/src ':!*tests.rs'`, added lines: `rg -e "Arc<Mutex" -e "Arc<RwLock"` → 0; `rg "thread::"` → the one `thread::Builder` in `whitewater_handoff.rs` |
+| I15 | No new lock; one new thread, the lifecycle's | `git diff -U0 origin/feat/fft-water -- crates/manifold-nodes crates/manifold-fluids/src ':!*tests.rs'`, added lines: `rg -e "Arc<Mutex" -e "Arc<RwLock"` → 0; `rg "thread::"` → the one `thread::Builder` in `whitewater_handoff.rs` |
 | I16 | The seam face layout holds for every producer (the seam's I16) | `liquid_face_grid_layout` |
 
 ## 5. Phasing
@@ -392,8 +392,8 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 
 - **Entry state:** this design approved; `origin/feat/fft-water` merged into the branch; anchors `swash_preset.rs:609`, `matter_state.rs:157`, `R/matter.rs:287` re-read.
 - **Read-back:** LIQUID_SOLVER_SEAM_DESIGN.md section 3.2 (Grid outputs) and P10 (Grid outputs); ADDING_PRIMITIVES.md; this doc's section 3.1 (Grids) and section 3.6 (Solver feeds). Restate D2, the seam's P10 forbidden list, and the entry findings.
-- **Deliverables:** `R/liquid/grid.rs` with `FACE_GRID_PORTS`; `node.face_sample_component`, `node.matter_face_component`; `matter_frame` inputs and outputs for the grid; group outputs `level_set`, `level_set_bounds`, `level_set_nodes_x/y/z` in every preset that embeds the Liquid Surface group (`rg -l '"liquid_surface"' crates/manifold-renderer/assets/generator-presets`), thumbnails regenerated; `face_grid_extent_tests.rs`; `liquid_face_grid_layout` (uniform and linear-shear fields, both producers, within 1e-5 of the seam positions).
-- **Gate:** `cargo nextest run -p manifold-renderer face_grid liquid_face_grid_layout`; `scripts/gpu_proofs_gate.py` green; `graph-tool validate` clean on every touched preset; every regenerated thumbnail pixel-identical to its previous PNG (new outputs must not change the render; any changed pixel stops the phase and is reported). Negative: `rg -n -e matter_ -e gpu_flip_ -e fluid_surface crates/manifold-node-engine/src/water/liquid/grid.rs` → 0, and `type_id ==` in the two new atoms → 0 (the atoms are the solver-specific producers, so I1 itself does not apply to them).
+- **Deliverables:** `R/liquid/grid.rs` with `FACE_GRID_PORTS`; `node.face_sample_component`, `node.matter_face_component`; `matter_frame` inputs and outputs for the grid; group outputs `level_set`, `level_set_bounds`, `level_set_nodes_x/y/z` in every preset that embeds the Liquid Surface group (`rg -l '"liquid_surface"' crates/manifold-nodes/assets/generator-presets`), thumbnails regenerated; `face_grid_extent_tests.rs`; `liquid_face_grid_layout` (uniform and linear-shear fields, both producers, within 1e-5 of the seam positions).
+- **Gate:** `cargo nextest run -p manifold-nodes face_grid liquid_face_grid_layout`; `scripts/gpu_proofs_gate.py` green; `graph-tool validate` clean on every touched preset; every regenerated thumbnail pixel-identical to its previous PNG (new outputs must not change the render; any changed pixel stops the phase and is reported). Negative: `rg -n -e matter_ -e gpu_flip_ -e fluid_surface crates/manifold-node-engine/src/water/liquid/grid.rs` → 0, and `type_id ==` in the two new atoms → 0 (the atoms are the solver-specific producers, so I1 itself does not apply to them).
 - **Demo:** L2, the seam's P10 demo: a face-speed slice of SWASH and MPM Dam Break at the same tick, side by side, PNG (`face_grid_demo_swash_and_matter_side_by_side`, path in `FACE_GRID_DEMO_PNG`).
 - **Forbidden:** a consumer switching on solver; node velocities as the contract; publishing every tick; `liquid_frame` (P7a's).
 - **Test scope:** focused renderer; GPU proofs.
@@ -403,7 +403,7 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 - **Entry state:** P1 on the branch; `F/particlelevelset.cpp:196` and `:728` re-read.
 - **Read-back:** D2–D4; section 3.1, 3.3 (grid atoms), 3.7 O1. Restate them.
 - **Deliverables:** `surface_crossings`, `nearest_crossing`, `crossing_distance`, `liquid_cells`, `lattice_curvature`, `extend_lattice` with gpu_tests and fused proofs; `whitewater_common.wgsl`; the `whitewater-oracle` feature with `manifold_fluids_oracle_curvature`; the O1 tests; the grid half of `whitewater_extent_tests.rs`.
-- **Gate:** O1 green as restated in section 3.7 (`cargo test -p manifold-renderer --features gpu-proofs,whitewater-oracle --lib -- whitewater_field_tests --test-threads=1`); `scripts/gpu_proofs_gate.py` green; `cargo clippy -p manifold-renderer --tests --features whitewater-oracle -- -D warnings`. Negative: I8's diff empty.
+- **Gate:** O1 green as restated in section 3.7 (`cargo test -p manifold-nodes --features gpu-proofs,whitewater-oracle --lib -- whitewater_field_tests --test-threads=1`); `scripts/gpu_proofs_gate.py` green; `cargo clippy -p manifold-nodes --tests --features whitewater-oracle -- -D warnings`. Negative: I8's diff empty.
 - **Demo:** none — L1 (fields only; P6 shows them).
 - **Forbidden:** FLIP's reinit on the capped field; a particle-built field; widening an O1 tolerance.
 - **Test scope:** focused renderer and manifold-fluids; GPU proofs.
@@ -413,7 +413,7 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 - **Entry state:** P2 on the branch; `F/diffuseparticlesimulation.cpp:55`, `:1480`, `F/particlesystem.h:72`, `retire.rs:159` re-read.
 - **Read-back:** D1, D6–D8, D10–D12; section 3.4, 3.5. Restate them and the size trap.
 - **Deliverables:** `WhitewaterSpawn`, `WhitewaterGrid`, `WhitewaterFields`, `WhitewaterLifecycle` and their bridge glue; `node.whitewater_lifecycle` with both rings; the lifecycle and handoff proofs of section 3.7 (spawns from a test source); I2–I6, I10, I11.
-- **Gate:** `cargo nextest run -p manifold-fluids whitewater`; `cargo nextest run -p manifold-renderer whitewater`; the handoff proofs under `scripts/gpu_proofs_gate.py`. Negative: I8, I15.
+- **Gate:** `cargo nextest run -p manifold-fluids whitewater`; `cargo nextest run -p manifold-nodes whitewater`; the handoff proofs under `scripts/gpu_proofs_gate.py`. Negative: I8, I15.
 - **Demo:** none — L1.
 - **Forbidden:** `wait` on the live path; a lock; reading graph arrays in place; any `flip_engine/` edit.
 - **Test scope:** focused manifold-fluids and renderer; GPU proofs.
@@ -430,7 +430,7 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 
 ### P5 — Spawn, the group and the FLIP oracle
 
-- **Entry state:** P4 on the branch; `F/diffuseparticlesimulation.cpp:1912`, `:2056` re-read. **Blocking:** the SWASH Dam Break preset JSON exists on the branch (`rg -l "swash" crates/manifold-renderer/assets/generator-presets`). If it does not, stop and tell the lead, who sequences it with the SWASH worker.
+- **Entry state:** P4 on the branch; `F/diffuseparticlesimulation.cpp:1912`, `:2056` re-read. **Blocking:** the SWASH Dam Break preset JSON exists on the branch (`rg -l "swash" crates/manifold-nodes/assets/generator-presets`). If it does not, stop and tell the lead, who sequences it with the SWASH worker.
 - **Read-back:** D8, D13; section 3.3 (spawn atoms), 3.4, 3.7 O2. Restate them.
 - **Deliverables:** `spawn_whitewater`, `whitewater_type` with gpu_tests and fused proofs; `manifold_fluids_oracle_emit`; O2; the Whitewater group and the three copies objects in the SWASH Dam Break preset; `swash_whitewater_emits` (SWASH Dam Break at 64 through the preset, 90 frames: foam > 0 at 1.5 s, no refusal); I12.
 - **Gate:** O2 green; `scripts/gpu_proofs_gate.py` green; `graph-tool validate --kind generator` and `fusion` clean on the preset; the preset loads, saves and reloads with its params (round trip).
@@ -454,7 +454,7 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 - **Read-back:** this doc's section 3.6 (Solver feeds) and section 3.7 (Proofs); the demo rules of DESIGN_DOC_STANDARD.md section 5 (Phase briefs). Restate them.
 - **Deliverables:** the SWASH side rendered from the SWASH Dam Break preset with its whitewater; `whitewater_side_by_side` writing `side_by_side.mp4` (1080p, 211 frames at 60 fps, FLIP engine with native whitewater left, SWASH with GPU whitewater right, `WaterDamBreakGpu.json`'s camera, the studio floor removed on both) and `counts.png` (foam, bubble and spray counts over time, both); the cost table in this phase's notes.
 - **Gate:** the test exits 0 and writes both files; cost measured and reported against the targets; the GPU and CPU targets met or escalated per D11.
-- **Demo:** L2 for Peter: `side_by_side.mp4` and `counts.png`. Command: `WHITEWATER_DEMO_DIR=/tmp/whitewater cargo test -p manifold-renderer --features gpu-proofs --lib whitewater_side_by_side -- --nocapture`.
+- **Demo:** L2 for Peter: `side_by_side.mp4` and `counts.png`. Command: `WHITEWATER_DEMO_DIR=/tmp/whitewater cargo test -p manifold-nodes --features gpu-proofs --lib whitewater_side_by_side -- --nocapture`.
 - **Gesture:** pause mid-splash; the foam freezes with the water and moves on when play resumes.
 - **Forbidden:** tuning FLIP's constants toward the look; judging the look by agent.
 - **Test scope:** focused renderer; GPU proofs.

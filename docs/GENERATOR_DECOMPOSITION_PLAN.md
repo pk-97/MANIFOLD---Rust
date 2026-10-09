@@ -17,7 +17,7 @@ Don't decompose for its own sake — see DECOMPOSING_GENERATORS section 1 for th
 ## State of play
 
 - **JSON-defined generators:** 20 (full list in [NODE_CATALOG.md section 6.1 (JSON-defined)](NODE_CATALOG.md)). Cover the procedural-texture, parametric-curve, mux'd-variant, particle-sim, screen-space PBR, 3D-mesh PBR-IBL, 3D / 4D wireframe, instanced-mesh, 2D/3D fluid-sim, volumetric-scrubbing, relativistic-lensing, CPU-rasterized-text, and text-baked-into-force-field families.
-- **Rust-defined generators:** 0 remaining. Every shipping generator now lives in [`assets/generator-presets/`](../crates/manifold-renderer/assets/generator-presets/) as a JSON graph composition.
+- **Rust-defined generators:** 0 remaining. Every shipping generator now lives in [`assets/generator-presets/`](../crates/manifold-nodes/assets/generator-presets/) as a JSON graph composition.
 - **Primitive vocabulary:** ~135 shipped — see NODE_CATALOG.md for the full inventory.
 - **Infra:** all the foundation work has shipped — `system.generator_input` boundary node, variadic mux primitives, per-slot texture format declaration on the backend, the JSON loader (`JsonGraphGenerator`), `paramAliases` migration support, and StateStore plumbing for stateful primitives inside generators.
 
@@ -59,9 +59,9 @@ See [NODE_CATALOG.md section 6.1 (JSON-defined)](NODE_CATALOG.md) for the topolo
 
 ## 3. Remaining Rust-defined generators
 
-The migration targets. Each lives at `crates/manifold-renderer/src/generators/<name>.rs`.
+The migration targets. Each lives at `crates/manifold-nodes/src/generators/<name>.rs`.
 
-All migration targets have shipped. The remaining Rust files under [`crates/manifold-renderer/src/generators/`](../crates/manifold-renderer/src/generators/) are runtime infrastructure (`json_graph_generator`, `bundled_generator_presets`, `registration`, `registry`, `clip_trigger`, `compute_common`, `generator_math`, `line_pipeline`, `mesh_common`, `mesh_pipeline`, `stateful_base`) — not generators in their own right.
+All migration targets have shipped. The remaining Rust files under [`crates/manifold-nodes/src/generators/`](../crates/manifold-nodes/src/generators/) are runtime infrastructure (`json_graph_generator`, `bundled_generator_presets`, `registration`, `registry`, `clip_trigger`, `compute_common`, `generator_math`, `line_pipeline`, `mesh_common`, `mesh_pipeline`, `stateful_base`) — not generators in their own right.
 
 ---
 
@@ -77,7 +77,7 @@ Follow [DECOMPOSING_GENERATORS.md section 3 (The workflow)](DECOMPOSING_GENERATO
 
 Validation gates:
 
-- Iteration loop: `cargo run -p manifold-renderer --bin check-presets` (no GPU, sub-second) after every JSON edit; `cargo test -p manifold-renderer --test parity <generator>::` for parity runs.
+- Iteration loop: `cargo run -p manifold-nodes --bin check-presets` (no GPU, sub-second) after every JSON edit; `cargo test -p manifold-nodes --test parity <generator>::` for parity runs.
 - Migration commit: `cargo clippy --workspace -- -D warnings && cargo test --workspace` green.
 - Visual parity against `Liveschool Live Show V6 LEDS.manifold` canonical fixture before declaring done.
 

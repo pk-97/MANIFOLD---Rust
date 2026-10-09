@@ -39,10 +39,10 @@ pub fn visible_x_range(left_px: f32, width_px: f32, buf_w: i32) -> (i32, i32) {
 /// - `waveform_x_px`: X pixel position of the waveform start in content space
 /// - `waveform_width_px`: total width of the waveform in pixels
 /// - `src_start`, `src_end`: the source-file sub-window to show, as fractions of
-///   the file in `[0, 1]`. The clip is a *window* onto the file (Ableton model):
+///   the file. The clip is a *window* onto the file (Ableton model):
 ///   `src_start..src_end` of the file's texels map across `waveform_width_px`, so
 ///   trimming the clip reveals more/less of the file instead of rescaling it.
-///   Pass `(0.0, 1.0)` to show the whole file.
+///   The window may extend beyond `[0, 1]`; those portions remain transparent.
 pub fn draw_waveform(
     buffer: &mut [Color32],
     buf_w: usize,
@@ -61,7 +61,10 @@ pub fn draw_waveform(
         return;
     }
 
-    let src_span = (src_end as f64 - src_start as f64).max(0.0);
+    let src_span = src_end as f64 - src_start as f64;
+    if !src_span.is_finite() || src_span <= 0.0 {
+        return;
+    }
     let mid = y_offset as f32 + lane_height as f32 * 0.5;
     // Proportional padding stays consistent at Retina scale and in short clips.
     let max_half_height = lane_height as f32 * 0.43;
@@ -74,10 +77,16 @@ pub fn draw_waveform(
         }
         // Pool the complete time interval under this pixel, including the last
         // partial source bin. Point sampling used to miss narrow peaks.
-        let sample = level.sample_range(
-            src_start as f64 + left / waveform_width_px as f64 * src_span,
-            src_start as f64 + right / waveform_width_px as f64 * src_span,
-        );
+        let source_start =
+            src_start as f64 + left / waveform_width_px as f64 * src_span;
+        let source_end =
+            src_start as f64 + right / waveform_width_px as f64 * src_span;
+        let clipped_start = source_start.max(0.0);
+        let clipped_end = source_end.min(1.0);
+        if clipped_end <= clipped_start {
+            continue;
+        }
+        let sample = level.sample_range(clipped_start, clipped_end);
         if sample.peak <= 0.0 {
             continue;
         }
@@ -340,6 +349,21 @@ mod tests {
             .filter(|&x| (0..80).any(|y| pixels[y * 128 + x].a > 0))
             .collect();
         assert_eq!(columns, [64]);
+    }
+
+    #[test]
+    fn waveform_window_past_eof_keeps_source_position_and_transparent_tail() {
+        let mut samples = vec![0.0; 4096];
+        samples[3072] = 1.0; // Source time 0.75, inside a nonzero in-point window.
+        let pixels = paint(&samples, 128, 80, 0.25, 1.25);
+        let columns: Vec<_> = (0..128)
+            .filter(|&x| (0..80).any(|y| pixels[y * 128 + x].a > 0))
+            .collect();
+        assert_eq!(columns, [64], "the source feature must keep its timeline position");
+        assert!(
+            (96..128).all(|x| (0..80).all(|y| pixels[y * 128 + x].a == 0)),
+            "the source window past EOF must stay transparent"
+        );
     }
 
     #[test]

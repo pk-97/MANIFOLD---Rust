@@ -1,5 +1,5 @@
 //! RT P0 prototype harness. See BRIEF.md. Standalone measurement binary —
-//! not wired into manifold-renderer.
+//! not wired into manifold-nodes.
 
 mod accel;
 mod gbuffer;

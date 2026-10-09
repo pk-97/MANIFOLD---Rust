@@ -38,7 +38,7 @@ from gate_policy import (
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
-    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, is_inert_plan_path,
+    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, CATALOG_PACKAGE, GPU_CONTRACT_TARGETS, is_inert_plan_path,
 )
 from gate_workspace import Workspace
 
@@ -110,6 +110,15 @@ def is_gpu_path(path, workspace=None):
         return False
     if workspace:
         owner = workspace.owner(path)
+        if owner and 'gpu-proofs' in workspace.packages[owner]['features']:
+            source = (workspace.repo / path).resolve()
+            for target in workspace.targets(owner, 'test'):
+                root = Path(target['src_path']).resolve()
+                if ('gpu-proofs' in target.get('required-features', [])
+                        and root.name == 'main.rs' and source.is_relative_to(root.parent)):
+                    return True
+                if target['name'] == GPU_CONTRACT_TARGETS.get(owner) and source == root:
+                    return True
         if (owner and 'gpu-proofs' in workspace.packages[owner]['features']
                 and ((path.startswith(workspace.roots[owner] + '/src/')
                       and path.endswith(('.rs', '.wgsl')))
@@ -117,7 +126,7 @@ def is_gpu_path(path, workspace=None):
             return True
     if path.endswith(".wgsl"):
         return True
-    if path.startswith((GPU_BACKEND_ROOT, UI_PAINT_DIR, ENGINE_SRC, CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
+    if path.startswith((GPU_BACKEND_ROOT, UI_PAINT_DIR, ENGINE_SRC, *CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
         return True
     if "shaders/" in path or "gpu::gpu_encoder" in path:
         return True
@@ -201,8 +210,14 @@ class Plan:
         for package in self.workspace.feature_packages('gpu-proofs'):
             filters = (UI_PAINT_FILTERS if self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
                        else self.final_filters())
+            if package in GPU_CONTRACT_TARGETS:
+                filters = [re.sub(r'^(exec|freeze|load|runtime|water|palette|preview_encoding|primitive_registry|node_graph)::',
+                                  r'contracts::\1::', value) for value in filters]
             targets = [t['name'] for t in self.workspace.targets(package, 'test')
-                       if 'gpu-proofs' in t.get('required-features', [])
+                       if ('gpu-proofs' in t.get('required-features', [])
+                           or (self.ui_paint and self.workspace.owner(UI_PAINT_DIR) == package
+                               and t['name'] == 'main')
+                           or t['name'] == GPU_CONTRACT_TARGETS.get(package))
                        and t['name'] not in GLB_TESTS
                        and not (route and route[:2] == (package, t['name']) and not route[2])]
             has_lib = bool(self.workspace.targets(package, 'lib'))
@@ -217,7 +232,7 @@ class Plan:
                     # The folded sweep retains its separate, unbudgeted run.
                     skips = sorted(set(skips) | {route[2]})
                 runs.append({'package': package, 'targets': [target], 'lib': False, 'target': target,
-                             'filters': [] if whole else self.final_filters(),
+                             'filters': [] if whole else filters,
                              'skips': skips, 'budgeted': True})
         if self.glb:
             package, target, prefix = route
@@ -289,14 +304,15 @@ def contract_module_filters(path, repo):
             if attrs:
                 child = source.parent.joinpath(*scope, attrs[-1])
             else:
-                base = source.parent if source.stem in ("lib", "mod") else source.with_suffix("")
+                base = source.parent if not ancestors or source.stem in ("lib", "mod", "main") else source.with_suffix("")
                 child = base.joinpath(*scope, name + ".rs")
                 if not child.is_file():
                     child = base.joinpath(*scope, name, "mod.rs")
-            if "engine_contract_tests" in child.parts:
-                walk(child, prefix + scope + (name,), ancestors | {source})
+            walk(child, prefix + scope + (name,), ancestors | {source})
 
     walk(repo / RENDERER_SRC / "lib.rs", (), set())
+    walk(repo / "crates/manifold-nodes/tests/main.rs", (), set())
+    walk(repo / "crates/manifold-app/tests/renderer_contracts.rs", (), set())
     return sorted(found)
 
 
@@ -444,6 +460,19 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
     if shader_users is None:
         shader_users = shader_index(repo, workspace) if any(p.endswith('.wgsl') for p in paths) else lambda p: []
     plan = Plan(workspace=workspace)
+    # Retired crates have no runnable target. Only skip paths Git confirms
+    # were deleted; moved destinations are independently scoped from the diff.
+    unowned_missing = [p for p in paths if workspace.owner(p) is None
+                       and not (Path(repo) / p).exists()]
+    retired = set()
+    if unowned_missing and (Path(repo) / '.git').exists():
+        deleted = subprocess.run(
+            ['git', '-C', str(repo), 'diff', '--no-renames', '--diff-filter=D',
+             '--name-only', '--merge-base', base, '--', *unowned_missing],
+            capture_output=True, text=True)
+        if deleted.returncode:
+            raise RuntimeError(f'cannot scope deleted crate paths: {deleted.stderr.strip()}')
+        retired.update(deleted.stdout.splitlines())
     test_paths = [p for p in paths if p.endswith('.rs') and (Path(repo) / p).is_file()
                   and '#[test]' in (Path(repo) / p).read_text()
                   and p.startswith((RENDERER_SRC, ENGINE_SRC, PROOFS_DIR))]
@@ -459,6 +488,8 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
             if path:
                 patches[path[1]] = section
     for path in sorted(set(paths)):
+        if path in retired:
+            continue
         if not is_gpu_path(path, workspace):
             continue
         plan.filters.update("node_graph::catalog_tests::" + module + "::"
@@ -466,6 +497,12 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
                             if path.startswith(prefix) and path.endswith(".rs"))
         plan.paths.append(path)
         owner = workspace.owner(path)
+        if owner in GPU_CONTRACT_TARGETS and any(
+                target['name'] == GPU_CONTRACT_TARGETS[owner]
+                and (Path(repo) / path).resolve() == Path(target['src_path']).resolve()
+                for target in workspace.targets(owner, 'test')):
+            plan.required_binaries.add((owner, GPU_CONTRACT_TARGETS[owner]))
+            continue
         if owner and path == workspace.roots[owner] + '/Cargo.toml':
             plan.whole_packages.add(owner)
             continue
@@ -535,6 +572,8 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
         if path.startswith((RENDERER_SRC, ENGINE_SRC)) and path.endswith(".rs"):
             plan.filters.update(path_attr_filters(path, repo) or module_filters(path))
             continue
+        if path.startswith(CONTRACT_TESTS_DIR):
+            continue  # Its real consolidated-harness mount was resolved above.
         if is_gltf_path(path):
             continue
         owner = workspace.owner(path)
@@ -547,10 +586,10 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
     # Feature-gated integration targets selected by CPU ownership belong here.
     if cpu_plan is _CPU_PLAN_UNSET:
         import cpu_scope
-        # GPU callers that do not share readiness planning are commonly using
-        # synthetic repositories without origin/main; preserve the historical
-        # no-base CPU scope in that mode.
-        cpu_plan = cpu_scope.plan_for_paths(paths, repo, workspace)
+        # Nested CPU ownership must use the same base as GPU deletion scope.
+        # Metadata-only fixtures have no Git history to consult.
+        cpu_plan = cpu_scope.plan_for_paths(
+            paths, repo, workspace, base=base if (Path(repo) / '.git').exists() else None)
     if cpu_plan is not None:
         plan.required_binaries.update(cpu_plan.gpu_binaries)
     return plan

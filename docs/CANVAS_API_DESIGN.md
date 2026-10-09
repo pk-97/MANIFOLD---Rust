@@ -32,8 +32,8 @@ invent.
 
 ## 0. The decision that frames everything: the canvas stays in `manifold-app`
 
-`graph_canvas.rs` imports `manifold_renderer::node_graph::{GraphSnapshot, …}`
-and `manifold_renderer::ui_renderer::UIRenderer` (`graph_canvas.rs:20-23`). The
+`graph_canvas.rs` imports `manifold_nodes::node_graph::{GraphSnapshot, …}`
+and `manifold_nodes::ui_renderer::UIRenderer` (`graph_canvas.rs:20-23`). The
 dependency graph is `renderer → ui` (CLAUDE.md crate table; `manifold-ui`'s
 `Cargo.toml` depends only on `manifold-core`). So the canvas **cannot** move into
 `manifold-ui` without a cycle (`ui → renderer → ui`).

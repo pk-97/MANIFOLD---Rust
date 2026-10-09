@@ -81,7 +81,7 @@ CRATE_AREAS = {
     "manifold-editing": "editing",
     "manifold-playback": "playback",
     "manifold-gpu": "gpu",
-    "manifold-renderer": "renderer",
+    "manifold-nodes": "renderer",
     "manifold-media": "media",
     "manifold-ui": "ui",
     "manifold-io": "io",

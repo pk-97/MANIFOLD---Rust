@@ -89,14 +89,14 @@ moved line is fine, a missing symbol is an escalation.
 | Camera atoms | `node.orbit_camera` (`orbit`/`tilt`/`distance`/`fov_y`/`near` — importer stamps them, `gltf_import.rs:673-682`), `node.free_camera`, `node.look_at_camera` | SHIPPED |
 | Atmosphere | `PortType::Atmosphere` + `node.atmosphere` (fog color/density/height falloff/ambient tint) | SHIPPED (REALTIME_3D P3) |
 | Environment chain (importer shape) | `gltf_import.rs:624-671` — `node.bake_environment` (`intensity`/`mode`/`fill`/`emitter_intensity`) + `node.hdri_source` (`hdri_file` string binding) + `node.exposure` gain + `node.switch_texture` selector → render_scene `envmap` | SHIPPED (F-P4/F-P7, GLB_CONFORMANCE D6) |
-| Mesh-modifier atoms (mesh → mesh) | `node.bend_mesh`, `node.twist_mesh`, `node.taper_mesh`, `node.push_along_normals`, `node.push_mesh` (texture displacement — type_id is `node.push_mesh`, file `displace_mesh.rs`), `node.morph_mesh`, `node.rotate_3d` | SHIPPED — the modifier-stack vocabulary. Re-derive at P5 entry: `rg -l "Array<MeshVertex>" crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/` and keep only single-mesh-in/mesh-out atoms |
+| Mesh-modifier atoms (mesh → mesh) | `node.bend_mesh`, `node.twist_mesh`, `node.taper_mesh`, `node.push_along_normals`, `node.push_mesh` (texture displacement — type_id is `node.push_mesh`, file `displace_mesh.rs`), `node.morph_mesh`, `node.rotate_3d` | SHIPPED — the modifier-stack vocabulary. Re-derive at P5 entry: `rg -l "Array<MeshVertex>" crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-nodes/src/node_graph/primitives/` and keep only single-mesh-in/mesh-out atoms |
 | Import assembler is a pure function | `gltf_import.rs:482` `assemble_import_graph(path) -> (EffectGraphDef, ImportReport)`; split `build_import_graph(&summary, path)` testable on synthetic summaries; node ids allocated by a local `fresh_id` counter from 0 | SHIPPED. The merge path (D5) reuses `gltf_load::gltf_import_summary` + a new merge assembler; id-offsetting is required |
 | App-side import entry | `Application::import_model_file` (manifold-app file-drop handler; `gltf_import.rs:26` doc) | SHIPPED — P4 adds a second entry that targets an existing scene |
 | Mesh sources reference the .glb by path param | `gltf_import.rs:57-63` — `model_file` card binding → source node `path` string; `hdri_file` likewise | SHIPPED. Assets do NOT embed in the project file (section 9 Deferred — real, known cost) |
 | Held-out fixtures on disk | `tests/fixtures/gltf/abandoned_warehouse_-_interior_scene.glb`, `skull_salazar_downloadable.glb`, `the_rosetta_stone.glb` (untracked, gitignored-class fixtures) | Present in the main checkout — P4's held-out merge gate uses two of them |
 | Selected-layer scoping for inspector surfaces | inspector panels scope to the selected layer via `state_sync` today (AUDIO TRIGGERS section precedent, audio dock P3b) | SHIPPED pattern. ⚠ VERIFY-AT-IMPL (P1): the exact selection accessor `state_sync` uses — `rg -n "selected_layer" crates/manifold-app/src/ui_bridge/state_sync.rs` — transcribe, don't invent |
 | Generator assignment to a layer (for "New 3D Scene") | the generator picker's command path | ⚠ VERIFY-AT-IMPL (P1): `rg -n "SetGenerator\|AssignGenerator\|gen_params" crates/manifold-editing/src/commands/ -l` then read the command the picker dispatches — the empty-state button dispatches THAT command with the starter preset's type id |
-| Bundled preset loader + `graph_tool` | `crates/manifold-renderer/assets/generator-presets/`; `graph_tool validate --kind generator` / `fusion` | SHIPPED — the starter preset ships and validates through these |
+| Bundled preset loader + `graph_tool` | `crates/manifold-nodes/assets/generator-presets/`; `graph_tool validate --kind generator` / `fusion` | SHIPPED — the starter preset ships and validates through these |
 
 Negative claims, searches run 2026-07-16: no scene/dock panel exists (`rg -l "scene_setup" crates/` → 0);
 no per-object visibility mechanism exists on `render_scene` (no `visible_k` port/param — section 9);
@@ -412,7 +412,7 @@ landing in the main checkout, landing reports per DESIGN_DOC_STANDARD section 8.
 - **Forbidden:** re-running the full importer and splicing defs; silent truncation anywhere;
   normalizing inside mesh data (the transform param is the only home —
   `feedback_fix_asset_transforms_in_graph_not_mesh_files`).
-- **Test scope:** focused `-p manifold-renderer --lib` (assembler) + `-p manifold-editing
+- **Test scope:** focused `-p manifold-nodes --lib` (assembler) + `-p manifold-editing
   --lib` + `-p manifold-app --lib`; sweep + clippy at the P3+P4 landing.
 
 ### P5 — Modifier stack (closes the wave)

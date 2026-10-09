@@ -620,7 +620,7 @@ pub fn punch_recorded_points(original: &[AutomationPoint], recorded: &[Automatio
 }
 
 // =====================================================================
-// Tests. Mirrors `modulation::tests`'s fixture pattern: manifold-renderer
+// Tests. Mirrors `modulation::tests`'s fixture pattern: manifold-nodes
 // (which submits the real shipping presets) isn't linked into this test
 // binary, so a synthetic effect is registered via `inventory` to give
 // `resolve_param_in` / the registry a target. Uses a distinct type name

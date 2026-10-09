@@ -39,7 +39,7 @@ first-play smoothness. See `MANIFOLD_GPU_ARCHITECTURE.md` for ownership and scop
 
 | Piece | Where | Notes |
 |---|---|---|
-| Atom codegen pipeline sweep | `crates/manifold-renderer/src/generators/registry.rs:135` (`prewarm_all_atom_codegen_pipelines`) | Runs at boot from `GeneratorRenderer::new` (`generator_renderer.rs:207`) |
+| Atom codegen pipeline sweep | `crates/manifold-nodes/src/generators/registry.rs:135` (`prewarm_all_atom_codegen_pipelines`) | Runs at boot from `GeneratorRenderer::new` (`generator_renderer.rs:207`) |
 | Hand-written pipeline prewarms | `registry.rs:84-99` (RenderScene, GltfTextureSource, ScatterOnMesh, SeedParticlesFromTexture) | P4 deletes the ones pre-roll subsumes |
 | Plugin effect prewarm | `crates/manifold-node-engine/src/runtime/plugin_prewarm.rs:52`, called at `layer_compositor.rs:600` | Post-process FFI effects |
 | Pipeline binary archive | `crates/manifold-app/src/app.rs:2382` load / `app.rs:2431` save, `~/Library/Caches/com.latentspace.manifold/pipeline_cache.metallib` | Cross-launch compile cache |
@@ -362,7 +362,7 @@ driven by `ContentState.warmup`. The window is otherwise the normal load state
   `install_layer_generator`; fixed sleeps/frame counts instead of the quiescence
   query; swallowing per-layer timeout logs; warming on a worker thread "for speed";
   touching the video decoder path.
-- **Test scope:** `cargo nextest run -p manifold-renderer warmup` + `-p manifold-app`;
+- **Test scope:** `cargo nextest run -p manifold-nodes warmup` + `-p manifold-app`;
   GPU proofs gate (`scripts/gpu_proofs_gate.py`) since primitive code is touched.
 
 ### P2 — Chains + stragglers: post-fx, image decodes, LED tap, edit-time adds (one session)
@@ -408,7 +408,7 @@ driven by `ContentState.warmup`. The window is otherwise the normal load state
 ### P4 — Consolidation + regression gate (one session)
 
 - **Deliverables:** audit the four hand-written prewarm calls in `registry.rs:84-99` against the atom codegen sweep; keep the ones the sweep cannot reach (`RenderScene`, `GltfTextureSource`, `ScatterOnMesh`, `SeedParticlesFromTexture` — all hand-written/exempt pipelines) and rewrite their comments to state why they survive; cold-touch counter wired to a CI/nextest gate via a CPU-runnable structural test in `manifold-foundation` plus the existing GPU `warmup_gate_zero_cold_touches_during_playback`; doc sweep (this doc's status, no stale `WARMUP_DESIGN` pointers found).
-- **Gate:** `rg "prewarm_pipelines|prewarm_pipeline" crates/manifold-renderer/src/generators/registry.rs` returns the four hand-written calls plus the atom sweep documentation references; all four survive because none are on the codegen path. INV1 gate runs as the GPU test in `gpu-proofs` plus the new default-suite structural test in `manifold-foundation/src/cold_touch.rs`.
+- **Gate:** `rg "prewarm_pipelines|prewarm_pipeline" crates/manifold-nodes/src/generators/registry.rs` returns the four hand-written calls plus the atom sweep documentation references; all four survive because none are on the codegen path. INV1 gate runs as the GPU test in `gpu-proofs` plus the new default-suite structural test in `manifold-foundation/src/cold_touch.rs`.
 - **Demo:** none — L1.
 - **Forbidden moves:** deleting a hand prewarm whose pipeline no pre-roll reaches
   (watched/graph-editor layer builds render unfused — check before deleting);

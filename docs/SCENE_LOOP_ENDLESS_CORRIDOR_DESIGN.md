@@ -42,12 +42,12 @@ D1–D11 remain cited; this doc revises the instance model), `docs/RT_INSTANCING
 |---|---|---|
 | `node.scene_array` | `crates/manifold-nodes-scene/src/node_graph/primitives/scene_array.rs:72-159` | Source atom, NO inputs. `count` (1..8) copies at `i * cell_size` along `axis`; optional jitter from a hash of `index % jitter_period` (`scene_array_body.wgsl`). Output buffer capacity = count's range max 8 (`array_output_capacity` `:162-184`); surplus slots masked zero-scale. `SceneArrayStasisKey` (`:62-70`) skips the rewrite when {count, axis, cell_size, jitter_seed, jitter_amount, rebuild_epoch} hold — INV-RTI4 producer stasis. |
 | `node.loop_camera` | `crates/manifold-nodes-scene/src/node_graph/primitives/loop_camera.rs:235-339` | Emits `Camera` + `pos_x/pos_y/pos_z`. Travel = `home + d(phase)·stride·cell_size`, `d(p) = p − flow·sin(2πp)/(2π)` (`:292-294`). `stride` = whole cells per loop, range 1..8 (`:164-171`). All movement terms phase-periodic (INV-3). |
-| Plan builder | `crates/manifold-renderer/src/node_graph/scene_modifier.rs:569-756` (`build_scene_loop_plan`) | Mints loop_phase/scene_array/loop_camera (+switch); cell_size = 2× Z-extent (D4 gap rule, `:586-588`); home = −cell/2; wires `loop_phase.out → loop_camera.phase` ONLY — scene_array takes no input. |
+| Plan builder | `crates/manifold-nodes/src/node_graph/scene_modifier.rs:569-756` (`build_scene_loop_plan`) | Mints loop_phase/scene_array/loop_camera (+switch); cell_size = 2× Z-extent (D4 gap rule, `:586-588`); home = −cell/2; wires `loop_phase.out → loop_camera.phase` ONLY — scene_array takes no input. |
 | Stride coupling | `scene_modifier.rs:450-492` | Stride row writes {loop_camera.stride, scene_array.count = K+2 clamped 8, scene_array.jitter_period = K}. **K ≥ 7 outruns the array** — the cap the corridor dissolves. |
 | Spacing coupling | `scene_modifier.rs:471-485` | cell_size row writes both nodes' cell_size + home = −cell/2 (INV-4). Unchanged by this design. |
 | Card rows | `scene_modifier.rs:421-441` (`LOOP_ROW_WHITELIST`) | 19 rows incl. ("scene_array","count","Copies"), ("loop_camera","stride","Stride"), ("scene_array","jitter_amount","Jitter"). Coupled writes resolve app-side: `manifold-app/src/ui_bridge/project.rs:1175,1258` → `CoupledWriteTarget` (`:1160`) → `apply_coupled_write_live` (`:1296`) → `scrub.rs:115,708,753` (bound secondaries write binding slot + def mirror; unbound write def only). |
 | Load migrations | `scene_modifier.rs:766-896` | `migrate_pre_switch_scene_loops`, `migrate_loop_exposure_rows` — the per-layer load loop precedent the corridor migration extends. |
-| Wrap-parity gates | `crates/manifold-renderer/tests/scene_loop_wrap_parity.rs` | INV-3 pixel gates: exact seam (beat 0 vs 8, diff == 0), near-seam bounded (phase 0.99999, ≤8 px / ≤48 delta), bars-change continuity. **The near-seam gate today needs far=22 clipping** (`:283-303`) because the finite array's far-edge hole otherwise confounds the measurement — the corridor removes that crutch. |
+| Wrap-parity gates | `crates/manifold-nodes/tests/scene_loop_wrap_parity.rs` | INV-3 pixel gates: exact seam (beat 0 vs 8, diff == 0), near-seam bounded (phase 0.99999, ≤8 px / ≤48 delta), bars-change continuity. **The near-seam gate today needs far=22 clipping** (`:283-303`) because the finite array's far-edge hole otherwise confounds the measurement — the corridor removes that crutch. |
 | RT instancing | `docs/RT_INSTANCING_DESIGN.md` D1/D9/INV-RTI4/5 | Instance buffers GPU-resident; `instance_count = buffer_size/32` (CAPACITY, not live count — `render_scene.rs:4909-4919`); capacity rides the topo key (rebuild), values ride refit; INV-RTI4: static instance buffers trigger no descriptor dispatch/refit beyond the transform-driven cadence. |
 | Camera struct | `crates/manifold-node-engine/src/scene/camera.rs:83-101` | Carries `pos`, `near`, `far` — enough to derive the window from a wired camera. |
 | Camera-input codegen atom | `crates/manifold-nodes-scene/src/node_graph/primitives/project_3d.rs:65-127` | Precedent: `fusion_kind: Pointwise` + `wgsl_body` atom with an optional `camera: Camera` input resolved CPU-side into uniforms (`cam_pos`/`cam_right`/`cam_up`/`cam_fwd`/`cam_near`/`use_camera`). The corridor atom copies this seam shape exactly. |
@@ -461,8 +461,8 @@ semantics for migration (D7) · touching per-object mesh modifier chains
   UnknownParam immediately, so P1 alone would break saved-loop loading.
   This is WHY the wave lands P1+P2 together and why the migration must run
   before param validation in the load loop (P2 input).
-  Test scope: `manifold-renderer` nextest + lib
-  gpu_tests; clippy `-p manifold-renderer`.
+  Test scope: `manifold-nodes` nextest + lib
+  gpu_tests; clippy `-p manifold-nodes`.
   Demo: none — L1 (atom-level phase; the observable surface arrives in P2).
 - **P2 — Plan builder, card surface, migration.** Deliverables: section 3.3
   (plan builder deltas, whitelist, coupled writes, `migrate_fixed_row_scene_loops`
@@ -478,13 +478,13 @@ semantics for migration (D7) · touching per-object mesh modifier chains
   parallel old path. Re-derivation command (run at execution time; if the
   count differs from the two/two listed, stop and list the new sites before
   touching anything):
-  `rg -n '"stride"|"jitter_period"|"count"' crates/manifold-renderer/src/node_graph/scene_modifier.rs crates/manifold-nodes-scene/src/node_graph/primitives/scene_array.rs crates/manifold-nodes-scene/src/node_graph/primitives/loop_camera.rs crates/manifold-renderer/tests/scene_loop_*.rs`
+  `rg -n '"stride"|"jitter_period"|"count"' crates/manifold-nodes/src/node_graph/scene_modifier.rs crates/manifold-nodes-scene/src/node_graph/primitives/scene_array.rs crates/manifold-nodes-scene/src/node_graph/primitives/loop_camera.rs crates/manifold-nodes/tests/scene_loop_*.rs`
   Gate: gates green; negative `rg` (zero `stride`/`count`/`jitter_period`
   hits in migrated fixtures + zero in the whitelist/coupled tables);
   round-trip gate green.
   Demo: ui-snap flow — L3. Performer gesture: dial Pattern 1→4 mid-set — the
   corridor's variety changes, the wrap stays invisible (asserted by D8.1 at
-  the new shape). Test scope: `manifold-renderer` + `manifold-editing`
+  the new shape). Test scope: `manifold-nodes` + `manifold-editing`
   nextest, `manifold-app` compile/clippy (ui-bridge card consumers), ui-snap
   flow.
 - **P3 — Acceptance on the reference projects + supersession sweep.**
@@ -512,7 +512,7 @@ semantics for migration (D7) · touching per-object mesh modifier chains
   mean (normal camera motion changes that mean). Thresholds remain 5% drop and
   5x the ordinary adjacent-frame p95 delta. Missing/nonfinite output is red.
   The crossing gate measures the full content tick after warmup.
-  Test scope: `manifold-renderer` + `manifold-app`; landing via the standard
+  Test scope: `manifold-nodes` + `manifold-app`; landing via the standard
   protocol. **Supersession sweep (same session):** SCENE_LOOP_DESIGN.md
   status header and D2/D10/Deferred entries annotated as revised-by-this-doc;
   BUG-ejeq (scene-loop-endless-corridor-redesign) closed;

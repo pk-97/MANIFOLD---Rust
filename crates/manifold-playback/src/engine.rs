@@ -713,6 +713,20 @@ impl PlaybackEngine {
         }
     }
 
+    /// Editing the tempo changes the time of the current musical position,
+    /// not the position itself. External transport remains authoritative.
+    pub fn reconcile_tempo_edit(&mut self, old_map: &manifold_core::tempo::TempoMap, old_bpm: Bpm) {
+        if self.external_time_sync {
+            return;
+        }
+        if self.project.as_ref().is_some_and(|p| {
+            !p.tempo_map.same_timing_as(old_map) || p.settings.bpm != old_bpm
+        }) {
+            self.sync_time_from_beat();
+            self.sync_project_bpm_from_current_beat();
+        }
+    }
+
     pub fn set_playback_speed(&mut self, speed: f32) {
         self.playback_speed = speed.clamp(MIN_CLIP_PLAYBACK_RATE, MAX_CLIP_PLAYBACK_RATE);
     }
@@ -3931,5 +3945,29 @@ mod tests {
             .unwrap();
         assert!((amount.base - 0.44).abs() < 1e-6);
         assert!((amount.value - 0.44).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod audio_tempo_edit_tests {
+    use super::*;
+    #[test]
+    fn manual_tempo_edit_preserves_beat_while_paused_and_playing() {
+        for state in [PlaybackState::Paused, PlaybackState::Playing] {
+            let mut engine = PlaybackEngine::new(Vec::new());
+            let mut project = Project::default();
+            project.settings.bpm = Bpm(120.0);
+            project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+            engine.initialize(project);
+            engine.set_state(state);
+            engine.set_time(Seconds(10.0));
+            let old_map = engine.project().unwrap().tempo_map.clone();
+            engine.project_mut().unwrap().tempo_map.add_or_replace_point(Beats::ZERO, Bpm(60.0), TempoPointSource::Manual, 0.001);
+            engine.reconcile_tempo_edit(&old_map, Bpm(120.0));
+            assert_eq!(engine.current_beat(), Beats(20.0));
+            assert_eq!(engine.current_time(), Seconds(20.0));
+            engine.advance_time(Seconds(0.5));
+            assert_eq!(engine.current_beat(), Beats(20.5));
+        }
     }
 }

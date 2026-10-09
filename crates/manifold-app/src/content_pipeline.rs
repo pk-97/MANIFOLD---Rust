@@ -1092,7 +1092,7 @@ pub struct ContentPipeline {
 
 /// The semantic node-preview render pipelines, borrowed as one bundle so the
 /// preview blit takes a single argument instead of one `Option<&pipeline>` per
-/// [`PreviewEncoding`](manifold_renderer::node_graph::PreviewEncoding). `raw`
+/// [`PreviewEncoding`](manifold_nodes::node_graph::PreviewEncoding). `raw`
 /// is the plain blit used for `Color` and smart-off.
 #[cfg(target_os = "macos")]
 struct PreviewPipelines<'a> {
@@ -1425,7 +1425,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // section 24 5c-2 P5: box-filter downsample for clip-thumbnail capture (anti-alias
         // the big full-res→cell downscale). Reusable helper (unit-tested in
-        // manifold-renderer).
+        // manifold-nodes).
         self.clip_downsample_pipeline =
             Some(manifold_ui_paint::clip_thumb_gpu::create_box_downsample_pipeline(
                 &device,

@@ -428,7 +428,7 @@ impl Project {
     ///   generator type. **Preserve** the legacy index so a future load
     ///   on a build that does have the registry can recover. Without
     ///   this preservation, loading on (e.g.) the `manifold-io` test
-    ///   harness which doesn't link `manifold-renderer` would silently
+    ///   harness which doesn't link `manifold-nodes` would silently
     ///   strip every driver's addressing data on the first save.
     fn resolve_legacy_param_ids(&mut self) {
         use crate::effect_registration::resolve_param_alias;
@@ -1090,7 +1090,7 @@ mod tests {
     fn legacy_resolution_preserves_legacy_idx_when_registry_missing() {
         // The cross-cutting recovery path: if the registry doesn't have a
         // def for this effect type at load time (e.g., a tooling crate
-        // that didn't link manifold-renderer), the resolver must NOT
+        // that didn't link manifold-nodes), the resolver must NOT
         // clear `legacy_param_index`. Otherwise the next save→reload on
         // a properly-registered build would silently lose the addressing
         // forever. The custom Serialize for `ParameterDriver` re-emits

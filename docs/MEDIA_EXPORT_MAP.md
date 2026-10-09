@@ -106,7 +106,7 @@ App periphery (`crates/manifold-app/src/`):
 
 A genuinely different mechanism — the only CPU readback in the pipeline. `ExportFrame`
 command → next tick, `submit_still_readback()` blits the compositor output into a
-CPU-visible staging buffer (`manifold_renderer::gpu_readback::ReadbackRequest`) → the tick
+CPU-visible staging buffer (`manifold_nodes::gpu_readback::ReadbackRequest`) → the tick
 after, `take_still_readback()` yields packed f16 pixels → a detached named thread runs
 `linear_f16_rgba_to_srgb8` (true sRGB, optional EDR rolloff) + `save_still` (PNG keeps
 alpha; JPEG drops to RGB at hardcoded quality 95, chosen by file extension). Two-tick

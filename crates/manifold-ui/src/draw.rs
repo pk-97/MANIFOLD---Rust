@@ -1,14 +1,14 @@
 //! Immediate-mode paint surface for the UI views that render *outside* the
 //! `UITree` — the graph canvas and its mapping popover.
 //!
-//! Chrome panels describe a `UITree` that `manifold-renderer` walks and draws.
+//! Chrome panels describe a `UITree` that `manifold-nodes` walks and draws.
 //! The graph canvas is immediate-mode by design (`docs/UI_ARCHITECTURE_OVERHAUL.md`
 //! section 5.4): it paints rects/lines/text directly each frame. Historically it called
-//! `manifold_renderer::ui_renderer::UIRenderer` for that, which forced the canvas
-//! to live app-side (a `manifold-ui` → `manifold-renderer` dependency is a cycle).
+//! `manifold_nodes::ui_renderer::UIRenderer` for that, which forced the canvas
+//! to live app-side (a `manifold-ui` → `manifold-nodes` dependency is a cycle).
 //!
 //! [`Painter`] is the thin abstraction that breaks the cycle. The canvas paints
-//! through `&mut dyn Painter`; `manifold-renderer` implements the trait for
+//! through `&mut dyn Painter`; `manifold-nodes` implements the trait for
 //! `UIRenderer` (it already depends on `manifold-ui`). So the canvas is now a
 //! pure UI component with no renderer dependency, and the renderer side is one
 //! adapter `impl`. See `docs/CANVAS_API_DESIGN.md` section 0 and Phase 8 of the
@@ -18,7 +18,7 @@ use crate::node::Color32;
 use crate::transform2d::Affine2;
 
 /// Layering depth for immediate-mode draws. Mirror of
-/// `manifold_renderer::ui_renderer::Depth` — the renderer's `Painter` impl maps
+/// `manifold_nodes::ui_renderer::Depth` — the renderer's `Painter` impl maps
 /// one to the other 1:1, so the same constants name the same layers on both
 /// sides. Higher draws over lower; rects of a layer batch before its lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

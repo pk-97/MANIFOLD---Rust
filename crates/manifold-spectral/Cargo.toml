@@ -21,7 +21,7 @@ rustfft = "6"
 default = []
 gpu = ["dep:manifold-gpu"]
 # GPU-readback tests (real Metal device, minutes not seconds) — OFF by default,
-# mirroring manifold-renderer's gpu-proofs convention. Run deliberately:
+# mirroring manifold-nodes's gpu-proofs convention. Run deliberately:
 # `cargo test -p manifold-spectral --features gpu-proofs`.
 gpu-proofs = ["gpu"]
 

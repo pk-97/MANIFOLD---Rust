@@ -8,7 +8,7 @@ Authority: [design and phase briefs](SCENE_MODIFIER_RT_DESIGN.md), [dated source
 
 ## A0. Harness, evidence and execution
 
-Extend `crates/manifold-renderer/tests/gpu_proofs/` and its existing shared native Metal device/readback harness. New file `rt_dynamic_geometry.rs` contains nested modules named `rt_dynamic_oracle`, `rt_dynamic_fusion`, `rt_dynamic_ordering`, `rt_dynamic_shading`, `rt_dynamic_current_frame`, `rt_dynamic_refit` and `rt_dynamic_catalog`. Put the named test in its owning module so phase filters select real tests. CPU tests use `mesh_change_` prefixes. App tests use `rt_dynamic_export_` and the existing `journey-proofs` harness. Register modules in the existing test root; zero selected tests is a failed gate.
+Extend `crates/manifold-nodes/tests/gpu_proofs/` and its existing shared native Metal device/readback harness. New file `rt_dynamic_geometry.rs` contains nested modules named `rt_dynamic_oracle`, `rt_dynamic_fusion`, `rt_dynamic_ordering`, `rt_dynamic_shading`, `rt_dynamic_current_frame`, `rt_dynamic_refit` and `rt_dynamic_catalog`. Put the named test in its owning module so phase filters select real tests. CPU tests use `mesh_change_` prefixes. App tests use `rt_dynamic_export_` and the existing `journey-proofs` harness. Register modules in the existing test root; zero selected tests is a failed gate.
 
 Add a debug ray-query entry point beside `MetalShadowRayTracer::debug_fetch_interpolated_normal`, using the production candidate-hit helper, source tables, descriptors and AS. It encodes into the caller's encoder and returns readback buffers; the harness waits only after all geometry/update/query commands are submitted. Ray input is origin/direction/tmin/tmax; output includes hit flag, object/instance/primitive IDs, distance, barycentrics, interpolated normal/UV and coverage. Invalid IDs are explicit sentinels. Debug code must not create a second acceleration or material implementation.
 
@@ -131,7 +131,7 @@ After warmup require **zero new Metal buffers, AS objects, pipelines or scratch 
 Commands use an acquired absolute `RT_WORKTREE` path and run only the phase's selected gates. Cargo target/builder lock follows repository slot discipline. These are implementation-time commands; executed evidence is recorded below.
 
 ```sh
-cargo test --manifest-path "$RT_WORKTREE/Cargo.toml" -p manifold-renderer mesh_change_
+cargo test --manifest-path "$RT_WORKTREE/Cargo.toml" -p manifold-nodes mesh_change_
 python3 "$RT_WORKTREE/scripts/gpu_proofs_gate.py" --manifest-path "$RT_WORKTREE/Cargo.toml" --filter rt_dynamic_refit
 cargo test --manifest-path "$RT_WORKTREE/Cargo.toml" -p manifold-app --features journey-proofs rt_dynamic_export_ -- --test-threads=1
 python3 "$RT_WORKTREE/scripts/rt_dynamic_acceptance.py" --manifest-path "$RT_WORKTREE/Cargo.toml" --mode catalog --report /tmp/manifold-rt-catalog.json

@@ -8,7 +8,7 @@ use crate::node::Color32;
 
 // ── Color constants ──
 // Clip fills/borders/separators/trim-hints moved to the GPU clip pass (section 24 5b,
-// `manifold_renderer::clip_draw`); their constants left with them. Region
+// `manifold_nodes::clip_draw`); their constants left with them. Region
 // highlight + insert cursor are still bitmap-painted (front buffer).
 
 pub const REGION_HIGHLIGHT_COLOR: Color32 = color::ACCENT_BLUE_SELECTION;

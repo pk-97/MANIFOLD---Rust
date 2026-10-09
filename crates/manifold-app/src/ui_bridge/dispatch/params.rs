@@ -56,7 +56,7 @@ fn string_binding_target(
     binding_id: &str,
 ) -> Option<(u32, String, Vec<u32>, manifold_core::effect_graph_def::EffectGraphDef)> {
     let instance = project.preset_instance(target)?;
-    let catalog_default = manifold_renderer::node_graph::bundled_preset_def(instance.effect_type())?.clone();
+    let catalog_default = manifold_nodes::bundled_presets::bundled_preset_def(instance.effect_type())?.clone();
     let graph = instance.graph.as_ref().unwrap_or(&catalog_default);
     let metadata = graph
         .preset_metadata
@@ -726,7 +726,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             let effect_type = manifold_core::PresetTypeId::from_string(preset_id.clone());
             let mut mask = manifold_core::preset_definition_registry::create_default(&effect_type);
             if let Some(layer_id) = source_layer {
-                let Some(mut graph) = manifold_renderer::node_graph::bundled_preset_def(&effect_type).cloned() else {
+                let Some(mut graph) = manifold_nodes::bundled_presets::bundled_preset_def(&effect_type).cloned() else {
                     ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected("Layer mask preset is unavailable".into()));
                     return DispatchResult::handled();
                 };
@@ -1062,7 +1062,7 @@ mod audio_send_dispatch_tests {
         target: &GraphTarget,
     ) -> Option<String> {
         let instance = project.preset_instance(target)?;
-        let catalog = manifold_renderer::node_graph::bundled_preset_def(instance.effect_type())?;
+        let catalog = manifold_nodes::bundled_presets::bundled_preset_def(instance.effect_type())?;
         let graph = instance.graph.as_ref().unwrap_or(catalog);
         let node = graph.nodes.iter().find(|node| node.node_id.as_str() == "waveform")?;
         match node.params.get("send") {

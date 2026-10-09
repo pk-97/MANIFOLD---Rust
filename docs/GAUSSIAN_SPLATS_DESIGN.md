@@ -110,7 +110,7 @@ The five atoms in section 3 are genuinely new; the sort is genuinely new infrast
   anti-pattern: source, masks, and displacement are all separate wire-visible atoms;
   the renderer's interior passes (project/sort/draw) are one composable render
   operation, exactly as `render_mesh`'s internal depth pass is not an atom.
-- **D8 — The radix sort is shared infrastructure in `manifold-renderer`**
+- **D8 — The radix sort is shared infrastructure in `manifold-nodes`**
   (`node_graph/gpu_sort.rs`): `radix_sort_pairs(encoder, keys, values, count)` over
   u32 key/value pairs, ≤4 passes of 8-bit digits (histogram → prefix scan → scatter),
   persistent ping-pong buffers owned by the caller, zero per-frame allocation. It
@@ -214,7 +214,7 @@ output (P4).
   3-splat `.ply` and `.splat` yield exact channel values post-transform (sigmoid/
   exp/SH-DC verified against hand-computed numbers); drift assertion compiles.
   Gate (negative): `rg 'Arc<Mutex' ` on new files → zero; `rg 'ply_rs|ply-rs'
-  Cargo.toml` → zero. Scope: focused (`-p manifold-renderer --lib`).
+  Cargo.toml` → zero. Scope: focused (`-p manifold-nodes --lib`).
 - **P2 — `gpu_sort.rs` radix sort.** D8's contract. Gate: CPU-parity test — 100k
   random u32 pairs, GPU result == `sort_by_key` reference, plus the already-sorted
   and all-equal-keys edge cases; buffer-reuse test proves no allocation on second
@@ -252,7 +252,7 @@ output (P4).
 4. Splats displace from rest, never integrate; no velocity channel, ever (D5).
 5. Sorted instanced quads via render pipeline; GPU radix sort every frame;
    camera-dependent sort stays renderer-internal (D6/D7).
-6. Sort = shared `gpu_sort.rs` in manifold-renderer; `manifold-gpu` API untouched (D8).
+6. Sort = shared `gpu_sort.rs` in manifold-nodes; `manifold-gpu` API untouched (D8).
 7. Scene composition = depth-input wire; `render_scene` grows only its promised lazy
    depth output (D9).
 8. Placement/opacity/scale = port-shadowed renderer params (D10); mask consumers v1 =

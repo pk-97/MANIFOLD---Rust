@@ -160,7 +160,7 @@ Hooks in `metal/encoder.rs`:
 - `ensure_compute`, `end_current`, `compute_memory_barrier_buffers`: flush first. The span's own execute uses a non-flushing twin of `ensure_compute`.
 - `copy_buffer_to_buffer`, `copy_buffer_range`: after their bounds asserts, offer the copy to `GpuEncoder::replay_copy` (`metal/replay.rs`), which dispatches the device's word-copy kernel when the span replays and the copy qualifies (D9), and otherwise leaves it to the blit. The span holds the kernel only while it has an entry, so a copy outside one can't reach it.
 
-### 3.3 Executor integration (`manifold-renderer`)
+### 3.3 Executor integration (`manifold-nodes`)
 
 `Executor` gains `encode_replay: bool` (default true), `pub fn set_encode_replay(&mut self, on: bool)`, `replay_caches: AHashMap<NodeInstanceId, GpuReplayCache>`, and `pub fn replay_stats(&self) -> GpuReplayStats` (the sum over caches). In `run_substep_region` at depth 0, with a GPU encoder present, replay on and `dump_all` off:
 1. After the boundary step, take the cache: `std::mem::take(self.replay_caches.entry(region.boundary).or_default())`.
@@ -272,9 +272,9 @@ FFT encode (section 8 (Deferred)), SWASH atoms (owned by the SWASH seat; any cha
   - Path (a) of the FFT decision (section 8 (Deferred)), moved here by the lead: `GpuFft::encode` stops making its tensor data, arrays and execution descriptor on every call. The FFT's CPU µs per call is reported before and after on SWASH 64, and the `manifold-gpu` fft tests stay green. As built, on feat/fft-encode-cache off feat/fft-water, where the 3D plans are: the descriptor is built once and each plan keeps tensor data for its last four buffer pairs. The command-buffer wrapper stays per call, because a kept one outlives its command buffer and MPS then encodes into the committed one (a Metal assertion, seen). SWASH 64: 23.3–24.7 µs a call before, 19.5–19.8 after; `one_plan_encodes_many_buffer_pairs` proves eight pairs through one plan match a fresh plan bit for bit.
 - **Gate:**
   - Positive:
-    - `cargo clippy -p manifold-gpu -p manifold-renderer -- -D warnings` is clean.
-    - `cargo nextest run -p manifold-renderer` passes.
-    - `cargo test -p manifold-renderer --features gpu-proofs --no-fail-fast` passes, with the freeze proofs and `substeps` nested-region proofs green.
+    - `cargo clippy -p manifold-gpu -p manifold-nodes -- -D warnings` is clean.
+    - `cargo nextest run -p manifold-nodes` passes.
+    - `cargo test -p manifold-nodes --features gpu-proofs --no-fail-fast` passes, with the freeze proofs and `substeps` nested-region proofs green.
     - Measured and reported, replay off against on: frame CPU and GPU ms for SWASH 64 and 128 (on a local merge with origin/feat/fft-water, never pushed) and for the bundled Dam Break. GPU ms is no worse than 3% beyond run-to-run spread.
     - The first-visit CPU cost (recording) is reported.
   - **Defaulted:** the Dam Break is assumed deterministic run to run. If replay off against replay off already differs (float atomics in MPM transfer), its parity gate becomes "within the off-against-off spread", and the report says so. The SWASH water scenes have no atomics (FFT_WATER_SOLVER_DESIGN.md D7 (gather-form transfers)) and must match bit for bit.
@@ -287,12 +287,12 @@ FFT encode (section 8 (Deferred)), SWASH atoms (owned by the SWASH seat; any cha
   - Editing SWASH atoms or `krylov_basis`.
   - Running matter above 64.
   - Replay under `dump_all`.
-- **Test scope:** manifold-gpu and manifold-renderer, with the full GPU proof suite, because the executor path is touched.
+- **Test scope:** manifold-gpu and manifold-nodes, with the full GPU proof suite, because the executor path is touched.
 
 ### P2 — Word copies join recordings
 
 - **Entry state:** P1b landed or on the branch, with its gate green.
-- **Read-back:** D9, and every late capture that copies inside a region (`rg -n 'late_capture' crates/manifold-renderer/src/node_graph`).
+- **Read-back:** D9, and every late capture that copies inside a region (`rg -n 'late_capture' crates/manifold-nodes/src/node_graph`).
 - **Deliverables:**
   - The built-in copy kernel (fusable is not required: it is a `manifold-gpu` internal, not a graph atom).
   - The copy hooks from section 3.2.

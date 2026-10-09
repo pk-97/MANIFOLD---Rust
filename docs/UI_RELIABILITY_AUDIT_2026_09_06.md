@@ -259,7 +259,7 @@ asymmetry. Measure edit/start tail latency before changing the swap-in lifecycle
 
 ## Broader-pass verification results
 
-- `cargo test -p manifold-renderer --test scene_modifier_inv_gate -- --nocapture`:
+- `cargo test -p manifold-nodes --test main scene_modifier_inv_gate:: -- --nocapture`:
   **13 passed, 0 failed, 0 ignored** on the audited base, using the build lock.
 - Fresh worktree `manifold-app --features perf-soak` build succeeded. Two
   `rt_toggle_matrix.py` cells (`rt_enabled`, `sun-intensity-snap`) ran against

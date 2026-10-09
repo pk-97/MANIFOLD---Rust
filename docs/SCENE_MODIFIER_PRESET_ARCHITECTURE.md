@@ -19,7 +19,7 @@ Base audit: `28c8486f0`. Re-derive anchors at implementation; source takes prior
 | Preset kind | `crates/manifold-core/src/preset_def.rs:29` | Effect and Generator only; SceneModifier is new |
 | Shared file format | `crates/manifold-io/src/preset_file.rs:1` | Complete graph + metadata; JSON import/export, `.manifoldpreset` |
 | Project-contained definitions | `crates/manifold-core/src/project/mod.rs:32`; `project/presets.rs:7` | Existing embedded preset registry; reuse catalog tiers and saved origins |
-| Modifier registry | `crates/manifold-renderer/src/node_graph/scene_modifier.rs:32`, `:162` | Rust function pointers, fixed trace strings, Loop/Fog submissions |
+| Modifier registry | `crates/manifold-nodes/src/node_graph/scene_modifier.rs:32`, `:162` | Rust function pointers, fixed trace strings, Loop/Fog submissions |
 | Singleton discovery | `scene_modifier.rs:238`; `scene_vm.rs:547` | Presence inferred from kind trace, not an instance stack |
 | Undoable graph surgery | `crates/manifold-editing/src/commands/graph/scene_modifier.rs:90`, `:419` | Current apply/remove snapshot and refresh precedent |
 | Object boundary | `crates/manifold-nodes-scene/src/node_graph/primitives/scene_object.rs:39` | Vertices/transform/material/maps/instances → Object; no Object chaining |

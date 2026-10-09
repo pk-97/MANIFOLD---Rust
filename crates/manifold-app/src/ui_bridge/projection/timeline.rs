@@ -3,8 +3,8 @@
 //! sync. Moved from state_sync.rs (P-P, UI_FUNNEL_DECOMPOSITION_DESIGN.md).
 
 use manifold_core::project::Project;
-use manifold_core::tempo::TempoMapConverter;
 use manifold_core::types::LayerType;
+#[cfg(test)]
 use manifold_core::Beats;
 use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::viewport::TrackInfo;
@@ -596,42 +596,22 @@ fn audio_waveform_breakpoints(
     }
 
     let start_beat = clip.start_beat;
-    let in_point = clip.in_point.0 as f32;
-    let clip_bpm = clip.recorded_bpm_resolved();
-
-    if clip_bpm > 0.0 {
-        // Warped clip: beat-linear, tempo-independent
-        // pos(beat) = in_point + (beat - start_beat) × (60.0 / recorded_bpm)
-        let source_secs_per_beat = 60.0 / clip_bpm;
-        let start_file_secs = in_point;
-        let end_file_secs = in_point + duration_beats * source_secs_per_beat;
-        vec![(0.0, start_file_secs), (1.0, end_file_secs)]
-    } else {
-        // Unwarped clip: follows tempo map, piecewise-linear in beats
-        // pos(beat) = in_point + secs(beat) - secs(start_beat)
-        let project_bpm = project.settings.bpm;
-        let start_secs =
-            TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, start_beat, project_bpm).0;
-
-        let file_secs_at = |beat: Beats| -> f32 {
-            let secs =
-                TempoMapConverter::beat_to_seconds_immut(&project.tempo_map, beat, project_bpm).0;
-            in_point + (secs - start_secs) as f32
-        };
-
-        let mut breakpoints = Vec::with_capacity(2 + project.tempo_map.points().len());
-        breakpoints.push((0.0, file_secs_at(start_beat)));
-
-        let end_beat = start_beat + clip.duration_beats;
+    let end_beat = clip.end_beat();
+    let clock = project.source_clock();
+    let mut breakpoints = vec![(0.0, clock.source_position(clip, start_beat).as_f32())];
+    if clip.recorded_bpm_resolved() <= 0.0 {
         for point in project.tempo_map.points() {
             if point.beat > start_beat && point.beat < end_beat {
-                let x_frac = (point.beat - start_beat).as_f32() / duration_beats;
-                breakpoints.push((x_frac, file_secs_at(point.beat)));
+                breakpoints.push((
+                    (point.beat - start_beat).as_f32() / duration_beats,
+                    clock.source_position(clip, point.beat).as_f32(),
+                ));
             }
         }
-        breakpoints.push((1.0, file_secs_at(end_beat)));
-        breakpoints
+        breakpoints.sort_by(|a, b| a.0.total_cmp(&b.0));
     }
+    breakpoints.push((1.0, clock.source_position(clip, end_beat).as_f32()));
+    breakpoints
 }
 
 #[cfg(test)]

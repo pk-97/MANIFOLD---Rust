@@ -159,8 +159,8 @@ pub fn clip_zones(rect: &ClipScreenRect, neighbor_gaps: (f32, f32)) -> ClipZones
         zw.inner + zw.right_extend,
         body.height,
     );
-    // Name strip: mirrors `manifold_renderer::clip_draw::emit_clip_names`'s
-    // bottom-anchored band (that fn lives in `manifold-renderer`, which
+    // Name strip: mirrors `manifold_nodes::clip_draw::emit_clip_names`'s
+    // bottom-anchored band (that fn lives in `manifold-nodes`, which
     // depends on `manifold-ui` — not the reverse — so this reads the same
     // `color` constants rather than importing the renderer's helper).
     let strip_h = if body.height >= color::CLIP_STRIP_MIN_CLIP_HEIGHT {
@@ -235,7 +235,7 @@ pub struct ViewportAutomationLane {
 /// Screen-space geometry for one automation lane strip, resolved against the
 /// current Y-layout + beat→pixel mapping by
 /// [`super::TimelineViewportPanel::automation_lane_screens`]. The renderer
-/// (`manifold_renderer::automation_lane_draw`) draws these directly — no
+/// (`manifold_nodes::automation_lane_draw`) draws these directly — no
 /// UITree nodes, the same "GPU rects computed here, drawn there" split as
 /// [`ClipScreenRect`] / [`TimelineOverlays`]. `InteractionOverlay`'s
 /// automation hit-testing/editing also reads this same geometry (per

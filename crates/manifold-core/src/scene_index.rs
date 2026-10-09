@@ -389,7 +389,7 @@ mod tests {
 
     const FIXTURE: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
+        "/../manifold-nodes/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
     ));
 
     fn fixture() -> EffectGraphDef {

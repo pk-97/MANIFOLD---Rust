@@ -1,0 +1,174 @@
+[package]
+name = "manifold-nodes"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[dependencies]
+manifold-nodes-scene = { path = "../manifold-nodes-scene" }
+manifold-nodes-image = { path = "../manifold-nodes-image" }
+manifold-node-engine = { path = "../manifold-node-engine" }
+manifold-physics = { path = "../manifold-physics" }
+manifold-fluids = { path = "../manifold-fluids" }
+zstd = "0.13.3"
+arrayvec = "0.7"
+manifold-core = { path = "../manifold-core" }
+manifold-foundation = { path = "../manifold-foundation" }
+manifold-gpu = { path = "../manifold-gpu" }
+manifold-native = { path = "../manifold-native" }
+manifold-playback = { path = "../manifold-playback" }
+log = { workspace = true }
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+half = "2"
+serde = { workspace = true }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+ahash = { workspace = true }
+arc-swap = { workspace = true }
+inventory = "0.3"
+tiff = "0.9"
+# Still-image decode for node.image_folder. TIFF stays on the dedicated
+# `tiff` path above (bit-exact u16/f32 grayscale for MRI scans); `image`
+# covers the everyday formats. Lean feature set, no default decoders.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "exr"] }
+png = "0.18"
+# Disk-cache hashing for expensive decodes (WARMUP_DESIGN.md P3).
+sha2 = "0.10"
+naga = { version = "28", features = ["wgsl-in", "msl-out"] }
+# glTF/.glb parse for node.gltf_mesh_source (node_graph::gltf_load) — a
+# production import primitive, not test-only. mesh_snapshot's azalea proof
+# test also uses this. IMPORT_FIDELITY_DESIGN.md D5/F-P4: KHR_materials_emissive_strength
+# + KHR_materials_transmission (typed presence/factor — transmission stays
+# report-only until F-P5 maps it) + extensions (raw JSON sniff for
+# KHR_materials_clearcoat, which this crate version has no typed support
+# for) + KHR_lights_punctual (IMPORT_DESIGN P1's light mapping needs it;
+# enabling here costs nothing — no lights/cameras work happens in F-P4).
+# GLB_CONFORMANCE_DESIGN.md G-P4: KHR_texture_transform (typed
+# `texture::Info::texture_transform()`) + KHR_materials_specular (typed
+# `Material::specular()`) + KHR_materials_ior (typed `Material::ior()`).
+# GLB_CONFORMANCE_DESIGN.md G-P5: KHR_materials_clearcoat's factors
+# (clearcoatFactor/clearcoatRoughnessFactor) are now MAPPED (second GGX
+# lobe) but STILL via the raw-JSON `extension_value` sniff above, not a
+# feature flag — VERIFIED this session against both `gltf` and
+# `gltf-json` 1.4.1's own `Cargo.toml` (and full source grep): neither
+# crate has a `KHR_materials_clearcoat` feature or any typed accessor at
+# this pinned version, unlike specular/ior in G-P4. No feature added; no
+# new dependency.
+# GLB_XFAIL_BURNDOWN_DESIGN.md D2 (BUG-167): KHR_materials_pbrSpecularGlossiness
+# HAS typed support at 1.4.1 (`gltf::Material::pbr_specular_glossiness()`,
+# `gltf::material::PbrSpecularGlossiness`) — VERIFIED this session by
+# reading `gltf-1.4.1/src/material.rs` — unlike clearcoat above. Enabling
+# the feature is the whole fix; no raw-JSON sniff needed for this one.
+# GLTF_MATERIAL_EXTENSIONS_DESIGN.md E1: KHR_materials_volume HAS typed
+# support at 1.4.1 (`Material::volume()`, `gltf::material::Volume` —
+# VERIFIED this session: `KHR_materials_volume` is a real Cargo feature on
+# both `gltf` and `gltf-json` 1.4.1's own `Cargo.toml`), unlike sheen/
+# iridescence/anisotropy/dispersion (E1 raw-JSON sniffs those four — no
+# feature or typed accessor exists for them at this pinned version).
+gltf = { version = "1", features = [
+    "KHR_materials_emissive_strength",
+    "KHR_materials_transmission",
+    "extensions",
+    "KHR_lights_punctual",
+    "KHR_texture_transform",
+    "KHR_materials_specular",
+    "KHR_materials_ior",
+    "KHR_materials_pbrSpecularGlossiness",
+    "KHR_materials_volume",
+    # BUG-w5wv: typed `Material::unlit()` accessor — was previously read
+    # only via raw-JSON sniff in `gltf_load.rs`'s doc comment claims, but
+    # never actually consumed anywhere; this feature is what makes the
+    # typed accessor exist to fix that.
+    "KHR_materials_unlit",
+    # IMPORT_ANYTHING_WAVE_DESIGN.md W1: EXT_texture_webp textures omit the
+    # base `source` index entirely (the image lives only behind the
+    # extension), which the crate's default validation rejects as Missing.
+    "allow_empty_texture",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-text = "20"
+core-graphics = "0.23"
+core-foundation = "0.9"
+
+
+[dev-dependencies]
+manifold-nodes = { path = ".", features = ["testkit"] }
+manifold-nodes-scene = { path = "../manifold-nodes-scene", features = ["testkit"] }
+manifold-nodes-image = { path = "../manifold-nodes-image", features = ["testkit"] }
+manifold-gpu = { path = "../manifold-gpu", features = ["testkit"] }
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
+# Independent f64 FLIP surface reconstruction reference fixtures.
+glam = "0.29.3"
+syn = { version = "2", features = ["full", "visit"] }
+# Serializes GPU tests on the shared Metal device (see `test_device`). Reentrant
+# so a single test may acquire it more than once without deadlocking.
+parking_lot = { workspace = true }
+
+# The GPU FLIP render smoke drains Metal's autoreleased objects per frame, as the
+# content thread does (`content_thread.rs`), so host memory reads as the app's.
+# Already in the graph through manifold-gpu.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "0.6"
+
+[[bin]]
+name = "check-presets"
+path = "src/bin/check_presets.rs"
+
+[[bin]]
+name = "freeze-profile"
+path = "src/bin/freeze_profile.rs"
+
+
+
+[[bin]]
+name = "render-generator-preset"
+path = "src/bin/render_generator_preset.rs"
+
+
+# GPU-proof integration binary: the alpha-contract sweep + generator smoke.
+# Gated behind `gpu-proofs` (see [features]) so it's excluded from the
+# default `cargo test` / `cargo nextest` sweep — run it deliberately with
+# `cargo test -p manifold-nodes --features gpu-proofs`.
+[[test]]
+name = "gpu_proofs"
+path = "tests/gpu_proofs/main.rs"
+required-features = ["gpu-proofs"]
+
+# glTF conformance is a module of gpu_proofs; select glb_conformance::.
+
+[features]
+testkit = ["manifold-node-engine/testkit", "manifold-nodes-image/testkit", "manifold-nodes-scene/testkit"]
+# GPU-proof tests: slow, flaky, and need a real Metal device with synchronous
+# readback. Off by default so the workspace test sweep stays fast and
+# deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,
+# every `mod gpu_tests`, the `gpu_proofs` integration binary above, and the
+# counters and error tap the liquid conformance suite reads.
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-gpu/gpu-proofs"]
+# Bounded dynamic-RT timing is opt-in, separate from correctness gates.
+rt-perf-proofs = ["manifold-nodes-scene/rt-perf-proofs", "manifold-node-engine/rt-perf-proofs", "gpu-proofs"]
+# GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.
+fluid-perf-proofs = ["manifold-node-engine/fluid-perf-proofs", "gpu-proofs"]
+# GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.
+matter-perf-proofs = ["manifold-node-engine/matter-perf-proofs", "gpu-proofs"]
+# Water race probes (GPU_FLIP_PRESSURE_SOLVE.md): minutes-long Dam Break
+# runs of GPU FLIP and the FLIP Fluids engine, opt-in. The frame probe reads
+# render_scene::water_perf.
+water-race-probes = ["manifold-node-engine/water-race-probes", "gpu-proofs", "fluid-perf-proofs"]
+# The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),
+# opt-in: builds FLIP's oracle entries into manifold-fluids.
+whitewater-oracle = ["manifold-node-engine/whitewater-oracle", "gpu-proofs"]
+[lints]
+workspace = true
+
+[[example]]
+name = "fluid_capture"
+required-features = ["gpu-proofs"]
+
+[[bin]]
+name = "gen_node_catalog"
+path = "src/bin/gen_node_catalog.rs"
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

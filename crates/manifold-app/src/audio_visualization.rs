@@ -22,7 +22,7 @@ pub(crate) fn visualizer_consumed_sends(project: &Project) -> AHashSet<AudioSend
         let def = instance
             .graph_def()
             .as_ref()
-            .or_else(|| manifold_renderer::node_graph::bundled_preset_def(instance.effect_type()));
+            .or_else(|| manifold_nodes::bundled_presets::bundled_preset_def(instance.effect_type()));
         if let Some(def) = def {
             visit_graph(def, &first, &mut out);
         }

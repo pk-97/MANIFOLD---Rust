@@ -18,7 +18,7 @@ Companions: [WATER_SIMULATION_DESIGN.md](WATER_SIMULATION_DESIGN.md) records the
 
 ## Product retirement boundary
 
-The CPU presets `WaterBasin`, `WaterDamBreak`, `WaterDamBreakGpu`, and `HoneyDamBreak`, and the node `node.fluid_surface`, are absent from the product catalog. Required graphs live in `crates/manifold-renderer/tests/fixtures/cpu-flip/`; native scene stepping and the CPU scene template require `gpu-proofs`. Saved CPU graphs and parameters are preserved with explicit load notices; an affected graph never falls back to a canonical preset.
+The CPU presets `WaterBasin`, `WaterDamBreak`, `WaterDamBreakGpu`, and `HoneyDamBreak`, and the node `node.fluid_surface`, are absent from the product catalog. Required graphs live in `crates/manifold-nodes/tests/fixtures/cpu-flip/`; native scene stepping and the CPU scene template require `gpu-proofs`. Saved CPU graphs and parameters are preserved with explicit load notices; an affected graph never falls back to a canonical preset.
 
 `manifold-fluids` remains a normal dependency for shared whitewater records, mesh validation, and the native whitewater lifecycle used by GPU liquids. The dependency cut belongs to the later water crate boundary. The integration plan below is historical except for shared rigid, clock, and liquid contracts.
 

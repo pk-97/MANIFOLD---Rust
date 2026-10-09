@@ -101,8 +101,8 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
         crate = repo / workspace.roots[package]
         relative = (repo / path).relative_to(crate)
         parts = ("crates", package, *relative.parts)
-        # Deleted tests have no binary; a rename selects only its surviving path.
-        if parts[2] == "tests" and not (repo / path).is_file():
+        # Deleted test/bin targets select only their surviving destination.
+        if (parts[2] == "tests" or parts[2:4] == ("src", "bin")) and not (repo / path).is_file():
             continue
         if crate not in cache:
             manifest = {"package": {"name": package}}

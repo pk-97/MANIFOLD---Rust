@@ -389,7 +389,7 @@ mod tests {
         let mut layer = Layer::new_generator("Source".into(), PresetTypeId::new("Scene"), 0);
         let id = layer.layer_id.clone();
         let graph =
-            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+            manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
                 .unwrap()
                 .clone();
         layer.gen_params_or_init().graph = Some(graph);
@@ -483,11 +483,11 @@ mod tests {
         let scene = available_scenes.into_iter().next().expect("imported scene");
 
         let mut source_graph = imported.clone();
-        let carrier_recipe = manifold_renderer::node_graph::bundled_preset_def(
+        let carrier_recipe = manifold_nodes::bundled_presets::bundled_preset_def(
             &PresetTypeId::new("VortexFragments"),
         )
         .unwrap();
-        let view_recipe = manifold_renderer::node_graph::bundled_preset_def(
+        let view_recipe = manifold_nodes::bundled_presets::bundled_preset_def(
             &PresetTypeId::new("MathView"),
         )
         .unwrap();
@@ -621,7 +621,7 @@ mod tests {
         let host = project.graph_target_owner(&source_target).unwrap();
         let mut source_graph = host.graph.clone().unwrap();
         let mut destination = PresetInstance::new_generator(PresetTypeId::new("Plasma"));
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Plasma"))
+        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Plasma"))
             .unwrap();
         let before = serde_json::to_value(&destination).unwrap();
         assert!(
@@ -644,7 +644,7 @@ mod tests {
             }],
         };
         let graph =
-            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("PhysicsBoxes"))
+            manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("PhysicsBoxes"))
                 .unwrap();
         assert!(
             transfer(

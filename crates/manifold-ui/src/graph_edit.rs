@@ -230,7 +230,7 @@ pub enum GraphEditCommand {
     /// the `render_scene` node face. Routed to `AddSceneObjectCommand`.
     /// `next_index` is the live `objects` count read straight off the node
     /// face at click time (the render_scene primitive's own defaults are
-    /// private to `manifold-renderer`, unreachable from the command crate —
+    /// private to `manifold-nodes`, unreachable from the command crate —
     /// see the command's doc comment).
     AddSceneObject {
         scope_path: Vec<u32>,

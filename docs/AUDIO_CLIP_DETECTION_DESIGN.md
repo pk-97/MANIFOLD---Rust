@@ -103,6 +103,8 @@ So `PercussionTimelinePlanner` needs a **clip-anchored converter**: source-secon
 
 ## 5. Commands (new, follow existing `Command` pattern)
 
+Current timing contract (2026-10-09): native-speed detection uses the full tempo map through `SourceClock`; warped detection uses source BPM. A confident detection can fill unknown/automatic source BPM without enabling Warp or replacing a manual value. Results are discarded if the source file changed during analysis. Existing `detection_source` links carry stem/trigger edits through source move, trim and tempo changes, with undo; detection is not rerun for these edits.
+
 Template: [commands/clip.rs](../crates/manifold-editing/src/commands/clip.rs), [commands/layer.rs](../crates/manifold-editing/src/commands/layer.rs).
 
 - `SetClipDetectionConfigCommand { clip_id, config }` — inspector edits (undoable). Triggers a re-plan if analysis is cached.

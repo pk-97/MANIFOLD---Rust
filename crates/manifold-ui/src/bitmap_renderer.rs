@@ -2,7 +2,7 @@
 //! buffer holding the timeline grid lines (+ the layer-0 top separator) for a
 //! single layer track.
 //!
-//! Since section 24 5b the clip *bodies* are GPU rounded rects (`manifold-renderer::
+//! Since section 24 5b the clip *bodies* are GPU rounded rects (`manifold-nodes::
 //! clip_draw`), their *content* (audio waveforms) is per-clip GPU textures
 //! (`clip_content_gpu`), and the timeline overlays (region highlight, insert
 //! cursor, markers) are GPU rects emitted in the overlay pass. So this buffer
@@ -11,7 +11,7 @@
 //! viewport (scroll / zoom / width / time-sig), independent of selection, hover,
 //! clip data, or mute — the dirty check is correspondingly small.
 //!
-//! GPU texture management lives in `manifold-renderer::layer_bitmap_gpu`.
+//! GPU texture management lives in `manifold-nodes::layer_bitmap_gpu`.
 
 use crate::color;
 use crate::node::Color32;

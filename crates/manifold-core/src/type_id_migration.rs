@@ -24,7 +24,7 @@
 //! Choke points (both wired in P1 — see `docs/NODE_VOCABULARY_AUDIT.md` section 3,
 //! section 9 P1):
 //! - `EffectGraphDef` node `type_id`s — migrated in
-//!   `manifold_renderer::node_graph::graph_loader::instantiate_def`, before
+//!   `manifold_nodes::node_graph::graph_loader::instantiate_def`, before
 //!   the group flatten, recursing into group bodies. Every loader (generator
 //!   load, effect splice, freeze/proof harnesses) converges on
 //!   `instantiate_def`, so this is the single place a graph gets built from a
@@ -42,7 +42,7 @@ use crate::effect_graph_def::SerializedParamValue;
 /// The real rename table. **Empty in every shipped build** — P1 lands the
 /// infrastructure only; P2/P3 populate real entries one rename-commit at a
 /// time. The one entry below is a fixture id, not a real node/preset — it
-/// exists so cross-crate tests (`manifold-core`, `manifold-renderer`,
+/// exists so cross-crate tests (`manifold-core`, `manifold-nodes`,
 /// `manifold-io`) can exercise every choke point without depending on a
 /// `#[cfg(test)]` item from a dependency, which wouldn't compile in when this
 /// crate is built as a normal (non-test) library dependency of another

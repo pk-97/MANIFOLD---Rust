@@ -28,7 +28,7 @@ puts the plasma layer onto the model's emissive map, where it lights the scene.
 
 **Binding constraints** (DESIGN_AUTHORING section 1): hot path — all deformation is
 GPU dispatch, zero CPU per-vertex work, zero per-frame allocation; thread residency —
-the layer-skin registry lives entirely inside `manifold-renderer` on the content
+the layer-skin registry lives entirely inside `manifold-nodes` on the content
 thread, no new cross-thread state; persistence — atoms serialize as ordinary graph
 nodes, `node.layer_source` stores a layer id as a param (round-trip gate in P4);
 performance surface — every numeric param port-shadowed, rack slots are manifest
@@ -123,7 +123,7 @@ layer id → transparent-black fallback texture + the panel Skin row shows a
 "missing layer" chip; the stored id is kept inert-but-present (load-path rule).
 Rejected: clearing the param — silent data loss on load is the forbidden move.
 
-**D9 — Registry lives inside `manifold-renderer`, content thread only.** The
+**D9 — Registry lives inside `manifold-nodes`, content thread only.** The
 compositor publishes previous-frame layer textures into a renderer-owned map at end
 of frame; graph execution reads it next frame. No new `Arc<Mutex>`, no crate
 crossing, no new channel. This is the design's one new seam and its committed shape
@@ -269,7 +269,7 @@ presets, so warmup rides the existing preset-prewarm path.
 - **Deliverables:** a hand-authored graph JSON: gltf mesh source → scene_object with
   a texture-producing atom wired into `emissive_map` → render_scene. Rendered PNG.
   Written verdict in the session record: in-graph skins work / what exactly blocks.
-- **Gate:** `cargo run -p manifold-renderer --bin graph-tool -- render <graph.json>`
+- **Gate:** `cargo run -p manifold-app --bin graph-tool -- render <graph.json>`
   exits 0; PNG region-mean probe at the model's screen position is non-zero and
   differs from the unwired baseline by a stated threshold (computed, not eyeballed).
 - **Demo:** the two PNGs, L2 — Peter looks.
@@ -291,7 +291,7 @@ presets, so warmup rides the existing preset-prewarm path.
   atoms get the check retroactively); the three type ids appended to
   `MODIFIER_TYPE_IDS`; `docs/NODE_CATALOG.md` + `node_catalog.json` regenerated.
 - **Gate:** `scripts/gpu_proofs_gate.py` green; scope test green incl.
-  `default_passthrough`; `cargo nextest run -p manifold-renderer` green; negative:
+  `default_passthrough`; `cargo nextest run -p manifold-nodes` green; negative:
   `rg "create_compute_pipeline\(include_str" primitives/{voxelize_mesh,noise_displace,glitch_jitter}.rs` → zero hits.
 - **Demo:** headless renders of the apricot glb, one per atom at a mid amount, PNGs
   + region-mean probes vs baseline, L2.
@@ -300,7 +300,7 @@ presets, so warmup rides the existing preset-prewarm path.
 - **Forbidden moves:** hand-WGSL runtime kernels; per-atom bespoke uniform structs
   that drift from codegen layout (the BUG-253 (blinn/tonemap uniform-layout drift)
   class); widening MODIFIER_TYPE_IDS beyond these three; "improving" the July atoms.
-- **Test scope:** `-p manifold-renderer` + gpu-proofs; clippy `-p manifold-renderer`.
+- **Test scope:** `-p manifold-nodes` + gpu-proofs; clippy `-p manifold-nodes`.
 
 ### P2 — flow the family through (one session)
 
@@ -339,7 +339,7 @@ presets, so warmup rides the existing preset-prewarm path.
 - **Forbidden moves:** stored noise phase/RNG state (statelessness is the design);
   a camera-node param instead of the atom (D4); presets hand-authored without
   `validate`.
-- **Test scope:** `-p manifold-renderer` + gpu-proofs; presets: graph-tool validate.
+- **Test scope:** `-p manifold-nodes` + gpu-proofs; presets: graph-tool validate.
 
 ### P4 — layer skins (the risk phase; split P4a/P4b 2026-08-22, lead call)
 
@@ -356,7 +356,7 @@ were too wide for one lane session.
   texture producer; context-carrier exposure; compositor end-of-frame publish;
   tests per section 4 (fallback, one-frame feedback, round-trip of the `layer`
   param).
-- **Gate:** `cargo nextest run -p manifold-renderer` green; the three named tests
+- **Gate:** `cargo nextest run -p manifold-nodes` green; the three named tests
   green; negative rg gates per section 4; `MANIFOLD_RENDER_TRACE=1` two-layer skin
   scene: no frame >20ms.
 - **Demo:** headless two-layer render where layer B's scene object wears layer A's
@@ -366,7 +366,7 @@ were too wide for one lane session.
   hitch; the feedback test covers it.
 - **Forbidden moves:** `Arc<Mutex>` anywhere; same-frame binding; clearing the
   stored layer id on missing; per-clip binding (D6).
-- **Test scope:** `-p manifold-renderer`; gpu-proofs if shared WGSL touched
+- **Test scope:** `-p manifold-nodes`; gpu-proofs if shared WGSL touched
   (expected: no).
 
 **P4b — panel Skin row + L3 flow (one session)**
@@ -378,7 +378,7 @@ were too wide for one lane session.
   the project snapshot + target-map dropdown, manifest params only, visibly
   clickable chrome); insert command routing through EditingService; missing-layer
   chip; `scripts/ui-flows/scene-skin.json`.
-- **Gate:** `cargo nextest run -p manifold-renderer -p manifold-ui -p manifold-editing`
+- **Gate:** `cargo nextest run -p manifold-nodes -p manifold-ui -p manifold-editing`
   green; L3 flow green end-to-end INCLUDING save → reload → still bound.
 - **Demo:** the L3 flow IS the demo (L3); final step kills the source clip and
   asserts the frame still renders (fallback).
@@ -401,7 +401,7 @@ were too wide for one lane session.
 6. Skin source = layer (composited output), not clip (D6).
 7. Source picker = manifest param + one panel row; no bespoke UI (D7).
 8. Missing source layer → fallback + chip + id kept inert-but-present (D8).
-9. Registry inside `manifold-renderer`, content thread, no new shared state (D9).
+9. Registry inside `manifold-nodes`, content thread, no new shared state (D9).
 
 ## 7. Deferred
 

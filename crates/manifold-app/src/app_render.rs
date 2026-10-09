@@ -1602,7 +1602,7 @@ impl Application {
                                 if c.recorded_bpm > 0.0 {
                                     format!("{:.1}", c.recorded_bpm)
                                 } else {
-                                    "Auto".to_string()
+                                    if c.is_audio() { "Unknown" } else { "Auto" }.to_string()
                                 }
                             })
                             .unwrap_or_else(|| "Auto".to_string());
@@ -2087,7 +2087,7 @@ impl Application {
                             );
                         if matches!(eid, manifold_core::GraphTarget::SceneModifier { .. }) {
                             let Some(id) = self.local_project.instance_preset_id(eid) else { continue; };
-                            let Some(def) = manifold_renderer::node_graph::bundled_preset_def(&id) else {
+                            let Some(def) = manifold_nodes::bundled_presets::bundled_preset_def(&id) else {
                                 log::error!("[preset] local modifier preset {id} is unavailable for revert");
                                 continue;
                             };

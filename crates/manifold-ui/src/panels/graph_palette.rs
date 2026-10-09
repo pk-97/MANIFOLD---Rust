@@ -19,6 +19,6 @@ pub struct GraphPaletteAtom {
     /// Stable section identifier. UI groups entries with the same
     /// `category` under one header. Matches `PaletteCategory::label()`
     /// on the renderer side. Plain string here so this crate stays
-    /// independent of `manifold-renderer`.
+    /// independent of `manifold-nodes`.
     pub category: String,
 }

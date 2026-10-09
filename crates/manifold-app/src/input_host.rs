@@ -1983,7 +1983,7 @@ mod automation_clipboard_host_tests {
         );
         let layer_id = h.project.timeline.layers[index].layer_id.clone();
         h.project.timeline.layers[index].gen_params_or_init();
-        let default = manifold_renderer::node_graph::bundled_preset_def(
+        let default = manifold_nodes::bundled_presets::bundled_preset_def(
             &PresetTypeId::new("WaterDamBreakGpuFlip"),
         )
         .expect("Water preset")
@@ -2197,7 +2197,7 @@ mod automation_clipboard_host_tests {
         let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let layer_id = LayerId::new("modifier-shortcut-layer");
         layer.layer_id = layer_id.clone();
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
             .expect("Scene fixture")
             .clone();
         layer.gen_params_or_init().graph = Some(graph);
@@ -2219,7 +2219,7 @@ mod automation_clipboard_host_tests {
         );
         let destination_id = LayerId::new("modifier-shortcut-destination");
         destination.layer_id = destination_id.clone();
-        let destination_graph = manifold_renderer::node_graph::bundled_preset_def(
+        let destination_graph = manifold_nodes::bundled_presets::bundled_preset_def(
             &PresetTypeId::new("Scene"),
         )
         .expect("Scene destination fixture")
@@ -2292,7 +2292,7 @@ mod automation_clipboard_host_tests {
         let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let layer_id = LayerId::new("modifier-cut-layer");
         layer.layer_id = layer_id.clone();
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
             .expect("Scene fixture").clone();
         layer.gen_params_or_init().graph = Some(graph);
         layer.gen_params_or_init().refresh_manifest_from_graph();
@@ -2385,7 +2385,7 @@ mod automation_clipboard_host_tests {
         );
         let gen_layer_id = LayerId::new("supersede-gen");
         gen_layer.layer_id = gen_layer_id.clone();
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
             .expect("Scene fixture")
             .clone();
         gen_layer.gen_params_or_init().graph = Some(graph);
@@ -2630,7 +2630,7 @@ mod automation_clipboard_host_tests {
         let mut h = Harness::new();
         let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let layer_id = layer.layer_id.clone();
-        layer.gen_params_or_init().graph = Some(manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene")).unwrap().clone());
+        layer.gen_params_or_init().graph = Some(manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene")).unwrap().clone());
         layer.gen_params_or_init().refresh_manifest_from_graph();
         h.project.timeline.layers.push(layer);
         h.selection.select_layer(layer_id.clone());

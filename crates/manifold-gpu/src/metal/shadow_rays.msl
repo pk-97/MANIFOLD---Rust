@@ -437,7 +437,7 @@ struct RtNormalSource {
 // RT_INSTANCING_DESIGN.md D3/D4: manual MSL mirror of the renderer's
 // `generators::mesh_common::InstanceTransform` (32 bytes: pos_scale =
 // xyz position + w uniform scale, rot_pad = xyz XYZ Euler + w mirror
-// marker) — manifold-gpu cannot import manifold-renderer types, so the
+// marker) — manifold-gpu cannot import manifold-nodes types, so the
 // layout is mirrored by hand, same manual-sync discipline as every other
 // CPU/GPU mirror in this file (the Rust side ties the size: the
 // descriptor-build kernel strides slots by RT_INSTANCE_TRANSFORM_BYTES=32

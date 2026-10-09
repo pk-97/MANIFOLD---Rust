@@ -18,7 +18,7 @@ Snapshot: `9b419c32587f4370d1f2f216850d274900603273`. Paths below are repository
 
 | Piece | Source anchor | State and consequence |
 |---|---|---|
-| Original preset | `crates/manifold-renderer/assets/effect-presets/BlobTracking.json` | Exists, available. Detection/filtering/tracking and HUD are already separate graph groups. Preserve its ID, parameters, availability and appearance. |
+| Original preset | `crates/manifold-nodes/assets/effect-presets/BlobTracking.json` | Exists, available. Detection/filtering/tracking and HUD are already separate graph groups. Preserve its ID, parameters, availability and appearance. |
 | Native detector | `assets/plugins/BlobDetector/BlobDetectorPlugin.cpp` (`BlobDetector_Process`) | Exists: equalization, blur, Canny, morphology, external contours, bounding boxes. Shape information is discarded. |
 | Native loading | `crates/manifold-native/src/ffi/blob_ffi.rs` (`FfiBlobDetector`); `ffi/mod.rs` (`resolve_bundle_path`) | Exists. Preserve original symbols and loader lifetime policy; add a versioned API in the same bundle. |
 | Analysis node | `crates/manifold-nodes-image/src/node_graph/primitives/blob_detect_ffi.rs` (`BlobDetectFfi`) | Exists, eight detections, downsample/readback/worker; allocating response and previous-image paths. Reuse architecture, not those allocations. |
@@ -29,10 +29,10 @@ Snapshot: `9b419c32587f4370d1f2f216850d274900603273`. Paths below are repository
 | Foreground sources | `MaskImage.json`; primitives `chroma_key.rs`, `smoothstep_texture.rs`; `MotionMosh.json` | Brightness, colour proximity, and flow-magnitude graphs already exist. Recompose them. `node.threshold` preserves colour; it is not a binary mask generator. |
 | Mask plumbing | `crates/manifold-core/src/effects/group.rs` (`EffectGroup::mask_effect_id`); `crates/manifold-node-engine/src/runtime/groups.rs` (`close_mix_group`) | Exists. Mask reads group dry input; red controls wet coverage. No new project schema. |
 | Mask UI/editing | `crates/manifold-app/src/ui_root/dropdowns.rs` (`mask_menu_items`); `crates/manifold-editing/src/commands/effect_groups.rs` (`AddGroupMaskCommand`) | Exists. Add entries through this menu and its existing undoable action. |
-| Mask composition/proofs | `MaskCircle.json`, `MaskImage.json`; `crates/manifold-renderer/src/engine_contract_tests/runtime_group_mask_tests.rs` | Existing invert/amount convention and dry-input, wet/dry, reload tests. Extend these tests. |
+| Mask composition/proofs | `MaskCircle.json`, `MaskImage.json`; `crates/manifold-nodes/src/engine_contract_tests/runtime_group_mask_tests.rs` | Existing invert/amount convention and dry-input, wet/dry, reload tests. Extend these tests. |
 | Native distribution | `assets/plugins/BlobDetector/build.sh` | Builds and embeds OpenCV dependencies in `assets/plugins/BlobDetector.bundle`; rebuilds the bundle directory. Run only in the implementation slot. |
 
-The primitive filenames above without a full directory are under `crates/manifold-nodes-image/src/node_graph/primitives/`; preset filenames are under `crates/manifold-renderer/assets/effect-presets/`.
+The primitive filenames above without a full directory are under `crates/manifold-nodes-image/src/node_graph/primitives/`; preset filenames are under `crates/manifold-nodes/assets/effect-presets/`.
 
 ## 2. Decisions
 
@@ -218,7 +218,7 @@ Acceptance: L1; fixed input bytes yield exact expected labels/stats. A second in
 
 Entry/read-back: P1 symbols/tests landed; inspect worker/readback, optical-flow lifecycle, registry, legacy graph end-to-end; bind D4/D6/D7. Deliver `resize_limit`, `detect_regions`, `track_regions`, wire types and brightness `BlobTrackingV2.json`, reusing the existing HUD. Include metadata/picker registration and any required thumbnail assets through existing tooling.
 
-Checks: `cargo test -p manifold-renderer blob_v2_`; `cargo clippy -p manifold-renderer --all-targets -- -D warnings`; scoped GPU gate above. Implement tracking/publication/lifecycle/buffer/preset tests from section 6. New test `blob_v2_tracking_demo` renders a deterministic moving ring plus a smaller blob, disappearance and source reset; writes PNGs under `target/blob-v2-demo/` with IDs, measured sample age and tracked coordinates in a sidecar. Run via `cargo test -p manifold-renderer --features gpu-proofs blob_v2_tracking_demo -- --nocapture`.
+Checks: `cargo test -p manifold-nodes blob_v2_`; `cargo clippy -p manifold-nodes --all-targets -- -D warnings`; scoped GPU gate above. Implement tracking/publication/lifecycle/buffer/preset tests from section 6. New test `blob_v2_tracking_demo` renders a deterministic moving ring plus a smaller blob, disappearance and source reset; writes PNGs under `target/blob-v2-demo/` with IDs, measured sample age and tracked coordinates in a sidecar. Run via `cargo test -p manifold-nodes --features gpu-proofs blob_v2_tracking_demo -- --nocapture`.
 
 Gesture/demo: select original Blob Track, then V2, sweep Threshold and Smoothing; both remain selectable, V2 changes regions/box response and surviving IDs stay stable. Extend the existing preset-picker UI-flow surface for this gesture; numerical tests establish tracking, the observed demo establishes visible output (L2). Forbidden: replacing legacy graph, new HUD renderer, treating repeated samples as misses, passing extended channels into old box filters.
 
@@ -234,7 +234,7 @@ Gesture/demo: add Blob Mask to a group containing an obvious colour effect; swee
 
 Entry/read-back: P2/P3 landed; verify shipped chroma-key math, scalar binding limits and optical-flow node contracts and `MotionMosh.json` extraction wiring. Deliver `rgb_distance` and its standalone/fused proof, the four colour/motion preset variants and two corresponding mask menu entries, all binding/availability tests, motion cut reset and first-frame validity tests. Keep the shared detector/tracker identical across variants. No source-mode mega-node or vector-binding migration. Add the new helper to the primitive audit with its explicit scalar-binding reuse reason.
 
-Checks: `cargo test -p manifold-renderer blob_v2_`; changed-crate clippy; scoped GPU gate; extend the P3 flow to select each mask variant. A new `blob_v2_source_variants_demo` generates matched-colour, wrong-colour, static, moving and hard-cut fixtures and records mask area, IDs, fresh-sample cadence and capture-to-output frame age. Motion first/reset frames must not flash full coverage. Commands follow P2's exact test form.
+Checks: `cargo test -p manifold-nodes blob_v2_`; changed-crate clippy; scoped GPU gate; extend the P3 flow to select each mask variant. A new `blob_v2_source_variants_demo` generates matched-colour, wrong-colour, static, moving and hard-cut fixtures and records mask area, IDs, fresh-sample cadence and capture-to-output frame age. Motion first/reset frames must not flash full coverage. Commands follow P2's exact test form.
 
 Performance acceptance: one bounded warm run of 600 frames after 60 warmup frames, 1080p output, analysis320/default8 blobs; a second case exercises authored max32 and 1024 analysis dimension as a stress case, reported separately. Record median/p95/max content-thread analysis work, worker duration, readback age, fixed-lag wait, allocation count and retained bytes; use `MANIFOLD_RENDER_TRACE=1`. Compare legacy and V2 on the same input/device/build. Default steady-state analysis contribution p95 must be ≤2ms and no content frame >20ms attributable to this change; failures are evidence to resolve before release, not numbers to relabel. Motion variant is reported separately including its existing flow cost. No claimed speedup without measurements. No automatic quality fallback when a limit fails.
 

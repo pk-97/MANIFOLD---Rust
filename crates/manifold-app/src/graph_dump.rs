@@ -382,7 +382,7 @@ mod tests {
         let (w, h) = (1280u32, 720u32);
         let json = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../manifold-renderer/assets/generator-presets/BlackHole.json"
+            "/../manifold-nodes/assets/generator-presets/BlackHole.json"
         ))
         .expect("read BlackHole.json");
 
@@ -498,7 +498,7 @@ mod tests {
         let (w, h) = (1280u32, 720u32);
         let json = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../manifold-renderer/assets/generator-presets/BlackHole.json"
+            "/../manifold-nodes/assets/generator-presets/BlackHole.json"
         ))
         .unwrap();
         let base: serde_json::Value = serde_json::from_str(&json).unwrap();

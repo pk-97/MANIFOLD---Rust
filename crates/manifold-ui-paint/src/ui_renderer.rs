@@ -2286,7 +2286,7 @@ impl TextMeasure for UIRenderer {
 
 /// Implement the immediate-mode `Painter` for `UIRenderer` so the graph canvas
 /// and its mapping popover (now in `manifold-ui`) can paint through
-/// `&mut dyn Painter` without depending on `manifold-renderer`. Each method
+/// `&mut dyn Painter` without depending on `manifold-nodes`. Each method
 /// forwards to the inherent `UIRenderer` method of the same name (method-call
 /// syntax resolves to the inherent one, so there is no recursion); `Depth` maps
 /// 1:1 since the two share the same tier constants. See

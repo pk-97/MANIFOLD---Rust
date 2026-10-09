@@ -414,11 +414,11 @@ fn scene_physics_refuses_enable_physics_on_water() {
     for (name, json) in [
         (
             "WaterDamBreakGpuFlip",
-            include_str!("../../../../../manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json"),
+            include_str!("../../../../../manifold-nodes/assets/generator-presets/WaterDamBreakGpuFlip.json"),
         ),
         (
             "WaterDamBreakMatter",
-            include_str!("../../../../../manifold-renderer/assets/generator-presets/WaterDamBreakMatter.json"),
+            include_str!("../../../../../manifold-nodes/assets/generator-presets/WaterDamBreakMatter.json"),
         ),
     ] {
         let graph: EffectGraphDef = serde_json::from_str(json).expect("preset parses");
@@ -2436,14 +2436,14 @@ fn shipped_physics_presets_keep_body_slots_linked_through_scene_edits() {
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+                "/../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
             )),
             6,
         ),
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
+                "/../manifold-nodes/assets/generator-presets/PhysicsBoxes.json"
             )),
             3,
         ),
@@ -2505,7 +2505,7 @@ fn shipped_physics_presets_keep_body_slots_linked_through_scene_edits() {
 fn physics_generator_duplicate_refreshes_live_manifest_and_roundtrips_identity() {
     let graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+        "/../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
     )))
     .unwrap();
     let (mut project, layer_id) = project_with_generator_graph(graph);
@@ -2706,7 +2706,7 @@ fn physics_generator_duplicate_refreshes_live_manifest_and_roundtrips_identity()
 fn nonphysical_object_coexists_with_physics_world_through_duplicate_remove_undo_redo() {
     let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+        "/../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
     )))
     .unwrap();
     graph.nodes.push(EffectGraphNode {
@@ -2796,7 +2796,7 @@ fn add_scene_object_to_shipped_physics_presets_creates_dynamic_cube_and_undoes()
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+                "/../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
             )),
             6,
             6,
@@ -2804,7 +2804,7 @@ fn add_scene_object_to_shipped_physics_presets_creates_dynamic_cube_and_undoes()
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
+                "/../manifold-nodes/assets/generator-presets/PhysicsBoxes.json"
             )),
             4,
             3,
@@ -2889,7 +2889,7 @@ fn add_scene_object_to_shipped_physics_presets_creates_dynamic_cube_and_undoes()
 fn add_scene_object_rejects_a_full_physics_world_atomically() {
     let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+        "/../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
     )))
     .unwrap();
     for slot in 6..64 {
@@ -2929,7 +2929,7 @@ fn add_scene_object_rejects_a_full_physics_world_atomically() {
 fn shipped_physics_copies_refuse_partial_scene_edits() {
     let graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
+        "/../manifold-nodes/assets/generator-presets/PhysicsBoxes.json"
     )))
     .unwrap();
     let mut graph = graph;
@@ -2965,7 +2965,7 @@ fn detached_physics_outputs_cannot_leave_orphaned_bodies_on_remove() {
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+                "/../manifold-nodes/assets/generator-presets/PhysicsSolids.json"
             )),
             0,
             vec![("pose_0", "transform")],
@@ -2973,7 +2973,7 @@ fn detached_physics_outputs_cannot_leave_orphaned_bodies_on_remove() {
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
+                "/../manifold-nodes/assets/generator-presets/PhysicsBoxes.json"
             )),
             1,
             vec![
@@ -3012,7 +3012,7 @@ fn detached_physics_outputs_cannot_leave_orphaned_bodies_on_remove() {
 fn shipped_physics_copies_remove_as_one_owned_object_and_undoes() {
     let graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/generator-presets/PhysicsBoxes.json"
+        "/../manifold-nodes/assets/generator-presets/PhysicsBoxes.json"
     )))
     .unwrap();
     let (mut project, fx) = project_with_graph(graph.clone());

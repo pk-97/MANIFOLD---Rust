@@ -543,7 +543,7 @@ mod gpu_tests {
     }
 
     /// Verbatim copy of the pre-D7 build-of-record shader
-    /// (`git show c41acc61:crates/manifold-renderer/src/node_graph/primitives/shaders/bake_equirect_envmap.wgsl`).
+    /// (`git show c41acc61:crates/manifold-nodes/src/node_graph/primitives/shaders/bake_equirect_envmap.wgsl`).
     /// The "gradient mode byte-identical to build-of-record" gate is proven
     /// by dispatching THIS exact old shader and the new mode=0 shader on the
     /// same GPU with the same inputs and comparing outputs — not by

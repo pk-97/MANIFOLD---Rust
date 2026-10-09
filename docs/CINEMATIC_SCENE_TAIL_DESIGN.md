@@ -99,7 +99,7 @@ This is CinematicScene.json's wiring transcribed; the import assembler and the m
 - **Gate:** `scripts/gpu_proofs_gate.py` green; regression test red-then-green.
 - **Demo:** none — L1 (P3 is the look-pass).
 - **Forbidden moves:** probe loops (Peter's ban); fixing the symptom by boosting `max_blur_px` defaults; touching `shutter_angle` semantics.
-- **Test scope:** `-p manifold-renderer` + gpu-proofs.
+- **Test scope:** `-p manifold-nodes` + gpu-proofs.
 
 ### P1 — Import-graph tail (fresh imports)
 - **Entry state:** P0 landed; `rg node.motion_blur crates/manifold-nodes-scene/src/node_graph/gltf_import/scene.rs` shows only the removal note.
@@ -109,16 +109,16 @@ This is CinematicScene.json's wiring transcribed; the import assembler and the m
 - **Demo:** L2 — headless PNGs of the held-out scene at f_stop 1000/2.8/1.4 and shutter 0/180, produced for Peter to look at; agent gate is computed region-statistics (defocused-region variance below, in-focus region above, stated thresholds).
 - **Performer gesture:** orbit the camera hard mid-set with shutter at 270° — motion must smear, not strobe (asserted via the P0 regression test on the imported graph).
 - **Forbidden moves:** reusing the pre-polish `variable_blur` chain; inventing a half-res mechanism instead of copying the preset's; adding a toggle.
-- **Test scope:** `-p manifold-renderer` + gpu-proofs.
+- **Test scope:** `-p manifold-nodes` + gpu-proofs.
 
 ### P2 — Migration for existing projects
 - **Entry state:** P1 landed (the migration targets the same topology); `crates/manifold-io/src/migrations/scene_transform_v1120.rs` read as the shape precedent.
 - **Read-back:** D3 including the skip-loudly default; I5.
 - **Deliverables:** `scene_cinematic_tail_vNNNN` migration; fixture = a saved pre-tail 3D project (SceneLadders.manifold or equivalent, committed as fixture if licensing allows); I5 toast test.
-- **Gate:** round-trip — load fixture → tail present → save → reload → modulate `f_stop` after reload and assert CoC output changes (computed, not eyeballed); I2 test passes on the migrated graph; `cargo nextest run -p manifold-io -p manifold-renderer`.
+- **Gate:** round-trip — load fixture → tail present → save → reload → modulate `f_stop` after reload and assert CoC output changes (computed, not eyeballed); I2 test passes on the migrated graph; `cargo nextest run -p manifold-io -p manifold-nodes`.
 - **Demo:** L2 — before/after headless PNGs of the fixture scene at f_stop 2.8 for Peter.
 - **Forbidden moves:** silent drop on unresolvable graphs; hand-editing any `.manifold` ZIP (project_tool rule); migrating graphs that already have a tail (idempotence — assert second load is a no-op).
-- **Test scope:** `-p manifold-io -p manifold-renderer`.
+- **Test scope:** `-p manifold-io -p manifold-nodes`.
 
 ### P3 — Look-pass on the rig
 - **Entry state:** P0–P2 landed on main.
@@ -141,7 +141,7 @@ Implementation notes the next session needs (lead analysis, 2026-08-26 night):
 - **Bokeh radius is DEFERRED** (not in this batch): f-stop is the photographic DoF control anyway. Correction at P4 execution (2026-08-26 night, k3 (lead)): this note's original reason — "group-internal card bindings flatten to `group/handle` nodeIds, an unprefixed stamp would dangle" — was WRONG. `flatten.rs` prefixes HANDLES only ("dof/bokeh" is the runtime handle); inner `node_id`s survive flattening verbatim, and both binding resolution paths key on the id. Bokeh's `enabled` shipped stamped with the plain `"bokeh"` nodeId and resolves. The deferral reason that stands is scope, not mechanism; a bokeh radius slider is unblocked whenever Peter asks.
 - The P2 migration (on main) must ALSO stamp `max_blur_px`/`enabled` for graphs it migrates: append `ParamSpecDef`+`BindingDef` JSON to `graph.presetMetadata` (camelCase wire shape — see `/tmp/inspect_metadata.py` output or the file itself: `{"id": "{docid}_max_blur_px", "name": ..., "section": "Camera", ...}`, binding `{"target": {"kind": "node", "nodeId": "motion_blur", "param": "max_blur_px"}}`). Update the migration's tests.
 - Where the layer's panel reads metadata: `graph.presetMetadata.params/bindings` (verified in SceneLadders: 21 params/22 bindings on the layer graph itself).
-- Tests to touch: gltf_import tests asserting the new stamps; migration tests (shutter 180 + metadata entries); I1 doc text. Gates: `-p manifold-renderer -p manifold-io` nextest, clippy, gpu_proofs_gate (atom changes), graph-tool validate.
+- Tests to touch: gltf_import tests asserting the new stamps; migration tests (shutter 180 + metadata entries); I1 doc text. Gates: `-p manifold-nodes -p manifold-io` nextest, clippy, gpu_proofs_gate (atom changes), graph-tool validate.
 - Branch `lane/lens-slider-ranges` (slot-1) holds the first commit (ranges). Continue there or fresh-branch from main — either, the commit is tiny and self-contained.
 
 ## 6. Decided — do not reopen

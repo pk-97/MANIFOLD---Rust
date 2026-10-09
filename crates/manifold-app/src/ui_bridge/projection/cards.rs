@@ -237,7 +237,7 @@ fn graph_string_param_value(
     inst: &PresetInstance,
     sp_def: &manifold_core::preset_definition_registry::StringParamDef,
 ) -> (String, Option<String>) {
-    let Some(catalog_def) = manifold_renderer::node_graph::bundled_preset_def(inst.effect_type()) else {
+    let Some(catalog_def) = manifold_nodes::bundled_presets::bundled_preset_def(inst.effect_type()) else {
         return (sp_def.default_value.to_string(), None);
     };
     let graph = inst.graph.as_ref().unwrap_or(catalog_def);
@@ -1154,7 +1154,7 @@ mod audio_send_projection_tests {
             manifold_core::PresetTypeId::from_string("Oscilloscope".to_string()),
         );
         generator.init_defaults();
-        let mut graph = manifold_renderer::node_graph::bundled_preset_def(generator.effect_type())
+        let mut graph = manifold_nodes::bundled_presets::bundled_preset_def(generator.effect_type())
             .expect("Oscilloscope generator preset is bundled")
             .clone();
         let first = AudioSend::new("Music");
@@ -1204,11 +1204,8 @@ mod audio_send_projection_tests {
 mod modifier_audio_projection_tests {
     #[test]
     fn scene_force_projection_preserves_audio_and_uses_separate_picker() {
-        let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
-        ))).unwrap();
-        let recipe = manifold_renderer::node_graph::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
+        let mut graph: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON).unwrap();
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
         let modifier = prepare_new_scene_modifier(&graph, recipe, "force".into(),
             SceneNodeRef { scope: vec![], node: "scan_render".into() }, SceneTargetSelection::AllObjects).unwrap();
         graph = manifold_core::scene_modifier_edit::insert_scene_modifier(&graph, 0, modifier).unwrap().graph;
@@ -1255,11 +1252,8 @@ mod modifier_audio_projection_tests {
     #[test]
     fn force_card_audio_meter_resolves_in_the_producer_capture() {
         use manifold_core::audio_trigger::{FireMeterCapture, fire_meter_key_for_param};
-        let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
-        ))).unwrap();
-        let recipe = manifold_renderer::node_graph::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
+        let mut graph: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON).unwrap();
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
         let modifier = prepare_new_scene_modifier(&graph, recipe, "force".into(),
             SceneNodeRef { scope: vec![], node: "scan_render".into() }, SceneTargetSelection::AllObjects).unwrap();
         graph = manifold_core::scene_modifier_edit::insert_scene_modifier(&graph, 0, modifier).unwrap().graph;
@@ -1323,12 +1317,9 @@ mod modifier_audio_projection_tests {
 
     #[test]
     fn modifier_surfaces_keep_audio_on_its_parameter_after_filtering_and_stack_reorder() {
-        let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
-        ))).unwrap();
+        let mut graph: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON).unwrap();
         for preset in ["RenderMode", "SceneFog"] {
-            let recipe = manifold_renderer::node_graph::bundled_preset_def(
+            let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
                 &manifold_core::PresetTypeId::new(preset),
             ).unwrap();
             let modifier = prepare_new_scene_modifier(
@@ -1454,15 +1445,9 @@ mod modifier_audio_projection_tests {
         use manifold_core::effect_graph_def::SerializedParamValue;
         use manifold_core::scene_modifier_preset::{SceneMeshReferenceFrame, SceneModifierInstanceDef};
 
-        let mut owner: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
-        ))).unwrap();
+        let mut owner: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON).unwrap();
         owner.version = 3;
-        let view_recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../manifold-renderer/assets/scene-modifier-presets/MathView.json"
-        ))).unwrap();
+        let view_recipe: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_MATHVIEW_JSON).unwrap();
         // One sampled object — the support check only reads frame targets.
         let container = owner.nodes.iter().find(|node| node.group.is_some()).unwrap();
         let group = container.group.as_ref().unwrap();
@@ -1563,7 +1548,7 @@ mod modifier_audio_projection_tests {
 
     #[test]
     fn prepared_enabled_parameter_projects_from_local_default_without_host_binding() {
-        let recipe = manifold_renderer::node_graph::bundled_preset_def(
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
             &manifold_core::PresetTypeId::new("Shatter"),
         )
         .unwrap()
@@ -1721,10 +1706,7 @@ mod sync_card_values_tests {
 #[cfg(test)]
 mod consolidation_tests {
     fn fixture() -> manifold_core::effect_graph_def::EffectGraphDef {
-        serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
-        )))
+        serde_json::from_str(manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON)
         .unwrap()
     }
 
@@ -1773,7 +1755,7 @@ mod consolidation_tests {
     #[test]
     fn picker_rejects_pre_modified_scene_and_conflicting_source_graph() {
         let mut modified = fixture();
-        let recipe = manifold_renderer::node_graph::bundled_preset_def(
+        let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
             &manifold_core::PresetTypeId::new("SceneFog"),
         )
         .unwrap();
@@ -1835,7 +1817,7 @@ mod consolidation_tests {
     fn modifier_target_chrome_follows_recipe_output_scope() {
         let mut graph = fixture();
         for preset_id in ["RenderMode", "SceneFog", "SceneLoop"] {
-            let recipe = manifold_renderer::node_graph::bundled_preset_def(
+            let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
                 &manifold_core::PresetTypeId::new(preset_id),
             )
             .unwrap();

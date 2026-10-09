@@ -12,7 +12,7 @@ Shared gates and resource limits: [Validation V9](SCENE_MODIFIER_VALIDATION_PLAN
 
 ## 1. Audit — original source audit 2026-09-10; amendment 2026-09-12
 
-| Piece | Source under `crates/manifold-renderer/src` | Finding |
+| Piece | Source under `crates/manifold-nodes/src` | Finding |
 |---|---|---|
 | Mesh layout | `generators/mesh_common.rs:26` | Position/normal/UV/tangent, 64-byte vertex; preserve attributes |
 | Deformer inventory | `node_graph/scene_vm.rs:68` | Bend/twist/taper/ripple/fold/shatter/slice/melt and others already curated |

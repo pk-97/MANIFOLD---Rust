@@ -16,7 +16,7 @@ vulkan = ["dep:ash"]
 testkit = []
 # GPU-backed proofs (requires an Apple Silicon device). Off by default — run with
 # `cargo test -p manifold-gpu --features gpu-proofs -- --test-threads=1`.
-# Also compiles the frame clock's wait counter, which manifold-renderer's
+# Also compiles the frame clock's wait counter, which manifold-nodes's
 # GPU proofs read.
 gpu-proofs = ["testkit", "dep:parking_lot"]
 
