@@ -56,8 +56,10 @@ pub fn native_ticks_on_this_thread() -> u64 {
     NATIVE_TICKS.get()
 }
 
-pub fn authored_sample_only() -> bool {
+manifold_core::testkit_visible! {
+pub(crate) fn authored_sample_only() -> bool {
     SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get)
+}
 }
 
 /// Transport paused or simulation speed zero. A capped simulation timestamp
@@ -87,8 +89,10 @@ pub(crate) fn simulation_interval() -> f64 {
     SIMULATION_INTERVAL.get()
 }
 
-pub fn offline_simulation() -> bool {
+manifold_core::testkit_visible! {
+pub(crate) fn offline_simulation() -> bool {
     PREVIEW_STEP_BUDGET.with(|budget| budget.get().is_none())
+}
 }
 
 pub(crate) fn history_drain_requested() -> bool {

@@ -10,20 +10,24 @@ use crate::graph::{Graph, WireWalkMode};
 use crate::water::physics::RigidImpulseTargets;
 use crate::validation::GraphError;
 
+manifold_core::testkit_visible! {
 /// One resolved pair of graph nodes that must be evaluated as one scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CoupledScene {
+pub(crate) struct CoupledScene {
     pub(crate) fluid: NodeInstanceId,
     pub(crate) rigid: NodeInstanceId,
     pub(crate) colliders: RigidImpulseTargets,
 }
+}
 
+manifold_core::testkit_visible! {
 /// Final execution-step positions for one coupled scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CoupledSceneSteps {
+pub(crate) struct CoupledSceneSteps {
     pub(crate) fluid_step: usize,
     pub(crate) rigid_step: usize,
     pub(crate) colliders: RigidImpulseTargets,
+}
 }
 
 struct ContractedGroup {

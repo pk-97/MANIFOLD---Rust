@@ -113,11 +113,12 @@ pub(crate) struct SortJob<'a> {
     pub gate: Option<&'a GpuBuffer>,
 }
 
+manifold_core::testkit_visible! {
 /// The counting sort itself, shared by `node.sort_particles_into_cells` and
 /// the stage nodes that sort inside one dispatch chain (`node.gpu_flip_step`).
 /// Owns the cell ranges and its scratch.
 #[derive(Default)]
-pub struct ParticleSorter {
+pub(crate) struct ParticleSorter {
     pipelines: Vec<GpuComputePipeline>,
     scan: PrefixScan,
     rank: Option<GpuBuffer>,
@@ -125,6 +126,7 @@ pub struct ParticleSorter {
     ranges: Option<GpuBuffer>,
     /// Zeros, the gate an ungated sort binds.
     open: Option<GpuBuffer>,
+}
 }
 
 impl ParticleSorter {

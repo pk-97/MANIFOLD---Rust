@@ -389,6 +389,7 @@ fn resolve_target_param(
     })
 }
 
+manifold_core::testkit_visible! {
 /// D8 card lints (GRAPH_TOOLING_DESIGN P4) — the checks beyond
 /// `check_bindings_resolve` that make sure a card never lies to the
 /// performer. Split by severity per D8: errors are structural breakage
@@ -411,7 +412,7 @@ fn resolve_target_param(
 /// time from a runtime handle, not statically derivable from the
 /// `EffectGraphDef` alone. No bundled preset uses a Composite target
 /// today, so this is a documented gap, not an observed miss.
-pub fn check_card_lints(
+pub(crate) fn check_card_lints(
     def: &EffectGraphDef,
     graph: Option<&crate::graph::Graph>,
 ) -> (Vec<ValidationIssue>, Vec<ValidationIssue>) {
@@ -644,6 +645,7 @@ pub fn check_card_lints(
     }
 
     (errors, warnings)
+}
 }
 
 #[cfg(test)]

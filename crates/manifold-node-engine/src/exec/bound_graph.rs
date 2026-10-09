@@ -429,6 +429,7 @@ pub fn is_baseline_shadow(preset_type_id: &str, finding: &ShadowedDefParam) -> b
 
 /// [`SHADOW_BASELINE`] as `(preset, node, param)` triples, for the corpus test's
 /// stale-entry check.
+#[cfg(any(test, feature = "testkit"))]
 pub fn shadow_baseline_entries() -> &'static [(&'static str, &'static str, &'static str)] {
     SHADOW_BASELINE
 }

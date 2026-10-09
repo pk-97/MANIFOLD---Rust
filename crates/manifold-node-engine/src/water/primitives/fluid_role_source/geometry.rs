@@ -15,16 +15,19 @@ use crate::platonic::{platonic_mesh, platonic_points};
 use crate::scene::physics_mesh::{MeshSelection, load_compound_materials, prepare_colliders, transform_vertices};
 use crate::scene::transform::Transform;
 
+manifold_core::testkit_visible! {
 /// The two preparation modes exposed by the source node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GeometryMode {
+pub(crate) enum GeometryMode {
     CollisionProxy,
     ClosedMesh,
 }
+}
 
+manifold_core::testkit_visible! {
 /// Prepare one or more immutable fluid meshes from an imported source or a
 /// built-in Platonic solid.
-pub fn prepare_geometry(
+pub(crate) fn prepare_geometry(
     path: &Path,
     selection: MeshSelection,
     shape: u32,
@@ -115,10 +118,12 @@ pub fn prepare_geometry(
     }
     Ok(meshes)
 }
+}
 
+manifold_core::testkit_visible! {
 /// Load every connected visible source independently, applying the same
 /// selectors, fit and fragment operations as rendering before part transforms.
-pub fn prepare_wired_geometry(
+pub(crate) fn prepare_wired_geometry(
     wired: &WiredPreparation,
     source_transform: Transform,
     mode: GeometryMode,
@@ -151,6 +156,7 @@ pub fn prepare_wired_geometry(
             Ok(vec![mesh])
         }
     }
+}
 }
 
 fn transform_points(points: &[[f32; 3]], transform: Transform) -> Result<Vec<[f32; 3]>, String> {

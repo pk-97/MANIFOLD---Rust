@@ -41,10 +41,12 @@ pub(crate) const COARSEST_SIDE: u32 = 4;
 const MAX_COARSE_CELLS: u64 = 64;
 /// The longest lattice side the solver takes.
 pub(crate) const MAX_SIDE: u32 = 1024;
+manifold_core::testkit_visible! {
 /// Iterations one solve may run, FLIP Fluids' cap: the scalars buffer holds
 /// two per iteration. Rounds past the stop cost nothing: the template executes
 /// only the chunks the GPU-written ranges name.
-pub const MAX_ITERATIONS: u32 = 900;
+pub(crate) const MAX_ITERATIONS: u32 = 900;
+}
 /// The stop's relative tolerance on |r|∞ / |f|∞, FLIP Fluids'
 /// `_pressureSolveTolerance` unchanged: f32 carries the recursive residual
 /// below it in 11 to 14 iterations on every saved problem
@@ -194,18 +196,20 @@ pub(crate) fn lattice_refusal(lattice: [u32; 3]) -> Option<String> {
         .then(|| format!("every lattice side must be 1 to {MAX_SIDE}, not {lattice:?}"))
 }
 
+manifold_core::testkit_visible! {
 /// The water a solve runs on: the cell lattice, water per cell (> 0.5), the
 /// padded face grid of open fractions (the step's open_fractions pass, box
 /// walls 0), the cell size in metres, and the particles' signed distance per cell
 /// for the free surface's ghost rows (docs/GPU_FLIP_PRESSURE_SOLVE.md
 /// section 2 (the equation)). With no φ the rows are the plain ones, as the
 /// density solve runs; the coarse levels always are.
-pub struct Water<'a> {
+pub(crate) struct Water<'a> {
     pub lattice: [u32; 3],
     pub cell_size: f32,
     pub water: &'a GpuBuffer,
     pub faces: &'a GpuBuffer,
     pub phi: Option<&'a GpuBuffer>,
+}
 }
 
 impl<'a> Water<'a> {
@@ -422,8 +426,10 @@ impl Buffers {
     }
 }
 
+manifold_core::testkit_visible! {
 /// Floats in the stop's record: four, then |r|∞ per iteration.
-pub const PROGRESS_FLOATS: u32 = 4 + MAX_ITERATIONS;
+pub(crate) const PROGRESS_FLOATS: u32 = 4 + MAX_ITERATIONS;
+}
 const PROGRESS_BYTES: u64 = PROGRESS_FLOATS as u64 * 4;
 /// Bytes of one indirect dispatch's three group counts.
 const TRIPLE_BYTES: u64 = 12;
@@ -626,8 +632,9 @@ fn spare(b: &Buffers, level: usize, which: Spare) -> &GpuBuffer {
     }
 }
 
+manifold_core::testkit_visible! {
 /// One solve's inputs.
-pub struct Solve<'a> {
+pub(crate) struct Solve<'a> {
     pub rhs: &'a GpuBuffer,
     pub pressure: &'a GpuBuffer,
     pub stop: Stop,
@@ -641,13 +648,15 @@ pub struct Solve<'a> {
     /// gradient starts: the step's pocket mean at that level.
     pub coarse_rhs: Option<CoarseRhs<'a>>,
 }
+}
 
 /// A pass over a coarse level's right-hand side: the buffer, its lattice
 /// and its cell size.
 pub(crate) type CoarseRhs<'a> = &'a dyn Fn(&mut GpuEncoder, &GpuBuffer, [u32; 3], f32);
 
+manifold_core::testkit_visible! {
 #[derive(Default)]
-pub struct PressureSolver {
+pub(crate) struct PressureSolver {
     pipelines: Option<Pipelines>,
     buffers: Option<Buffers>,
     /// The round template every solve runs (GPU_FLIP_PRESSURE_CAP_DESIGN.md
@@ -660,10 +669,12 @@ pub struct PressureSolver {
     /// whether the fine rows carry the ghost diagonal (prepare saw φ).
     prepared: Option<([u32; 3], f32, bool)>,
 }
+}
 
 impl PressureSolver {
+manifold_core::testkit_visible! {
     /// Build the solver's pipelines; the owning node calls this at install.
-    pub fn prepare_pipelines(&mut self, device: &GpuDevice) {
+    pub(crate) fn prepare_pipelines(&mut self, device: &GpuDevice) {
         if self.pipelines.is_none() {
             self.pipelines = Some(Pipelines::new(device));
         }
@@ -676,19 +687,23 @@ impl PressureSolver {
             self.plan = Some(plan);
         }
     }
+}
 
+manifold_core::testkit_visible! {
     /// The clock plan of the slot the next prepare, solve and tally run in.
     /// An inactive slot's (live, no time to step) arms no gated pass, and
     /// every other pass returns at the top.
-    pub fn set_clock_plan(&mut self, plan: &GpuBuffer) {
+    pub(crate) fn set_clock_plan(&mut self, plan: &GpuBuffer) {
         self.plan = Some(plan.clone());
     }
+}
 
+manifold_core::testkit_visible! {
     /// Build every level's operator rows, the coarse levels and the coarse
     /// inverse for `water`. Every solve until the next prepare runs on this
     /// water; a solve with φ needs a prepare that saw it. Allocates only when
     /// the lattice changes.
-    pub fn prepare(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, water: &Water<'_>) -> Result<(), String> {
+    pub(crate) fn prepare(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, water: &Water<'_>) -> Result<(), String> {
         if let Some(reason) = lattice_refusal(water.lattice) {
             return Err(reason);
         }
@@ -785,7 +800,9 @@ impl PressureSolver {
         self.prepared = Some((n, water.cell_size, water.phi.is_some()));
         Ok(())
     }
+}
 
+manifold_core::testkit_visible! {
     /// Solve L p = `run.rhs` on the prepared water by conjugate gradient
     /// iterations from zero, one V-cycle each; p into `run.pressure`.
     /// `run.stop` says when it ends; the solve's record (iterations run,
@@ -802,7 +819,7 @@ impl PressureSolver {
     /// zeroed fine pressure. The bodies stay fine: each direction is
     /// prolonged, their product taken there and restricted into s, so the
     /// coarse operator is L_k + Rᵀ B P.
-    pub fn solve(&mut self, enc: &mut GpuEncoder, water: &Water<'_>, run: Solve<'_>) -> Result<(), String> {
+    pub(crate) fn solve(&mut self, enc: &mut GpuEncoder, water: &Water<'_>, run: Solve<'_>) -> Result<(), String> {
         let n = water.lattice;
         let Solve { rhs, pressure, stop, bodies, level: k, coarse_rhs } = run;
         let Some((lattice, cell_size, with_phi)) = self.prepared else {
@@ -979,15 +996,18 @@ impl PressureSolver {
         }
         Ok(())
     }
+}
 
+manifold_core::testkit_visible! {
     /// The fine level's tile buffers after a prepare (the gate triples, the
     /// flags, the lists; the fine level's words start at 0 in each), for
     /// the body passes that run outside the solve.
-    pub fn tiles(&self) -> Result<[&GpuBuffer; 3], String> {
+    pub(crate) fn tiles(&self) -> Result<[&GpuBuffer; 3], String> {
         let b = self.buffers.as_ref().ok_or("the solver was not prepared")?;
         debug_assert_eq!(b.bases[0], 0, "the fine level's flags and lists start at word 0");
         Ok([&b.armed, &b.flags, &b.lists])
     }
+}
 
     /// The last solve's record: |f|∞, iterations run, 1.0 when it stopped by
     /// the tolerance, then |r|∞ per iteration; [`PROGRESS_FLOATS`] floats.
@@ -1064,14 +1084,16 @@ impl PressureSolver {
     }
 }
 
+manifold_core::testkit_visible! {
 /// When a solve ends.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Stop {
+pub(crate) enum Stop {
     /// Exactly this many iterations.
     Fixed(u32),
     /// The engine's stop (gpu_flip_pressure.wgsl check_main), after at most
     /// this many iterations.
     Converged(u32),
+}
 }
 
 impl Stop {
@@ -1168,11 +1190,13 @@ struct Gate<'a> {
 /// clock plan included.
 const MAX_BINDINGS: usize = 12;
 
+manifold_core::testkit_visible! {
 /// Where a solve's dispatches go: the encoder, or a round template's
 /// recorder, which takes gated dispatches only.
-pub trait Sink {
+pub(crate) trait Sink {
     fn gated(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], groups: [u32; 3], gate: &GpuBuffer, offset: u64, label: &str);
     fn plain(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], groups: [u32; 3], label: &str);
+}
 }
 
 impl Sink for GpuEncoder {

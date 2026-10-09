@@ -142,13 +142,16 @@ impl Graph {
         self.modifier_buffer_budget = Some(budget);
     }
 
-    pub fn modifier_buffer_budget(&self) -> Option<&crate::load::expand::PreparedModifierBufferBudget> {
+manifold_core::testkit_visible! {
+    pub(crate) fn modifier_buffer_budget(&self) -> Option<&crate::load::expand::PreparedModifierBufferBudget> {
         self.modifier_buffer_budget.as_ref()
     }
+}
 
+manifold_core::testkit_visible! {
     /// Hold a source selector or admitted mode at its prepared value. This
     /// policy is installed only after construction defaults have been applied.
-    pub fn protect_prepared_param(&mut self, id: NodeInstanceId, name: &str) -> Result<(), GraphError> {
+    pub(crate) fn protect_prepared_param(&mut self, id: NodeInstanceId, name: &str) -> Result<(), GraphError> {
         let inst = self.nodes.get(&id).ok_or(GraphError::NodeNotFound(id))?;
         let expected = inst.params.get(name).ok_or_else(|| GraphError::ParamNotFound {
             node: id, param: name.into(),
@@ -159,6 +162,7 @@ impl Graph {
         }
         Ok(())
     }
+}
 
     fn prepared_param_allows(&mut self, id: NodeInstanceId, name: &str, value: &ParamValue) -> bool {
         let Some(guard) = self.prepared_params.get_mut(&id)
@@ -294,9 +298,11 @@ impl Graph {
             .map(|inst| inst.id)
     }
 
-    pub fn coupled_scenes(&self) -> &[CoupledScene] {
+manifold_core::testkit_visible! {
+    pub(crate) fn coupled_scenes(&self) -> &[CoupledScene] {
         &self.coupled_scenes
     }
+}
 
     pub(crate) fn add_coupled_scene(
         &mut self,

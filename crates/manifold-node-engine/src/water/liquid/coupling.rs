@@ -590,8 +590,9 @@ fn handover_error(
     Ok(worst)
 }
 
+manifold_core::testkit_visible! {
 /// A coupled row as the law's start state.
-pub fn coupled_start(row: &LiquidBody) -> CoupledStart {
+pub(crate) fn coupled_start(row: &LiquidBody) -> CoupledStart {
     let xyz = |v: [f32; 4]| [v[0], v[1], v[2]];
     CoupledStart {
         position: xyz(row.position_inv_mass),
@@ -603,6 +604,7 @@ pub fn coupled_start(row: &LiquidBody) -> CoupledStart {
         linear_acceleration: xyz(row.accel_shape),
         angular_acceleration: [row.inv_inertia_x[3], row.inv_inertia_y[3], row.inv_inertia_z[3]],
     }
+}
 }
 
 /// The angle between two unit quaternions, radians.

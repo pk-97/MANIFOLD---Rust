@@ -173,12 +173,13 @@ mod gpu_tests {
 
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 
+manifold_core::testkit_visible! {
 /// Give every liquid field consumer saved before `node.blob_bounds` existed
 /// its bounds, the way the shipped Liquid Surface group wires them: one
 /// bounds node per blob source, feeding every consumer of that source.
 /// Runs once at graph installation; a graph that already wires `bounds` is
 /// untouched.
-pub fn wire_blob_bounds(def: &mut EffectGraphDef) -> bool {
+pub(crate) fn wire_blob_bounds(def: &mut EffectGraphDef) -> bool {
     const CONSUMERS: [&str; 2] = ["node.particle_volume", "node.lattice_bricks"];
     let mut next_id = def.nodes.iter().map(|n| n.id).max().map_or(0, |id| id + 1);
     let consumers: Vec<u32> =
@@ -226,6 +227,7 @@ pub fn wire_blob_bounds(def: &mut EffectGraphDef) -> bool {
         changed = true;
     }
     changed
+}
 }
 
 

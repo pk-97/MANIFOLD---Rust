@@ -200,6 +200,7 @@ fn fuse_view_parts(
 /// empty maps everywhere; 2 = fusion composes member declarations.
 const MESH_RULE_SCHEMA: u32 = 2;
 
+manifold_core::testkit_visible! {
 /// Structural content key for a def: topology + node configs + baked (non-
 /// exposed) param values. Deterministic because every map in `EffectGraphDef` is
 /// a `BTreeMap` and every list a `Vec`, so `serde_json` is a stable total
@@ -210,7 +211,7 @@ const MESH_RULE_SCHEMA: u32 = 2;
 /// differ only in live modulation share one key, and the fused kernel keeps
 /// exposed params as uniforms (never baked). Computed on cache miss / chain
 /// rebuild, an editing-time event, never per frame.
-pub fn def_content_key(def: &EffectGraphDef) -> u64 {
+pub(crate) fn def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
     MESH_RULE_SCHEMA.hash(&mut h);
@@ -229,6 +230,7 @@ pub fn def_content_key(def: &EffectGraphDef) -> u64 {
     }
     h.finish()
 }
+}
 
 /// Recursively clears `editor_pos` and `title` on every node, including nodes
 /// nested inside group bodies (`EffectGraphNode::group`), which are
@@ -244,6 +246,7 @@ fn clear_cosmetic_fields(nodes: &mut [EffectGraphNode]) {
     }
 }
 
+manifold_core::testkit_visible! {
 /// Effect-path content key that normalizes binding metadata away.
 /// Clears `label`, `default_value`, `scale`, `offset` from every binding in
 /// `preset_metadata.bindings` before hashing — these fields never reach
@@ -255,7 +258,7 @@ fn clear_cosmetic_fields(nodes: &mut [EffectGraphNode]) {
 /// `preset_metadata.bindings` directly from the cached fused def (registry.rs:253-268),
 /// so normalizing generator bindings would lose metadata at runtime. Effects don't read
 /// bindings from the cache — they flow through `ResolvedBinding::from_static` at slot-build time.
-pub fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
+pub(crate) fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
     MESH_RULE_SCHEMA.hash(&mut h);
@@ -276,6 +279,7 @@ pub fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
         Err(_) => return u64::MAX,
     }
     h.finish()
+}
 }
 
 /// Cap on each content cache (effect view / generator def / segment view). The
@@ -1345,12 +1349,13 @@ pub(crate) fn convert_for_fused_field(convert: ParamConvert) -> ParamConvert {
     }
 }
 
+manifold_core::testkit_visible! {
 /// A canonical def rewritten with one fused node per region, plus the routing the
 /// binding retarget needs. `pub(crate)` so the end-to-end oracle test can drive
 /// both the unfused and fused graphs from one fixture (set inner params by stable
 /// node id on the unfused side, by the `retarget`ed `(fused id, field)` on the
 /// fused side).
-pub struct FusedDef {
+pub(crate) struct FusedDef {
     pub def: EffectGraphDef,
     /// `(original stable node_id, original param) → (fused node id, fused uniform
     /// field)`. The field is `"n{idx}_{param}"` (`idx` = the member's topo index
@@ -1371,6 +1376,7 @@ pub struct FusedDef {
     /// lands in P2b. Not serialized — owned by the prepared views built from
     /// this def.
     pub mesh_rules: PreparedMeshRules,
+}
 }
 
 /// `node.array_feedback`'s stable type id — the head of a buffer in-place
@@ -1745,12 +1751,14 @@ fn compose_region_mesh_rules(
     rules
 }
 
+manifold_core::testkit_visible! {
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn fuse_canonical_def(
+pub(crate) fn fuse_canonical_def(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> Option<FusedDef> {
     fuse_canonical_def_masked(def, registry, None)
+}
 }
 
 /// How many fusable regions the canonical def partitions into (after the same
@@ -2499,14 +2507,16 @@ fn fused_def_builds(
         .all(|(doc, port, want)| space_of(Some(&spaces), *doc, port) == *want)
 }
 
+manifold_core::testkit_visible! {
 /// A node's stable id defaults to its handle when the document carries none —
 /// the same convention `instantiate_def` / the preset stamp use.
-pub fn resolve_node_id(n: &EffectGraphNode) -> NodeId {
+pub(crate) fn resolve_node_id(n: &EffectGraphNode) -> NodeId {
     if n.node_id.is_empty() {
         n.handle.as_deref().map(NodeId::new).unwrap_or_default()
     } else {
         n.node_id.clone()
     }
+}
 }
 
 /// Effective scalar value for a region param: the def override if present, else
