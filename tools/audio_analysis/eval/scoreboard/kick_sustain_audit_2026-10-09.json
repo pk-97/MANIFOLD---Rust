@@ -1,0 +1,1051 @@
+{
+  "date": "2026-10-09",
+  "status": "Promising development candidate; no live integration or held-out evaluation.",
+  "review": "Peter reports useful prototype behavior, Skrillex misses/misfires, and Late Night false kicks during sustained bass. No sample-accurate relabeling performed.",
+  "diagnosis": {
+    "audio_sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+    "sample_rate": 48000,
+    "hop": 256,
+    "method": "Raw v5 vs existing causal stable_features from kick_stable_rms: low power averaged over one 45Hz period, body over one 140Hz period, then unchanged 3/80ms EMAs. Measurements at original available trigger time. Diagnostic comparison only; not a deployed detector.",
+    "rows": [
+      {
+        "trigger_s": 129.27466666666666,
+        "raw": {
+          "low": 1.658071921296997,
+          "body": 2.602420836667915,
+          "combined": 1.83585489142369
+        },
+        "cycle_averaged": {
+          "low": 0.8679072625552392,
+          "body": 1.793931846012327,
+          "combined": 1.035495002170633
+        },
+        "previous_body_ratio": 1.039408991540595,
+        "next_body_ratio": 1.0341263483125414
+      },
+      {
+        "trigger_s": 130.37866666666667,
+        "raw": {
+          "low": 1.6750001275547726,
+          "body": 2.970461149061967,
+          "combined": 1.911505065257708
+        },
+        "cycle_averaged": {
+          "low": 0.9788242606757519,
+          "body": 1.8562191731551883,
+          "combined": 1.1313544599014307
+        },
+        "previous_body_ratio": 0.8538405965130003,
+        "next_body_ratio": 1.950145568872727
+      },
+      {
+        "trigger_s": 132.0,
+        "raw": {
+          "low": 1.614864695623013,
+          "body": 2.6954278784512984,
+          "combined": 1.8111566162020298
+        },
+        "cycle_averaged": {
+          "low": 0.9616465575328129,
+          "body": 1.2128689035376001,
+          "combined": 1.0058698486458189
+        },
+        "previous_body_ratio": 0.7606554237809647,
+        "next_body_ratio": 1.134511355672272
+      },
+      {
+        "trigger_s": 135.21066666666667,
+        "raw": {
+          "low": 2.019796853126411,
+          "body": 2.80920202969611,
+          "combined": 2.2064514268431195
+        },
+        "cycle_averaged": {
+          "low": 1.0401373198048074,
+          "body": 1.1833872241208123,
+          "combined": 1.072120875086334
+        },
+        "previous_body_ratio": 0.8129662893892972,
+        "next_body_ratio": 1.1100198686981768
+      },
+      {
+        "trigger_s": 138.79466666666667,
+        "raw": {
+          "low": 1.5969368753305107,
+          "body": 3.9250375811294185,
+          "combined": 1.9808124841448227
+        },
+        "cycle_averaged": {
+          "low": 1.025647480143403,
+          "body": 2.6134023353261253,
+          "combined": 1.2652360919616412
+        },
+        "previous_body_ratio": 1.8995677929427952,
+        "next_body_ratio": 1.5003421432250712
+      }
+    ],
+    "interpretation": "All five false-fire hops have >2 raw body attack ratio but preceding and following hops do not. Cycle averaging suppresses combined rise to near unity. Consistent with short-envelope waveform fluctuations; does not prove bass alone causes every full-mix firing. Stem and master differ.",
+    "user_review": "Peter reported false kick triggers during sustained bass in Late Night and misses/misfires in dense Skrillex mixes. No new sample-accurate labels inferred."
+  },
+  "baseline": {
+    "passages": [
+      {
+        "id": "apricots_128bpm",
+        "strict_50ms": {
+          "matched": 14,
+          "missed": 0,
+          "extra": 0
+        },
+        "wide_association": {
+          "matched": 14,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 0
+        }
+      },
+      {
+        "id": "bad_guy_128bpm",
+        "strict_50ms": {
+          "matched": 15,
+          "missed": 0,
+          "extra": 17
+        },
+        "wide_association": {
+          "matched": 15,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 17
+        }
+      },
+      {
+        "id": "feel_the_vibration_174bpm",
+        "strict_50ms": {
+          "matched": 13,
+          "missed": 2,
+          "extra": 4
+        },
+        "wide_association": {
+          "matched": 15,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 2
+        }
+      },
+      {
+        "id": "inhale_exhale_145bpm",
+        "strict_50ms": {
+          "matched": 11,
+          "missed": 1,
+          "extra": 14
+        },
+        "wide_association": {
+          "matched": 11,
+          "unmatched_labels": 1,
+          "unmatched_triggers": 14
+        }
+      },
+      {
+        "id": "tears_140bpm",
+        "strict_50ms": {
+          "matched": 10,
+          "missed": 0,
+          "extra": 7
+        },
+        "wide_association": {
+          "matched": 10,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 7
+        }
+      },
+      {
+        "id": "late_night_kick_heavy",
+        "strict_50ms": {
+          "matched": 23,
+          "missed": 6,
+          "extra": 3
+        },
+        "wide_association": {
+          "matched": 23,
+          "unmatched_labels": 6,
+          "unmatched_triggers": 3
+        }
+      },
+      {
+        "id": "late_night_bass_heavy",
+        "strict_50ms": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 5
+        },
+        "wide_association": {
+          "matched": 0,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 5
+        }
+      },
+      {
+        "id": "midnight_patience_kick_heavy",
+        "strict_50ms": {
+          "matched": 17,
+          "missed": 18,
+          "extra": 0
+        },
+        "wide_association": {
+          "matched": 17,
+          "unmatched_labels": 18,
+          "unmatched_triggers": 0
+        }
+      },
+      {
+        "id": "midnight_patience_bass_heavy",
+        "strict_50ms": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 0
+        },
+        "wide_association": {
+          "matched": 0,
+          "unmatched_labels": 0,
+          "unmatched_triggers": 0
+        }
+      }
+    ],
+    "strict_50ms": {
+      "matched": 103,
+      "missed": 27,
+      "extra": 50
+    },
+    "wide_association": {
+      "matched": 105,
+      "unmatched_labels": 25,
+      "unmatched_triggers": 48
+    }
+  },
+  "variants": {
+    "candidate_persistence": {
+      "passages": [
+        {
+          "id": "apricots_128bpm",
+          "strict_50ms": {
+            "matched": 14,
+            "missed": 0,
+            "extra": 0
+          },
+          "wide_association": {
+            "matched": 14,
+            "unmatched_labels": 0,
+            "unmatched_triggers": 0
+          }
+        },
+        {
+          "id": "bad_guy_128bpm",
+          "strict_50ms": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 17
+          },
+          "wide_association": {
+            "matched": 15,
+            "unmatched_labels": 0,
+            "unmatched_triggers": 17
+          }
+        },
+        {
+          "id": "feel_the_vibration_174bpm",
+          "strict_50ms": {
+            "matched": 12,
+            "missed": 3,
+            "extra": 3
+          },
+          "wide_association": {
+            "matched": 14,
+            "unmatched_labels": 1,
+            "unmatched_triggers": 1
+          }
+        },
+        {
+          "id": "inhale_exhale_145bpm",
+          "strict_50ms": {
+            "matched": 11,
+            "missed": 1,
+            "extra": 13
+          },
+          "wide_association": {
+            "matched": 11,
+            "unmatched_labels": 1,
+            "unmatched_triggers": 13
+          }
+        },
+        {
+          "id": "tears_140bpm",
+          "strict_50ms": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 6
+          },
+          "wide_association": {
+            "matched": 10,
+            "unmatched_labels": 0,
+            "unmatched_triggers": 6
+          }
+        },
+        {
+          "id": "late_night_kick_heavy",
+          "strict_50ms": {
+            "matched": 21,
+            "missed": 8,
+            "extra": 1
+          },
+          "wide_association": {
+            "matched": 21,
+            "unmatched_labels": 8,
+            "unmatched_triggers": 1
+          }
+        },
+        {
+          "id": "late_night_bass_heavy",
+          "strict_50ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          },
+          "wide_association": {
+            "matched": 0,
+            "unmatched_labels": 0,
+            "unmatched_triggers": 0
+          }
+        },
+        {
+          "id": "midnight_patience_kick_heavy",
+          "strict_50ms": {
+            "matched": 17,
+            "missed": 18,
+            "extra": 0
+          },
+          "wide_association": {
+            "matched": 17,
+            "unmatched_labels": 18,
+            "unmatched_triggers": 0
+          }
+        },
+        {
+          "id": "midnight_patience_bass_heavy",
+          "strict_50ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          },
+          "wide_association": {
+            "matched": 0,
+            "unmatched_labels": 0,
+            "unmatched_triggers": 0
+          }
+        }
+      ],
+      "strict_50ms": {
+        "matched": 100,
+        "missed": 30,
+        "extra": 40
+      },
+      "wide_association": {
+        "matched": 102,
+        "unmatched_labels": 28,
+        "unmatched_triggers": 38
+      }
+    },
+    "confirmed_persistence": {
+      "passages": [
+        {
+          "id": "apricots_128bpm",
+          "strict_50ms": {
+            "matched": 14,
+            "missed": 0,
+            "extra": 0
+          },
+          "wide_association": {
+            "matched": 14,
+            "unmatched_labels": 0,
+            "unmatched_triggers": 0
+          }
+        },
+        {
+          "id": "bad_guy_128bpm",
+          "strict_50ms": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 17
+          },
+          "wide_association": {
+            "matched": 15,
+            "unmatched_labels": 0,
+            "unmatched_triggers": 17
+          }
+        },
+        {
+          "id": "feel_the_vibration_174bpm",
+          "strict_50ms": {
+            "matched": 12,
+            "missed": 3,
+            "extra": 5
+          },
+          "wide_association": {
+            "matched": 15,
+            "unmatched_labels": 0,
+            "unmatched_triggers": 2
+          }
+        },
+        {
+          "id": "inhale_exhale_145bpm",
+          "strict_50ms": {
+            "matched": 11,
+            "missed": 1,
+            "extra": 13
+          },
+          "wide_association": {
+            "matched": 11,
+            "unmatched_labels": 1,
+            "unmatched_triggers": 13
+          }
+        },
+        {
+          "id": "tears_140bpm",
+          "strict_50ms": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 7
+          },
+          "wide_association": {
+            "matched": 10,
+            "unmatched_labels": 0,
+            "unmatched_triggers": 7
+          }
+        },
+        {
+          "id": "late_night_kick_heavy",
+          "strict_50ms": {
+            "matched": 23,
+            "missed": 6,
+            "extra": 1
+          },
+          "wide_association": {
+            "matched": 23,
+            "unmatched_labels": 6,
+            "unmatched_triggers": 1
+          }
+        },
+        {
+          "id": "late_night_bass_heavy",
+          "strict_50ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          },
+          "wide_association": {
+            "matched": 0,
+            "unmatched_labels": 0,
+            "unmatched_triggers": 0
+          }
+        },
+        {
+          "id": "midnight_patience_kick_heavy",
+          "strict_50ms": {
+            "matched": 17,
+            "missed": 18,
+            "extra": 0
+          },
+          "wide_association": {
+            "matched": 17,
+            "unmatched_labels": 18,
+            "unmatched_triggers": 0
+          }
+        },
+        {
+          "id": "midnight_patience_bass_heavy",
+          "strict_50ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          },
+          "wide_association": {
+            "matched": 0,
+            "unmatched_labels": 0,
+            "unmatched_triggers": 0
+          }
+        }
+      ],
+      "strict_50ms": {
+        "matched": 102,
+        "missed": 28,
+        "extra": 43
+      },
+      "wide_association": {
+        "matched": 105,
+        "unmatched_labels": 25,
+        "unmatched_triggers": 40
+      }
+    }
+  },
+  "recovery_rule": "Keep all original v5 internal state and events. Accept output if two consecutive body fast/slow ratios >2 occurred within preceding35ms; otherwise hold original fire up to35ms for that evidence. Emit at actual validation hop. No revised thresholds or per-track settings.",
+  "sequential_trials": [
+    {
+      "name": "candidate persistence",
+      "result": "100/30/40 at50ms; loses2LateNight kicks and delays1Feel kick beyond50ms"
+    },
+    {
+      "name": "persistence required alongside low confirmation",
+      "raw": "recovery.json",
+      "result": "94/36/38 at50ms; rejected because simultaneous confirmation still loses hits"
+    },
+    {
+      "name": "preserve completed v5 fire, allow one-hop validation",
+      "raw": "postconfirm.json",
+      "result": "100/30/43 at50ms; recovers2LateNight hits but loses2Apricots hits"
+    },
+    {
+      "name": "preserve completed v5 fire, allow up to35ms validation",
+      "raw": "audit.json",
+      "result": "102/28/43 at50ms; same105wide-associated labels, unmatched fires48\u219240"
+    }
+  ],
+  "recovered_late_night": [
+    {
+      "attack_s": 208.475,
+      "available_s": 208.496,
+      "delay_ms": 21
+    },
+    {
+      "attack_s": 210.7,
+      "available_s": 210.71466666666666,
+      "delay_ms": 14.667
+    }
+  ],
+  "changed_associated_hit_timing": [
+    {
+      "passage": "apricots_128bpm",
+      "attack_s": 1.65,
+      "old_available_s": 1.6693333333333333,
+      "new_available_s": 1.6746666666666667,
+      "new_delay_ms": 24.667,
+      "added_delay_ms": 5.333
+    },
+    {
+      "passage": "apricots_128bpm",
+      "attack_s": 6.41,
+      "old_available_s": 6.432,
+      "new_available_s": 6.437333333333333,
+      "new_delay_ms": 27.333,
+      "added_delay_ms": 5.333
+    },
+    {
+      "passage": "apricots_128bpm",
+      "attack_s": 7.24,
+      "old_available_s": 7.248,
+      "new_available_s": 7.264,
+      "new_delay_ms": 24.0,
+      "added_delay_ms": 16.0
+    },
+    {
+      "passage": "apricots_128bpm",
+      "attack_s": 9.305,
+      "old_available_s": 9.328,
+      "new_available_s": 9.354666666666667,
+      "new_delay_ms": 49.667,
+      "added_delay_ms": 26.667
+    },
+    {
+      "passage": "bad_guy_128bpm",
+      "attack_s": 2.81,
+      "old_available_s": 2.818934240362812,
+      "new_available_s": 2.824263038548753,
+      "new_delay_ms": 14.263,
+      "added_delay_ms": 5.329
+    },
+    {
+      "passage": "bad_guy_128bpm",
+      "attack_s": 3.75,
+      "old_available_s": 3.756802721088435,
+      "new_available_s": 3.7621315192743765,
+      "new_delay_ms": 12.132,
+      "added_delay_ms": 5.329
+    },
+    {
+      "passage": "bad_guy_128bpm",
+      "attack_s": 4.685,
+      "old_available_s": 4.694671201814059,
+      "new_available_s": 4.7,
+      "new_delay_ms": 15.0,
+      "added_delay_ms": 5.329
+    },
+    {
+      "passage": "bad_guy_128bpm",
+      "attack_s": 5.625,
+      "old_available_s": 5.632539682539683,
+      "new_available_s": 5.637868480725624,
+      "new_delay_ms": 12.868,
+      "added_delay_ms": 5.329
+    },
+    {
+      "passage": "bad_guy_128bpm",
+      "attack_s": 12.185,
+      "old_available_s": 12.192290249433107,
+      "new_available_s": 12.197619047619048,
+      "new_delay_ms": 12.619,
+      "added_delay_ms": 5.329
+    },
+    {
+      "passage": "feel_the_vibration_174bpm",
+      "attack_s": 1.645,
+      "old_available_s": 1.6906666666666668,
+      "new_available_s": 1.696,
+      "new_delay_ms": 51.0,
+      "added_delay_ms": 5.333
+    },
+    {
+      "passage": "inhale_exhale_145bpm",
+      "attack_s": 5.38,
+      "old_available_s": 5.386666666666667,
+      "new_available_s": 5.392,
+      "new_delay_ms": 12.0,
+      "added_delay_ms": 5.333
+    },
+    {
+      "passage": "inhale_exhale_145bpm",
+      "attack_s": 8.69,
+      "old_available_s": 8.698666666666666,
+      "new_available_s": 8.704,
+      "new_delay_ms": 14.0,
+      "added_delay_ms": 5.333
+    },
+    {
+      "passage": "inhale_exhale_145bpm",
+      "attack_s": 10.555,
+      "old_available_s": 10.56,
+      "new_available_s": 10.565333333333333,
+      "new_delay_ms": 10.333,
+      "added_delay_ms": 5.333
+    },
+    {
+      "passage": "inhale_exhale_145bpm",
+      "attack_s": 12.005,
+      "old_available_s": 12.005333333333333,
+      "new_available_s": 12.010666666666667,
+      "new_delay_ms": 5.667,
+      "added_delay_ms": 5.333
+    },
+    {
+      "passage": "tears_140bpm",
+      "attack_s": 6.62,
+      "old_available_s": 6.629333333333333,
+      "new_available_s": 6.634666666666667,
+      "new_delay_ms": 14.667,
+      "added_delay_ms": 5.333
+    },
+    {
+      "passage": "late_night_kick_heavy",
+      "attack_s": 203.34,
+      "old_available_s": 203.35466666666667,
+      "new_available_s": 203.36,
+      "new_delay_ms": 20.0,
+      "added_delay_ms": 5.333
+    },
+    {
+      "passage": "late_night_kick_heavy",
+      "attack_s": 205.56,
+      "old_available_s": 205.57333333333332,
+      "new_available_s": 205.57866666666666,
+      "new_delay_ms": 18.667,
+      "added_delay_ms": 5.333
+    },
+    {
+      "passage": "late_night_kick_heavy",
+      "attack_s": 208.475,
+      "old_available_s": 208.49066666666667,
+      "new_available_s": 208.496,
+      "new_delay_ms": 21.0,
+      "added_delay_ms": 5.333
+    },
+    {
+      "passage": "late_night_kick_heavy",
+      "attack_s": 210.7,
+      "old_available_s": 210.70933333333332,
+      "new_available_s": 210.71466666666666,
+      "new_delay_ms": 14.667,
+      "added_delay_ms": 5.333
+    }
+  ],
+  "controls": [
+    {
+      "name": "stationary_bass",
+      "sample_rate": 44100,
+      "variant": "v5",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "stationary_bass",
+      "sample_rate": 44100,
+      "variant": "candidate_persistence",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "stationary_bass",
+      "sample_rate": 44100,
+      "variant": "confirmed_persistence",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "wobbling_bass",
+      "sample_rate": 44100,
+      "variant": "v5",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 25
+      }
+    },
+    {
+      "name": "wobbling_bass",
+      "sample_rate": 44100,
+      "variant": "candidate_persistence",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 15
+      }
+    },
+    {
+      "name": "wobbling_bass",
+      "sample_rate": 44100,
+      "variant": "confirmed_persistence",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 18
+      }
+    },
+    {
+      "name": "isolated_kicks",
+      "sample_rate": 44100,
+      "variant": "v5",
+      "score": {
+        "matched": 4,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "isolated_kicks",
+      "sample_rate": 44100,
+      "variant": "candidate_persistence",
+      "score": {
+        "matched": 4,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "isolated_kicks",
+      "sample_rate": 44100,
+      "variant": "confirmed_persistence",
+      "score": {
+        "matched": 4,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "rapid_kicks",
+      "sample_rate": 44100,
+      "variant": "v5",
+      "score": {
+        "matched": 8,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "rapid_kicks",
+      "sample_rate": 44100,
+      "variant": "candidate_persistence",
+      "score": {
+        "matched": 8,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "rapid_kicks",
+      "sample_rate": 44100,
+      "variant": "confirmed_persistence",
+      "score": {
+        "matched": 8,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "kicks_over_bass",
+      "sample_rate": 44100,
+      "variant": "v5",
+      "score": {
+        "matched": 4,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "kicks_over_bass",
+      "sample_rate": 44100,
+      "variant": "candidate_persistence",
+      "score": {
+        "matched": 4,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "kicks_over_bass",
+      "sample_rate": 44100,
+      "variant": "confirmed_persistence",
+      "score": {
+        "matched": 4,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "stationary_bass",
+      "sample_rate": 48000,
+      "variant": "v5",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "stationary_bass",
+      "sample_rate": 48000,
+      "variant": "candidate_persistence",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "stationary_bass",
+      "sample_rate": 48000,
+      "variant": "confirmed_persistence",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "wobbling_bass",
+      "sample_rate": 48000,
+      "variant": "v5",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 18
+      }
+    },
+    {
+      "name": "wobbling_bass",
+      "sample_rate": 48000,
+      "variant": "candidate_persistence",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 9
+      }
+    },
+    {
+      "name": "wobbling_bass",
+      "sample_rate": 48000,
+      "variant": "confirmed_persistence",
+      "score": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 9
+      }
+    },
+    {
+      "name": "isolated_kicks",
+      "sample_rate": 48000,
+      "variant": "v5",
+      "score": {
+        "matched": 4,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "isolated_kicks",
+      "sample_rate": 48000,
+      "variant": "candidate_persistence",
+      "score": {
+        "matched": 4,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "isolated_kicks",
+      "sample_rate": 48000,
+      "variant": "confirmed_persistence",
+      "score": {
+        "matched": 4,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "rapid_kicks",
+      "sample_rate": 48000,
+      "variant": "v5",
+      "score": {
+        "matched": 8,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "rapid_kicks",
+      "sample_rate": 48000,
+      "variant": "candidate_persistence",
+      "score": {
+        "matched": 8,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "rapid_kicks",
+      "sample_rate": 48000,
+      "variant": "confirmed_persistence",
+      "score": {
+        "matched": 8,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "kicks_over_bass",
+      "sample_rate": 48000,
+      "variant": "v5",
+      "score": {
+        "matched": 4,
+        "missed": 0,
+        "extra": 0
+      }
+    },
+    {
+      "name": "kicks_over_bass",
+      "sample_rate": 48000,
+      "variant": "candidate_persistence",
+      "score": {
+        "matched": 3,
+        "missed": 1,
+        "extra": 1
+      }
+    },
+    {
+      "name": "kicks_over_bass",
+      "sample_rate": 48000,
+      "variant": "confirmed_persistence",
+      "score": {
+        "matched": 4,
+        "missed": 0,
+        "extra": 0
+      }
+    }
+  ],
+  "verification": {
+    "unit_tests": 8,
+    "native_baselines_replayed": 7,
+    "all_candidate_and_final_hop_lists_match_exploratory_reports": true,
+    "all_control_scores_match": true,
+    "all105original_wide_associated_label_identities_retained": true
+  },
+  "limitations": [
+    "Sequential development trials, no independent held-out evaluation. Provisional visual labels plus qualitative user listening feedback. Output validation adds up to 35ms beyond original v5 latency. Unequal waits can shorten output spacing below60ms. No app change.",
+    "Up to32ms extra wait observed across all native full-file outputs; max26.667ms extra on reviewed associated kicks. One Feel hit changes45.667\u219251ms. Timing tolerances remain unchanged.",
+    "Output gaps below60ms occur outside reviewed passages (including excluded clip ending); listed explicitly. Native integration must decide output-spacing behavior. No callback deadline or audiovisual measurement performed.",
+    "Bad Guy17false fires remain. Existing27strict misses are not generally recovered. Synthetic wobbling bass still creates9extras at48k and18at44.1k."
+  ],
+  "output_gaps_under_60ms": [
+    {
+      "track": "inhale_exhale_145bpm",
+      "available_s": 13.104,
+      "gap_ms": 58.666666666666664
+    },
+    {
+      "track": "late_night",
+      "available_s": 239.056,
+      "gap_ms": 58.666666666666664
+    },
+    {
+      "track": "late_night",
+      "available_s": 245.01866666666666,
+      "gap_ms": 58.666666666666664
+    },
+    {
+      "track": "late_night",
+      "available_s": 245.776,
+      "gap_ms": 48.0
+    },
+    {
+      "track": "midnight_patience",
+      "available_s": 58.352,
+      "gap_ms": 58.666666666666664
+    }
+  ],
+  "sources_sha256": {
+    "kick_sustain_audit.py": "d72f8fc18bc8414bf72ee85e7aa2bfa27669e6f2fd951dede86b29209eb34917",
+    "kick_attack_rejection.py": "cb5e8ad261f64ae5b6e3bafce2f232e14ec99bb3fc54c0599f113dcfaed6a144",
+    "kick_dsp_experiments.py": "e5595079d48ef086e0731ac871f9c4fc07c53e7de87e2796f51cbe5c3983dd3b",
+    "kick_hybrid_experiment.py": "9f16149655e367952cab586b2e89d900d5ca3bcb07e0cf5cbead4fa2ecd42aa8",
+    "run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615",
+    "live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2",
+    "master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145"
+  },
+  "labels_sha256": {
+    "inhale_exhale_145bpm.csv": "a29b9892456588294efbf6f506da912d4f2d996fc105f9551b1b9d6db4077f4e",
+    "bad_guy_128bpm.csv": "d657d298ad98bee09e048922b465de4b4a69386a1482d8327be3207a37444ef7",
+    "attack_review.csv": "b29e872c8a8ec9d05902c7f76bc68b5a16399fc9cf0fd1ef669c598c8711a9ae",
+    "feel_the_vibration_174bpm.csv": "922be87c9a6a9eb03002b68ce5f87915e1fec4652921795c20cf6975a2bc21e8",
+    "apricots_128bpm.csv": "fa38b535e88b55580df3f90956935420070d95fb89441b30e625b1cdce45b163",
+    "tears_140bpm.csv": "f3ce02e72f191bd53bc86c611fce2efe56a55db4cb19b6f1434bdba80ce28576",
+    "master_passages_2026-10-09.json": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c"
+  },
+  "audio_sha256": {
+    "apricots_128bpm": "fde3593f372875579a15b95d80cb1d4408971ba62dd80b84110623eecbba28c4",
+    "bad_guy_128bpm": "351ad2f07dc5778690b8f04c0af12c1acc8f83fdb3c253fc988e26a433cff7a8",
+    "feel_the_vibration_174bpm": "57458b322198b9c12ac821180874466a6636c15dda56d33bc29d616f46f80533",
+    "inhale_exhale_145bpm": "26163ae92e4b7aaf74cafc6a5fff3b6bad2a566a60474bb8b8b53386add18514",
+    "tears_140bpm": "49c7c4ee799e93690e4023665b332c617f0fa170314a83d05c79a2c675d5b334",
+    "late_night": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+    "midnight_patience": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2"
+  },
+  "raw_reports": {
+    "audit.json": "ac54ece28a3d204aeeedef4af7468b3bedf97a18afab4011de5782d50aad2986",
+    "measurements.json": "5986f0f170a080756c2ff8572fb90517948c0f163d5e83b0190cb170db6875a2",
+    "persistence.json": "721a9a1096de4af6f40443e7853394d3b29ee70ec9898a8a24e096ad3cb691e9",
+    "recovery.json": "90a93a02fe8391ceeebcf510b786837dcead1c3d46f9bc2f62a3e8ab7ad92acb",
+    "postconfirm.json": "2e2a17e8378b49a615f906d6b06ed3d988ff345d201ad496c5a79213021c696c",
+    "postconfirm35.json": "6074ace55a8b0227969b092d55340cafb084bfb21772997b9dc345bc071e9b4c"
+  },
+  "reproduction": "PYTHONPATH=tools/audio_analysis python3 -m eval.kick_sustain_audit --audio-root '/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio' --cache /Users/peterkiemann/.cache/manifold/kick-dsp-experiments-2026-10-09 --out PATH"
+}

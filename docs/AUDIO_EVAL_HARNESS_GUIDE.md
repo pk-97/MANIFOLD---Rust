@@ -310,6 +310,25 @@ No live change or held-out evaluation was made. See
 `tools/audio_analysis/eval/scoreboard/kick_timbre_trial_2026-10-09.json` for
 per-track results, reference provenance, limitations and reproduction commands.
 
+**Sustained-bass follow-up, 2026-10-09 — development candidate:** Peter's listening review
+identified Late Night false kicks during sustained bass. At all five reviewed
+bass-passage fires, the body attack ratio exceeds 2 for one isolated hop;
+cycle averaging reduces combined fast/slow rise from 1.81–2.21 to 1.01–1.27.
+Requiring the existing body attack on two consecutive completed hops removes
+all five fires, but also loses two Late Night kicks and delays a Feel the
+Vibration kick to 51 ms. Overall 50 ms matches/extras change from 103/50 to
+100/40. A recovery variant preserves the original v5 decision and validates its
+output using two-hop attack evidence within the preceding or following 35 ms.
+It recovers both lost Late Night kicks while still removing all five bass-passage
+fires. All 105 original wider-associated labels remain associated; unmatched fires
+fall from 48 to 40. Strict 50 ms scores are 102 matched /28 missed /43 extra:
+one Feel hit moves from 45.667 to 51 ms. Actual validation time is used, never
+backdated. Added delay reaches 26.667 ms on reviewed kicks. Eight focused tests,
+seven native baseline replays and exact exploratory-report comparisons pass.
+This remains offline: unequal waits shorten some output gaps below 60 ms outside
+reviewed passages, and held-out evaluation/native latency are unverified. See
+`tools/audio_analysis/eval/scoreboard/kick_sustain_audit_2026-10-09.json`.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
