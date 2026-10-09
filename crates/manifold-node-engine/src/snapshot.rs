@@ -1206,7 +1206,7 @@ mod tests {
             outputs: vec![output("out")],
         }));
         let _named = g.add_node_named(
-            "uv_transform",
+            String::from("uv_transform"),
             Box::new(ParamfulNode {
                 type_id: EffectNodeType::new("node.transform"),
                 outputs: vec![output("out")],
@@ -1232,6 +1232,7 @@ mod tests {
         );
 
         let snap = GraphSnapshot::from_graph(&g);
+        drop(g);
         let anon = snap.nodes.iter().find(|n| n.title == "Source").unwrap();
         assert_eq!(anon.node_handle, None);
         assert!(anon.parameters.is_empty());
