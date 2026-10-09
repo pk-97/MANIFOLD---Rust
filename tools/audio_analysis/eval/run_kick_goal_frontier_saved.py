@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import numpy as np  # noqa: E402
 
-from tools.audio_analysis.eval.kick_goal_eval import GOAL, NEW_SONGS, TRACKS, Goal  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_eval import GOAL, NEW_SONGS, TRACKS, TRUTH, Goal  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_data import ALL  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_frontier import frontier, pooled, sweep  # noqa: E402
 
@@ -25,7 +25,7 @@ from tools.audio_analysis.eval.run_kick_goal_frontier import frontier, pooled, s
 def main():
     z = np.load(GOAL / sys.argv[1])
     prefixes = sys.argv[2:] or ['']
-    g = Goal(mode='strict')
+    g = Goal(mode=TRUTH)
     res = {}
     for pre in prefixes:
         fr, labels = {}, {}
