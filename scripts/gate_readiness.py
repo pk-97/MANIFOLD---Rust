@@ -5,6 +5,7 @@ Compiled test-inventory validation necessarily happens after compilation.
 """
 import re
 import json
+import tomllib
 from pathlib import Path
 import subprocess
 
@@ -33,6 +34,74 @@ def reference_problems(repo, workspace, packages):
                     r'include_(?:str|bytes)!\s*\(\s*concat!\s*\(\s*env!\("CARGO_MANIFEST_DIR"\),\s*"([^"\n]+)"\s*\)\s*\)', text):
                 if not (root / match[1].lstrip('/')).is_file():
                     problems.append(f'{source.relative_to(repo)}: missing manifest include {match[1]}')
+    return problems
+
+
+def dependency_bans_cover_workspace(repo, workspace):
+    """Check the checked-in physics boundary against Cargo metadata.
+
+    Cargo-deny remains authoritative for resolved dependency paths. This cheap
+    check only ensures every current workspace crate is represented and that
+    the protected lower layer cannot be admitted as a host wrapper.
+    """
+    path = Path(repo) / 'deny.toml'
+    try:
+        config = tomllib.loads(path.read_text())
+        entries = config['bans']['deny']
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as error:
+        return [f'{path}: invalid bans config: {error}']
+    if not isinstance(entries, list):
+        return [f'{path}: bans.deny must be a list']
+
+    members = set(workspace.packages)
+    manifold = {name for name in members if name.startswith('manifold-')}
+    foundation = 'manifold-foundation'
+    required = manifold - {foundation}
+    rows = {}
+    problems = []
+    for row in entries:
+        if not isinstance(row, dict) or not isinstance(row.get('name'), str):
+            continue
+        name = row['name']
+        if name.startswith('manifold-'):
+            rows.setdefault(name, []).append(row)
+            if name not in members:
+                problems.append(f'{path}: stale MANIFOLD ban target {name}')
+    for name in sorted(required):
+        matches = rows.get(name, [])
+        if not matches:
+            problems.append(f'{path}: missing MANIFOLD ban entry for {name}')
+            continue
+        if len(matches) != 1:
+            problems.append(f'{path}: expected exactly one MANIFOLD ban entry for {name}')
+        wrappers = matches[0].get('wrappers')
+        if not isinstance(wrappers, list) or not wrappers or any(not isinstance(w, str) or not w for w in wrappers):
+            problems.append(f'{path}: {name} ban must have nonempty string wrappers')
+            continue
+        unknown = sorted({w for w in wrappers if w.startswith('manifold-') and w not in members})
+        if unknown:
+            problems.append(f'{path}: {name} has stale MANIFOLD wrappers: {", ".join(unknown)}')
+        if 'manifold-ui' in wrappers:
+            problems.append(f'{path}: manifold-ui cannot wrap non-foundation crate {name}')
+        protected = {'manifold-physics', 'manifold-fluids', 'manifold-gpu'} & set(wrappers)
+        allowed = {'manifold-fluids'} if name == 'manifold-physics' else set()
+        for wrapper in sorted(protected - allowed):
+            problems.append(f'{path}: protected crate {wrapper} cannot wrap non-foundation crate {name}')
+
+    protected_dependencies = {
+        'manifold-physics': {'manifold-foundation'},
+        'manifold-fluids': {'manifold-foundation', 'manifold-physics'},
+        'manifold-gpu': {'manifold-foundation'},
+    }
+    for package, allowed in protected_dependencies.items():
+        if package not in members:
+            continue
+        dependencies = workspace.packages[package].get('dependencies', [])
+        local = {dependency.get('name') for dependency in dependencies
+                 if isinstance(dependency, dict) and dependency.get('path')}
+        unexpected = sorted(local - allowed)
+        if unexpected:
+            problems.append(f'{package}: protected dependencies must stay in {sorted(allowed)}; found {unexpected}')
     return problems
 
 
@@ -256,6 +325,8 @@ def plan(repo, paths, base=None):
     workspace = attempt('metadata', lambda: Workspace(repo))
     result['workspace'] = workspace
     if workspace:
+        for problem in attempt('dependency-bans', lambda: dependency_bans_cover_workspace(repo, workspace)) or []:
+            result['errors'].append(('dependency-bans', problem))
         attempt('nextest-grouping', workspace.validate_nextest)
         result['packages'] = attempt('package-ownership',
                                      lambda: sorted({workspace.owner(p) for p in paths} - {None})) or []

@@ -46,6 +46,7 @@ pub mod project;
 pub mod recording;
 pub mod retired_cpu_flip;
 pub mod scene_exposure;
+pub mod scene_graph_edit;
 pub mod scene_index;
 pub mod scene_modifier_preset;
 pub mod scene_modifier_edit;

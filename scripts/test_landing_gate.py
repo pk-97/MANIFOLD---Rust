@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import landing_gate
@@ -97,6 +98,97 @@ def add_test_target(root, workspace, package, name, relative):
         "required-features": [],
     })
     return source
+
+
+def dependency_fixture(root, rows, dependencies=None, extra=()):
+    """Build the metadata/config seam without invoking Cargo."""
+    names = {'manifold-foundation', 'manifold-app', 'manifold-physics',
+             'manifold-fluids', 'manifold-gpu', 'manifold-core', 'manifold-ui',
+             *extra}
+    packages = {}
+    for name in names:
+        packages[name] = {'dependencies': []}
+    for name, edges in (dependencies or {}).items():
+        packages[name]['dependencies'] = [
+            {'name': child, 'path': f'crates/{child}', 'kind': kind, 'target': target}
+            for child, kind, target in edges]
+    config = ['[bans]', 'deny = [']
+    for name, wrappers in rows:
+        values = ', '.join(f'"{wrapper}"' for wrapper in wrappers)
+        config.append(f'    {{ name = "{name}", wrappers = [{values}] }},')
+    config.append(']')
+    (Path(root) / 'deny.toml').write_text('\n'.join(config) + '\n')
+    return SimpleNamespace(packages=packages)
+
+
+class DependencyBanTests(unittest.TestCase):
+    def rows(self):
+        return [('manifold-app', ['manifold-app']),
+                ('manifold-core', ['manifold-app']),
+                ('manifold-fluids', ['manifold-app']),
+                ('manifold-gpu', ['manifold-app']),
+                ('manifold-physics', ['manifold-fluids']),
+                ('manifold-ui', ['manifold-app'])]
+
+    def test_dependency_bans_cover_workspace_accepts_lower_edges_and_all_edge_kinds(self):
+        dependencies = {
+            'manifold-physics': [('manifold-foundation', None, None),
+                                 ('manifold-foundation', 'dev', None),
+                                 ('manifold-foundation', 'build', 'cfg(unix)')],
+            'manifold-fluids': [('manifold-foundation', None, None),
+                                ('manifold-physics', 'dev', 'cfg(test)')],
+            'manifold-gpu': [('manifold-foundation', None, 'cfg(target_os = "macos")')],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = dependency_fixture(directory, self.rows(), dependencies)
+            self.assertEqual(gate_readiness.dependency_bans_cover_workspace(directory, workspace), [])
+
+    def test_dependency_bans_rejects_protected_to_host_and_ui_admissions(self):
+        for wrapper, phrase in [('manifold-physics', 'protected crate'),
+                                ('manifold-fluids', 'protected crate'),
+                                ('manifold-gpu', 'protected crate'),
+                                ('manifold-ui', 'manifold-ui cannot wrap')]:
+            with self.subTest(wrapper=wrapper), tempfile.TemporaryDirectory() as directory:
+                rows = [(name, [wrapper] if name == 'manifold-core' else values)
+                        for name, values in self.rows()]
+                workspace = dependency_fixture(directory, rows)
+                problems = gate_readiness.dependency_bans_cover_workspace(directory, workspace)
+                self.assertTrue(any(phrase in problem for problem in problems), problems)
+
+    def test_dependency_bans_rejects_protected_dependencies_of_every_kind(self):
+        for parent in ('manifold-physics', 'manifold-fluids', 'manifold-gpu'):
+            for kind, target in ((None, None), ('dev', None), ('build', None),
+                                 (None, 'cfg(target_os = "macos")')):
+                with self.subTest(parent=parent, kind=kind, target=target), tempfile.TemporaryDirectory() as directory:
+                    rows = self.rows() + [('manifold-new', ['manifold-app'])]
+                    dependencies = {parent: [('manifold-new', kind, target)]}
+                    workspace = dependency_fixture(directory, rows, dependencies, extra=('manifold-new',))
+                    problems = gate_readiness.dependency_bans_cover_workspace(directory, workspace)
+                    self.assertTrue(any('protected dependencies' in problem for problem in problems), problems)
+
+    def test_dependency_bans_require_exact_nonfoundation_entries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rows = self.rows() + [('manifold-core', ['manifold-app'])]
+            workspace = dependency_fixture(directory, rows, extra=('manifold-new',))
+            problems = gate_readiness.dependency_bans_cover_workspace(directory, workspace)
+            self.assertTrue(any('exactly one' in problem for problem in problems))
+            self.assertTrue(any('missing MANIFOLD ban entry for manifold-new' in problem
+                                for problem in problems))
+
+        with tempfile.TemporaryDirectory() as directory:
+            rows = [(name, [] if name == 'manifold-core' else values)
+                    for name, values in self.rows()]
+            workspace = dependency_fixture(directory, rows)
+            problems = gate_readiness.dependency_bans_cover_workspace(directory, workspace)
+            self.assertTrue(any('nonempty string wrappers' in problem for problem in problems))
+
+    def test_dependency_bans_reject_stale_manifold_wrapper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rows = [(name, ['manifold-removed'] if name == 'manifold-core' else values)
+                    for name, values in self.rows()]
+            workspace = dependency_fixture(directory, rows)
+            problems = gate_readiness.dependency_bans_cover_workspace(directory, workspace)
+            self.assertTrue(any('stale MANIFOLD wrappers' in problem for problem in problems))
 
 
 def process_alive(pid):

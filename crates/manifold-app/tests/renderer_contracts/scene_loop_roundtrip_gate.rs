@@ -10,7 +10,7 @@ use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::preset_type_id::PresetTypeId;
 use manifold_editing::command::Command;
-use manifold_editing::commands::graph::InsertSceneModifierCommand;
+use manifold_editing::commands::graph::{DeleteSceneModifierCommand, InsertSceneModifierCommand};
 use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
 use manifold_node_engine::load::expand::prepare_scene_modifiers;
 use manifold_node_engine::persistence::PrimitiveRegistry;
@@ -131,4 +131,62 @@ fn scene_loop_preparation_is_idempotent_after_flatten() {
         .expect("second preparation");
     assert_eq!(first.def, second.def);
     assert_eq!(first.routes, second.routes);
+}
+
+#[test]
+fn physics_boundary_transaction_reload() {
+    use manifold_core::effect_graph_def::BindingTarget;
+    use manifold_core::effects::ParameterDriver;
+    use manifold_core::types::{BeatDivision, DriverWaveform};
+    use manifold_core::{GraphTarget, NodeId};
+
+    let mut project = Project::default();
+    let (layer_id, idx) = apply_loop(&mut project, host());
+    let target = GraphTarget::Generator(layer_id);
+    let instance = project.timeline.layers[idx].gen_params_or_init();
+    let graph = instance.graph.clone().unwrap();
+    let modifier_id = NodeId::new("roundtrip-loop");
+    let address = graph.preset_metadata.as_ref().unwrap().bindings.iter()
+        .find(|binding| matches!(&binding.target, BindingTarget::SceneModifier { modifier_id: id, .. } if id == &modifier_id))
+        .expect("loop exposes a host parameter").id.clone();
+    instance.drivers = Some(vec![ParameterDriver::new(
+        address.clone(), BeatDivision::Quarter, DriverWaveform::Sine,
+    )]);
+    let saved = serde_json::to_value(&*instance).unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "manifold_scene_transaction_{}_{}.manifold",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    manifold_io::saver::save_project(&mut project, &path, Some("Scene transaction"), false)
+        .expect("save project archive");
+    let mut reloaded = manifold_io::loader::load_project(&path).expect("reload archive");
+    std::fs::remove_file(path).expect("remove archive");
+    let instance = reloaded.graph_target_owner_mut(&target).unwrap();
+    assert_eq!(serde_json::to_value(&*instance).unwrap(), saved);
+    assert_eq!(instance.graph.as_ref(), Some(&graph));
+
+    instance.set_param(&address, 0.91);
+    assert_eq!(instance.params.get(&address).unwrap().value, 0.91);
+    instance.drivers.as_mut().unwrap()[0].is_paused_by_user = true;
+    let before = instance.clone();
+    let mut command = DeleteSceneModifierCommand::new(
+        &reloaded, target.clone(), &host(), modifier_id,
+    ).expect("prepare deletion after reload");
+    for _ in 0..2 {
+        command.execute(&mut reloaded);
+        assert!(command.was_applied());
+        let deleted = reloaded.graph_target_owner(&target).unwrap();
+        assert!(deleted.graph.as_ref().unwrap().scene_modifiers.is_empty());
+        assert!(!deleted.params.contains(&address));
+        assert!(deleted.drivers.is_none());
+        command.undo(&mut reloaded);
+        assert!(!command.was_applied());
+        let restored = reloaded.graph_target_owner(&target).unwrap();
+        assert_eq!(restored.graph, before.graph);
+        assert_eq!(serde_json::to_value(restored).unwrap(), serde_json::to_value(&before).unwrap());
+        assert_eq!(restored.params, before.params);
+        assert_eq!(restored.base_tracked, before.base_tracked);
+        assert!(restored.drivers.as_ref().unwrap()[0].is_paused_by_user);
+    }
 }
