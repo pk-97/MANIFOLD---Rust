@@ -1037,9 +1037,9 @@ trusting it, and route rare shapes to evidence that is physical for them; check
 a cue's sign inside each support zone, not pooled; and audit labels against
 isolated stems with a label-free lag before arguing about timing. Run the
 per-song oracle frontier first, on day one: it separates threshold problems from
-information problems in minutes. For snares and claps, Bad Guy shows the
-confusion runs both ways (its claps are this detector's worst extras), so a joint
-kick/snare/bass decision is the next design question rather than three detectors.
+information problems in minutes. The kick detector stays kick-only (a joint
+kick/snare/bass detector is rejected); its open gain is the 41 visible-but-ranked-low
+kicks, where it must learn what a clap or bass-note onset looks like and reject it.
 
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
