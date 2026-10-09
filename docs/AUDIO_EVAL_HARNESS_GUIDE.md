@@ -165,9 +165,8 @@ artifacts; no detector reset, timestamp correction, or per-song tuning occurs.
 The causal Python reference exactly reproduces both complete native Rust v5
 event lists. All 24 missed onsets have no eligible candidate in the reviewed
 -20/+70 ms neighborhood; 13 pass the individual conditions at different hops
-but never together. Next experiment: bounded temporal combination of attack
-evidence, evaluated against the existing kick and bass rejection passages.
-Do not simply lower global thresholds or integrate v5 into the live path.
+but never together. The fixed temporal, tonal and PCEN probes below now test
+three proposed responses. None justifies integrating v5 into the live path.
 
 Reproduce scoring with `PYTHONPATH=tools/audio_analysis python3 -m
  eval.master_kick_comparison --runs
@@ -179,6 +178,54 @@ binary hashes, and build provenance. Results and miss diagnosis are the
 `master_kick_miss_diagnosis_2026-10-09.json` scoreboard files. Review plots,
 scripts and complete logs are preserved in
 `~/.cache/manifold/master-kick-comparison-2026-10-09/`.
+
+
+**Three isolated DSP probes, 2026-10-09:** fixed first settings were tested
+without per-track tuning, models, GPU work or live integration. Five original
+mix excerpts plus four master passages provide 130 scored visual labels.
+All seven reference Python event lists exactly reproduce native Rust v5.
+
+| Detector | Matched within 50 ms | Missed | Extra fires |
+|---|---:|---:|---:|
+| Unchanged live (reused baseline) | 45 | 85 | 256 |
+| Fixed v5 reference | 103 | 27 | 50 |
+| 20 ms temporal eligibility | 108 | 22 | 130 |
+| SuperFlux-style confirmation | 85 | 45 | 40 |
+| PCEN-style candidate gate | 114 | 16 | 386 |
+
+These implementations fail the proposed upgrade criterion. Temporal evidence
+recovers some kicks but also joins ongoing bass fluctuations. The tonal mask
+eliminates fires in both kick-free master passages yet rejects strong kicks.
+PCEN applied to the existing 3 ms band-power envelopes fires 48 times after
+startup on a stationary harmonic bass control. This exposes sensitivity to
+within-cycle energy variation, not a conclusion that PCEN is generally poor.
+The first versions remain separate; no combined detector was tuned.
+
+Controls also run full kick-only, bass-only, kick+bass, kick+quieter-bass and
+kick+other-drums stem combinations for both development tracks. Counts use
+source-clock passages, not master-label accuracy. On Midnight, v5 fires 25
+times in the kick-active kick-only passage, 19 with bass, and 24 with bass
+reduced by 12 dB; those counts diagnose interference, not which hits were correct.
+Viewed source/master detail panels corroborate selected recovered and rejected
+reference events. Labels were not changed to improve scores.
+
+Long-master Python process CPU time was 0.15–0.18% of audio duration for v5,
+temporal and PCEN, and 0.46–0.47% for tonal. This is batch CPU throughput,
+not native callback or end-to-end latency proof. No GPU was used. Twelve
+focused tests pass, including causality, evidence expiry, silent inputs,
+filterbank coverage and FFT batch invariance. No Rust source changed.
+
+Run each variant (`baseline`, `temporal`, `tonal`, `pcen`) using
+`PYTHONPATH=tools/audio_analysis python3 -m eval.run_kick_dsp_experiments`
+with `--variant`, `--cache`, and `--audio-root`. Run source/synthetic controls
+with `python3 -m eval.kick_dsp_controls --out PATH` under the same PYTHONPATH.
+The reproducible summary, frozen parameters, per-passage errors, controls and
+source hashes are in `scoreboard/kick_dsp_experiments_2026-10-09.json` relative
+to `tools/audio_analysis/eval/`. Raw reports and feature caches are under
+`~/.cache/manifold/kick-dsp-experiments-2026-10-09/`.
+The next useful experiment is a steadier energy representation that preserves
+attack timing before applying adaptive normalization. Miracle and Heavy On
+Mind remain untouched by detector evaluation.
 
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
