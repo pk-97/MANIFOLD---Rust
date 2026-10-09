@@ -94,6 +94,8 @@ pub struct StubRenderer {
     /// Test instrumentation (P3): every start, in order, with the edge flag it
     /// carried — lets tests prove a heal restarted a clip with no edge fired.
     start_log: Vec<(ClipId, bool)>,
+    /// Test instrumentation: every stop request, in order.
+    stop_log: Vec<ClipId>,
 }
 
 struct StubClipState {
@@ -111,6 +113,7 @@ impl StubRenderer {
             active_clips: std::collections::HashMap::new(),
             is_generator: false,
             start_log: Vec::new(),
+            stop_log: Vec::new(),
         }
     }
 
@@ -119,6 +122,7 @@ impl StubRenderer {
             active_clips: std::collections::HashMap::new(),
             is_generator: true,
             start_log: Vec::new(),
+            stop_log: Vec::new(),
         }
     }
 
@@ -127,6 +131,14 @@ impl StubRenderer {
         self.start_log
             .iter()
             .filter(|(id, _)| id.as_str() == clip_id)
+            .count()
+    }
+
+    #[doc(hidden)]
+    pub fn stop_count_for(&self, clip_id: &str) -> usize {
+        self.stop_log
+            .iter()
+            .filter(|id| id.as_str() == clip_id)
             .count()
     }
 
@@ -173,6 +185,7 @@ impl ClipRenderer for StubRenderer {
     }
 
     fn stop_clip(&mut self, clip_id: &str) {
+        self.stop_log.push(ClipId::new(clip_id));
         self.active_clips.remove(clip_id);
     }
 

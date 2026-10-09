@@ -2,22 +2,16 @@
 
 <!-- index: Child trigger lanes with no thumbnails; shared assignment from lane headers and parameter drawers. Current-code audit, proposed architecture, and first-slice acceptance contract. -->
 
-**Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence, trigger lane/clip
-kinds, media exclusion, ownership editing, shared arrangement/live/session timing
-and source-timed delivery are landed. The combined foundation gate passed.
-Header/drawer authoring, atomic response arming and backward-clock cancellation
-pass focused tests and clippy. The persistent header checklist and Edit navigation
-pass the 42-step assignment and 42-step force UI flows, including force assignment
-save/reload; rendered header and response drawers were inspected. Generic scene
-property navigation uses projected object/section ownership and passes focused
-CPU checks. Source-pattern invalidation and actual numeric
-playback through real save/load, disconnect and undo pass focused CPU checks.
-Full feature acceptance, including rendered force isolation, is still open.
+**Status:** SHIPPED · 2026-10-10 · Codex. Shared timing/delivery, thumbnail-free
+child lanes, header/drawer assignment, addressed Scene response navigation and
+all-owner lifecycle are implemented. Acceptance evidence is recorded in section 6;
+the required landing gate governs delivery. Route gating, clip-progress responses
+and unrestricted cross-owner routing remain explicitly deferred in section 8.
 **Tracking:** `BUG-tqtel` (feature).
 **Prerequisites:** crate refactor landed; reverify the audited seams against subsequent cleanup.
 **Execution contract:** read `DESIGN_DOC_STANDARD.md` sections 5–6 before briefing
-implementation. Section 6 below names the remaining entry blockers. This document
-completes the initial audit and behaviour contract, not feature implementation.
+implementation. The dated audit records the starting point; sections 4 and 6
+record the implemented contracts and acceptance.
 
 Peter's foundation requirement: “ensure our base level engine systems, contracts,
 APIs, and Interfaces are unified for these cross domain systems” and “Unified
@@ -429,11 +423,11 @@ ordering/channel checks and the shared parameter gesture/undo flow.
 
 ## 6. Phasing — first slice and entry blockers
 
-**P0 — this audit and behaviour contract.** Deliver the source map, interaction,
+**P0 — complete: audit and behaviour contract.** Deliver the source map, interaction,
 architecture recommendation, alternatives and acceptance requirements. Verification:
 source/reference checks and documentation index/diff checks only. No runtime claim.
 
-**P1 — one complete connection through the real UI.** Intended performer gesture:
+**P1 — complete: one connection through the real UI.** Intended performer gesture:
 create a trigger child under an existing generator, draw two clips, assign one
 ordinary numeric parameter with its existing decay response, then change its source
 from the drawer. Main-lane starts must no longer drive that response. Save, reload,
@@ -445,7 +439,9 @@ existing UI flow harness plus a playback-value integration test.
 **P1 authoring passes focused checks.** The `trigger-lane-assignment` UI flow
 verifies creation from both entry points, assignment, disconnect and undo/redo.
 Rendered header/drawer states are inspected; numeric playback after real save/load
-passes its separate integration check. Full acceptance remains open. The foundation
+passes its separate integration check. The 49-step flow also draws two timing
+clips and reloads their saved project; the inspected render contains solid blocks
+without thumbnails, and both saved clips have empty media IDs. The foundation
 contracts below resolve the original entry blockers:
 
 1. **Resolved: mute policy (D6).** Owner mute does not suppress child control output.
@@ -487,7 +483,12 @@ including macro edit locks. The header derives its checked targets from paramete
 state. Both surfaces queue content-owned commands; accepted snapshots update their
 labels. Creating a lane selects and reveals it; selecting a drawer source reveals
 the lane without changing the inspected parameter. Reveals expand collapsed owners
-on the content thread. Header-to-drawer navigation remains outstanding.
+on the content thread. Header Edit opens the addressed existing response drawer.
+Scene item ownership selects the correct object, camera or world section; an
+explicitly opened hidden material row stays visible until selection changes.
+The rendered material probe assigned Clearcoat Normal Scale and opened its Scene
+drawer with the same Trigger 1 source. Duplicate force names use occurrence suffixes
+shared by the picker and cards; routing continues to use stable parameter IDs.
 
 Playback reconciliation also derives each source's authored pattern identity once
 per reconciliation, reusing the source map. Parameters carry the selected identity
@@ -505,11 +506,19 @@ and `cargo test -p manifold-editing --lib commands::trigger_source`, with
 adds scoped clippy and reverse-dependency checks. These checks establish
 persistence and undo only; they do not establish playback or UI behaviour.
 
-**Completion after P1:** named Fire/scene-force isolation, legacy Gate handling,
-all-owner/nested-group coverage, MIDI/live/session/export parity and lifecycle
-hardening. These are required for full feature completion. Split into bounded
-seam-based briefs once P1's inventory establishes cost; do not publish a family-by-
-family plan that duplicates routing code. No feature-complete claim after P1 alone.
+**Completion after P1 — verified:** named Fire isolation, legacy Gate exclusion,
+all-owner/nested-group eligibility and mute, MIDI/live/session/export timing,
+editing lifecycle, serialization and prepared-control invalidation have focused
+coverage through the shared mechanisms. `engine_tick` renderer spies observe no
+trigger-clip starts or stops for all five owner kinds, including stale clip owner
+and misleading media IDs. `content_pipeline::trigger_lane_force_tests` delivers
+independent 3/2 patterns to two native forces in one running scene, with stable
+runtime identity and physics epoch, no broadcast Gate and no discarded impulses.
+Its opt-in `journey-proofs` mixed audio/clip acceptance passed 36 measured frames
+at 32×32 with a maximum CPU content time of 0.508 ms against the existing 20 ms
+gate. The run retained audio hops and awaited native frame completion; it is a
+bounded timing result, not an allocation measurement. Source inspection confirms
+reused clip-control buffers and edit-boundary reconciliation.
 
 Before each app landing: scoped check/clippy and module tests, required UI flow and
 GPU proofs selected by touched paths, then `scripts/land_branch.py`. One cargo

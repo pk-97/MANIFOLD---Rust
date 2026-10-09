@@ -1,4 +1,6 @@
 mod trigger_targets;
+#[cfg(all(test, target_os = "macos"))]
+mod trigger_lane_force_tests;
 
 use parking_lot::RwLock;
 use std::sync::Arc;

@@ -126,8 +126,15 @@ impl ScenePanel {
             return false;
         };
         self.set_selection(layer_id, selection);
+        self.revealed_property = Some((target.clone(), param.clone()));
         self.pending_parameter_reveal = Some((target.clone(), param.clone()));
         true
+    }
+
+    pub(super) fn property_explicitly_revealed(&self, row: &ParamRow) -> bool {
+        self.revealed_property.as_ref().is_some_and(|(target, param)| {
+            self.target_matches_scene(target) && row.id == *param
+        })
     }
 
     /// Prepare an ordinary scene row for the pending reveal after the filtered
@@ -203,6 +210,14 @@ impl ScenePanel {
 
     /// Drop navigation when its current projection no longer owns the address.
     pub(super) fn clear_stale_parameter_reveal(&mut self) {
+        if self.revealed_property.as_ref().is_some_and(|(target, param)| {
+            !self.target_matches_scene(target)
+                || !self.full_params.as_ref().is_some_and(|surface| {
+                    surface.rows.iter().any(|row| row.id == *param)
+                })
+        }) {
+            self.revealed_property = None;
+        }
         let Some((target, param)) = self.pending_parameter_reveal.as_ref() else { return; };
         let valid = self.target_matches_scene(target)
             && self.full_params.as_ref().and_then(|surface| surface.rows.iter().find(|row|
@@ -233,6 +248,20 @@ mod tests {
 
     #[test]
     fn shared_object_section_uses_exact_parameter_owner() {
+        assert_object_response_navigation(None);
+    }
+
+    #[test]
+    fn explicitly_revealed_material_response_remains_reachable() {
+        for role in [
+            MaterialParamRole::Placement(MaterialMapFamily::Base, crate::param_surface::UvComponent::M00),
+            MaterialParamRole::Sampler(MaterialMapFamily::Normal, crate::param_surface::SamplerComponent::WrapU),
+        ] {
+            assert_object_response_navigation(Some(role));
+        }
+    }
+
+    fn assert_object_response_navigation(role: Option<MaterialParamRole>) {
         let (mut vm, mut surface) = world_transform_vm();
         let target = UiGraphTarget::Generator(vm.layer_id.clone());
         let first = vm
@@ -261,6 +290,7 @@ mod tests {
         arm(&mut row_a, &target);
         let mut row_b = row_a.clone();
         row_b.id = "shared_b".into();
+        row_b.spec.material_role = role;
         row_b.value.base = 0.75;
         row_b.value.effective = 0.75;
         row_b.modulation.envelope_active = true;
@@ -286,6 +316,14 @@ mod tests {
         assert!(panel.properties_card.row_host.param_row_rect(&tree, index).is_some());
         assert_eq!(panel.properties_card.mod_active_tab[index], ModTab::Envelope);
         assert!(panel.pending_parameter_reveal.is_none());
+        tree.clear();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
+        assert!(panel.properties_card.row_id_index.contains_key("shared_b"), "response must remain reachable after the reveal frame");
+        panel.set_selection(LayerId::new("layer-1"), SceneSelection::Object(40));
+        assert!(panel.revealed_property.is_none());
+        assert!(panel.reveal_clip_response(&target, &param));
+        panel.configure_params(None);
+        assert!(panel.revealed_property.is_none());
     }
 
     #[test]

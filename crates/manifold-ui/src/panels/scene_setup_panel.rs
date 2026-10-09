@@ -1029,6 +1029,8 @@ pub struct ScenePanel {
     /// A clip response reveal queued for the next structural build. The
     /// address is shared by force cards, object modifiers, and scene rows.
     pending_parameter_reveal: Option<(crate::view::UiGraphTarget, manifold_foundation::ParamId)>,
+    /// Keep an explicitly opened property visible until selection changes.
+    revealed_property: Option<(crate::view::UiGraphTarget, manifold_foundation::ParamId)>,
     /// P2 slice 2a: the scene panel's bound layer's FULL generator
     /// `ParamSurface` (every exposed param, every section) — built by
     /// `state_sync` the SAME way the main inspector's generator card is
@@ -1189,6 +1191,7 @@ impl Default for ScenePanel {
             force_cards: Vec::new(),
             force_pressed_card: None,
             pending_parameter_reveal: None,
+            revealed_property: None,
             full_params: None,
             full_param_id_index: ahash::AHashMap::new(),
             add_object_id: None,
@@ -1692,6 +1695,7 @@ impl ScenePanel {
     /// push through, unlike `handle_event`'s click arm).
     pub fn set_selection(&mut self, layer_id: LayerId, sel: SceneSelection) {
         self.pending_parameter_reveal = None;
+        self.revealed_property = None;
         self.selected_object_modifier = None;
         self.selection.insert(layer_id, sel);
         self.reveal_properties = true;
@@ -1705,6 +1709,8 @@ impl ScenePanel {
         };
         if matches!(selection, SceneSelection::OutlinerFold(_)) { return false; }
         let SceneSetupState::Live(vm) = &self.state else { return false; };
+        self.pending_parameter_reveal = None;
+        self.revealed_property = None;
         self.selected_object_modifier = None;
         self.selection.insert(vm.layer_id.clone(), selection.clone());
         true
@@ -2383,8 +2389,9 @@ impl ScenePanel {
                     && (imported_selection || p.spec.name != "Collider Detail")
                     && !retained.contains(&i)
                     && self.material_param_selected(p)
-                    && self.material_row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
-                    && Self::material_panel_row_visible(p)
+                    && (self.property_explicitly_revealed(p)
+                        || (self.material_row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
+                            && Self::material_panel_row_visible(p)))
                 {
                     retained.push(i);
                 }
@@ -2781,6 +2788,8 @@ impl ScenePanel {
                     }
                     // Normal selection change
                     if let SceneSetupState::Live(vm) = &self.state {
+                        self.pending_parameter_reveal = None;
+                        self.revealed_property = None;
                         self.selected_object_modifier = None;
                         self.selection.insert(vm.layer_id.clone(), sel.clone());
                         return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(vm.layer_id.clone()))]);

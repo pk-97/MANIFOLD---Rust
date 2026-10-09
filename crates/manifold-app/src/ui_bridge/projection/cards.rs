@@ -889,7 +889,8 @@ pub(crate) fn modifier_surfaces(
         }
         Some(ParamSurface {
             kind: ParamCardKind::Effect,
-            title: metadata.display_name.clone(),
+            title: scene_modifier_display_name(def, instance)
+                .unwrap_or_else(|| metadata.display_name.clone()),
             rows,
             string_params: vec![],
             audio_sends: Vec::new(),
@@ -930,6 +931,32 @@ pub(crate) fn modifier_surfaces(
         })
     }).collect()
 }
+
+/// Return the display name shared by modifier cards and trigger target groups.
+/// Duplicate recipe names get an occurrence suffix only when the stack needs
+/// disambiguation; a single instance keeps its existing title unchanged.
+pub(crate) fn scene_modifier_display_name(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    instance: &manifold_core::scene_modifier_preset::SceneModifierInstanceDef,
+) -> Option<String> {
+    let base = instance.graph.preset_metadata.as_ref()?.display_name.clone();
+    let same_name = def.scene_modifiers.iter().filter(|candidate| {
+        candidate.graph.preset_metadata.as_ref().is_some_and(|metadata| {
+            metadata.display_name == base
+        })
+    });
+    let count = same_name.count();
+    if count <= 1 {
+        return Some(base);
+    }
+    let occurrence = def.scene_modifiers.iter().take_while(|candidate| candidate.id != instance.id)
+        .filter(|candidate| candidate.graph.preset_metadata.as_ref().is_some_and(|metadata| {
+            metadata.display_name == base
+        }))
+        .count() + 1;
+    Some(format!("{base} #{occurrence}"))
+}
+
 
 fn modifier_enabled_value(
     gp: &manifold_core::effects::PresetInstance,
@@ -1246,6 +1273,7 @@ mod modifier_audio_projection_tests {
         let surfaces = modifier_surfaces(&host, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
         let surface = &surfaces[0];
         assert!(is_force_surface(surface, &graph));
+        assert_eq!(surface.title, "Radial Force");
         assert!(!surface.rows.is_empty());
         for row in &surface.rows {
             assert!(host.params.get(row.id.as_ref()).is_some());

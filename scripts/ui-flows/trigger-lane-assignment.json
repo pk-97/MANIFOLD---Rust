@@ -472,5 +472,58 @@
         "Count": 0
       }
     }
-  }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "GLOW",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Point": {
+          "x": 242.0,
+          "y": 850.0
+        }
+      },
+      "gesture": "DoubleClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Point": {
+          "x": 386.0,
+          "y": 850.0
+        }
+      },
+      "gesture": "DoubleClick"
+    }
+  },
+  "Snapshot",
+  "SaveReloadProject",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Trigger 1",
+          "type": "Button"
+        }
+      },
+      "check": {
+        "Count": 2
+      }
+    }
+  },
+  "Snapshot"
 ]
