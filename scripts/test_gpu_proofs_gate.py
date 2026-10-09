@@ -372,7 +372,7 @@ class GpuProofsGateTests(unittest.TestCase):
             if owned_proofs:
                 timings.extend(gate.timing_entry(package, target, name + "proof", 0, "ok", budgeted)
                                for name in filters
-                               if gate.gpu_scope.GPU_FILTER_TARGETS.get(name) == (package, target))
+                               if gate.gpu_scope.gpu_filter_target(name) == (package, target))
             hung.extend(run_hung)
             return run_exit, run_output
 
@@ -428,7 +428,7 @@ class GpuProofsGateTests(unittest.TestCase):
                            for kind, cmd in self.events if kind == "build"})
         self.assertEqual(
             kinds,
-            ["build"] * 4 + ["hold-enter"] + ["run"] * 5 + ["hold-exit"],
+            ["build"] * 2 + ["hold-enter"] + ["run"] * 3 + ["hold-exit"],
         )
         builds = [cmd for kind, cmd in self.events if kind == "build"]
         runs = [cmd for kind, cmd in self.events if kind == "run"]
@@ -499,7 +499,7 @@ class GpuProofsGateTests(unittest.TestCase):
         p = "crates/manifold-nodes/src/registry.rs"
         code, calls, text = self.run_main([], repo_changed=[p])
         self.assertEqual(code, 0)
-        self.assertEqual({call['package'] for call in calls}, set(self.Workspace.packages))
+        self.assertEqual({call['package'] for call in calls}, {'manifold-nodes', 'manifold-nodes-scene'})
         self.assertTrue(calls[0]["lib"])
         self.assertFalse(calls[0]["full"])
         self.assertIn("registry::", calls[0]["filters"])

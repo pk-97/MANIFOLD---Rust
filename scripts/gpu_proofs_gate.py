@@ -1098,7 +1098,7 @@ def _main() -> int:
             # run after the other harnesses have been pruned.
             names = [timing_fields(t)[2] for t in run_timings if timing_fields(t)[4] == "ok"]
             missing = [f for f in run["filters"]
-                       if gpu_scope.GPU_FILTER_TARGETS.get(f) == (run["package"], run["target"])
+                       if gpu_scope.gpu_filter_target(f) == (run["package"], run["target"])
                        and not any(f in name for name in names)]
             if missing:
                 print(f"GPU-PROOFS SCOPE: FAIL - {run['package']}/{run['target']} "

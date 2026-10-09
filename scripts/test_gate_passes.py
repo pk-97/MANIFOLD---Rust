@@ -136,7 +136,7 @@ class CacheTests(unittest.TestCase):
         self.git('checkout', '-b', 'work')
         self.write('crates/a/src/lib.rs', 'pub fn changed() {}\n')
         self.write('crates/b/src/lib.rs', 'pub fn changed() {}\n')
-        self.write('crates/manifold-nodes/src/registry.rs', 'pub fn invert() {}\n')
+        self.write('crates/manifold-nodes/src/cache_fixture.rs', 'pub fn invert() {}\n')
         self.commit('BUG-cache branch change')
         self.real_cache_git = cache.git
         self.fixture_git = FixtureQueries(self.repo / '.git', cache.git)
@@ -207,7 +207,7 @@ class CacheTests(unittest.TestCase):
     def scoped_runs(self):
         workspace = cache.Workspace(self.repo)
         plan = gpu_scope.plan_for_paths(
-            ['crates/manifold-nodes/src/registry.rs'], self.repo,
+            ['crates/manifold-nodes/src/cache_fixture.rs'], self.repo,
             workspace=workspace)
         return proofs.normalize_runs(workspace, [dict(run, full=False) for run in plan.runs()])
 
@@ -392,7 +392,7 @@ class CacheTests(unittest.TestCase):
     def test_failed_run_keeps_earlier_pass_and_retries_only_failure(self):
         runs = self.scoped_runs()
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
-                '--path', 'crates/manifold-nodes/src/registry.rs']
+                '--path', 'crates/manifold-nodes/src/cache_fixture.rs']
         count = 0
 
         def execute(*args):
@@ -584,7 +584,7 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(cache.dependency_paths(self.repo, ['b']), ['crates/a', 'crates/b', 'crates/base'])
 
     def test_metadata_added_and_removed_gpu_crate_updates_scope_and_cache(self):
-        renderer_path = 'crates/manifold-nodes/src/registry.rs'
+        renderer_path = 'crates/manifold-nodes/src/cache_fixture.rs'
         initial = self.run_spec()
         cache.proof_pass(self.repo, initial).save(0)
 
@@ -696,7 +696,7 @@ class CacheTests(unittest.TestCase):
 
     def test_queue_and_gate_share_exact_proof_key(self):
         for run in gpu_scope.plan_for_paths(
-                ['crates/manifold-nodes/src/registry.rs'], self.repo).runs():
+                ['crates/manifold-nodes/src/cache_fixture.rs'], self.repo).runs():
             with self.subTest(package=run.get('package', 'manifold-nodes')):
                 command = proofs.cargo_test_cmd(
                     self.repo / 'Cargo.toml', run['targets'], lib=run['lib'],
@@ -757,7 +757,7 @@ class CacheTests(unittest.TestCase):
     def test_actual_standalone_wrapper_and_queue_save_for_landing(self):
         run = self.run_spec()
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
-                '--path', 'crates/manifold-nodes/src/registry.rs']
+                '--path', 'crates/manifold-nodes/src/cache_fixture.rs']
         with patch.object(sys, 'argv', argv), \
                 patch.object(proofs, 'build_tests', return_value=0), \
                 patch.object(proofs, 'run_gate', return_value=(0, '')) as executed, \
@@ -791,7 +791,7 @@ class CacheTests(unittest.TestCase):
         self.assertTrue(cache.proof_pass(self.repo, run).reused())
 
     def test_two_package_standalone_reuse_and_input_invalidation(self):
-        path = 'crates/manifold-nodes/src/registry.rs'
+        path = 'crates/manifold-nodes/src/cache_fixture.rs'
         runs = self.scoped_runs()
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
                 '--path', path]
@@ -909,7 +909,7 @@ class CacheTests(unittest.TestCase):
 
     def test_budget_warning_reuses_pass_and_nightly_ignores_existing_pass(self):
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
-                '--path', 'crates/manifold-nodes/src/registry.rs',
+                '--path', 'crates/manifold-nodes/src/cache_fixture.rs',
                 '--budget', '360']
 
         def too_slow(manifest, filters, skips, targets, full, lib, timings, *rest):
@@ -960,7 +960,7 @@ class CacheTests(unittest.TestCase):
                         'uniform_layout_extended': {'binary-name': 'uniform_layout_extended',
                                                     'testcases': ['uniform_layout_extended::fixture::test']},
                         'lib': {'binary-name': 'manifold_nodes',
-                                'testcases': ['registry::fixture',
+                                'testcases': ['cache_fixture::fixture',
                                               'regenerates_in_sync']},
                     })
                 return 0, json.dumps({'rust-suites': suites}), '', 0.01
