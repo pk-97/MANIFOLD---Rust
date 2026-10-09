@@ -2501,7 +2501,6 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "arc-swap",
- "arrayvec",
  "bytemuck",
  "core-foundation 0.9.4",
  "core-graphics",
@@ -2516,7 +2515,6 @@ dependencies = [
  "manifold-fluids",
  "manifold-foundation",
  "manifold-gpu",
- "manifold-native",
  "manifold-node-engine",
  "manifold-nodes",
  "manifold-nodes-image",
@@ -2529,10 +2527,7 @@ dependencies = [
  "png",
  "serde",
  "serde_json",
- "sha2",
  "syn 2.0.117",
- "tiff 0.9.1",
- "zstd",
 ]
 
 [[package]]
