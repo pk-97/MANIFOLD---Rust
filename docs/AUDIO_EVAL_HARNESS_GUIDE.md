@@ -137,7 +137,48 @@ native-rate alignment with no detected drift. This is source alignment, not
 detector-latency compensation. Late Night's alternate NO VOX reference aligns
 with its master in three sampled passages; kick-envelope peaks shift with
 mastering, so no automatic onset offset has been applied to its individual
-stems. No originals were warped, and no new reviewed labels exist yet.
+stems. No originals were warped. The bounded development review below now
+provides provisional labels for four master passages.
+
+
+**Master passage comparison, 2026-10-09:** both unchanged Rust harnesses ran
+chronologically over the complete Late Night and Midnight Patience masters.
+Two 12-second passages per track were selected using stem activity, then
+reviewed from master waveforms/spectrograms without detector results. The labels
+in `tests/fixtures/audio_labels/master_passages_2026-10-09.json` are provisional:
+initial grid-assisted point timings were revoked before scoring and replaced
+with visual onset intervals (20–40 ms wide). They are not independent listening
+truth or precise latency ground truth. Ambiguous fills and their possible
+responses are excluded; 64 accepted kicks remain scored.
+
+| Detector | Within 50 ms | Extra at 50 ms | Within 70 ms | Extra at 70 ms |
+|---|---:|---:|---:|---:|
+| Unchanged live | 37/64 | 77 | 64/64 | 50 |
+| Fixed v5 prototype | 40/64 | 8 | 40/64 | 8 |
+
+The prototype's 24 misses persist in the wider -35/+200 ms diagnostic. Its
+bass-only passage fires are 5 versus live's 16 on Late Night, and 0 versus 12
+on Midnight. These results reject v5 as a general replacement despite its
+lower extra-fire count. Matching uses reviewed margins to avoid boundary
+artifacts; no detector reset, timestamp correction, or per-song tuning occurs.
+
+The causal Python reference exactly reproduces both complete native Rust v5
+event lists. All 24 missed onsets have no eligible candidate in the reviewed
+-20/+70 ms neighborhood; 13 pass the individual conditions at different hops
+but never together. Next experiment: bounded temporal combination of attack
+evidence, evaluated against the existing kick and bass rejection passages.
+Do not simply lower global thresholds or integrate v5 into the live path.
+
+Reproduce scoring with `PYTHONPATH=tools/audio_analysis python3 -m
+ eval.master_kick_comparison --runs
+ tools/audio_analysis/eval/scoreboard/master_kick_runs_2026-10-09.json --labels
+ tests/fixtures/audio_labels/master_passages_2026-10-09.json --out /tmp/master-score.json`
+(join the command onto one line). Raw runs include exact commands, input and
+binary hashes, and build provenance. Results and miss diagnosis are the
+`master_kick_comparison_2026-10-09.json` and
+`master_kick_miss_diagnosis_2026-10-09.json` scoreboard files. Review plots,
+scripts and complete logs are preserved in
+`~/.cache/manifold/master-kick-comparison-2026-10-09/`.
 
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
