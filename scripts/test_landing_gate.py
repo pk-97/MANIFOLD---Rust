@@ -141,6 +141,8 @@ class LandingTests(unittest.TestCase):
         self.enterContext(patch.dict(
             os.environ, {"MANIFOLD_GPU_QUEUE_DIR": self._gpu_queue_tmp}))
         self.enterContext(patch.object(landing_gate.gpu_scope, "learned_times_path", return_value=None))
+        # The synthetic workspace exercises gate ordering, not shipped smoke ownership.
+        self.enterContext(patch.object(landing_gate.gpu_scope, "SMOKE_FILTERS", ['fixture_smoke::']))
 
     checks = ["tooling", "design-status", "ignored-tests", "deny",
               "clippy", "tests-build", "test-ownership/manifold-gpu",
