@@ -16,8 +16,8 @@ pub use pulses::{
 use crate::clip_controls::ClipControlFrame;
 
 use composition::{
-    AudioControlState, ControlSample, ControlSources, apply_envelope_offset,
-    compose_controls, compose_param, driver_target_value,
+    AudioControlState, ControlSample, ControlSources, compose_param,
+    compose_prepared_controls, prepare_control_bases,
 };
 
 use manifold_core::audio_features::{
@@ -30,7 +30,7 @@ use manifold_core::audio_mod::{
 use manifold_core::audio_trigger::{FireMeterCapture, TriggerFireMode, fire_meter_key_for_param};
 use manifold_core::tempo::TempoMapConverter;
 use manifold_core::{Beats, Seconds};
-use manifold_core::effects::{PresetInstance, ParamEnvelope};
+use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 
 // ── Shared modulation core ──────────────────────────────────────────────────
@@ -101,13 +101,26 @@ fn apply_instance_envelopes(
 ) -> bool {
     let Some(owner) = owner else { return false; };
     let owner = Some(owner);
+    let any_modulated = compose_continuous && compose_prepared_controls(
+        &mut inst.params,
+        ControlSources {
+            enabled: false,
+            drivers: &[],
+            envelopes: inst.envelopes.as_deref().unwrap_or_default(),
+            audio_mods: &[],
+        },
+        |param| ControlSample {
+            beat: current_beat, time: Seconds::ZERO, bpm: manifold_core::Bpm(120.0), fps: 60.0,
+            active_elapsed: controls.elapsed(&param.clip_trigger_source, owner, current_beat),
+        },
+        |_, m| AudioControlState::current(m),
+    );
     let Some(envelopes) = inst.envelopes.as_mut() else {
-        return false;
+        return any_modulated;
     };
     if envelopes.is_empty() {
         return false;
     }
-    let mut any_modulated = false;
     // Disjoint mutable borrows: envelopes and params are separate fields of
     // `PresetInstance`, so we can update envelope state and the manifest in one
     // loop without per-frame scratch allocations.
@@ -119,17 +132,9 @@ fn apply_instance_envelopes(
         let Some(p) = params.get_mut(env.param_id.as_ref()) else {
             continue;
         };
-        let active_elapsed = controls.elapsed(&p.clip_trigger_source, owner, current_beat);
         let (min, max, whole_numbers) = (p.spec.min, p.spec.max, p.spec.whole_numbers);
         match env.action {
-            TriggerAction::Continuous => {
-                if compose_continuous && let Some(active_elapsed) = active_elapsed {
-                    let level = ParamEnvelope::decay_level(active_elapsed, env.decay_beats);
-                    if apply_envelope_offset(&mut p.value, min, max, env.target_normalized, level) {
-                        any_modulated = true;
-                    }
-                }
-            }
+            TriggerAction::Continuous => {}
             TriggerAction::Step { amount, wrap } => {
                 for _ in controls.starts(&p.clip_trigger_source, owner).iter().filter(|start| !start.is_muted) {
                     let lo = min;
@@ -191,28 +196,16 @@ pub fn reset_all_effectives(project: &mut Project) {
 /// envelopes stack on top of it unchanged.
 pub fn apply_envelope_step_values(project: &mut Project) -> bool {
     fn apply_instance(inst: &mut PresetInstance) -> bool {
-        let Some(envelopes) = inst.envelopes.as_ref() else {
-            return false;
-        };
-        if envelopes.is_empty() {
-            return false;
-        }
-        let mut any = false;
-        for env in envelopes.iter() {
-            if !env.enabled {
-                continue;
-            }
-            if matches!(env.action, TriggerAction::Continuous) {
-                continue;
-            }
-            if let Some(v) = env.step_value
-                && let Some(p) = inst.params.get_mut(env.param_id.as_ref())
-            {
-                p.value = v;
-                any = true;
-            }
-        }
-        any
+        prepare_control_bases(
+            &mut inst.params,
+            ControlSources {
+                enabled: inst.enabled,
+                drivers: &[],
+                envelopes: inst.envelopes.as_deref().unwrap_or_default(),
+                audio_mods: &[],
+            },
+            |_, m| AudioControlState::current(m),
+        )
     }
 
     let mut any = false;
@@ -289,33 +282,17 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats, time: Se
 fn evaluate_instance_drivers(
     fx: &mut PresetInstance, current_beat: Beats, time: Seconds, bpm: manifold_core::Bpm, fps: f32,
 ) -> bool {
-    if !fx.enabled {
-        return false;
-    }
-    // Take the drivers out so the manifest can be written in the same pass
-    // without the old per-frame `Vec<(usize, f32)>` scratch (it allocated every
-    // frame on this hot path). No registry def needed: each `Param` carries its
-    // own reshaped range (calibration edits `spec.min`/`spec.max` in place), so
-    // a driver denormalizes against `p.spec` directly — which also removes the
-    // stale-registry-index misroute the manifest redesign targets.
-    let drivers = fx.drivers.take();
-    let mut any_driven = false;
-    if let Some(ds) = &drivers {
-        for driver in ds.iter().filter(|d| d.enabled && !d.is_paused_by_user) {
-            if let Some(p) = fx.params.get_mut(driver.param_id.as_ref()) {
-                let (min, max) = (p.spec.min, p.spec.max);
-                let raw = driver_target_value(driver, current_beat, time, bpm, fps, min, max);
-                // BUG-039: a saw (or any waveform, via a trim overshoot)
-                // bound to a periodic param wraps back into range instead
-                // of clamping, so a full-range sweep spins continuously
-                // instead of hitching at the rail.
-                p.value = manifold_core::params::constrain_to_range(raw, min, max, p.spec.wraps);
-                any_driven = true;
-            }
-        }
-    }
-    fx.drivers = drivers;
-    any_driven
+    compose_prepared_controls(
+        &mut fx.params,
+        ControlSources {
+            enabled: fx.enabled,
+            drivers: fx.drivers.as_deref().unwrap_or_default(),
+            envelopes: &[],
+            audio_mods: &[],
+        },
+        |_| ControlSample { beat: current_beat, time, bpm, fps, active_elapsed: None },
+        |_, m| AudioControlState::current(m),
+    )
 }
 
 // =====================================================================
@@ -385,68 +362,36 @@ pub fn evaluate_modulation(
     trigger_pulses: &mut impl TriggerPulseSink,
     fire_meters: &mut FireMeterCapture,
 ) -> bool {
-    // Retained hops are advanced before the reset so Step/Random shadows and
-    // trigger counters are visible on this same display tick. Their continuous
-    // outputs are applied after drivers below, preserving the existing
-    // precedence. An empty hop_batches vector is the legacy snapshot contract.
+    // Snapshot Step/Random shadows are prepared before input advancement;
+    // retained-hop shadows become visible on this update. Both use the same
+    // value composition and advance envelope steps afterward.
     let retained_hops = !audio.hop_batches.is_empty();
+    let mut any = false;
     if retained_hops {
         advance_audio_hops(project, audio, controls, trigger_pulses, current_time);
         reset_all_effectives(project);
-        return compose_retained_controls(
-            project, current_beat, current_time, controls, fire_meters,
-        );
+    } else {
+        reset_all_effectives(project);
+        any |= apply_step_values(project);
+        any |= apply_envelope_step_values(project);
+        advance_snapshot_audio(project, audio, dt, controls, trigger_pulses, fire_meters);
     }
-
-    // Phase 1: Reset all effective values to base
-    reset_all_effectives(project);
-
-    // Legacy snapshot-only callers retain the existing staged evaluation.
-    // Phase 1.5: Apply any armed step/random audio-mod shadow values (PARAM_
-    // STEP_ACTIONS D4). Runs BEFORE drivers/continuous-mods/envelopes so a
-    // step *replaces* the base exactly like a hand-moved slider — everything
-    // downstream stacks on top unchanged. Snapshot-only callers retain their
-    // next-frame shadow behavior.
-    let any_stepped = apply_step_values(project);
-
-    // Phase 1.6: Apply any armed Step/Random envelope shadow values.
-    // Mirrors `apply_step_values`: the stepped envelope owns the base for
-    // this tick; continuous envelopes, drivers, and audio mods stack on top.
-    let any_envelope_stepped = apply_envelope_step_values(project);
-
-    // Phase 2: Evaluate LFO drivers
-    let any_driven = evaluate_all_drivers(project, current_beat, current_time);
-
-    // Phase 2.5: Evaluate audio modulations (live audio → effective). Driver-
-    // like (sets the value), so it runs alongside drivers and before the
-    // additive envelope phase. Inert when no audio features are present.
-    // section 9 U1/U6: a trigger-gate target's fire is collected into
-    // `trigger_pulses` by this SAME walk (the deleted `AudioTriggerMod`
-    // config's separate `evaluate_all_param_triggers` pass is gone — a
-    // fire-mode mod is a normal audio mod now). A trigger-gate fire never
-    // marks the compositor dirty on its own (the renderer's own dirty
-    // tracking covers the visible effect).
-    let any_audio = evaluate_all_audio_mods(
-        project, audio, dt, current_time, controls, trigger_pulses, fire_meters,
+    any |= compose_project_controls(
+        project, current_beat, current_time, controls, fire_meters, retained_hops,
     );
-
-    // Phase 3: Evaluate clip/layer/generator ADSR envelopes (additive on top
-    // of drivers). One walk visits every layer's effects AND its generator
-    // instance — see evaluate_all_envelopes.
-    let any_enveloped = evaluate_all_envelopes(project, current_beat, controls);
-
-    any_stepped || any_envelope_stepped || any_driven || any_audio || any_enveloped
+    any
 }
 
 /// Compose each instance using the same pure path that accepts captured audio
 /// state. Event advancement and meter publication stay on the content update;
 /// historical value sampling must not run either again.
-fn compose_retained_controls(
+fn compose_project_controls(
     project: &mut Project,
     beat: Beats,
     time: Seconds,
     controls: &ClipControlFrame,
     fire_meters: &mut FireMeterCapture,
+    retained_hops: bool,
 ) -> bool {
     let sample = ControlSample {
         beat, time, bpm: project.settings.bpm, fps: project.settings.frame_rate,
@@ -454,7 +399,7 @@ fn compose_retained_controls(
     };
     let mut any = false;
     for fx in &mut project.settings.master_effects {
-        any |= compose_instance_retained_controls(fx, sample, controls, None, fire_meters);
+        any |= compose_instance_controls(fx, sample, controls, None, fire_meters, retained_hops);
     }
     let tempo_map = &project.tempo_map;
     for layer in project.timeline.layers.iter_mut() {
@@ -463,12 +408,14 @@ fn compose_retained_controls(
         if let Some(effects) = layer.effects.as_mut() {
             for fx in effects {
                 let clip_owner = fx.enabled.then_some(&layer_id);
-                any |= compose_instance_retained_controls(fx, sample, controls, clip_owner, fire_meters);
+                any |= compose_instance_controls(fx, sample, controls, clip_owner, fire_meters, retained_hops);
             }
         }
         if let Some(gp) = layer.gen_params_mut() {
-            record_hop_values(gp, sample, tempo_map, controls, owner);
-            any |= compose_instance_retained_controls(gp, sample, controls, owner, fire_meters);
+            if retained_hops {
+                record_hop_values(gp, sample, tempo_map, controls, owner);
+            }
+            any |= compose_instance_controls(gp, sample, controls, owner, fire_meters, retained_hops);
         }
     }
     any
@@ -520,7 +467,7 @@ fn record_hop_values(
                         AudioControlState { step_value: v, ..AudioControlState::current(m) }
                     }
                     AudioModContribution::TriggerCounter { count, .. } => {
-                        AudioControlState { fire_count: count, ..AudioControlState::current(m) }
+                        AudioControlState { fire_count: Some(count), ..AudioControlState::current(m) }
                     }
                 };
                 let state = |i: usize, other: &ParameterAudioMod| {
@@ -576,27 +523,51 @@ fn settle_hop_clock(clock: &mut Option<HopClock>, stamp: AudioHopStamp, eval: Se
     }
 }
 
-fn compose_instance_retained_controls(
+/// Snapshot input contributes a Fire counter only when it received a sample
+/// or a clip start this update. Retained input holds counters through gaps.
+fn audio_control_state(m: &ParameterAudioMod, retained_hops: bool) -> AudioControlState {
+    AudioControlState {
+        fire_count: (retained_hops || m.audio_held_output.is_some()).then_some(m.fire_count),
+        ..AudioControlState::current(m)
+    }
+}
+
+fn compose_instance_controls(
     instance: &mut PresetInstance,
     sample: ControlSample,
     controls: &ClipControlFrame,
     owner: Option<&manifold_core::LayerId>,
     fire_meters: &mut FireMeterCapture,
+    retained_hops: bool,
 ) -> bool {
-    let any = compose_controls(
+    let sources = ControlSources {
+        enabled: instance.enabled,
+        drivers: instance.drivers.as_deref().unwrap_or_default(),
+        envelopes: instance.envelopes.as_deref().unwrap_or_default(),
+        audio_mods: instance.audio_mods.as_deref().unwrap_or_default(),
+    };
+    let mut any = false;
+    if retained_hops {
+        any |= prepare_control_bases(&mut instance.params, sources, |_, m| AudioControlState::current(m));
+    }
+    any |= compose_prepared_controls(
         &mut instance.params,
-        ControlSources {
-            enabled: instance.enabled,
-            drivers: instance.drivers.as_deref().unwrap_or_default(),
-            envelopes: instance.envelopes.as_deref().unwrap_or_default(),
-            audio_mods: instance.audio_mods.as_deref().unwrap_or_default(),
-        },
+        sources,
         |param| ControlSample {
             active_elapsed: owner.and_then(|owner| controls.elapsed(&param.clip_trigger_source, Some(owner), sample.beat)),
             ..sample
         },
-        |_, m| AudioControlState::current(m),
+        |_, m| audio_control_state(m, retained_hops),
     );
+    if retained_hops {
+        publish_audio_meters(instance, fire_meters);
+    }
+    // Step/Random envelopes retain their existing next-update visibility.
+    apply_instance_envelopes(instance, sample.beat, controls, owner, false);
+    any
+}
+
+fn publish_audio_meters(instance: &PresetInstance, fire_meters: &mut FireMeterCapture) {
     if instance.enabled {
         for m in instance.audio_mods.iter().flatten().filter(|m| m.enabled) {
             if instance.params.get(m.param_id.as_ref()).is_some() {
@@ -607,10 +578,6 @@ fn compose_instance_retained_controls(
             }
         }
     }
-    // Step/Random envelopes retain their existing next-update visibility.
-    // Continuous values have already been composed above.
-    apply_instance_envelopes(instance, sample.beat, controls, owner, false);
-    any
 }
 
 // =====================================================================
@@ -627,23 +594,16 @@ fn compose_instance_retained_controls(
 /// true if any value was written (compositor should be marked dirty).
 pub fn apply_step_values(project: &mut Project) -> bool {
     fn apply_instance(fx: &mut PresetInstance) -> bool {
-        if !fx.enabled {
-            return false;
-        }
-        let Some(mods) = fx.audio_mods.as_ref() else {
-            return false;
-        };
-        let params = &mut fx.params;
-        let mut any = false;
-        for m in mods.iter().filter(|m| m.enabled) {
-            if let Some(v) = m.step_value
-                && let Some(p) = params.get_mut(m.param_id.as_ref())
-            {
-                p.value = v;
-                any = true;
-            }
-        }
-        any
+        prepare_control_bases(
+            &mut fx.params,
+            ControlSources {
+                enabled: fx.enabled,
+                drivers: &[],
+                envelopes: &[],
+                audio_mods: fx.audio_mods.as_deref().unwrap_or_default(),
+            },
+            |_, m| AudioControlState::current(m),
+        )
     }
 
     let mut any = false;
@@ -674,7 +634,7 @@ pub fn apply_step_values(project: &mut Project) -> bool {
 // =====================================================================
 
 /// Advance each retained analysis hop exactly once. This is deliberately a
-/// separate phase from [`apply_retained_audio_mods`]: the former runs before
+/// separate phase from [`apply_audio_controls`]: the former runs before
 /// reset/apply-step-values, while the latter runs after drivers.
 fn advance_audio_hops(
     project: &mut Project,
@@ -714,12 +674,11 @@ fn fire_parameter_clip_starts(
     controls: &ClipControlFrame,
     owner: Option<&manifold_core::LayerId>,
     pulses: &mut impl TriggerPulseSink,
-) -> bool {
+) {
     if !fx.enabled {
-        return false;
+        return;
     }
-    let mut wrote = false;
-    let Some(mods) = fx.audio_mods.as_mut() else { return false };
+    let Some(mods) = fx.audio_mods.as_mut() else { return };
     for m in mods.iter_mut().filter(|m| {
         m.enabled && m.trigger_mode.unwrap_or(TriggerFireMode::Transient).wants_clip_edge()
     }) {
@@ -745,13 +704,9 @@ fn fire_parameter_clip_starts(
             );
         }
         if !starts.is_empty() {
-            if let Some(param) = fx.params.get_mut(m.param_id.as_ref()) {
-                param.value = param.base + m.fire_count as f32;
-            }
-            wrote = true;
+            m.audio_held_output = Some(param.base + m.fire_count as f32);
         }
     }
-    wrote
 }
 
 fn fire_parameter(
@@ -1083,50 +1038,51 @@ fn apply_audio_action(
 /// values. A valid empty batch holds its last output; an inactive or failed
 /// batch applies no continuous held output or legacy snapshot. Trigger counts
 /// stay monotonic through these intervals.
-fn apply_retained_audio_mods(
+fn apply_audio_controls(
     project: &mut Project,
     fire_meters: &mut FireMeterCapture,
+    retained_hops: bool,
 ) -> bool {
+    let sample = ControlSample {
+        beat: Beats::ZERO, time: Seconds::ZERO, bpm: project.settings.bpm,
+        fps: project.settings.frame_rate, active_elapsed: None,
+    };
     let mut any = false;
     for fx in project.settings.master_effects.iter_mut() {
-        any |= apply_instance_retained_audio(fx, fire_meters);
+        any |= apply_instance_audio_controls(fx, sample, fire_meters, retained_hops);
     }
     for layer in project.timeline.layers.iter_mut() {
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
-                any |= apply_instance_retained_audio(fx, fire_meters);
+                any |= apply_instance_audio_controls(fx, sample, fire_meters, retained_hops);
             }
         }
         if let Some(gp) = layer.gen_params_mut() {
-            any |= apply_instance_retained_audio(gp, fire_meters);
+            any |= apply_instance_audio_controls(gp, sample, fire_meters, retained_hops);
         }
     }
     any
 }
 
-fn apply_instance_retained_audio(
+fn apply_instance_audio_controls(
     fx: &mut PresetInstance,
+    sample: ControlSample,
     fire_meters: &mut FireMeterCapture,
+    retained_hops: bool,
 ) -> bool {
-    if !fx.enabled { return false; }
-    let Some(mods) = fx.audio_mods.as_ref() else { return false; };
-    let params = &mut fx.params;
-    let mut any = false;
-    for m in mods.iter().filter(|m| m.enabled) {
-        let Some(p) = params.get_mut(m.param_id.as_ref()) else { continue; };
-        // Advancing the input phase already invalidated missing/faulted
-        // continuous signals. Counters stay monotonic through those intervals.
-        if p.spec.is_trigger && !p.spec.is_trigger_gate {
-            p.value = p.base + m.fire_count as f32;
-            any = true;
-        } else if !p.spec.is_trigger_gate
-            && matches!(m.action, TriggerAction::Continuous)
-            && let Some(output) = m.audio_held_output
-        {
-            p.value = output;
-            any = true;
-        }
-        fire_meters.push(fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()), m.audio_held_meter);
+    let any = compose_prepared_controls(
+        &mut fx.params,
+        ControlSources {
+            enabled: fx.enabled,
+            drivers: &[],
+            envelopes: &[],
+            audio_mods: fx.audio_mods.as_deref().unwrap_or_default(),
+        },
+        |_| sample,
+        |_, m| audio_control_state(m, retained_hops),
+    );
+    if retained_hops {
+        publish_audio_meters(fx, fire_meters);
     }
     any
 }
@@ -1135,7 +1091,7 @@ fn apply_instance_retained_audio(
 /// generator params, using the latest per-send feature `snapshot`. Returns true
 /// if any modulation wrote a value (compositor should be marked dirty).
 /// Clears and refills `pulses` with every trigger-gate fire this tick (section 9 U1)
-/// — a fire never sets the return bool (see [`evaluate_instance_audio_mods`]).
+/// — a gate fire never sets the return bool.
 ///
 /// Walks the same instance set as the driver pass (master + layer effects +
 /// generators) — NOT clip effects, which the modulation pipeline does not reset
@@ -1157,56 +1113,46 @@ pub fn evaluate_all_audio_mods(
     pulses: &mut impl TriggerPulseSink,
     fire_meters: &mut FireMeterCapture,
 ) -> bool {
-    pulses.clear_events();
-    if !snapshot.hop_batches.is_empty() {
+    let retained_hops = !snapshot.hop_batches.is_empty();
+    if retained_hops {
         advance_audio_hops(project, snapshot, controls, pulses, current_time);
-        return apply_retained_audio_mods(project, fire_meters);
+    } else {
+        advance_snapshot_audio(project, snapshot, dt, controls, pulses, fire_meters);
     }
+    apply_audio_controls(project, fire_meters, retained_hops)
+}
+
+fn advance_snapshot_audio(
+    project: &mut Project,
+    snapshot: &AudioFeatureSnapshot,
+    dt: Seconds,
+    controls: &ClipControlFrame,
+    pulses: &mut impl TriggerPulseSink,
+    fire_meters: &mut FireMeterCapture,
+) {
+    pulses.clear_events();
     clear_audio_observations(project);
     let sends = &project.audio_setup.sends;
-
-    let mut any = false;
-
     for fx in project.settings.master_effects.iter_mut() {
-        if evaluate_instance_audio_mods(fx, sends, snapshot, dt, controls, None, pulses, fire_meters) {
-            any = true;
-        }
+        advance_instance_snapshot_audio(fx, sends, snapshot, dt, controls, None, pulses, fire_meters);
     }
     for layer in project.timeline.layers.iter_mut() {
         let layer_id = layer.layer_id.clone();
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
-                if evaluate_instance_audio_mods(
-                    fx,
-                    sends,
-                    snapshot,
-                    dt,
-                    controls,
-                    Some(layer_id.clone()),
-                    pulses,
-                    fire_meters,
-                ) {
-                    any = true;
-                }
-                any |= fire_parameter_clip_starts(fx, controls, Some(&layer_id), pulses);
+                advance_instance_snapshot_audio(
+                    fx, sends, snapshot, dt, controls, Some(&layer_id), pulses, fire_meters,
+                );
+                fire_parameter_clip_starts(fx, controls, Some(&layer_id), pulses);
             }
         }
         if let Some(gp) = layer.gen_params_mut() {
-            any |= evaluate_instance_audio_mods(
-                gp,
-                sends,
-                snapshot,
-                dt,
-                controls,
-                Some(layer_id.clone()),
-                pulses,
-                fire_meters,
+            advance_instance_snapshot_audio(
+                gp, sends, snapshot, dt, controls, Some(&layer_id), pulses, fire_meters,
             );
-            any |= fire_parameter_clip_starts(gp, controls, Some(&layer_id), pulses);
+            fire_parameter_clip_starts(gp, controls, Some(&layer_id), pulses);
         }
     }
-
-    any
 }
 
 /// An export/take consumer must stop on an incomplete control batch, even if
@@ -1240,33 +1186,28 @@ fn clear_audio_observations(project: &mut Project) {
     }
 }
 
-/// Evaluate every audio modulation on a single instance. Returns true if any
-/// wrote a param value (a trigger-gate fire pushed onto `pulses` does NOT
-/// count — see section 9 U1). `layer_id` is `None` for a master-chain instance,
-/// cloned onto every pulse this instance emits. `clip_edge` (PARAM_STEP_
-/// ACTIONS D5) is whether this instance's owning layer had a clip-start edge
-/// since this was last called — always `false` for a master-chain instance
-/// (`layer_id: None`), matching D3's "master chains have no layer" rule.
-fn evaluate_instance_audio_mods(
+/// Advance snapshot input without composing values. Missing sources publish
+/// no output, preserving snapshot callers' orphan behaviour.
+fn advance_instance_snapshot_audio(
     fx: &mut PresetInstance,
     sends: &[manifold_core::audio_setup::AudioSend],
     snapshot: &AudioFeatureSnapshot,
     dt: Seconds,
     controls: &ClipControlFrame,
-    layer_id: Option<manifold_core::id::LayerId>,
+    layer_id: Option<&manifold_core::id::LayerId>,
     pulses: &mut impl TriggerPulseSink,
     fire_meters: &mut FireMeterCapture,
-) -> bool {
-    if !fx.enabled { return false; }
+) {
+    if !fx.enabled { return; }
     let Some(mods) = fx.audio_mods.as_mut().filter(|mods| !mods.is_empty()) else {
-        return false;
+        return;
     };
-    let params = &mut fx.params;
-    let mut wrote = false;
+    let params = &fx.params;
     for m in mods.iter_mut().filter(|m| m.enabled) {
+        m.audio_held_output = None;
         let Some(features) = sends.iter().position(|send| send.id == m.source.send_id)
             .and_then(|index| snapshot.get(index)) else { continue; };
-        let Some(p) = params.get_mut(m.param_id.as_ref()) else { continue; };
+        let Some(p) = params.get(m.param_id.as_ref()) else { continue; };
         let info = AudioParamInfo {
             min: p.spec.min,
             max: p.spec.max,
@@ -1276,9 +1217,9 @@ fn evaluate_instance_audio_mods(
             base: p.base,
         };
         let clip_edge = !controls
-            .starts(&p.clip_trigger_source, layer_id.as_ref())
+            .starts(&p.clip_trigger_source, layer_id)
             .is_empty();
-        let output = process_audio_sample(
+        m.audio_held_output = process_audio_sample(
             &fx.id,
             m,
             info,
@@ -1286,16 +1227,11 @@ fn evaluate_instance_audio_mods(
             dt,
             TriggerSourceStamp::Snapshot,
             clip_edge,
-            layer_id.as_ref(),
+            layer_id,
             pulses,
         );
-        if let Some(output) = output {
-            p.value = output;
-            wrote = true;
-        }
         fire_meters.push(fire_meter_key_for_param(fx.id.as_str(), m.param_id.as_ref()), m.audio_held_meter);
     }
-    wrote
 }
 
 /// BUG-051 fix (section 8 D4, still true post-section 9): drop every audio-mod's trigger
@@ -1498,7 +1434,7 @@ mod tests {
         fire_meters: &mut FireMeterCapture,
     ) -> bool {
         let controls = controls_for_timing(project, beat, timing);
-        compose_retained_controls(project, beat, time, &controls, fire_meters)
+        compose_project_controls(project, beat, time, &controls, fire_meters, true)
     }
 
     const TEST_FX: PresetTypeId = PresetTypeId::new("TestEnvFx");
@@ -2317,7 +2253,7 @@ mod tests {
                 let mut staged_dirty = apply_step_values(&mut staged);
                 staged_dirty |= apply_envelope_step_values(&mut staged);
                 staged_dirty |= evaluate_all_drivers(&mut staged, beat, time);
-                staged_dirty |= apply_retained_audio_mods(&mut staged, &mut staged_meters);
+                staged_dirty |= apply_audio_controls(&mut staged, &mut staged_meters, true);
                 staged_dirty |= evaluate_all_envelopes_fixture(&mut staged, &timing);
                 assert_eq!(composed_dirty, staged_dirty);
                 for (actual, expected) in instances(&project).into_iter().zip(instances(&staged)) {
@@ -2842,6 +2778,44 @@ mod tests {
         let value = project.timeline.layers[0].effects.as_ref().unwrap()[0]
             .params.get("amount").unwrap().value;
         assert!((value - 0.25).abs() < 1e-6, "step shadow must apply this tick, got {value}");
+    }
+
+    #[test]
+    fn snapshot_step_shadow_remains_delayed_one_update() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+        project.timeline.layers[0].effects.as_mut().unwrap()[0].audio_mods_mut()[0].action =
+            TriggerAction::Step { amount: 0.25, wrap: WrapMode::Clamp };
+        for (level, value, shadow) in [(1.0, 0.0, 0.25), (0.0, 0.25, 0.25), (1.0, 0.25, 0.5)] {
+            retained_tick(&mut project, &snapshot_low(level), Seconds(0.016), &[]);
+            let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+            assert_eq!(fx.params.get("amount").unwrap().value, value);
+            assert_eq!(fx.audio_mods.as_ref().unwrap()[0].step_value, Some(shadow));
+        }
+    }
+
+    #[test]
+    fn snapshot_source_loss_drops_audio_output_without_overwriting_driver() {
+        for is_trigger in [false, true] {
+            let (mut project, send_id) = project_with_audio_send();
+            attach_full_range_low_mod(&mut project, &send_id);
+            let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+            fx.params.get_mut("amount").unwrap().spec.is_trigger = is_trigger;
+            let mut driver = ParameterDriver::new("amount", BeatDivision::Whole, DriverWaveform::Sawtooth);
+            driver.trim_min = 0.4;
+            driver.trim_max = 0.4;
+            fx.drivers = Some(vec![driver]);
+            retained_tick(&mut project, &snapshot_low(1.0), Seconds(0.016), &[]);
+            assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap().value, 1.0);
+            retained_tick(&mut project, &AudioFeatureSnapshot::default(), Seconds(0.016), &[]);
+            let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+            assert_eq!(fx.params.get("amount").unwrap().value, 0.4);
+            assert_eq!(fx.audio_mods.as_ref().unwrap()[0].audio_held_output, None);
+            // A retained empty batch still holds an established Fire counter.
+            retained_tick(&mut project, &empty_hop_snapshot(1), Seconds(0.016), &[]);
+            assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap().value,
+                if is_trigger { 1.0 } else { 0.4 });
+        }
     }
 
     #[test]
@@ -4431,6 +4405,7 @@ mod tests {
 #[cfg(test)]
 mod frame_alignment_pipeline_tests {
     use super::*;
+    use super::composition::driver_target_value;
     use manifold_core::effects::ParameterDriver;
     use manifold_core::{Bpm, types::{BeatDivision, DriverWaveform}};
 

@@ -188,12 +188,13 @@ manager, universal event bus, or common float standing for both values and event
 | Does this clip need media resources? | Playback activation and explicit layer/clip capabilities | Scheduling membership is independent of renderer acquisition. Video/audio/generator consumers own readiness and resources; trigger clips own none. Avoid scattered “not audio means generator” fallthroughs. |
 | What invalidates prepared state? | Existing manifest reconcile, project edit versions and physics control digest | Include authored routing and applicable source-pattern dependencies. Keep transient counters, meters and event cursors out of serialization and authored hashes. |
 
-Concrete duplicate paths found: `evaluate_modulation` selects staged composition
-when `audio.hop_batches` is empty and pure retained composition otherwise;
-`apply_instance_envelopes` still composes decay separately from `compose_param`.
-The two paths have documented shadow-update timing differences. Characterize those
-before consolidation; do not silently change existing show timing. A single pure
-composer can serve both while input-advancement policy remains explicit.
+Snapshot and retained inputs now share pure shadow preparation and dynamic value
+composition in `modulation/composition.rs`. Snapshot audio steps retain next-update
+visibility; retained audio steps apply on the current update. Envelope steps still
+advance after composition in both paths. Snapshot source loss supplies no audio
+value or Fire counter; retained counters continue through input gaps. Compatibility
+entry points delegate their arithmetic to the same composer. Historical sampling
+does not advance inputs or publish meters.
 
 The timing migration now builds each retained hop's `ControlSample` at the hop's
 timestamp and tempo-derived beat. Arrangement spans cover the interval since the
@@ -308,9 +309,9 @@ cannot overwrite earlier session samples or replay a start from before resumptio
 `session_mode::back_to_arrangement_preserves_control_history_and_phase` reproduces
 the former error and checks repeated transitions, stopped-session gaps and seeking.
 
-Full acceptance below remains open: external-clock discontinuities, audio clip-Step/Random multiplicity,
-audio source-time verification, rendered scene timing and snapshot/retained composition
-consolidation must be completed before exposing trigger lanes.
+Full acceptance below remains open: external-clock discontinuities, audio clip-Step/Random
+multiplicity, audio source-time verification and rendered scene timing must be completed
+before exposing trigger lanes.
 
 ### Model, scheduling and delivery
 
