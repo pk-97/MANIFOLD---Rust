@@ -197,10 +197,11 @@ impl PresetRuntime {
             if !expected {
                 return Err(format!("Impulse: recipient `{id}` changed type"));
             }
-            if let Some(pair) = self.graph.coupled_scenes().iter()
-                .find(|pair| pair.rigid == instance)
+            if let Some(pair) = self.graph.node_pairs().iter()
+                .find(|pair| pair.second == instance
+                    && pair.behavior.as_ref().as_any().is::<crate::water::physics_scene::PhysicsPair>())
             {
-                instance = pair.fluid;
+                instance = pair.first;
                 id = self.graph.get_node(instance).expect("coupled owner exists").node_id.clone();
             }
             if let Some(existing) = recipients.iter_mut().find(|entry| entry.instance == instance) {

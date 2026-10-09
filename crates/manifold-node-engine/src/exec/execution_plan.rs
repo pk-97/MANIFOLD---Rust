@@ -26,7 +26,7 @@ use crate::mesh::MeshVertex;
 use crate::exec::effect_node::{intern_name, NodeInstanceId, NodeRequires, NodeWire};
 use crate::graph::Graph;
 use crate::scene::mesh_change::{MeshAspect, MeshRevisionRule};
-use crate::water::physics_scene::{active_execution_order, contracted_execution_order, CoupledSceneSteps};
+use crate::exec::node_pairs::{active_execution_order, contracted_execution_order, NodePairSteps};
 use crate::ports::{KnownItem, PortType};
 use crate::validation::{GraphError, topological_sort, validate};
 
@@ -179,8 +179,8 @@ pub struct ExecutionPlan {
     /// non-stateful nodes here keeps the late pass cost proportional
     /// to the number of feedback / accumulator nodes in the graph.
     late_capture_steps: Vec<usize>,
-    /// Coupled fluid/rigid scene participants in final execution-step order.
-    coupled_scenes: Vec<CoupledSceneSteps>,
+    /// Ordered node-pair participants in final execution-step order.
+    node_pairs: Vec<NodePairSteps>,
     /// SCENE_MODIFIER_RT_DESIGN.md §3.2: plan-compiled mesh revision
     /// rules, indexed by `ResourceId`, parallel to `resource_types`.
     /// `Some` only for outputs with the `MeshVertex` channel layout —
@@ -323,8 +323,8 @@ impl ExecutionPlan {
     }
 
 manifold_core::testkit_visible! {
-    pub(crate) fn coupled_scenes(&self) -> &[CoupledSceneSteps] {
-        &self.coupled_scenes
+    pub(crate) fn node_pairs(&self) -> &[NodePairSteps] {
+        &self.node_pairs
     }
 }
 
@@ -351,9 +351,9 @@ manifold_core::testkit_visible! {
     /// render path.
     pub fn truncated(&self, k: usize) -> ExecutionPlan {
         let mut k = k.min(self.steps.len());
-        for pair in &self.coupled_scenes {
-            if k > pair.fluid_step && k <= pair.rigid_step {
-                k = pair.fluid_step;
+        for pair in &self.node_pairs {
+            if k > pair.first_step && k <= pair.second_step {
+                k = pair.first_step;
                 break;
             }
         }
@@ -361,7 +361,7 @@ manifold_core::testkit_visible! {
         p.steps.truncate(k);
         p.hoistable_steps.truncate(k);
         p.late_capture_steps.retain(|&i| i < k);
-        p.coupled_scenes.retain(|pair| pair.rigid_step < k);
+        p.node_pairs.retain(|pair| pair.second_step < k);
         // A prefix cutting through a region body has no repeat semantics;
         // only whole regions survive, an inner region with its outer one.
         p.substep_regions.retain(|r| r.steps.iter().all(|&i| i < k));
@@ -426,7 +426,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // every region's steps are one contiguous block (boundary first).
     let region_nodes = crate::exec::substeps::derive_regions(graph, &active_order)?;
     let region_blocks: Vec<Vec<NodeInstanceId>> = region_nodes.iter().map(|r| r.nodes.clone()).collect();
-    let (order, coupled_scenes) =
+    let (order, node_pairs) =
         contracted_execution_order(graph, &active_order, &region_blocks)?;
 
     // Index wires by their target (input) port for O(1) lookup during
@@ -1162,7 +1162,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         provided_texture_resources,
         hoistable_steps,
         late_capture_steps,
-        coupled_scenes,
+        node_pairs,
         mesh_rules,
         substep_regions,
     })

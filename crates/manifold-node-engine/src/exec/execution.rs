@@ -138,7 +138,7 @@ enum StepFlow {
     Abort,
 }
 
-mod coupled_physics;
+mod node_pairs;
 mod array_growth;
 mod substep_region;
 
@@ -1178,8 +1178,8 @@ impl Executor {
         // A world's scene sample is captured for its liquid, so a world never
         // samples without its liquid.
         assert!(
-            plan.coupled_scenes().iter().all(|pair| {
-                !sample_steps[pair.rigid_step] || sample_steps[pair.fluid_step]
+            plan.node_pairs().iter().all(|pair| {
+                !sample_steps[pair.second_step] || sample_steps[pair.first_step]
             }),
             "a coupled scene's world must not sample without its liquid",
         );
@@ -1281,11 +1281,11 @@ impl Executor {
             let step = &steps[idx];
             // A physical pair is one simulation dependency even when a mux
             // currently displays only one participant's outputs.
-            for pair in plan.coupled_scenes() {
-                let partner = if idx == pair.fluid_step {
-                    Some(pair.rigid_step)
-                } else if idx == pair.rigid_step {
-                    Some(pair.fluid_step)
+            for pair in plan.node_pairs() {
+                let partner = if idx == pair.first_step {
+                    Some(pair.second_step)
+                } else if idx == pair.second_step {
+                    Some(pair.first_step)
                 } else {
                     None
                 };
@@ -1902,8 +1902,8 @@ impl Executor {
                 return StepFlow::Next;
             }
 
-            if let Some(pair) = plan.coupled_scenes().iter().find(|pair| pair.fluid_step == idx) {
-                self.capture_coupled_scene(graph, plan, *pair, time, sample);
+            if let Some(pair) = plan.node_pairs().iter().find(|pair| pair.first_step == idx) {
+                self.prepare_node_pair(graph, plan, *pair, time, sample);
             }
 
             // Memoized-dataflow skip (constant-subgraph hoisting): a PURE
@@ -2571,19 +2571,13 @@ impl Executor {
                 }
             }
 
-            // The plan makes the rigid publication step adjacent to the
-            // liquid step. No consumer can observe either output until this
-            // accepted pair has been latched.
-            if let Some(pair) = plan.coupled_scenes().iter().find(|pair| pair.fluid_step == idx) {
-                let (fluid, rigid) = graph
-                    .node_pair_mut(step.node, plan.steps()[pair.rigid_step].node)
-                    .expect("compiled coupled participants exist");
-                if let Some(native) = crate::water::node::get_mut(rigid.node.as_mut()) {
-                    native.accept_coupled_rigid_frame(
-                        crate::water::node::get(fluid.node.as_ref())
-                            .and_then(|fluid| fluid.coupled_rigid_frame()),
-                    );
-                }
+            // Publish the first result to its paired second step before any
+            // consumer can observe either output.
+            if let Some(pair) = plan.node_pairs().iter().find(|pair| pair.first_step == idx) {
+                let (behavior, first, second) = graph
+                    .pair_nodes_mut(pair.pair_index)
+                    .expect("compiled pair participants exist");
+                behavior.after_first(first.node.as_ref(), second.node.as_mut());
             }
 
             // Storage freshness advances independently of semantic content:

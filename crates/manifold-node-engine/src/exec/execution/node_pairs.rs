@@ -1,21 +1,21 @@
-//! Capture both participants before their single shared worker step.
+//! Prepare the second participant before the first step of an ordered pair.
 
 use super::*;
-use crate::water::physics_scene::CoupledSceneSteps;
+use crate::exec::node_pairs::NodePairSteps;
 
 impl Executor {
-    pub(super) fn capture_coupled_scene(
+    pub(super) fn prepare_node_pair(
         &mut self,
         graph: &mut Graph,
         plan: &ExecutionPlan,
-        pair: CoupledSceneSteps,
+        pair: NodePairSteps,
         time: FrameTime,
         sample: Option<PhysicsSample<'_>>,
     ) {
-        let rigid_step = &plan.steps()[pair.rigid_step];
+        let second_step = &plan.steps()[pair.second_step];
         self.input_scratch.clear();
         let mut complete = true;
-        for &(port, resource) in &rigid_step.inputs {
+        for &(port, resource) in &second_step.inputs {
             if let Some(slot) = self.backend.slot_for(resource) {
                 self.input_scratch.push((port, slot));
             } else {
@@ -24,16 +24,11 @@ impl Executor {
                 complete = false;
             }
         }
-        let (fluid, rigid) = graph
-            .node_pair_mut(plan.steps()[pair.fluid_step].node, rigid_step.node)
-            .expect("compiled coupled participants exist");
+        let (behavior, first, second) = graph
+            .pair_nodes_mut(pair.pair_index)
+            .expect("compiled pair participants exist");
         if !complete {
-            if let Some(native) = crate::water::node::get_mut(fluid.node.as_mut()) {
-                native.set_coupled_rigid_inputs(None, pair.colliders, None);
-            }
-            if let Some(native) = crate::water::node::get_mut(rigid.node.as_mut()) {
-                native.accept_coupled_rigid_frame(None);
-            }
+            behavior.before_first(first.node.as_mut(), second.node.as_mut(), None);
             return;
         }
 
@@ -66,23 +61,12 @@ impl Executor {
         );
         let params = sample
             .map(|sample| {
-                sample.params[pair.rigid_step]
+                sample.params[pair.second_step]
                     .as_ref()
-                    .expect("coupled rigid sample has retained parameters")
+                    .expect("paired second step has retained parameters")
             })
-            .unwrap_or(&rigid.params);
+            .unwrap_or(&second.params);
         let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, None);
-        let result = match crate::water::node::get_mut(rigid.node.as_mut()) {
-            Some(native) => native.capture_coupled_rigid(&mut ctx),
-            None => Err("Node does not support coupled rigid input capture".into()),
-        };
-        if let Some(native) = crate::water::node::get_mut(fluid.node.as_mut()) {
-            native.set_coupled_rigid_inputs(
-                crate::water::node::get(rigid.node.as_ref())
-                    .and_then(|rigid| rigid.rigid_scene_observation()),
-                pair.colliders,
-                result.as_ref().err().map(String::as_str),
-            );
-        }
+        behavior.before_first(first.node.as_mut(), second.node.as_mut(), Some(&mut ctx));
     }
 }

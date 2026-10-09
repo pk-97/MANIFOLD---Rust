@@ -1,4 +1,5 @@
 pub mod fluid;
+mod graph_install;
 #[cfg(feature = "gpu-proofs")]
 pub(crate) mod fluid_cache;
 #[cfg(feature = "gpu-proofs")]

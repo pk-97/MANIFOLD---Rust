@@ -178,9 +178,9 @@ pub(crate) fn derive_regions(
         rev.entry(w.to.0).or_default().push(w.from.0);
     }
     let coupled: AHashSet<NodeInstanceId> = graph
-        .coupled_scenes()
+        .node_pairs()
         .iter()
-        .flat_map(|pair| [pair.fluid, pair.rigid])
+        .flat_map(|pair| [pair.first, pair.second])
         .collect();
 
     let mut declared: Vec<(NodeInstanceId, SubstepBoundaryPorts, Vec<NodeInstanceId>)> =
@@ -446,7 +446,6 @@ mod tests {
     use crate::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
     use crate::exec::execution_plan::compile;
     use crate::parameters::ParamDef;
-    use crate::water::physics::RigidImpulseTargets;
     use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 
     const STATS: &[SubstepResultPorts] = &[SubstepResultPorts {
@@ -1030,13 +1029,10 @@ mod tests {
         let src = source(&mut graph, "src");
         graph.connect((src, "out"), (rigid, "a")).unwrap();
         graph
-            .add_coupled_scene(
+            .add_node_pair(
                 fluid,
                 rigid,
-                RigidImpulseTargets {
-                    bodies: 1,
-                    copies: false,
-                },
+                Box::new(crate::exec::node_pairs::tests::OrderingOnly),
             )
             .unwrap();
 

@@ -95,12 +95,12 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("WaterFloatingBoxMatter loads");
-        let pairs = runtime.plan.coupled_scenes();
+        let pairs = runtime.plan.node_pairs();
         assert!(!pairs.is_empty(), "the box and the liquid are one coupled scene");
         let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime).expect("the liquid samples its field per tick");
         for pair in pairs {
-            assert!(mask[pair.fluid_step_for_test()], "the liquid samples");
-            assert!(mask[pair.rigid_step_for_test()], "its owned world's scene samples per tick");
+            assert!(mask[pair.first_step], "the liquid samples");
+            assert!(mask[pair.second_step], "its owned world's scene samples per tick");
         }
     }
 

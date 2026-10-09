@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod cpu_values;
+pub mod node_pairs;
 manifold_core::testkit_visible! { pub(crate) mod bound_graph; }
 pub mod effect_node;
 pub mod execution;

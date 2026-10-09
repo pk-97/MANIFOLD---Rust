@@ -418,6 +418,47 @@ allocations, numerical changes or new clock. Generic coupled scheduling and
 runtime state separation must still remove the remaining engine calls into
 water before the crate move; this interface is not a completed extraction.
 
+#### P5 paired scheduling seam
+
+The engine owns ordering and resource lifetime; water owns collider masks and
+native capture/publication. Replace `CoupledScene` with
+`exec::node_pairs::NodePair { first, second, behavior: Box<dyn NodePairBehavior> }`.
+`NodePairBehavior: AsAny + Send` requires:
+`set_enabled(&self, node: &mut dyn EffectNode, enabled: bool)`,
+`before_first(&self, first: &mut dyn EffectNode, second: &mut dyn EffectNode,
+second_inputs: Option<&mut EffectNodeContext<'_, '_>>)` and
+`after_first(&self, first: &dyn EffectNode, second: &mut dyn EffectNode)`.
+Construct the box once per pair; callbacks borrow existing nodes and state.
+
+`Graph::add_node_pair(first, second, behavior)` validates existence and cycles,
+rejects duplicate ordered pairs, and enables both participants. `node_pairs()`
+returns a read-only slice; `pair_behavior_mut(first, second)` permits prepared
+family metadata updates. Water's `add_coupled_scene` merges duplicate collider
+masks and re-enables participants as before. Removing a node disables surviving
+participants only when no retained pair uses them. A crate-private graph
+accessor borrows the behavior and both node instances together for execution.
+
+`NodePairSteps { first_step, second_step, pair_index }` replaces native plan
+metadata. Preserve the original graph index when pruning dead pairs. Move the
+contraction algorithms and existing tests into `exec::node_pairs`; preserve
+liveness closure, stable order, internal-wire rejection, substep exclusion,
+resource release and truncation. Generic tests use an ordering-only callback.
+Water's `PhysicsPair` retains `RigidImpulseTargets`, missing-input clearing,
+capture and accepted-frame publication. Fluid runs first, rigid second. Native
+impulse routing considers only pairs whose behavior downcasts to `PhysicsPair`.
+Remove the water-named graph/plan APIs rather than leaving forwarding methods.
+
+Add a `GraphInstantiationHook` inventory beside `graph_loader`: named callbacks
+take the exact def, registry, `AHashMap<u32, NodeInstanceId>` and mutable graph,
+returning `GraphBuildError`. Run in unique name order after wires and before
+mesh-rule/budget installation, at today's coupled registration point. Water
+registers the existing installer with identical splice-local mapping and errors.
+Authored expansion remains in the engine; its native route types are a later
+seam. Rejected: native payloads in generic plan metadata or cloned solver state.
+Cost: one preparation-time box per pair and borrowed callback dispatch. No new
+clock, lock or frame allocation. Verify scheduling, substep, splice, sampling
+and coupled playback contracts; final P5 GPU parity and landing still apply.
+
 Phasing-completeness check: every D1 crate appears in exactly one phase's deliverables (ui-paint P1a, graph P1, image/scene/compositor P2, nodes P3, water P5); D5 P0; D6 P3; D7 P1/P2; D8 P4; D10 P0; D11 P0; D12 P1a; INV-5's script P0; measurement P4.
 
 ---
