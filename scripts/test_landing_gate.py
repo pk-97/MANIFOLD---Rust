@@ -1639,7 +1639,8 @@ class CancellationTests(unittest.TestCase):
                     f'sys.path.insert(0, {scripts!r})\n'
                     'import gpu_proofs_gate as p\n'
                     f'p.cargo_test_cmd = lambda *a: [sys.executable, "-u", "-c", {cargo!r}]\n'
-                    'p._main = lambda: p.run_gate(Path("/fake/Cargo.toml"), [], [])[0]\n'
+                    # run_gate runs cargo from the manifest's directory, so it must exist.
+                    f'p._main = lambda: p.run_gate(Path({str(root / "Cargo.toml")!r}), [], [])[0]\n'
                     'status = p.main()\n'
                     f'Path({str(root / "cleanup-ready")!r}).touch()\n'
                     'import time\n'
