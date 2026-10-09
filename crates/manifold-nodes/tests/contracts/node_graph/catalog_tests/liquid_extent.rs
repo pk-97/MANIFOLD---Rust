@@ -37,19 +37,19 @@ use manifold_core::effect_graph_def::EffectGraphDef;
         // provided solids, frame rings, sparse schedules and mesh outputs.
         let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").unwrap();
         for resolution in [8, 32, 64] {
-            let report = check_preset_extents(def, resolution).unwrap();
+            let report = check_preset_extents(def.as_ref(), resolution).unwrap();
             assert!(report.checked > 20);
         }
     }
 
     /// Every bundled generator preset holding a liquid domain.
-    fn liquid_presets() -> Vec<(String, &'static EffectGraphDef)> {
+    fn liquid_presets() -> Vec<(String, std::sync::Arc<EffectGraphDef>)> {
         let holds_liquid = |def: &EffectGraphDef| {
             let flat = manifold_core::flatten::flatten_groups(def).expect("flattens");
             flat.nodes.iter().any(|node| is_liquid_domain(&node.type_id))
         };
         bundled_preset_type_ids(PresetKind::Generator)
-            .filter_map(|id| bundled_preset_def(&id).filter(|def| holds_liquid(def)).map(|def| (id.to_string(), def)))
+            .filter_map(|id| bundled_preset_def(&id).filter(|def| holds_liquid(def.as_ref())).map(|def| (id.to_string(), def)))
             .collect()
     }
 
@@ -114,7 +114,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
     #[test]
     fn narrow_band_preset_small_extent_checked() {
         let (id, def) = liquid_presets().into_iter().find(|(id, _)| id.contains("WaterDamBreakGpuFlip")).expect("GPU FLIP preset");
-        let mut preset = LiquidPreset::build(def).unwrap_or_else(|error| panic!("{id}: {error}"));
+        let mut preset = LiquidPreset::build(def.as_ref()).unwrap_or_else(|error| panic!("{id}: {error}"));
         for resolution in [8, 16] {
             let report = preset.check(resolution).unwrap_or_else(|error| panic!("{id} at {resolution}: {error}"));
             assert!(report.checked > 0);
@@ -125,7 +125,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
     fn liquid_blob_bounds_reject_wrong_extent_before_gpu_work() {
         let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").expect("preset");
         for consumer in ["node.particle_volume", "node.lattice_bricks"] {
-            let mut flat = manifold_core::flatten::flatten_groups(def).expect("flattens");
+            let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
             let id = flat.nodes.iter().find(|n| n.type_id == consumer).expect("consumer").id;
             // Both ports are Array<f32>, so the graph type check accepts this
             // deliberately wrong wire. The extent contract must reject it.
@@ -143,7 +143,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
     #[test]
     fn liquid_mesh_contact_rejects_short_solid_before_gpu_work() {
         let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").expect("preset");
-        let mut flat = manifold_core::flatten::flatten_groups(def).expect("flattens");
+        let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
         let mesh = flat.nodes.iter().find(|n| n.type_id == "node.volume_surface_mesh").expect("mesh").id;
         let bounds = flat.nodes.iter().find(|n| n.type_id == "node.blob_bounds").expect("two-float source").id;
         let solid = flat.wires.iter_mut().find(|w| w.to_node == mesh && w.to_port == "solid").expect("solid wire");
@@ -165,7 +165,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
         assert!(presets.len() >= 7, "liquid presets: {:?}", presets.iter().map(|(id, _)| id).collect::<Vec<_>>());
         let mut refusals: AHashMap<String, (u32, String)> = AHashMap::default();
         for (id, def) in &presets {
-            let mut preset = LiquidPreset::build(def).unwrap_or_else(|error| panic!("{id}: {error}"));
+            let mut preset = LiquidPreset::build(def.as_ref()).unwrap_or_else(|error| panic!("{id}: {error}"));
             let resolutions = preset.resolutions();
             assert_eq!(resolutions, 8..=512, "{id}");
             let mut largest = None;
@@ -203,7 +203,7 @@ use manifold_core::liquid_domain::is_liquid_domain;
     #[test]
     fn an_atom_without_a_rule_fails_by_name() {
         let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakMatter").expect("preset");
-        let mut preset = LiquidPreset::build(def).expect("builds");
+        let mut preset = LiquidPreset::build(def.as_ref()).expect("builds");
         let rules: Vec<ExtentRule> =
             LIQUID_EXTENT_RULES.iter().filter(|rule| rule.type_id != "node.matter_to_grid").copied().collect();
         match manifold_node_engine::water::liquid::extent::testkit::check_with_rules(&mut preset, &rules) {
@@ -219,7 +219,7 @@ use manifold_core::liquid_domain::is_liquid_domain;
     fn a_lattice_past_its_storage_is_caught() {
         use manifold_core::effect_graph_def::SerializedParamValue;
         let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakMatter").expect("preset");
-        let mut flat = manifold_core::flatten::flatten_groups(def).expect("flattens");
+        let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
         let counter = flat.nodes.iter().find(|node| node.type_id == "node.count_surface_triangles").map(|node| node.id).expect("a counter");
         let lattice = ["nodes_x", "nodes_y", "nodes_z"];
         // Exercise the dense level-set bound specifically. With a sparse
@@ -241,7 +241,7 @@ use manifold_core::liquid_domain::is_liquid_domain;
     #[test]
     fn ocean_cliff_authored_extent_checked() {
         let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
-        let mut preset = LiquidPreset::build(def).unwrap();
+        let mut preset = LiquidPreset::build(def.as_ref()).unwrap();
         let report = preset.check_authored().unwrap();
         println!("OceanCliff authored {:?}: {} nodes checked, {} array/private bytes", preset.domains(), report.checked, report.scene_bytes);
     }
@@ -249,7 +249,7 @@ use manifold_core::liquid_domain::is_liquid_domain;
     #[test]
     fn inverse_fft_extent_counts_retained_full_buffers_at_rebind_peak() {
         let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
-        let preset = LiquidPreset::build(def).unwrap();
+        let preset = LiquidPreset::build(def.as_ref()).unwrap();
         for padding in [0, 4096] {
             let (bound, held) = manifold_node_engine::water::liquid::extent::testkit::inverse_fft_rebind_bytes(&preset, padding);
             // Four cached pairs plus a distinct incoming pair before eviction.
@@ -266,7 +266,7 @@ use manifold_core::liquid_domain::is_liquid_domain;
             ("node.ocean_displace", "size_0", 512.0, "field_0"),
             ("node.make_triangles", "src_cols", 4096.0, "in"),
         ] {
-            let mut flat = manifold_core::flatten::flatten_groups(def).expect("preset flattens");
+            let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("preset flattens");
             // Keep the producer's capacity unchanged while the consumer's
             // gather footprint grows; a size-bounded exemption would miss it.
             let node = flat.nodes.iter_mut().find(|node| node.type_id == type_id).expect("consumer");

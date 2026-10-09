@@ -46,7 +46,7 @@ fn repair_graph(def: &mut EffectGraphDef) -> bool {
     let Some(stock) = preset_def(&PresetTypeId::from_string(id.to_owned())) else {
         return false;
     };
-    if !same_topology(def, stock) || !qualified_fragment_nodes(def, id) {
+    if !same_topology(def, &stock) || !qualified_fragment_nodes(def, id) {
         return false;
     }
 

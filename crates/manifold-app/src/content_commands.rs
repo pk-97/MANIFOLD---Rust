@@ -95,9 +95,8 @@ fn scene_modifier_ids(
     project: &manifold_core::project::Project,
     layer_id: &LayerId,
 ) -> Option<Vec<NodeId>> {
-    crate::graph_target::resolve(
-        project, &manifold_core::GraphTarget::Generator(layer_id.clone()),
-    )
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+    crate::graph_target::resolve(project, &target)
         .map(|graph| {
             graph
                 .scene_modifiers

@@ -1,10 +1,8 @@
-//! Phase 4b: project-embedded presets resolve through the catalog overlay.
-//!
-//! Isolated in its own integration-test binary (own process) because it mutates
-//! the process-global preset catalog — running it inside the renderer lib test
-//! binary would race the other catalog-reading tests.
+//! Project-embedded presets resolve through the catalog overlay.
+//! These tests mutate global catalogs: use nextest process isolation or the
+//! gate's serial libtest execution when running alongside catalog readers.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use manifold_core::PresetTypeId;
 use manifold_core::project::EmbeddedOrigin;
@@ -71,6 +69,12 @@ fn project_generator_preset_resolves_via_overlay_then_clears() {
         .expect("project generator preset must be in the core registry after overlay");
     assert_eq!(def.display_name, format!("Test Fork {id}"));
 
+    let graph = manifold_nodes::bundled_presets::bundled_preset_def(&preset_id).unwrap();
+    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&preset_id).unwrap();
+    assert!(Arc::ptr_eq(&graph, &view.canonical_def));
+    let old_graph = Arc::downgrade(&graph);
+    let old_view = Arc::downgrade(&view);
+
     // Clearing the overlay removes it from both (no leak into the next project).
     clear_project_presets();
     assert!(
@@ -81,6 +85,15 @@ fn project_generator_preset_resolves_via_overlay_then_clears() {
         manifold_core::preset_definition_registry::try_get(&preset_id).is_none(),
         "clearing the overlay must remove the project preset from the core registry"
     );
+    assert!(manifold_nodes::bundled_presets::bundled_preset_def(&preset_id).is_none());
+    assert!(manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&preset_id).is_none());
+    // Readers keep the old generation valid, but releasing them frees it.
+    assert_eq!(graph.preset_metadata.as_ref().unwrap().id, preset_id);
+    assert_eq!(view.type_id, preset_id);
+    drop(view);
+    drop(graph);
+    assert!(old_view.upgrade().is_none());
+    assert!(old_graph.upgrade().is_none());
 }
 
 /// A minimal but valid effect preset carrying a marker string in its
@@ -237,7 +250,7 @@ fn overlay_only_generator_produces_nonempty_editor_snapshot() {
     // loaded_preset_view_by_id → snapshot_for_view.
     let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&preset_id)
         .expect("EDITOR path: overlay generator must resolve a LoadedPresetView");
-    let snap = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view)
+    let snap = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view)
         .expect("EDITOR path: snapshot_for_view must build a snapshot");
     assert!(
         !snap.nodes.is_empty(),

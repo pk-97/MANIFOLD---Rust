@@ -282,7 +282,7 @@ pub fn sync_inspector_data(
                     let def = l
                         .generator_graph()
                         .cloned()
-                        .or_else(|| manifold_nodes::bundled_presets::bundled_preset_def(&gen_type).cloned());
+                        .or_else(|| manifold_nodes::bundled_presets::bundled_preset_def(&gen_type).map(|def| (*def).clone()));
                     let layer_ids: Vec<manifold_core::LayerId> =
                         project.timeline.layers.iter().map(|l| l.layer_id.clone()).collect();
                     match def.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
@@ -1268,8 +1268,7 @@ pub fn sync_inspector_data(
                         .or_else(|| {
                             manifold_nodes::bundled_presets::bundled_preset_def(
                                 &layer.generator_type().clone(),
-                            )
-                            .cloned()
+                            ).map(|def| (*def).clone())
                         })?;
                     let layer_ids: Vec<manifold_core::LayerId> = project
                         .timeline

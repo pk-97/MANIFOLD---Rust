@@ -246,6 +246,7 @@ fn audio_visual_generators_render_live_sources_and_fuse_on_portrait_canvas() {
     for name in ["Oscilloscope", "Spectrogram"] {
         let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(name))
             .unwrap()
+            .as_ref()
             .clone();
         assert!(
             def.nodes
@@ -370,6 +371,7 @@ fn audio_visual_spectrum_chain_keeps_fixed_source_size_on_portrait_canvas() {
     })).unwrap());
     let mut metadata = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::INVERT_COLORS)
         .unwrap()
+        .as_ref()
         .preset_metadata
         .clone()
         .unwrap();

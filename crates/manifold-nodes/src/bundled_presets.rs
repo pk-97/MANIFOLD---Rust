@@ -88,74 +88,52 @@ fn parse_bundled_preset(kind: PresetKind, id: &str, json: &str) -> EffectGraphDe
     def
 }
 
-/// Generation-stamped parsed-def cache. Keyed `&'static str` → leaked
-/// `&'static EffectGraphDef` so [`bundled_preset_def`] can keep handing out
-/// `&'static` references (the render path stores them on
-/// `LoadedPresetView.canonical_def`). The cache is rebuilt (and re-leaked)
-/// whenever the catalog generation advances; at rest the generation never
-/// moves and the cache is reused.
+/// One parsed catalog generation. Callers retain individual definitions through
+/// `Arc`, so replacing the cache releases entries no longer in use.
 struct DefCache {
-    /// Generation this map was built against. `u64::MAX` = not yet built.
-    generation: std::sync::atomic::AtomicU64,
-    map: ArcSwap<AHashMap<&'static str, &'static EffectGraphDef>>,
+    generation: u64,
+    map: AHashMap<String, Arc<EffectGraphDef>>,
 }
 
-static DEF_CACHE: std::sync::LazyLock<DefCache> = std::sync::LazyLock::new(|| DefCache {
-    generation: std::sync::atomic::AtomicU64::new(u64::MAX),
-    map: ArcSwap::from_pointee(AHashMap::default()),
+static DEF_CACHE: std::sync::LazyLock<ArcSwap<DefCache>> = std::sync::LazyLock::new(|| {
+    ArcSwap::from_pointee(DefCache {
+        generation: u64::MAX,
+        map: AHashMap::default(),
+    })
 });
 
-fn parsed_def_map() -> Arc<AHashMap<&'static str, &'static EffectGraphDef>> {
-    let generation = catalog_generation();
-    if DEF_CACHE.generation.load(std::sync::atomic::Ordering::Acquire) != generation {
-        rebuild_def_cache(generation);
-    }
-    DEF_CACHE.map.load_full()
-}
-
 #[cold]
-fn rebuild_def_cache(generation: u64) {
-    // Build from the current catalog snapshot and leak each def so the
-    // returned references are `'static`. The leak is bounded by the
-    // (finite) shipping preset count × the number of reloads in a session —
-    // authoring-time, never on the perform path.
-    let mut m: AHashMap<&'static str, &'static EffectGraphDef> = AHashMap::default();
-    // Hold each catalog snapshot through the rebuild so no snapshot is
-    // dropped midway through parsing its entries.
+fn rebuild_def_cache(generation: u64) -> Arc<DefCache> {
+    let mut map = AHashMap::default();
+    // Keep each catalog snapshot alive while parsing its entries.
     let effect_catalog = catalog_for_kind(PresetKind::Effect).load();
     let generator_catalog = catalog_for_kind(PresetKind::Generator).load();
     let scene_modifier_catalog = catalog_for_kind(PresetKind::SceneModifier).load();
-    let catalogs = [
+    for (kind, catalog) in [
         (PresetKind::Effect, &*effect_catalog),
         (PresetKind::Generator, &*generator_catalog),
         (PresetKind::SceneModifier, &*scene_modifier_catalog),
-    ];
-    for (kind, catalog) in catalogs {
+    ] {
         for (id, json) in catalog.entries() {
-            let def = parse_bundled_preset(kind, &id, &json);
-            let id_static: &'static str = Box::leak(id.to_string().into_boxed_str());
-            let def_static: &'static EffectGraphDef = Box::leak(Box::new(def));
-            m.insert(id_static, def_static);
+            map.insert(id.to_string(), Arc::new(parse_bundled_preset(kind, &id, &json)));
         }
     }
-    DEF_CACHE.map.store(Arc::new(m));
-    DEF_CACHE
-        .generation
-        .store(generation, std::sync::atomic::Ordering::Release);
+    let cache = Arc::new(DefCache { generation, map });
+    DEF_CACHE.store(Arc::clone(&cache));
+    cache
 }
 
-/// Parsed [`EffectGraphDef`] for the bundled preset of `preset_type`
-/// (any kind), or `None` if no preset is registered.
-///
-/// First call (and every call after a hot-reload generation bump) parses
-/// all three catalog snapshots into a leaked map; subsequent calls return a
-/// borrowed reference into that map. At rest, parsing happens once.
-///
-/// Parse failures panic with the type id and underlying error — these come
-/// from files we author, so any failure is a developer mistake to fix, not
-/// a runtime condition to handle.
-pub fn bundled_preset_def(preset_type: &PresetTypeId) -> Option<&'static EffectGraphDef> {
-    parsed_def_map().get(preset_type.as_str()).copied()
+/// Current migrated catalog definition. Reloads replace the cache; previously
+/// returned definitions stay valid until their callers release them.
+/// Invalid catalog JSON panics with the preset id and parse error.
+pub fn bundled_preset_def(preset_type: &PresetTypeId) -> Option<Arc<EffectGraphDef>> {
+    let generation = catalog_generation();
+    let cache = DEF_CACHE.load();
+    if cache.generation == generation {
+        cache.map.get(preset_type.as_str()).cloned()
+    } else {
+        rebuild_def_cache(generation).map.get(preset_type.as_str()).cloned()
+    }
 }
 
 /// Every [`PresetTypeId`] of `kind` that has a bundled preset registered
@@ -291,7 +269,7 @@ mod tests {
         for kind in [PresetKind::Generator, PresetKind::SceneModifier] {
             for type_id in bundled_preset_type_ids(kind) {
                 let def = bundled_preset_def(&type_id).expect("registered preset has a parsed def");
-                if kind == PresetKind::Generator && manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).is_none() {
+                if kind == PresetKind::Generator && manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def).is_none() {
                     continue;
                 }
                 scenes += 1;
@@ -328,7 +306,7 @@ mod tests {
         for type_id in bundled_preset_type_ids(PresetKind::Effect) {
             let def = bundled_preset_def(&type_id)
                 .expect("registered preset must have a parsed def")
-                .clone();
+                .as_ref().clone();
             let graph = def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap_or_else(|e| {
                 panic!("bundled preset {}: into_graph failed: {e}", type_id.as_str())
             });
@@ -352,7 +330,7 @@ mod tests {
         let id = PresetTypeId::new("LED Fill");
         let def = bundled_preset_def(&id)
             .expect("LED Fill must be a bundled generator (filename stem = preset id)")
-            .clone();
+            .as_ref().clone();
         assert!(
             def.preset_metadata.is_some(),
             "LED Fill must carry presetMetadata so the picker/inspector can show its params",
@@ -496,7 +474,7 @@ mod tests {
             let def = bundled_preset_def(&type_id).expect("registered");
             let mut chain = Graph::new();
             let src = chain.add_node(Box::new(Source::new()));
-            let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default());
+            let result = splice_def_into_chain(&mut chain, (src, "out"), &def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default());
             assert!(
                 result.is_some(),
                 "bundled preset {} failed to splice into a chain — preset and chain runtime have \
@@ -566,7 +544,7 @@ mod tests {
             let mut chain = Graph::new();
             let src = chain.add_node(Box::new(Source::new()));
             let Some(result) =
-                splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
+                splice_def_into_chain(&mut chain, (src, "out"), &def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
             else {
                 failures.push(format!("{preset_id}: splice failed"));
                 continue;
@@ -663,7 +641,7 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
+        let result = splice_def_into_chain(&mut chain, (src, "out"), &def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
             .expect("Color Compass splices");
 
         // Resolve handle → chain-node-id map for the inner nodes the
@@ -839,7 +817,7 @@ mod tests {
 
         let mut chain = Graph::new();
         let src = chain.add_node(Box::new(Source::new()));
-        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
+        let result = splice_def_into_chain(&mut chain, (src, "out"), &def, &registry, None, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
             .expect("splice ok");
 
         // Look up smoothing_y (vertical axis = N-S compass).
@@ -935,7 +913,7 @@ mod catalog_source_tests {
             for id in direct {
                 assert_eq!(bundled_preset_json(&id), manifold_node_engine::load::catalog_source::preset_json(&id));
                 match (bundled_preset_def(&id), manifold_node_engine::load::catalog_source::preset_def(&id)) {
-                    (Some(a), Some(b)) => assert!(std::ptr::eq(a, b)),
+                    (Some(a), Some(b)) => assert!(Arc::ptr_eq(&a, &b)),
                     (None, None) => {},
                     _ => panic!("catalog definition mismatch: {id}"),
                 }

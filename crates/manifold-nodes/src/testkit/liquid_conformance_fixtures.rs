@@ -426,7 +426,10 @@ fn flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     }
 }
 fn bundled(id: &'static str) -> EffectGraphDef {
-    bundled_preset_def(&PresetTypeId::new(id)).unwrap_or_else(|| panic!("no bundled preset {id}")).clone()
+    bundled_preset_def(&PresetTypeId::new(id))
+        .unwrap_or_else(|| panic!("no bundled preset {id}"))
+        .as_ref()
+        .clone()
 }
 /// The Floating Box preset whose box the GPU FLIP box scenes carry.
 const BOX_PRESET: &str = "WaterFloatingBoxMatter";

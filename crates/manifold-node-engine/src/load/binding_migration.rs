@@ -85,7 +85,7 @@ fn complete_stub_graph(fx: &mut PresetInstance) {
         .and_then(|g| g.preset_metadata.take())
         .expect("needs_lift checked preset_metadata is Some");
 
-    let mut lifted: EffectGraphDef = canonical.clone();
+    let mut lifted: EffectGraphDef = canonical.as_ref().clone();
     match lifted.preset_metadata.as_mut() {
         Some(canon_meta) => {
             // Append only the user-added entries from the stub — the
