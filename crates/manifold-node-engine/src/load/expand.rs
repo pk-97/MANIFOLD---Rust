@@ -7,8 +7,10 @@ use manifold_core::scene_index::{FlatSceneIndex, SceneIndexError};
 
 mod acceleration;
 pub(crate) use acceleration::impulse_recipients;
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub mod coupling;
+pub(crate) mod coupling;
+}
 pub use coupling::{CoupledSceneBinding, prepare_coupled_scenes};
 mod bindings;
 mod buffer_budget;
@@ -21,11 +23,15 @@ pub use buffer_budget::{
 pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
 pub use impulses::SceneModifierImpulseRoute;
 mod impulses;
-pub mod compiler;
+manifold_core::testkit_visible! {
+pub(crate) mod compiler;
+}
 pub(crate) use compiler::math_events::resource_node_id as math_resource_node_id;
 pub(crate) use compiler::math_events::sample_node_id as math_sample_node_id;
 mod control_state;
-pub mod math_view;
+manifold_core::testkit_visible! {
+pub(crate) mod math_view;
+}
 pub(crate) use math_view::LegacyMathViewScope;
 pub(crate) use compiler::prepare_legacy_scene_modifier_math_view;
 pub use control_state::PreparedModifierControlState;

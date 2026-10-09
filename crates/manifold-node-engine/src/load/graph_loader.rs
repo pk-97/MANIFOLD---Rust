@@ -302,15 +302,17 @@ fn migrate_def_type_ids(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> O
     changed.then_some(owned)
 }
 
+manifold_core::testkit_visible! {
 /// Whether any node, at any group depth or in any scene modifier, has a type
 /// listed in [`manifold_core::type_id_migration::RETIRED_PARAMS`]. Lets the
 /// common load borrow the document instead of cloning it.
-pub fn has_retired_params(def: &EffectGraphDef) -> bool {
+pub(crate) fn has_retired_params(def: &EffectGraphDef) -> bool {
     fn any(nodes: &[EffectGraphNode]) -> bool {
         nodes.iter().any(|node| manifold_core::type_id_migration::retires_params(&node.type_id)
             || node.group.as_ref().is_some_and(|group| any(&group.nodes)))
     }
     any(&def.nodes) || def.scene_modifiers.iter().any(|modifier| has_retired_params(&modifier.graph))
+}
 }
 
 /// Strip every [`manifold_core::type_id_migration::RETIRED_PARAMS`] entry

@@ -324,7 +324,9 @@ impl LifecycleParams {
     }
 }
 
-pub const WHITEWATER_STEP_SHADER: &str = include_str!("shaders/whitewater_step.wgsl");
+manifold_core::testkit_visible! {
+pub(crate) const WHITEWATER_STEP_SHADER: &str = include_str!("shaders/whitewater_step.wgsl");
+}
 
 pub(crate) const OUTPUTS: [&str; 4] = ["foam_particles", "bubble_particles", "spray_particles", "dust_particles"];
 /// The population counts, in [`OUTPUTS`]' order.
@@ -481,10 +483,11 @@ crate::primitive! {
     },
 }
 
+manifold_core::testkit_visible! {
 /// The grid and pool one frame's inputs describe, once every placement rule
 /// held. A change in any of it starts the pool over.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct StepShape {
+pub(crate) struct StepShape {
     pub nodes: [u32; 3],
     pub cells: [u32; 3],
     pub level_nodes: [u32; 3],
@@ -495,6 +498,7 @@ pub struct StepShape {
     /// The pool sort's bins: one a cell.
     pub bins: [u32; 3],
     pub capacity: u32,
+}
 }
 
 impl StepShape {
@@ -597,9 +601,10 @@ impl StepShape {
     }
 }
 
+manifold_core::testkit_visible! {
 /// One frame's scalar inputs and knobs.
 #[derive(Clone, Copy, Debug)]
-pub struct StepFrame {
+pub(crate) struct StepFrame {
     pub shape: StepShape,
     /// Live liquid particles; `None` takes every slot.
     pub count: Option<u32>,
@@ -627,8 +632,10 @@ pub struct StepFrame {
     pub max_energy: f32,
     pub preserve_foam: bool,
 }
+}
 
-pub struct MotionInputs<'a> {
+manifold_core::testkit_visible! {
+pub(crate) struct MotionInputs<'a> {
     pub schedule: &'a GpuBuffer,
     pub faces: [&'a GpuBuffer; 3],
     pub count: u32,
@@ -639,11 +646,14 @@ pub struct MotionInputs<'a> {
     pub atlas: Option<&'a GpuBuffer>,
     pub region_count: u32,
 }
+}
 
+manifold_core::testkit_visible! {
 #[derive(Clone, Copy)]
-pub enum FaceSource<'a> {
+pub(crate) enum FaceSource<'a> {
     Packed(&'a GpuBuffer),
     Axes([&'a GpuBuffer; 3]),
+}
 }
 
 /// Shared runtime/extent truth table. Packed input is unpacked before use;
@@ -672,7 +682,8 @@ impl<'a> FaceSource<'a> {
     }
 }
 
-pub struct StepInputs<'a> {
+manifold_core::testkit_visible! {
+pub(crate) struct StepInputs<'a> {
     pub motion: Option<MotionInputs<'a>>,
     pub particles: &'a GpuBuffer,
     pub solid: &'a GpuBuffer,
@@ -680,6 +691,7 @@ pub struct StepInputs<'a> {
     pub faces: FaceSource<'a>,
     pub level_set: &'a GpuBuffer,
     pub distance: Option<&'a GpuBuffer>,
+}
 }
 
 /// Each input holds at least what the shape reads from it.
@@ -1125,9 +1137,10 @@ impl Outputs {
     }
 }
 
+manifold_core::testkit_visible! {
 /// The node's GPU side: pipelines, the pool and its fields, the outputs.
 #[derive(Default)]
-pub struct Step {
+pub(crate) struct Step {
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     reference: reference::Reference,
     pipelines: Pipelines,
@@ -1147,6 +1160,7 @@ pub struct Step {
     /// The pool stepped since an output last took it.
     owed: bool,
     pub(super) outputs: Outputs,
+}
 }
 
 impl Step {
@@ -1226,7 +1240,8 @@ impl Step {
         Ok(self.outputs.report)
     }
 
-    pub fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64, tick_mode: bool) -> Result<(), String> {
+manifold_core::testkit_visible! {
+    pub(crate) fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64, tick_mode: bool) -> Result<(), String> {
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         self.reference.reserve(device, particles as u32, shape.capacity)?;
         self.surface_distance.reserve(device, shape.face_cells)?;
@@ -1246,8 +1261,10 @@ impl Step {
         }
         Ok(())
     }
+}
 
-    pub fn reserve_faces(&mut self, device: &GpuDevice, packed: bool) -> Result<(), String> {
+manifold_core::testkit_visible! {
+    pub(crate) fn reserve_faces(&mut self, device: &GpuDevice, packed: bool) -> Result<(), String> {
         let f = self.fields.as_mut().expect("whitewater fields allocated");
         if packed {
             if f.unpacked_faces.is_none() {
@@ -1259,6 +1276,7 @@ impl Step {
         }
         Ok(())
     }
+}
 
     fn face_axes<'a>(&'a self, faces: FaceSource<'a>) -> [&'a GpuBuffer; 3] {
         match faces {
@@ -1267,7 +1285,8 @@ impl Step {
         }
     }
 
-    pub fn unpack_faces(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape, faces: FaceSource<'_>) {
+manifold_core::testkit_visible! {
+    pub(crate) fn unpack_faces(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape, faces: FaceSource<'_>) {
         if let FaceSource::Packed(packed) = faces {
             let [u, v, w] = self.face_axes(faces);
             let [nodes_x, nodes_y, nodes_z] = shape.face_cells.map(|n| (n + 4) as f32);
@@ -1277,10 +1296,12 @@ impl Step {
                 params.count, FUSED_ENTRIES[pass.index()].1, Barrier::After);
         }
     }
+}
 
+manifold_core::testkit_visible! {
     /// One liquid tick, with all persistent pool words supplied by the
     /// boundary. No CPU readback or display-frame clock participates.
-    pub fn advance_tick(
+    pub(crate) fn advance_tick(
         &mut self,
         gpu: &mut GpuEncoder<'_>,
         frame: &StepFrame,
@@ -1325,8 +1346,10 @@ impl Step {
         self.publish(enc, &shape, 0);
         Ok(())
     }
+}
 
-    pub fn tick_output(&self, port: &str) -> Option<&GpuBuffer> {
+manifold_core::testkit_visible! {
+    pub(crate) fn tick_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
             "pool_out" => self.fields.as_ref().map(|f| &f.pools[self.current]),
             "state_out" => self.fields.as_ref().map(|f| &f.state),
@@ -1335,6 +1358,7 @@ impl Step {
                 .and_then(|i| self.outputs.slots.first().map(|s| &s.buffers[i])),
         }
     }
+}
 
     /// Whitewater switched off: unpublish the pool so nothing downstream
     /// draws it, and start it over when it is switched on again. The

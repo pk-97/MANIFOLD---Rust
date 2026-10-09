@@ -44,8 +44,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use arc_swap::ArcSwap;
 use manifold_core::project::EmbeddedOrigin;
 
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub mod blob_mask;
+pub(crate) mod blob_mask;
+}
 
 /// Monotonic catalog generation counter. Starts at 0 and is bumped by the
 /// hot-reload watcher (after both the catalog snapshots and the core
@@ -164,9 +166,10 @@ pub struct PresetAssetsRoot {
 
 inventory::collect!(PresetAssetsRoot);
 
+manifold_core::testkit_visible! {
 /// Which sub-directory names a preset kind uses under each root.
 #[doc(hidden)]
-pub struct KindDirs {
+pub(crate) struct KindDirs {
     /// Human label for log + panic messages ("effect" / "generator").
     label: &'static str,
     /// Sub-dir under the packaged-bundle `Resources/presets/` and under
@@ -176,20 +179,25 @@ pub struct KindDirs {
     /// (e.g. `"effect-presets"`).
     dev_subdir: &'static str,
 }
+}
 
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub const EFFECT_DIRS: KindDirs = KindDirs {
+pub(crate) const EFFECT_DIRS: KindDirs = KindDirs {
     label: "effect",
     bundle_subdir: "effects",
     dev_subdir: "effect-presets",
 };
+}
 
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub const GENERATOR_DIRS: KindDirs = KindDirs {
+pub(crate) const GENERATOR_DIRS: KindDirs = KindDirs {
     label: "generator",
     bundle_subdir: "generators",
     dev_subdir: "generator-presets",
 };
+}
 
 const SCENE_MODIFIER_DIRS: KindDirs = KindDirs {
     label: "scene modifier",
@@ -212,6 +220,7 @@ pub static GENERATOR_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
 pub static SCENE_MODIFIER_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
     LazyLock::new(|| ArcSwap::from(load_catalog(&SCENE_MODIFIER_DIRS)));
 
+manifold_core::testkit_visible! {
 /// Project-scoped preset overlay (Phase 4; split into two origin tiers by
 /// PRESET_LIBRARY_DESIGN D5/P2). `(type_id, json)` for the currently-loaded
 /// project's `embedded_presets`, split by [`EmbeddedOrigin`] and merged in
@@ -231,7 +240,8 @@ pub static SCENE_MODIFIER_CATALOG: LazyLock<ArcSwap<PresetCatalog>> =
 /// render path is unaffected — resolution stays a catalog read.
 /// `(type_id, json)` overlay entries for one preset kind.
 #[doc(hidden)]
-pub type OverlayEntries = Vec<(Arc<str>, Arc<str>)>;
+pub(crate) type OverlayEntries = Vec<(Arc<str>, Arc<str>)>;
+}
 static PROJECT_EFFECT_PRESETS_SAVED: LazyLock<ArcSwap<OverlayEntries>> =
     LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
 static PROJECT_GENERATOR_PRESETS_SAVED: LazyLock<ArcSwap<OverlayEntries>> =
@@ -353,13 +363,14 @@ fn reload_into(slot: &ArcSwap<PresetCatalog>, dirs: &KindDirs) -> bool {
     }
 }
 
+manifold_core::testkit_visible! {
 /// Resolve the STOCK root for a kind. First existing directory wins:
 /// packaged bundle `Resources/presets/<subdir>`, then the dev workspace
 /// assets dir supplied by registration. Returns the resolved path
 /// plus the full list of candidates that were tried (for the fail-loud
 /// message).
 #[doc(hidden)]
-pub fn resolve_stock_root(dirs: &KindDirs) -> (Option<PathBuf>, Vec<PathBuf>) {
+pub(crate) fn resolve_stock_root(dirs: &KindDirs) -> (Option<PathBuf>, Vec<PathBuf>) {
     let mut tried = Vec::new();
 
     // (a) Packaged macOS .app bundle: <dir-of-exe>/../Resources/presets/<subdir>
@@ -387,6 +398,7 @@ pub fn resolve_stock_root(dirs: &KindDirs) -> (Option<PathBuf>, Vec<PathBuf>) {
 
     (None, tried)
 }
+}
 
 /// The catalog's registered development assets directory.
 pub fn registered_assets_root() -> Option<PathBuf> {
@@ -398,8 +410,9 @@ pub fn registered_assets_root() -> Option<PathBuf> {
     ).map(PathBuf::from)
 }
 
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub fn select_assets_root(roots: Vec<&str>) -> Option<&str> {
+pub(crate) fn select_assets_root(roots: Vec<&str>) -> Option<&str> {
     assert!(
         roots.len() <= 1,
         "expected at most one PresetAssetsRoot registration, got {}: {roots:?}",
@@ -407,6 +420,7 @@ pub fn select_assets_root(roots: Vec<&str>) -> Option<&str> {
     );
     // Engine-only binaries have no catalog and therefore no development assets.
     roots.first().copied()
+}
 }
 
 /// Resolve the optional USER root for a kind:
@@ -509,12 +523,13 @@ fn load_catalog(dirs: &KindDirs) -> Arc<PresetCatalog> {
     }
 }
 
+manifold_core::testkit_visible! {
 /// Fallible catalog build shared by startup and reload. Resolves the stock
 /// root and scans it; returns `Err(reason)` if the stock root can't be
 /// resolved or scans to zero presets. Startup turns that `Err` into a
 /// panic; reload logs it and keeps the last-good snapshot.
 #[doc(hidden)]
-pub fn try_load_catalog(dirs: &KindDirs) -> Result<Arc<PresetCatalog>, String> {
+pub(crate) fn try_load_catalog(dirs: &KindDirs) -> Result<Arc<PresetCatalog>, String> {
     let (stock_root, tried) = resolve_stock_root(dirs);
     let Some(stock_root) = stock_root else {
         let candidates = tried
@@ -530,6 +545,7 @@ pub fn try_load_catalog(dirs: &KindDirs) -> Result<Arc<PresetCatalog>, String> {
 
     let user_root = resolve_user_root(dirs);
     build_catalog(dirs.label, &stock_root, user_root.as_deref())
+}
 }
 
 /// The catalog assembly + empty-scan check, factored out of the
@@ -555,8 +571,9 @@ fn build_catalog(
     )
 }
 
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub fn build_catalog_with_overlays(
+pub(crate) fn build_catalog_with_overlays(
     label: &str,
     stock_root: &Path,
     user_root: Option<&Path>,
@@ -720,6 +737,7 @@ pub fn build_catalog_with_overlays(
         entries: merged,
         browser_ids,
     }))
+}
 }
 
 // ─── Hot-reload watcher (step 10) ───

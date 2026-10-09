@@ -8,7 +8,9 @@ use crate::{exec::backend::Backend, ports::PortType};
 
 pub(super) use crate::water::runtime::physics_sampling::physics_sample_steps;
 
-pub const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
+manifold_core::testkit_visible! {
+pub(crate) const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
+}
 
 /// Walk the plan to find the `ResourceId` produced by `node`'s named
 /// output port. Mirrors the helper in `effects/mirror.rs` —
@@ -231,7 +233,8 @@ pub(super) enum PresetIo {
     },
 }
 
-pub struct EffectSlot {
+manifold_core::testkit_visible! {
+pub(crate) struct EffectSlot {
     #[cfg(feature = "gpu-proofs")]
     pub(crate) physics_sources: crate::water::runtime::physics_source_state::PhysicsSourceState,
     pub(super) effect_id: EffectId,
@@ -342,6 +345,7 @@ pub struct EffectSlot {
     /// every frame when the card's toggle is on. Empty when relight is off.
     pub(super) relight_writes: Vec<RelightParamWrite>,
 }
+}
 
 impl EffectSlot {
     /// Push the live relight knob values into the spliced graph. No-op if the
@@ -353,6 +357,7 @@ impl EffectSlot {
     }
 }
 
+manifold_core::testkit_visible! {
 /// BUG-080 seam: a provisional manifest (built against an incomplete
 /// registry, not yet reconciled) reaching chain build means a load/ingest
 /// path skipped `reconcile_param_manifests()`. Loud in dev (panics), throttled
@@ -360,7 +365,7 @@ impl EffectSlot {
 /// unit-testable without driving a full chain build — see
 /// `docs/PARAM_MANIFEST_GATE_DESIGN.md` D2, INV-1.
 #[doc(hidden)]
-pub fn assert_manifest_gate(fx: &PresetInstance) {
+pub(crate) fn assert_manifest_gate(fx: &PresetInstance) {
     debug_assert!(
         !fx.manifest_provisional(),
         "BUG-080: provisional manifest reached PresetRuntime::try_build — a \
@@ -370,6 +375,7 @@ pub fn assert_manifest_gate(fx: &PresetInstance) {
     if fx.manifest_provisional() {
         warn_provisional_manifest_once(&fx.id);
     }
+}
 }
 
 /// BUG-080 D2: release-mode once-per-instance warn for a provisional

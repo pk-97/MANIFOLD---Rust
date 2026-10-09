@@ -13,6 +13,7 @@ use crate::persistence::PrimitiveRegistry;
 use crate::ports::PortType;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
+manifold_core::testkit_visible! {
 /// One of the eight buckets FUSION_SOTA_DESIGN.md D4/P3 names. `Other`
 /// catches every boundary that isn't one of D4's four under-fusing
 /// families or the D3 BufferIndex-shaped family — control wires,
@@ -21,7 +22,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 /// q16/particle-loop cuts, specialization-token cuts, and any
 /// `build_region` drop that isn't the fan-out message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum RefusalFamily {
+pub(crate) enum RefusalFamily {
     ParamType,
     Arity,
     MultiOutput,
@@ -30,6 +31,7 @@ pub enum RefusalFamily {
     StencilDepth,
     BufferIndexShaped,
     Other,
+}
 }
 
 impl RefusalFamily {
@@ -53,12 +55,13 @@ struct FamilyStats {
     dispatches_saved: usize,
 }
 
+manifold_core::testkit_visible! {
 /// WHY a node classifies `Boundary` — same gate ORDER as [`classify_node`],
 /// stopping at the first cut and naming its D4 family. `None` for an
 /// `Eligible` node (nothing to bucket) — the function must never return
 /// `Some` where `classify_node` returns `Eligible`, or vice versa; that
 /// invariant is exactly what `refusal_census_matches_classify_node` checks.
-pub fn classify_refusal(
+pub(crate) fn classify_refusal(
     node: &EffectGraphNode,
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
@@ -231,6 +234,7 @@ pub fn classify_refusal(
         Ok(kernel) if naga::front::wgsl::parse_str(&kernel).is_ok() => None,
         _ => Some(RefusalFamily::Other),
     }
+}
 }
 
 /// Replays `partition_regions`' union-candidate/convexity pass to find every

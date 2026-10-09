@@ -19,13 +19,19 @@ use manifold_core::scene_index::FlatSceneIndex;
 
 use {super::SceneModifierExpandError, super::bindings, super::frames, super::math_view::LegacyMathViewScope, super::math_view::MathViewRequest, super::namespace, crate::load::expand::routes, super::routes::PreparedSceneModifierGraph};
 
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub type PortAddress = (u32, String);
+pub(crate) type PortAddress = (u32, String);
+}
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub type EndpointKey = (SceneNodeRef, String);
+pub(crate) type EndpointKey = (SceneNodeRef, String);
+}
 type CloneKey = (u32, Option<SceneNodeRef>);
 type LeafMap = BTreeMap<String, Vec<NodeId>>;
-pub mod math_events;
+manifold_core::testkit_visible! {
+pub(crate) mod math_events;
+}
 pub(crate) mod shatter;
 
 
@@ -142,7 +148,8 @@ pub fn prepare_scene_modifier_math_view(
     }))
 }
 
-pub fn prepare_legacy_scene_modifier_math_view(
+manifold_core::testkit_visible! {
+pub(crate) fn prepare_legacy_scene_modifier_math_view(
     owner: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     modifier_id: &NodeId,
@@ -152,6 +159,7 @@ pub fn prepare_legacy_scene_modifier_math_view(
         modifier_id,
         legacy_scope: Some(scope),
     }))
+}
 }
 
 fn prepare_scene_modifiers_impl(
@@ -540,8 +548,9 @@ fn validate_binding_leaves(
     Ok(())
 }
 
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub struct Builder<'a> {
+pub(crate) struct Builder<'a> {
     derived: EffectGraphDef,
     index: &'a FlatSceneIndex,
     registry: &'a PrimitiveRegistry,
@@ -557,6 +566,7 @@ pub struct Builder<'a> {
     math_targets: Option<(SceneNodeRef, Vec<SceneNodeRef>)>,
     math_captures: BTreeMap<SceneNodeRef, MathViewCapture>,
     math_samples: BTreeMap<SceneNodeRef, PortAddress>,
+}
 }
 
 #[derive(Debug, Clone)]
@@ -1521,8 +1531,9 @@ impl Builder<'_> {
         self.constant_node(key, "node.value", params, "out")
     }
 
+manifold_core::testkit_visible! {
     #[doc(hidden)]
-    pub fn attachment_key(
+    pub(crate) fn attachment_key(
         &mut self,
         instance: &SceneModifierInstanceDef,
         target: Option<&SceneNodeRef>,
@@ -1564,6 +1575,7 @@ impl Builder<'_> {
         }
         Ok(key)
     }
+}
 
     /// Find the stable insertion point for a scene-wide camera source stage.
     ///

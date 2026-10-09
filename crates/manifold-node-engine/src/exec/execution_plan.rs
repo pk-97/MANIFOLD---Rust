@@ -322,9 +322,11 @@ impl ExecutionPlan {
         &self.late_capture_steps
     }
 
-    pub fn coupled_scenes(&self) -> &[CoupledSceneSteps] {
+manifold_core::testkit_visible! {
+    pub(crate) fn coupled_scenes(&self) -> &[CoupledSceneSteps] {
         &self.coupled_scenes
     }
+}
 
     /// Substep repeat regions derived at compile time; empty for graphs
     /// without a substep boundary.

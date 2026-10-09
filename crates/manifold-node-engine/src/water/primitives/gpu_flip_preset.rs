@@ -38,15 +38,19 @@ const DAM_BREAK_METRES: f64 = 4.0;
 /// substep's end.
 pub(crate) const STEPS_PER_TICK: usize = 1;
 
+manifold_core::testkit_visible! {
 /// The main solve's iterations: the step's Auto.
-pub const PRESSURE_ITERATIONS: usize = super::gpu_flip_pressure::MAX_ITERATIONS as usize;
+pub(crate) const PRESSURE_ITERATIONS: usize = super::gpu_flip_pressure::MAX_ITERATIONS as usize;
+}
 
+manifold_core::testkit_visible! {
 #[derive(Clone, Copy, Debug)]
-pub struct PressureShape {
+pub(crate) struct PressureShape {
     /// Cells per side of the cubic lattice.
     pub n: usize,
     /// Conjugate gradient iterations, one V-cycle each.
     pub iterations: usize,
+}
 }
 
 impl PressureShape {
@@ -55,16 +59,22 @@ impl PressureShape {
     }
 }
 
+manifold_core::testkit_visible! {
 /// The FLIP Fluids engine's Dam Break (`WaterDamBreak.json`): a 4 m tank
 /// over the floor, a 0.16 m pool, and the `initial_column` block, seeded by
 /// the engine's half-cell site rule.
-pub const DAM_FILL_HEIGHT: f64 = 0.16;
-pub const DAM_COLUMN: [[f64; 2]; 3] = [[-1.84, -0.66], [0.16, 2.08], [-1.75, 1.75]];
+pub(crate) const DAM_FILL_HEIGHT: f64 = 0.16;
+}
+manifold_core::testkit_visible! {
+pub(crate) const DAM_COLUMN: [[f64; 2]; 3] = [[-1.84, -0.66], [0.16, 2.08], [-1.75, 1.75]];
+}
 
+manifold_core::testkit_visible! {
 /// The Dam Break's box obstacle, the transform of `WaterDamBreak.json`'s
 /// `obstacle_transform`: a unit cube scaled to 0.6 × 1.16 × 0.85 m standing
 /// on the floor in the column's path. Position, then scale.
-pub const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
+pub(crate) const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
+}
 
 /// Fluid role Collider and the role source's built-in cube, whose circumradius
 /// 0.866 makes it a unit cube before the transform.
@@ -72,10 +82,11 @@ const COLLIDER_ROLE: usize = 3;
 const CUBE_SHAPE: usize = 1;
 const UNIT_CUBE_RADIUS: f64 = 0.866_025_4;
 
+manifold_core::testkit_visible! {
 /// A liquid in a cubic tank: a pool `fill_height` deep plus one box, both
 /// in metres.
 #[derive(Clone, Copy, Debug)]
-pub struct WaterScene {
+pub(crate) struct WaterScene {
     pub pressure: PressureShape,
     /// The tank's side in metres: the domain's Domain Size.
     pub size: f64,
@@ -110,15 +121,20 @@ pub struct WaterScene {
     /// the high one; an open face's Closed param is off on the domain.
     pub closed_faces: u32,
 }
+}
 
 /// The domain's Closed params, in mask bit order.
 const CLOSED_PARAMS: [&str; 6] = ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"];
 
+manifold_core::testkit_visible! {
 /// The face grid's nodes in a scene built with `faces`, x, y and z.
-pub const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
+pub(crate) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
+}
 
+manifold_core::testkit_visible! {
 /// The water step node in every scene.
-pub const STEP_NODE: &str = "step";
+pub(crate) const STEP_NODE: &str = "step";
+}
 
 /// Particles per cell the fill seeds: one per half-cell site.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -378,13 +394,14 @@ const FIELD_WIRES: [&str; 9] = [
     "first_tick", "impulse_tick",
 ];
 
+manifold_core::testkit_visible! {
 /// A scene as a running liquid on the seam. The domain seeds the fill and
 /// runs the clock; the state's region runs one tick per due tick: `steps`
 /// water steps from `state.out`, then the tick's stats, closing into
 /// `state.in` and `state.stats_in`. The frame publishes each tick with the
 /// solid lattice. The harness sink holds the frame, or the surface mesh when
 /// `surface`.
-pub fn water_def(scene: WaterScene) -> EffectGraphDef {
+pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let mut b = Builder::default();
     let geometry = scene.geometry();
     let mut params = json!({
@@ -528,6 +545,7 @@ pub fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((sink, "out"), output, "in");
     serde_json::from_value(json!({"version": 3, "nodes": b.nodes, "wires": b.wires})).expect("water def")
 }
+}
 
 /// The collider and its visible box share this one transform in the preset.
 fn obstacle_source(b: &mut Builder) -> (usize, usize) {
@@ -553,10 +571,12 @@ fn obstacle_source(b: &mut Builder) -> (usize, usize) {
     (transform, collider)
 }
 
+manifold_core::testkit_visible! {
 /// The shipped GPU FLIP Dam Break supplies the authored camera, lights,
 /// environment, tank and tone map, plus the shared Liquid Surface group.
 /// The family itself is constructed by the recipe below.
-pub const SHIPPED_PRESET: &str = "WaterDamBreakGpuFlip";
+pub(crate) const SHIPPED_PRESET: &str = "WaterDamBreakGpuFlip";
+}
 
 fn shipped_preset() -> Value {
     let json = bundled_preset_json(&PresetTypeId::new(SHIPPED_PRESET)).expect("the GPU FLIP preset is bundled");
