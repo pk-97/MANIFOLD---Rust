@@ -63,7 +63,7 @@ notes = "D13: gate the clean vocal stem to derive near-truth activity regions; s
 
 # ---------------------------------------------------------------------------
 # Real-stem tracks (tests/fixtures/audio/*) — 5 tracks, Ableton stem splits,
-# exact BPM from directory name, kick-onset ground truth
+# fixture BPM metadata and reviewed visual kick-onset labels
 # (tests/fixtures/audio_labels/*.csv). Pre-existing fixtures for the Rust
 # mod_harness (docs/AUDIO_EVAL_HARNESS_GUIDE.md) — registered here too per
 # Peter's 2026-07-17 scope addition.
@@ -85,11 +85,12 @@ roles = ["drums", "grid"]
 license = "ours"
 path = "tests/fixtures/audio/apricots_128bpm"  # relative to the MAIN checkout, not this worktree
 labels_path = "tests/fixtures/audio_labels/apricots_128bpm.csv"
+review_path = "tests/fixtures/audio_labels/attack_review.csv"
 bpm = 128
 truth_kind = "kick_onset_csv"
 instrument_filter = "kick"  # the CSV enumerates kicks only — non-kick predicted events are not false positives against it
 label_tolerance_sec = 0.035  # this fixture's own historical convention (AUDIO_EVAL_HARNESS_GUIDE.md); D10's frozen ±50ms is what eval/metrics.py actually scores at
-n_labels = 16
+n_labels = 14
 
 [[fixture]]
 id = "bad_guy_128bpm"
@@ -100,11 +101,12 @@ roles = ["drums", "grid"]
 license = "ours"
 path = "tests/fixtures/audio/bad_guy_128bpm"
 labels_path = "tests/fixtures/audio_labels/bad_guy_128bpm.csv"
+review_path = "tests/fixtures/audio_labels/attack_review.csv"
 bpm = 128
 truth_kind = "kick_onset_csv"
 instrument_filter = "kick"
 label_tolerance_sec = 0.035
-n_labels = 17
+n_labels = 15
 notes = "Repaired 2026-10-09: mix reconstructed at unity gain from the unchanged 44100 Hz stems (661501 frames). Label columns now share stem time. See audio_labels/bad_guy_128bpm.repair.json for hashes. Old mix scores/calibration are invalid for this revision; perceptual onset-label audit remains pending (BUG-qtd)."
 
 [[fixture]]
@@ -116,11 +118,12 @@ roles = ["drums", "grid"]
 license = "ours"
 path = "tests/fixtures/audio/feel_the_vibration_174bpm"
 labels_path = "tests/fixtures/audio_labels/feel_the_vibration_174bpm.csv"
+review_path = "tests/fixtures/audio_labels/attack_review.csv"
 bpm = 174
 truth_kind = "kick_onset_csv"
 instrument_filter = "kick"
 label_tolerance_sec = 0.035
-n_labels = 16
+n_labels = 15
 
 [[fixture]]
 id = "inhale_exhale_145bpm"
@@ -131,11 +134,12 @@ roles = ["drums", "grid"]
 license = "ours"
 path = "tests/fixtures/audio/inhale_exhale_145bpm"
 labels_path = "tests/fixtures/audio_labels/inhale_exhale_145bpm.csv"
+review_path = "tests/fixtures/audio_labels/attack_review.csv"
 bpm = 145
 truth_kind = "kick_onset_csv"
 instrument_filter = "kick"
 label_tolerance_sec = 0.035
-n_labels = 14
+n_labels = 12
 
 [[fixture]]
 id = "tears_140bpm"
@@ -146,6 +150,7 @@ roles = ["drums", "grid"]
 license = "ours"
 path = "tests/fixtures/audio/tears_140bpm"
 labels_path = "tests/fixtures/audio_labels/tears_140bpm.csv"
+review_path = "tests/fixtures/audio_labels/attack_review.csv"
 bpm = 140
 truth_kind = "kick_onset_csv"
 instrument_filter = "kick"
