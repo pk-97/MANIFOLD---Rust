@@ -25,9 +25,9 @@ import numpy as np  # noqa: E402
 from sklearn.ensemble import HistGradientBoostingClassifier  # noqa: E402
 
 from tools.audio_analysis.eval.kick_goal_eval import (  # noqa: E402
-    GOAL, NEW_SONGS, TRACKS, Goal, add_whole_song_truth, nested, summarise, training_set)
+    GOAL, MORE_SONGS, NEW_SONGS, TRACKS, Goal, add_whole_song_truth, nested, summarise, training_set)
 
-ALL = tuple(TRACKS) + NEW_SONGS
+ALL = tuple(TRACKS) + NEW_SONGS + MORE_SONGS
 
 
 def gbt(g, whole, feats):

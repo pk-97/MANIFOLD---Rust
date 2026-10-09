@@ -29,7 +29,7 @@ from scipy.special import expit, logit
 
 from tools.audio_analysis.eval.kick_attack_rejection import read_audio
 from tools.audio_analysis.eval.kick_fusion_bandwise import fusion_features
-from tools.audio_analysis.eval.kick_goal_labels import DEV_STEMS, GOAL, NEW, fresh_onsets, kick_env_db, load
+from tools.audio_analysis.eval.kick_goal_labels import DEV_STEMS, GOAL, MORE, NEW, fresh_onsets, kick_env_db, load
 from tools.audio_analysis.eval.kick_goal_rolls import kick_notes
 from tools.audio_analysis.eval.kick_night_common import NIGHT, TRACKS, Data
 from tools.audio_analysis.eval.run_kick_dsp_experiments import evaluate
@@ -46,8 +46,12 @@ def stem_notes(track, kick_path, sr):
 
 REFRACTORY = .060
 TRUTH = os.environ.get('KICK_GOAL_TRUTH', 'strict')
-SUFFIX = '' if TRUTH == 'strict' else f'_{TRUTH}'
+MORE_ON = os.environ.get('KICK_GOAL_MORE') == '1'
+SUFFIX = ('' if TRUTH == 'strict' else f'_{TRUTH}') + ('_more' if MORE_ON else '')
 NEW_SONGS = ('pattern', 'back_to_you', 'burn_stems', 'cold_remix')
+# KICK_GOAL_MORE=1 adds the campaign 2 training songs (kick_goal_labels.MORE, labels_more.json).
+MORE_SONGS = tuple(MORE) if MORE_ON else ()
+STEM_CFG = {**NEW, **MORE}
 CORE_IDS = ('late_night_bass_heavy', 'midnight_patience_bass_heavy', 'expanded_midnight_patience_s2',
             'expanded_midnight_patience_s4', 'expanded_miracle_s1', 'miracle_bass', 'expanded_miracle_s4',
             'expanded_miracle_s6', 'heavy_on_mind_bass')
@@ -108,8 +112,10 @@ class Goal:
                        removed=sorted(removed), lag=lags[t]['song_lag_ms'] / 1000 if t in lags else 0.0)
             self._finish(rec, DEV_STEMS[t]['kick'] if t in DEV_STEMS else None)
             self.records[t] = rec
+        if MORE_SONGS:
+            self.labels['new'].update(json.loads((GOAL / 'labels_more.json').read_text())['new'])
         if with_new:
-            for name in NEW_SONGS:
+            for name in NEW_SONGS + MORE_SONGS:
                 self.records[name] = self._new(name)
 
     def _new(self, name):
@@ -126,11 +132,11 @@ class Goal:
             np.savez(cache, candidates=cand, available=avail, features=feats, hop=hop, duration=dur)
         shift = info['kick_lag_ms'] / 1000
         if self.mode == 'v3':
-            stem_kicks = stem_notes(name, NEW[name]['kick'], sr) + shift
+            stem_kicks = stem_notes(name, STEM_CFG[name]['kick'], sr) + shift
             labels = sorted([float(x) for x in stem_kicks if 1.0 <= x <= dur - 1.0] +
                             [x for x in info['labels'] if not np.any(np.abs(stem_kicks - x) <= .07)])
         else:
-            stem_kicks = fresh_onsets(kick_env_db(load(NEW[name]['kick'], sr), sr)) + shift
+            stem_kicks = fresh_onsets(kick_env_db(load(STEM_CFG[name]['kick'], sr), sr)) + shift
             labels = info['labels']
         regions = [(0.0, 1.2), (dur - 1.0, dur + 1.0)]
         for t in labels:
@@ -148,7 +154,7 @@ class Goal:
                    regions=[dict(start_s=a, end_s=b, reason='uncertain') for a, b in merged])
         rec = dict(track=name, source=src, ref=None, sample_rate=sr, hop=hop, candidates=cand, available=avail, all_labels=labels,
                    features=feats, duration=dur, removed=[], lag=shift)
-        self._finish(rec, NEW[name]['kick'])
+        self._finish(rec, STEM_CFG[name]['kick'])
         return rec
 
     def _finish(self, rec, kick_path):

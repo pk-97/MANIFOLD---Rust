@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import numpy as np  # noqa: E402
 
-from tools.audio_analysis.eval.kick_goal_eval import GOAL, NEW_SONGS, TRACKS, TRUTH, Goal  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_eval import GOAL, MORE_SONGS, NEW_SONGS, TRACKS, TRUTH, Goal  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_data import ALL  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_frontier import frontier, pooled, sweep  # noqa: E402
 
@@ -35,6 +35,8 @@ def main():
         res[pre or 'bare'] = dict(all=pooled(fr, labels, 0), all_floor=pooled(fr, labels, .8),
                                   dev=pooled({t: fr[t] for t in TRACKS}, labels, 0),
                                   new=pooled({t: fr[t] for t in NEW_SONGS}, labels, 0))
+        if MORE_SONGS:
+            res[pre or 'bare']['orig13'] = pooled({t: fr[t] for t in TRACKS + NEW_SONGS}, labels, 0)
         print(pre or 'bare', {k: v.get('best_balanced', v) for k, v in res[pre or 'bare'].items()}, flush=True)
     (GOAL / f'frontier_saved_{Path(sys.argv[1]).stem}.json').write_text(json.dumps(res, indent=1, default=float))
 

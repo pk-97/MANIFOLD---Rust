@@ -83,6 +83,22 @@ NEW = {
                        bass=[ABL / '2024/Eleonora - Cold - Remix Project/STEMS - Cold/_ BASS GUITAR.wav'],
                        parts_dir=ABL / '2024/Eleonora - Cold - Remix Project/STEMS - Cold'),
 }
+# Campaign 2 training songs: every local multitrack with a whole-song kick stem
+# (Rainfall's kick stem covers 45 s and is left out). No master exists, so the
+# mix is the sum of the folder's stems; no other stem carries the kick.
+REMIX = DROP / 'Old Albums Remix Stems And Extras/Remix Stems'
+GERRIT = ABL / 'Ableton 11/Gerrit Mixdown Project/STEMS'
+MORE = {
+    'gerrit': dict(mix=None, kick=GERRIT / 'Drums kick.wav', drums=[], bass=[], parts_dir=GERRIT),
+    'lh': dict(mix=None, kick=REMIX / 'LH Stems/Kick.wav', drums=[REMIX / 'LH Stems/Drums.wav'], bass=[],
+               parts_dir=REMIX / 'LH Stems'),
+    'eat_sleep': dict(mix=None, kick=[REMIX / 'Kx5 - Eat Sleep/EatSlp_ Kick.wav', REMIX / 'Kx5 - Eat Sleep/EatSlp_ Kick Small.wav'],
+                      drums=[], bass=[], parts_dir=REMIX / 'Kx5 - Eat Sleep'),
+    'business': dict(mix=None, kick=REMIX / 'Tiësto - Business (STEMS)-selected/@Kick.wav', drums=[], bass=[],
+                     parts_dir=REMIX / 'Tiësto - Business (STEMS)-selected'),
+    'worship': dict(mix=None, kick=REMIX / 'Worship - MAX/Worship Stems - MM_chunk_ass_kick 2-24b.wav', drums=[], bass=[],
+                    parts_dir=REMIX / 'Worship - MAX'),
+}
 MS = .001
 DRUM_KICK_SHARE = .25
 LAG_Z_MIN = 8.0
@@ -143,6 +159,11 @@ def lag(stem, mix, sr):
 
 
 def load(path, sr):
+    """One file, or the sum of several layers (cut to the shortest)."""
+    if isinstance(path, (list, tuple)):
+        xs = [read_audio(str(p), sr)[1] for p in path]
+        n = min(len(x) for x in xs)
+        return sum(x[:n] for x in xs)
     return read_audio(str(path), sr)[1]
 
 
@@ -232,9 +253,9 @@ def dev_labels(d):
     return out
 
 
-def new_labels():
+def new_labels(cfgs=NEW):
     out = {}
-    for name, cfg in NEW.items():
+    for name, cfg in cfgs.items():
         sr = read_audio(str(cfg['mix']))[0] if cfg['mix'] is not None else 48000
         kick = load(cfg['kick'], sr) if cfg['kick'] is not None else None
         mix_kind, mix_path, parts, shift, z = 'stem_sum', None, None, 0.0, None
@@ -270,6 +291,11 @@ def new_labels():
 
 def main():
     GOAL.mkdir(parents=True, exist_ok=True)
+    if sys.argv[1:] == ['more']:
+        path = GOAL / 'labels_more.json'
+        path.write_text(json.dumps(dict(method=__doc__, new=new_labels(MORE)), indent=1, default=str))
+        print(path, sha(path))
+        return
     d = Data()
     report = dict(method=__doc__, dev=dev_labels(d), new=new_labels())
     path = GOAL / 'labels_v2.json'
