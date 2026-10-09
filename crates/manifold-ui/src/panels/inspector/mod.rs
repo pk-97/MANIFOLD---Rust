@@ -1575,6 +1575,7 @@ mod tests {
             },
             value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
             audio: crate::panels::param_slider_shared::AudioRowState::default(),
+            clip_trigger: None,
             modulation: RowMod::default(),
             mapping: RowMapping {
                 osc_address: None,

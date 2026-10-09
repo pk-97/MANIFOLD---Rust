@@ -16,7 +16,7 @@ use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
 use super::cards::{
-    OscScope, SurfaceVisibility, attach_audio_sends, audio_send_choices, effects_to_surfaces,
+    OscScope, SurfaceVisibility, attach_project_sources, audio_send_choices, effects_to_surfaces,
     gen_params_to_surface, modifier_surfaces,
 };
 use super::scene::sections_for_nodes;
@@ -379,7 +379,7 @@ pub fn sync_inspector_data(
                             let (forces, force_picker) = if let (Some(gp), Some(def)) = (gen_inst, def.as_ref()) {
                                 let mut surfaces = modifier_surfaces(gp, def, &vm, layer_id.as_str(), automation_latched, driver_timing);
                                 surfaces.retain(|surface| super::cards::is_force_surface(surface, def));
-                                attach_audio_sends(&mut surfaces, &project.audio_setup);
+                                attach_project_sources(&mut surfaces, project);
                                 if let Some((target, param_id)) = selected_automation(&layer_id) {
                                     for surface in &mut surfaces {
                                         mark_selected_automation_row(surface, &layer_id, target, param_id);
@@ -1046,7 +1046,7 @@ pub fn sync_inspector_data(
                                     SurfaceVisibility::All,
                                     driver_timing,
                                 );
-                                attach_audio_sends(std::slice::from_mut(&mut surface), &project.audio_setup);
+                                attach_project_sources(std::slice::from_mut(&mut surface), project);
                                 if let Some(d) = def.as_ref() { super::material::enrich_surface(&mut surface, gp, d); }
                                 surface
                             });
@@ -1151,7 +1151,7 @@ pub fn sync_inspector_data(
         automation_latched,
         driver_timing,
     );
-    attach_audio_sends(&mut master_configs, &project.audio_setup);
+    attach_project_sources(&mut master_configs, project);
     ui.inspector.configure_master_effects(&master_configs);
     ui.inspector.configure_rack_groups(
         manifold_ui::InspectorTab::Master,
@@ -1218,7 +1218,7 @@ pub fn sync_inspector_data(
             if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
                 for surface in &mut layer_effects { mark_selected_automation_row(surface, &layer.layer_id, target, param_id); }
             }
-            attach_audio_sends(&mut layer_effects, &project.audio_setup);
+            attach_project_sources(&mut layer_effects, project);
             ui.inspector
                 .configure_layer_effects(&layer_effects, Some(&layer.layer_id));
             ui.inspector.configure_rack_groups(
@@ -1252,7 +1252,7 @@ pub fn sync_inspector_data(
                 if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
                     mark_selected_automation_row(c, &layer.layer_id, target, param_id);
                 }
-                attach_audio_sends(std::slice::from_mut(c), &project.audio_setup);
+                attach_project_sources(std::slice::from_mut(c), project);
             }
             let layer_id = layer.layer_id.clone();
             ui.inspector
@@ -1286,7 +1286,7 @@ pub fn sync_inspector_data(
                     let picker = super::cards::modifier_picker_entries(&def, &vm);
                     let mut surfaces = modifier_surfaces(gp, &def, &vm, lid, automation_latched, driver_timing);
                     surfaces.retain(|surface| !super::cards::is_force_surface(surface, &def));
-                    attach_audio_sends(&mut surfaces, &project.audio_setup);
+                    attach_project_sources(&mut surfaces, project);
                     if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
                         for surface in &mut surfaces { mark_selected_automation_row(surface, &layer.layer_id, target, param_id); }
                     }

@@ -268,6 +268,15 @@ pub enum UiGraphTarget {
     },
 }
 
+/// Read-only UI vocabulary for a parameter's clip timing assignment. The app
+/// converts this directly to the core source type at the command boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UiClipTriggerSource {
+    Main,
+    Disabled,
+    Lane(LayerId),
+}
+
 /// One lane strip's read-only render data: which param, whether it draws
 /// grayed (overridden), and the breakpoints the viewport samples into a
 /// screen-space polyline. `effect_id` + `param_id` are the identity key that

@@ -12,7 +12,7 @@ use manifold_core::effects::{AutomationLane, ParamEnvelope, ParameterDriver, Pre
 use serde::Serialize;
 use sha2::{Digest as ShaDigest, Sha256};
 
-const DIGEST_VERSION: &[u8] = b"manifold.physics-source-controls\0v1";
+const DIGEST_VERSION: &[u8] = b"manifold.physics-source-controls\0v2";
 
 #[cfg(test)]
 mod tests;
@@ -47,6 +47,11 @@ pub(super) fn digest(ids: &[String], instance: &PresetInstance) -> Result<[u8; 3
             writer.bool(param.spec.is_trigger);
             writer.bool(param.spec.is_trigger_gate);
             writer.bool(param.wraps());
+            hash_json(&mut writer, b"clip-source", &param.clip_trigger_source)?;
+            writer.bool(param.clip_control_digest.is_some());
+            if let Some(pattern) = &param.clip_control_digest {
+                writer.bytes(pattern)?;
+            }
 
             let base = instance.get_base_param(id);
             if !base.is_finite() {

@@ -684,6 +684,14 @@ pub enum ParamsAction {
     /// Open the searchable automation parameter chooser. `None` means the
     /// current inspector layer; `Some` is a layer-context invocation.
     OpenAutomationChooser(Option<LayerId>),
+    /// Both trigger assignment surfaces carry stable addresses captured at open.
+    OpenClipTriggerSource(crate::view::UiGraphTarget, ParamId),
+    OpenTriggerTargets(LayerId),
+    AssignClipTriggerSource(crate::view::UiGraphTarget, ParamId, crate::view::UiClipTriggerSource),
+    CreateTriggerLane {
+        owner: LayerId,
+        assignment: Option<(crate::view::UiGraphTarget, ParamId)>,
+    },
     /// Remove all arrangement automation for this parameter, with undo.
     ClearAutomation(GraphParamTarget, ParamId),
     MacroReset(usize), // macro_idx — reset to 0 from context menu

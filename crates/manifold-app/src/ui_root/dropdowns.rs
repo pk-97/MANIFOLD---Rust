@@ -272,6 +272,95 @@ fn scene_target_menu_items(
     items
 }
 
+/// Build the source assignment menu for one parameter. The target snapshot is
+/// the authority for both the current source and the compatible lane ids, so
+/// a stale or unavailable lane never appears as a selectable item.
+fn trigger_source_menu_items(
+    target: &crate::ui_bridge::TriggerTargetChoice,
+    sources: &[crate::ui_bridge::TriggerSourceChoice],
+) -> Vec<DropdownItem> {
+    let mut items = Vec::new();
+    if target.has_main_source {
+        items.push(DropdownItem::new("Main lane")
+            .with_check(target.source == manifold_ui::view::UiClipTriggerSource::Main)
+            .with_action(PanelAction::Params(ParamsAction::AssignClipTriggerSource(
+                target.target.clone(),
+                target.param_id.clone(),
+                manifold_ui::view::UiClipTriggerSource::Main,
+            ))));
+    }
+    items.push(DropdownItem::new("No source")
+            .with_check(target.source == manifold_ui::view::UiClipTriggerSource::Disabled
+                || (!target.has_main_source && target.source == manifold_ui::view::UiClipTriggerSource::Main))
+            .with_action(PanelAction::Params(ParamsAction::AssignClipTriggerSource(
+                target.target.clone(),
+                target.param_id.clone(),
+                manifold_ui::view::UiClipTriggerSource::Disabled,
+            ))));
+    for source in sources.iter().filter(|source| target.eligible_sources.contains(&source.id)) {
+        items.push(
+            DropdownItem::new(&source.label)
+                .with_check(
+                    target.source
+                        == manifold_ui::view::UiClipTriggerSource::Lane(source.id.clone()),
+                )
+                .with_action(PanelAction::Params(ParamsAction::AssignClipTriggerSource(
+                    target.target.clone(),
+                    target.param_id.clone(),
+                    manifold_ui::view::UiClipTriggerSource::Lane(source.id.clone()),
+                ))),
+        );
+    }
+    items.push(
+        DropdownItem::new("Create trigger lane")
+            .with_separator()
+            .with_action(PanelAction::Params(ParamsAction::CreateTriggerLane {
+                owner: target.owner.clone(),
+                assignment: Some((target.target.clone(), target.param_id.clone())),
+            })),
+    );
+    items
+}
+
+/// Build the searchable header picker. A selected target gets a visible check
+/// prefix because the shared action-list surface supports one current cursor,
+/// while this picker intentionally permits multiple assignments.
+fn trigger_target_picker_items(
+    layer_id: &LayerId,
+    targets: &[crate::ui_bridge::TriggerTargetChoice],
+) -> (Vec<manifold_ui::panels::picker_core::PickerItem>, Vec<PanelAction>) {
+    let mut items = Vec::new();
+    let mut actions = Vec::new();
+    for target in targets.iter().filter(|target| target.eligible_sources.contains(layer_id)) {
+        let assigned = target.source
+            == manifold_ui::view::UiClipTriggerSource::Lane(layer_id.clone());
+        let label = if assigned {
+            format!("✓ {}", target.label)
+        } else {
+            target.label.clone()
+        };
+        items.push(manifold_ui::panels::picker_core::PickerItem {
+            type_id: items.len().to_string(),
+            label,
+            category: Some(target.group_label.clone()),
+            search_text: None,
+            source: None,
+            thumbnail: None,
+        });
+        let source = if assigned {
+            manifold_ui::view::UiClipTriggerSource::Disabled
+        } else {
+            manifold_ui::view::UiClipTriggerSource::Lane(layer_id.clone())
+        };
+        actions.push(PanelAction::Params(ParamsAction::AssignClipTriggerSource(
+            target.target.clone(),
+            target.param_id.clone(),
+            source,
+        )));
+    }
+    (items, actions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{modifier_object_menu_items, preset_allowed_on_layer_type};
@@ -965,6 +1054,51 @@ impl UIRoot {
                 });
                 true
             }
+            PanelAction::Params(ParamsAction::OpenClipTriggerSource(target, param_id)) => {
+                let Some(target_choice) = self
+                    .trigger_routing
+                    .targets
+                    .iter()
+                    .find(|candidate| candidate.target == *target && candidate.param_id == *param_id)
+                else {
+                    return true;
+                };
+                let items = trigger_source_menu_items(
+                    target_choice,
+                    &self.trigger_routing.sources,
+                );
+                self.open_dropdown_typed(items, trigger);
+                true
+            }
+            PanelAction::Params(ParamsAction::OpenTriggerTargets(layer_id)) => {
+                use manifold_ui::panels::browser_popup::*;
+                let (items, actions) =
+                    trigger_target_picker_items(layer_id, &self.trigger_routing.targets);
+                let mut categories = Vec::new();
+                for item in &items {
+                    if let Some(category) = &item.category
+                        && !categories.contains(category)
+                    {
+                        categories.push(category.clone());
+                    }
+                }
+                self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
+                self.browser_popup.open_actions(BrowserPopupRequest {
+                    mode: BrowserPopupMode::Actions,
+                    tab: self.inspector.last_effect_tab(),
+                    layer_id: Some(layer_id.clone()),
+                    items,
+                    category_names: categories,
+                    spawn_graph_pos: None,
+                    paste_count: 0,
+                    screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
+                }, actions, ActionListOptions {
+                    empty_label: "No compatible trigger targets",
+                    ..Default::default()
+                });
+                self.overlay_dirty = true;
+                true
+            }
             PanelAction::Params(ParamsAction::AddEffectClicked { tab, layer_id }) => {
                 use manifold_core::{preset_def::PresetKind, preset_type_registry};
                 use manifold_ui::panels::browser_popup::*;
@@ -1350,10 +1484,25 @@ impl UIRoot {
                     .layer_info(*layer)
                     .map(|info| manifold_core::LayerId::new(&info.layer_id))
                 {
-                    items.push(
-                        DropdownItem::new("Import MIDI File")
-                            .with_action(PanelAction::Editing(EditingAction::ContextImportMidi(layer_id.clone()))),
-                    );
+                    let is_trigger = self
+                        .layer_headers
+                        .layer_info(*layer)
+                        .is_some_and(|info| info.is_trigger);
+                    if !is_trigger {
+                        items.push(
+                            DropdownItem::new("Import MIDI File")
+                                .with_action(PanelAction::Editing(EditingAction::ContextImportMidi(layer_id.clone()))),
+                        );
+                    }
+                    if !is_trigger {
+                        items.push(
+                            DropdownItem::new("Add trigger lane")
+                                .with_action(PanelAction::Params(ParamsAction::CreateTriggerLane {
+                                    owner: layer_id.clone(),
+                                    assignment: None,
+                                })),
+                        );
+                    }
                     items.push(
                         DropdownItem::new("Insert Video Layer")
                             .with_action(PanelAction::Editing(EditingAction::ContextAddVideoLayer(layer_id.clone()))),
@@ -1435,18 +1584,32 @@ impl UIRoot {
                 };
                 let layer_info = self.layer_headers.layer_info(li);
                 let is_group = layer_info.is_some_and(|l| l.is_group);
+                let is_trigger = layer_info.is_some_and(|l| l.is_trigger);
                 let mut items = vec![
                     DropdownItem::new("Paste")
                         .with_action(PanelAction::Editing(EditingAction::ContextPasteAtLayer(layer_id.clone()))),
-                    DropdownItem::new("Add/show automation lane…")
-                        .with_action(PanelAction::Params(ParamsAction::OpenAutomationChooser(
-                            Some(layer_id.clone()),
-                        ))),
                 ];
-                if !is_group {
+                if !is_trigger {
+                    items.push(
+                        DropdownItem::new("Add/show automation lane…")
+                            .with_action(PanelAction::Params(ParamsAction::OpenAutomationChooser(
+                                Some(layer_id.clone()),
+                            ))),
+                    );
+                }
+                if !is_group && !is_trigger {
                     items.push(
                         DropdownItem::new("Import MIDI File")
                             .with_action(PanelAction::Editing(EditingAction::ContextImportMidi(layer_id.clone()))),
+                    );
+                }
+                if !is_trigger {
+                    items.push(
+                        DropdownItem::new("Add trigger lane")
+                            .with_action(PanelAction::Params(ParamsAction::CreateTriggerLane {
+                                owner: layer_id.clone(),
+                                assignment: None,
+                            })),
                     );
                 }
                 items.push(
@@ -2076,6 +2239,7 @@ mod led_browser_scoped_open_tests {
     use super::*;
     use manifold_ui::node::Color32;
     use manifold_ui::panels::layer_header::LayerInfo;
+    use manifold_ui::view::{UiClipTriggerSource, UiGraphTarget};
 
     fn layer_info(name: &str, is_led_layer: bool) -> LayerInfo {
         LayerInfo {
@@ -2085,6 +2249,8 @@ mod led_browser_scoped_open_tests {
             is_group: false,
             is_generator: true,
             is_audio: false,
+            is_trigger: false,
+            trigger_targets_label: String::new(),
             is_muted: false,
             is_solo: false,
             analysis_only: false,
@@ -2189,5 +2355,68 @@ mod led_browser_scoped_open_tests {
                 .count(),
             "unscoped open must list more than just the LED presets"
         );
+    }
+
+    #[test]
+    fn trigger_source_menu_keeps_only_eligible_lanes_and_captures_assignment() {
+        use crate::ui_bridge::{TriggerSourceChoice, TriggerTargetChoice};
+
+        let target = TriggerTargetChoice {
+            owner: LayerId::new("owner"),
+            target: UiGraphTarget::Generator(LayerId::new("owner")),
+            param_id: "fire".into(),
+            label: "Owner / Fire".into(),
+            group_label: "Owner".into(),
+            has_main_source: true,
+            source: UiClipTriggerSource::Main,
+            eligible_sources: vec![LayerId::new("lane-a")],
+        };
+        let items = super::trigger_source_menu_items(
+            &target,
+            &[
+                TriggerSourceChoice { id: LayerId::new("lane-a"), label: "Lane A".into() },
+                TriggerSourceChoice { id: LayerId::new("lane-b"), label: "Lane B".into() },
+            ],
+        );
+        assert!(items.iter().any(|item| item.label == "Lane A"));
+        assert!(!items.iter().any(|item| item.label == "Lane B"));
+        assert!(items.iter().any(|item| item.label == "Create trigger lane"));
+        assert!(items.iter().any(|item| matches!(item.action.as_ref(),
+            Some(PanelAction::Params(manifold_ui::ParamsAction::AssignClipTriggerSource(
+                target @ UiGraphTarget::Generator(id), param, UiClipTriggerSource::Lane(lane)
+            ))) if *target == UiGraphTarget::Generator(LayerId::new("owner"))
+                && id == &LayerId::new("owner")
+                && param.as_ref() == "fire"
+                && lane == &LayerId::new("lane-a")
+        )));
+    }
+
+    #[test]
+    fn trigger_target_picker_marks_assigned_targets_and_toggles_them_off() {
+        use crate::ui_bridge::TriggerTargetChoice;
+
+        let target = TriggerTargetChoice {
+            owner: LayerId::new("owner"),
+            target: UiGraphTarget::Generator(LayerId::new("owner")),
+            param_id: "fire".into(),
+            label: "Owner / Fire".into(),
+            group_label: "Owner".into(),
+            has_main_source: true,
+            source: UiClipTriggerSource::Lane(LayerId::new("lane")),
+            eligible_sources: vec![LayerId::new("lane")],
+        };
+        let (items, actions) = super::trigger_target_picker_items(
+            &LayerId::new("lane"),
+            &[target],
+        );
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "✓ Owner / Fire");
+        assert_eq!(items[0].category.as_deref(), Some("Owner"));
+        assert!(items[0].thumbnail.is_none());
+        assert!(matches!(actions.as_slice(), [
+            PanelAction::Params(manifold_ui::ParamsAction::AssignClipTriggerSource(
+                UiGraphTarget::Generator(id), param, UiClipTriggerSource::Disabled
+            ))
+        ] if id == &LayerId::new("owner") && param.as_ref() == "fire"));
     }
 }

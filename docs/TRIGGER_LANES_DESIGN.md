@@ -2,13 +2,14 @@
 
 <!-- index: Child trigger lanes with no thumbnails; shared assignment from lane headers and parameter drawers. Current-code audit, proposed architecture, and first-slice acceptance contract. -->
 
-**Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence, undoable assignment,
-trigger lane/clip kinds, media exclusion, ownership deletion/duplication, shared
-arrangement/live/session timing and source-timed delivery are implemented.
-Authoring commands now validate ownership and routing, create-and-assign in one
-undo step, and preserve trigger ownership when grouping or reordering. Source
-mute and renderer-free live launches are implemented. Authoring UI and full
-runtime acceptance remain pending; these foundations are not yet all landed.
+**Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence, trigger lane/clip
+kinds, media exclusion, ownership editing, shared arrangement/live/session timing
+and source-timed delivery are landed. The combined foundation gate passed.
+Header/drawer authoring, atomic response arming and backward-clock cancellation
+pass focused tests and clippy. The 34-step assignment UI flow passed with rendered
+header/drawer states inspected. Source-pattern invalidation and actual numeric
+playback through real save/load, disconnect and undo pass focused CPU checks.
+Full feature acceptance, including rendered force isolation, is still open.
 **Tracking:** `BUG-tqtel` (feature).
 **Prerequisites:** crate refactor landed; reverify the audited seams against subsequent cleanup.
 **Execution contract:** read `DESIGN_DOC_STANDARD.md` sections 5–6 before briefing
@@ -334,9 +335,11 @@ cannot overwrite earlier session samples or replay a start from before resumptio
 `session_mode::back_to_arrangement_preserves_control_history_and_phase` reproduces
 the former error and checks repeated transitions, stopped-session gaps and seeking.
 
-Full acceptance below remains open: external-clock discontinuities
-and rendered scene timing must be completed before exposing
-trigger lanes. CPU event-order proofs do not establish rendered scene behaviour.
+Direct backward clock corrections now clear pending starts, Fire delivery and
+source-assignment cutoffs, using destination membership without restarting the
+scene. Focused clock regressions pass. Full acceptance below,
+including rendered scene timing, is still open; CPU event-order proofs do not
+establish rendered scene behaviour.
 
 ### Model, scheduling and delivery
 
@@ -434,26 +437,20 @@ no thumbnail requests. Use the generic owner model from the outset; the demo's o
 generator is a fixture, not a generator-only implementation. Target L3 using the
 existing UI flow harness plus a playback-value integration test.
 
-**P1 is not ready to dispatch.** The lead must close these named entry blockers and
-write its exact signatures, exhaustive call-site inventory, named test modules and
-runnable commands under `DESIGN_DOC_STANDARD.md` sections 5–6:
+**P1 authoring passes focused checks.** The `trigger-lane-assignment` UI flow
+verifies creation from both entry points, assignment, disconnect and undo/redo.
+Rendered header/drawer states are inspected; numeric playback after real save/load
+passes its separate integration check. Full acceptance remains open. The foundation
+contracts below resolve the original entry blockers:
 
 1. **Resolved: mute policy (D6).** Owner mute does not suppress child control output.
-2. **Lead: source/response persistence seam.** Pin the exact manifest field,
-   disconnected versus implicit-main representation, and command payload. Specify
-   atomic response creation from the header and clip-only Fire arming without an
-   audio send. Header unassignment must have one unambiguous serialized meaning.
-3. **Lead: timing seam.** Pin the scheduler's stable source events, short-clip and
-   seek policy, loop/retrigger rules and per-parameter frame/hop sampling signatures.
-   Inventory all callers before replacing `clip_edge_layers` or `active_elapsed`.
-   The replacement must serve existing main-lane modulation as well as new trigger
-   children; keeping the old independent timing path for existing layers fails the
-   foundation requirement. Pin the snapshot/retained composition migration and its
-   behavioural characterization checks at this same boundary.
-4. **Lead: ownership lifecycle.** Pin deletion of trigger children with their owner,
-   group ungrouping, source deletion, moving a target out of scope and subtree
-   duplication/remapping. Orphan rescue must preserve data without turning a
-   trigger lane into a playable media layer.
+2. **Source/response persistence:** the parameter owns the source; validated
+   assignment arms an existing response in the same undo step (contract below).
+3. **Timing:** `ClipControlFrame`, shared composition and typed delivery serve
+   main and child sources together. Section 4 records interval and seek semantics.
+4. **Ownership:** creation, deletion, ungrouping, reordering and subtree duplication
+   preserve trigger ownership and stable source IDs. Missing/out-of-scope sources
+   stay inert and retain their authored identity.
 
 ### Source persistence and assignment contract
 
@@ -469,10 +466,33 @@ template reconciliation and graph-manifest refresh.
 `manifold-editing::commands::trigger_source::SetParamClipTriggerSourceCommand::new`
 takes `(GraphTarget, ParamId, ClipTriggerSource)`. It captures the old source at
 execution and restores it on undo, resolving through `Project::graph_target_owner_mut`.
-Both UI surfaces will dispatch this command through `EditingService`; scene
+Both UI surfaces dispatch this command through `EditingService`; scene
 modifier rows pass the owning manifest's public macro parameter ID. A missing
-owner/parameter is inert. Source-scope validation and atomic response creation
-belong to the later authoring operation, not a second persisted route list.
+owner/parameter is inert. `for_assignment` validates source scope at execution and
+arms a compatible response atomically. Numeric parameters retain their enabled
+envelope or clip-driven Step/Random response; otherwise assignment enables or
+creates their envelope. Named Fire retains active transient input by selecting
+Both, or creates a clip-only response without an audio send. Disabled disconnects
+only clip timing. Undo restores source and response together. Legacy broadcast
+Gate parameters are excluded from this targeted picker.
+
+`TriggerRoutingCatalog` projects the same manifest addresses for the header and
+drawer. Scene modifier rows use their host generator and public parameter ID,
+including macro edit locks. The header derives its checked targets from parameter
+state. Both surfaces queue content-owned commands; accepted snapshots update their
+labels. Creating a lane selects and reveals it; selecting a drawer source reveals
+the lane without changing the inspected parameter. Reveals expand collapsed owners
+on the content thread. Header-to-drawer navigation remains outstanding.
+
+Playback reconciliation also derives each source's authored pattern identity once
+per reconciliation, reusing the source map. Parameters carry the selected identity
+as runtime-only `clip_control_digest`; prepared physics controls hash it together
+with `clip_trigger_source`. Arrangement starts/durations, clip mute, trigger-lane
+mute and authored session sequences participate. Parent mute, names, live launch
+cursors, meters and counters do not. Project initialization rebuilds the identity
+before notifying renderers. Hashing streams directly into SHA-256 and needs no
+per-frame JSON buffer. The focused edit/reload digest proof passes, alongside the
+existing authored-control tests that exclude counters and sampled values.
 
 Focused checks for this seam: `cargo test -p manifold-core --lib trigger_source`
 and `cargo test -p manifold-editing --lib commands::trigger_source`, with

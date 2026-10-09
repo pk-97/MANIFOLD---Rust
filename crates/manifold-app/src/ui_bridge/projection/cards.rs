@@ -163,6 +163,13 @@ pub(crate) fn attach_audio_sends(configs: &mut [ParamSurface], setup: &manifold_
     }
 }
 
+/// Attach every project-backed source choice at the structural projection seam.
+/// Audio sends and clip-trigger assignments therefore share one cold/dirty pass.
+pub(crate) fn attach_project_sources(configs: &mut [ParamSurface], project: &Project) {
+    attach_audio_sends(configs, &project.audio_setup);
+    super::trigger_routing::attach_trigger_sources(configs, project);
+}
+
 pub(crate) fn audio_send_choices(
     setup: &manifold_core::audio_setup::AudioSetup,
 ) -> Vec<AudioSendChoice> {
@@ -503,6 +510,7 @@ fn param_surface(
                 rgb_members: None,
                 material_attached: false,
                 audio: Default::default(),
+                clip_trigger: None,
             }
         })
         .collect();
@@ -663,7 +671,7 @@ pub(crate) fn gen_params_to_surface(
     visibility: SurfaceVisibility,
     timing: (manifold_core::Bpm, f32),
 ) -> ParamSurface {
-    param_surface(
+    let mut surface = param_surface(
         gp,
         manifold_core::preset_def::PresetKind::Generator,
         0,
@@ -673,7 +681,9 @@ pub(crate) fn gen_params_to_surface(
         visibility,
         timing,
     )
-    .expect("generator param_surface always yields a config")
+    .expect("generator param_surface always yields a config");
+    surface.layer_id = Some(manifold_core::LayerId::new(layer_id));
+    surface
 }
 
 fn scene_ref_for_vm(
@@ -1250,8 +1260,22 @@ mod modifier_audio_projection_tests {
         assert!(modifier_picker_entries(&graph, &vm).iter().all(|entry| entry.preset_id != "RadialForce"));
         let mut project = manifold_core::project::Project::default();
         let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), host.generator_type().clone(), 0);
+        layer.layer_id = manifold_core::LayerId::new("layer");
         *layer.gen_params_mut().unwrap() = host;
         project.timeline.layers.push(layer);
+        let mut source = manifold_core::layer::Layer::new_trigger("Hits".into(), "layer".into(), 1);
+        source.layer_id = "hits".into();
+        project.timeline.layers.push(source);
+        project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut(&strength).unwrap()
+            .clip_trigger_source = manifold_core::params::ClipTriggerSource::Lane { layer_id: "hits".into() };
+        let mut projected = surfaces.clone();
+        attach_project_sources(&mut projected, &project);
+        let row = projected[0].rows.iter().find(|row| row.id.as_ref() == strength).unwrap();
+        let route = row.clip_trigger.as_ref().expect("force card source selector");
+        assert_eq!(route.target, manifold_ui::view::UiGraphTarget::Generator("layer".into()));
+        assert_eq!(route.source_label, "Hits");
+        let catalog = super::super::trigger_routing::TriggerRoutingCatalog::project(&project);
+        assert_eq!(catalog.targets.iter().filter(|target| target.param_id.as_ref() == strength).count(), 1);
         let saved = serde_json::to_vec(&project).unwrap();
         let mut loaded: manifold_core::project::Project = serde_json::from_slice(&saved).unwrap();
         assert_eq!(loaded.reconcile_param_manifests(), 0);

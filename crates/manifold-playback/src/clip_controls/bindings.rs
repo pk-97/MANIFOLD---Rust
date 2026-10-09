@@ -53,7 +53,7 @@ impl ClipControlFrame {
     /// project serialization and undo continue to own the parameter assignment.
     pub(crate) fn reconcile_bindings(
         &mut self,
-        project: &Project,
+        project: &mut Project,
         beat: Beats,
         mut source_changed: impl FnMut(&EffectId, &str),
     ) {
@@ -69,15 +69,19 @@ impl ClipControlFrame {
                 layer.layer_type,
                 layer.parent_layer_id.clone(),
             );
+            self.by_source.get_mut(&layer.layer_id).unwrap().pattern_digest = Some(
+                manifold_core::project::clip_trigger_pattern_digest(layer, &project.session),
+            );
         }
-        for layer in &project.timeline.layers {
-            if let Some(effects) = &layer.effects {
+        for layer in &mut project.timeline.layers {
+            let owner = layer.layer_id.clone();
+            if let Some(effects) = &mut layer.effects {
                 for instance in effects {
-                    self.reconcile_instance(instance, &layer.layer_id, beat, &mut source_changed);
+                    self.reconcile_instance(instance, &owner, beat, &mut source_changed);
                 }
             }
-            if let Some(instance) = layer.gen_params() {
-                self.reconcile_instance(instance, &layer.layer_id, beat, &mut source_changed);
+            if let Some(instance) = layer.gen_params_mut() {
+                self.reconcile_instance(instance, &owner, beat, &mut source_changed);
             }
         }
         self.bindings.instances.retain(|owner, instance| {
@@ -94,15 +98,18 @@ impl ClipControlFrame {
 
     fn reconcile_instance(
         &mut self,
-        instance: &PresetInstance,
+        instance: &mut PresetInstance,
         owner: &LayerId,
         beat: Beats,
         source_changed: &mut impl FnMut(&EffectId, &str),
     ) {
-        for param in instance.params.iter() {
+        for param in instance.params.iter_mut() {
             let source = if instance.enabled {
                 self.source_layer(&param.clip_trigger_source, Some(owner)).cloned()
             } else { None };
+            param.clip_control_digest = source.as_ref()
+                .and_then(|id| self.by_source.get(id))
+                .and_then(|source| source.pattern_digest);
             let cutoff = EventCutoff {
                 beat,
                 sequence: self.next_sequence,
@@ -182,7 +189,7 @@ mod tests {
         let mut project = Project::default();
         project.timeline.layers = vec![owner, lane];
         let mut frame = ClipControlFrame::default();
-        frame.reconcile_bindings(&project, Beats::ZERO, |_, _| {});
+        frame.reconcile_bindings(&mut project, Beats::ZERO, |_, _| {});
         let event = |id, beat| ClipControlStart {
             clip_id: ClipId::new(id),
             beat: Beats(beat),
@@ -199,7 +206,7 @@ mod tests {
             .clip_trigger_source = ClipTriggerSource::Lane {
             layer_id: source.clone(),
         };
-        frame.reconcile_bindings(&project, Beats(2.0), |_, _| {});
+        frame.reconcile_bindings(&mut project, Beats(2.0), |_, _| {});
         frame.record_start(source.clone(), event("late-history", 1.0));
         frame.record_start(source.clone(), event("new", 2.0));
         frame.record_start(source, event("future", 3.0));
@@ -217,9 +224,9 @@ mod tests {
         );
 
         project.timeline.layers[0].gen_params_mut().unwrap().enabled = false;
-        frame.reconcile_bindings(&project, Beats(3.0), |_, _| {});
+        frame.reconcile_bindings(&mut project, Beats(3.0), |_, _| {});
         project.timeline.layers[0].gen_params_mut().unwrap().enabled = true;
-        frame.reconcile_bindings(&project, Beats(3.0), |_, _| {});
+        frame.reconcile_bindings(&mut project, Beats(3.0), |_, _| {});
         let owner = &project.timeline.layers[0];
         let instance = owner.gen_params().unwrap();
         let param = instance.params.get("value").unwrap();

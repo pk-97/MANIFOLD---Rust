@@ -315,6 +315,7 @@ pub struct UIRoot {
     /// One-shot view request, consumed after lane geometry is projected.
     pub(crate) pending_automation_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
     pub(crate) automation_chooser_candidates: Vec<AutomationChooserCandidate>,
+    pub(crate) trigger_routing: crate::ui_bridge::TriggerRoutingCatalog,
     pub(crate) pinned_automation_lanes: Vec<manifold_ui::ui_state::AutomationLaneKey>,
 
     /// Cached macro slot labels for context menu display.
@@ -511,6 +512,7 @@ impl UIRoot {
             last_right_click_pos: Vec2::new(0.0, 0.0),
             pending_automation_reveal: None,
             automation_chooser_candidates: Vec::new(),
+            trigger_routing: Default::default(),
             pinned_automation_lanes: Vec::new(),
             macro_labels: std::array::from_fn(|_| String::new()),
             macro_mapping_descs: std::array::from_fn(|_| Vec::new()),
@@ -1813,6 +1815,7 @@ mod tick_parity_tests {
                 rgb_members: None,
                 material_attached: false,
                 audio: Default::default(),
+                clip_trigger: None,
             }],
             string_params: Vec::new(),
             collapsed,

@@ -1273,6 +1273,7 @@ pub(super) mod tests {
                     },
                     value: RowValue { base: 10.0, effective: 10.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),
+                    clip_trigger: None,
                     modulation: RowMod::default(),
                     mapping: RowMapping {
                         osc_address: None,
@@ -1305,6 +1306,7 @@ pub(super) mod tests {
                     },
                     value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
                     audio: AudioRowState::default(),
+                    clip_trigger: None,
                     modulation: RowMod::default(),
                     mapping: RowMapping {
                         osc_address: None,
@@ -1350,6 +1352,7 @@ pub(super) mod tests {
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
             audio: AudioRowState::default(),
+            clip_trigger: None,
             modulation: RowMod::default(),
             mapping: RowMapping {
                 osc_address: None,
@@ -1382,6 +1385,7 @@ pub(super) mod tests {
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
             audio: AudioRowState::default(),
+            clip_trigger: None,
             modulation: RowMod::default(),
             mapping: RowMapping {
                 osc_address: None,
@@ -1627,6 +1631,7 @@ pub(super) mod tests {
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
             audio: AudioRowState::default(),
+            clip_trigger: None,
             modulation: RowMod::default(),
             mapping: RowMapping {
                 osc_address: None,
@@ -1661,6 +1666,104 @@ pub(super) mod tests {
         c.rows[fi].spec.is_trigger_gate = false;
         c.rows[fi].audio.trigger_mode_idx = 1; // Audio/Transient
         c
+    }
+
+    fn clip_trigger_row() -> crate::param_surface::ClipTriggerRow {
+        crate::param_surface::ClipTriggerRow {
+            target: crate::view::UiGraphTarget::Effect(EffectId::new("stable-owner")),
+            source_label: "Owner lane".into(),
+        }
+    }
+
+    #[test]
+    fn envelope_clip_source_button_emits_stable_target_and_param() {
+        let mut config = effect_config();
+        config.rows[0].clip_trigger = Some(clip_trigger_row());
+        config.rows[0].modulation.envelope_active = true;
+
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&config);
+        let mut tree = UITree::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        let envelope = panel.row_host.envelope_config_ids[0].as_ref().expect("envelope drawer");
+        let source_button = envelope.drawer.button_ids()[0];
+        let actions = panel.handle_click(source_button, &tree);
+        let [PanelAction::Params(ParamsAction::OpenClipTriggerSource(
+            crate::view::UiGraphTarget::Effect(owner), param_id,
+        ))] = actions.as_slice()
+        else {
+            panic!("expected stable envelope clip-source action, got {actions:?}");
+        };
+        assert_eq!(owner, &EffectId::new("stable-owner"));
+        assert_eq!(param_id.as_ref(), "radius");
+
+        let expected = crate::panels::param_slider_shared::envelope_config_height(
+            &panel.rows[0],
+            &panel.state.mod_state,
+            0,
+        );
+        assert!((panel.row_drawer_height(0) - expected - DRAWER_BOTTOM_GAP).abs() < 0.1);
+    }
+
+    #[test]
+    fn clip_edge_fire_audio_source_button_emits_stable_target_and_param() {
+        let mut config = effect_config_with_fire();
+        let fi = config.rows.len() - 1;
+        config.rows[fi].clip_trigger = Some(clip_trigger_row());
+        config.rows[fi].audio.trigger_mode_idx = 2; // Both
+
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&config);
+        let mut tree = UITree::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 500.0));
+
+        let audio = panel.row_host.audio_configs[fi].as_ref().expect("audio drawer");
+        let source_button = audio.0.button_ids()[1]; // send, then clip source
+        let actions = panel.handle_click(source_button, &tree);
+        let [PanelAction::Params(ParamsAction::OpenClipTriggerSource(
+            crate::view::UiGraphTarget::Effect(owner), param_id,
+        ))] = actions.as_slice()
+        else {
+            panic!("expected stable audio clip-source action, got {actions:?}");
+        };
+        assert_eq!(owner, &EffectId::new("stable-owner"));
+        assert_eq!(param_id.as_ref(), "clip_trigger");
+
+        let expected = crate::panels::param_slider_shared::audio_config_height(
+            &panel.rows[fi],
+            &panel.state.mod_state,
+            fi,
+        );
+        assert!((panel.row_drawer_height(fi) - expected - DRAWER_BOTTOM_GAP).abs() < 0.1);
+    }
+
+    #[test]
+    fn transient_continuous_and_gate_audio_drawers_hide_clip_source() {
+        let mut transient = effect_config_with_fire();
+        let ti = transient.rows.len() - 1;
+        transient.rows[ti].clip_trigger = Some(clip_trigger_row());
+        transient.rows[ti].audio.trigger_mode_idx = 1; // Audio only
+
+        let mut continuous = transient.clone();
+        continuous.rows[ti].spec.is_trigger = false;
+        continuous.rows[ti].audio.action_idx = 0; // Continuous
+        continuous.rows[ti].audio.trigger_mode_idx = 2; // mode alone is insufficient
+
+        let mut gate = effect_config_with_trigger_gate();
+        let gi = gate.rows.len() - 1;
+        gate.rows[gi].clip_trigger = Some(clip_trigger_row());
+
+        for config in [transient, continuous, gate] {
+            let mut panel = ParamCardPanel::new();
+            panel.configure(&config);
+            let mut tree = UITree::new();
+            panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 500.0));
+            assert!(!tree
+                .nodes()
+                .iter()
+                .any(|node| node.text.as_deref() == Some("Owner lane")));
+        }
     }
 
     #[test]
@@ -3370,6 +3473,7 @@ pub(super) mod tests {
                     },
                     value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),
+                    clip_trigger: None,
                     modulation: RowMod::default(),
                     mapping: RowMapping {
                         osc_address: None,
@@ -3402,6 +3506,7 @@ pub(super) mod tests {
                     },
                     value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),
+                    clip_trigger: None,
                     modulation: RowMod::default(),
                     mapping: RowMapping {
                         osc_address: None,
@@ -3434,6 +3539,7 @@ pub(super) mod tests {
                     },
                     value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),
+                    clip_trigger: None,
                     modulation: RowMod::default(),
                     mapping: RowMapping {
                         osc_address: None,

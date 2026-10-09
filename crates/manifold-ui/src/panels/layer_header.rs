@@ -1,4 +1,4 @@
-use crate::{EditingAction, LayerAction, ProjectAction, RootAction};
+use crate::{EditingAction, LayerAction, ParamsAction, ProjectAction, RootAction};
 use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
 use crate::color::{self, darken, lighten};
@@ -254,6 +254,12 @@ pub struct LayerInfo {
     /// Audio "analysis-only" output state: silent to master, still feeding its
     /// send. Drives the teal `A` toggle on the audio row. See LAYER_CONTROLS section 5.3.
     pub analysis_only: bool,
+    /// True for a trigger lane. Trigger rows keep their own mute and MIDI
+    /// routing, but replace media/mix controls with the target assignment.
+    pub is_trigger: bool,
+    /// Snapshot label for the trigger target assignment chip (for example
+    /// "No targets" or "Kick + 2").
+    pub trigger_targets_label: String,
     pub is_led: bool,
     /// True for `LayerType::Dmx`. The lane's L chip is then an LED state
     /// indicator, not the mirror toggle: rendered permanently on and
@@ -318,6 +324,7 @@ enum LayerControl {
     Solo,
     Led,
     Blend,
+    TriggerTargets,
     /// Hairline rule under the mix row separating M/S/L/Blend from the routing
     /// form (section K). Decoration — non-interactive, drawn over the background.
     MixDivider,
@@ -339,7 +346,7 @@ enum LayerControl {
     Analysis,
 }
 
-const N_CONTROLS: usize = 30;
+const N_CONTROLS: usize = 31;
 
 impl LayerControl {
     /// All controls in declaration (build / z) order.
@@ -357,6 +364,7 @@ impl LayerControl {
         LayerControl::Solo,
         LayerControl::Led,
         LayerControl::Blend,
+        LayerControl::TriggerTargets,
         LayerControl::MixDivider,
         LayerControl::Separator,
         LayerControl::Info,
@@ -433,6 +441,7 @@ fn compute_layer_row(
     is_group: bool,
     is_generator: bool,
     is_audio: bool,
+    is_trigger: bool,
     is_child: bool,
     is_last_child: bool,
     is_group_expanded: bool,
@@ -528,6 +537,53 @@ fn compute_layer_row(
     let mut btn_x = pad;
     d.set(C::Mute, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
     btn_x += MS_BTN_W + MSL_GAP;
+
+    if is_trigger {
+        let target_w = (w - btn_x - right_pad - RIGHT_GUTTER).max(20.0);
+        d.set(C::TriggerTargets, Rect::new(btn_x, y, target_w, BTN_H));
+        y += BTN_H;
+
+        // A collapsed trigger lane still exposes its target assignment in the
+        // header row, but omits the secondary MIDI routing rows.
+        let sep_h = SEP_H;
+        if is_collapsed {
+            d.set(
+                C::Separator,
+                Rect::new(card_x, y_offset + height - sep_h, card_w, sep_h),
+            );
+            return d;
+        }
+
+        let right_edge = w - right_pad - RIGHT_GUTTER;
+        let div_y = (y + MIX_DIVIDER_PAD).round();
+        d.set(
+            C::MixDivider,
+            Rect::new(pad, div_y, (right_edge - pad).max(1.0), MIX_DIVIDER_THICK),
+        );
+        y = div_y + MIX_DIVIDER_THICK + MIX_DIVIDER_PAD;
+        let val_x = pad + LBL_W + 6.0;
+        let val_w = (right_edge - val_x).max(20.0);
+        let mode_x = right_edge - MODE_TOGGLE_W;
+
+        d.set(C::MidiLabel, Rect::new(pad, y, LBL_W, BTN_H));
+        d.set(
+            C::MidiInput,
+            Rect::new(val_x, y, (mode_x - 4.0 - val_x).max(10.0), BTN_H),
+        );
+        d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
+        y += BTN_H + ROUTING_ROW_GAP;
+        d.set(C::ChLabel, Rect::new(pad, y, LBL_W, BTN_H));
+        d.set(C::ChDropdown, Rect::new(val_x, y, val_w, BTN_H));
+        y += BTN_H + ROUTING_ROW_GAP;
+        d.set(C::DevLabel, Rect::new(pad, y, LBL_W, BTN_H));
+        d.set(C::DevDropdown, Rect::new(val_x, y, val_w, BTN_H));
+        d.set(
+            C::Separator,
+            Rect::new(card_x, y_offset + height - sep_h, card_w, sep_h),
+        );
+        return d;
+    }
+
     d.set(C::Solo, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
     btn_x += MS_BTN_W + MSL_GAP;
 
@@ -1863,6 +1919,15 @@ impl LayerHeaderPanel {
                         &layer.blend_mode,
                     )
                 }
+                C::TriggerTargets => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    value_chip_style(layer.color),
+                    &layer.trigger_targets_label,
+                ),
                 C::MixDivider => tree.add_panel(
                     clip_parent,
                     r.x,
@@ -2148,6 +2213,9 @@ impl LayerHeaderPanel {
                     C::Led => vec![PanelAction::Layer(LayerAction::ToggleLed(lid))],
                     C::Chevron => vec![PanelAction::Layer(LayerAction::ChevronClicked(lid))],
                     C::Blend => vec![PanelAction::Layer(LayerAction::BlendModeClicked(lid))],
+                    C::TriggerTargets => vec![PanelAction::Params(
+                        ParamsAction::OpenTriggerTargets(lid),
+                    )],
                     C::Folder => vec![PanelAction::Layer(LayerAction::FolderClicked(lid))],
                     C::NewClip => vec![PanelAction::Layer(LayerAction::NewClipClicked(lid))],
                     C::AddGenClip => vec![PanelAction::Layer(LayerAction::AddGenClipClicked(lid))],
@@ -2379,6 +2447,7 @@ impl LayerHeaderPanel {
                 layer.is_group,
                 layer.is_generator,
                 layer.is_audio,
+                layer.is_trigger,
                 is_child,
                 is_last_child,
                 layer.is_group && !layer.is_collapsed,
@@ -2522,6 +2591,8 @@ pub(super) mod tests {
             is_group: false,
             is_generator: false,
             is_audio: false,
+            is_trigger: false,
+            trigger_targets_label: "No targets".into(),
             is_muted: false,
             is_solo: false,
             analysis_only: false,
@@ -2556,6 +2627,14 @@ pub(super) mod tests {
         LayerInfo {
             is_generator: true,
             generator_type: Some("Plasma".into()),
+            ..make_video_layer(name)
+        }
+    }
+
+    fn make_trigger_layer(name: &str) -> LayerInfo {
+        LayerInfo {
+            is_trigger: true,
+            trigger_targets_label: "Kick + 2".into(),
             ..make_video_layer(name)
         }
     }
@@ -2741,6 +2820,48 @@ pub(super) mod tests {
         );
         assert_eq!(a.len(), 1);
         assert!(matches!(&a[0], PanelAction::Layer(LayerAction::ToggleSolo(id)) if *id == LayerId::new("L1")));
+    }
+
+    #[test]
+    fn trigger_header_opens_targets_and_hides_media_controls() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+        let layers = vec![make_trigger_layer("Trigger")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+
+        let row = &panel.rows[0];
+        assert!(row.id(LayerControl::Mute).is_some());
+        assert!(row.id(LayerControl::TriggerTargets).is_some());
+        assert!(row.id(LayerControl::MidiInput).is_some());
+        assert!(row.id(LayerControl::MidiMode).is_some());
+        assert!(row.id(LayerControl::ChDropdown).is_some());
+        assert!(row.id(LayerControl::DevDropdown).is_some());
+        for control in [
+            LayerControl::Solo,
+            LayerControl::Led,
+            LayerControl::Blend,
+            LayerControl::Folder,
+            LayerControl::NewClip,
+            LayerControl::AddGenClip,
+            LayerControl::Gain,
+            LayerControl::Send,
+            LayerControl::Analysis,
+        ] {
+            assert!(row.id(control).is_none(), "trigger row unexpectedly has {control:?}");
+        }
+
+        let action = panel.handle_click(
+            row.id(LayerControl::TriggerTargets).unwrap(),
+            crate::input::Modifiers::NONE,
+        );
+        assert!(matches!(
+            action.as_slice(),
+            [PanelAction::Params(ParamsAction::OpenTriggerTargets(id))]
+                if *id == LayerId::new("Trigger")
+        ));
     }
 
     #[test]
@@ -2985,7 +3106,7 @@ pub(super) mod tests {
     /// it shows the generator-name line and never the source-folder row.
     #[test]
     fn led_layer_shows_generator_line_not_folder_row() {
-        let row = compute_layer_row(0.0, 140.0, 300.0, false, false, false, false, false, false, false, true);
+        let row = compute_layer_row(0.0, 140.0, 300.0, false, false, false, false, false, false, false, false, true);
         assert!(row.has(LayerControl::GenType));
         assert!(!row.has(LayerControl::Folder));
     }
@@ -3078,9 +3199,9 @@ pub(super) mod tests {
         // of Name's own width budget, so the row's total content width never
         // grows past what a non-generator collapsed row already uses.
         let row_gen =
-            compute_layer_row(0.0, 140.0, 300.0, true, false, true, false, false, false, false, true);
+            compute_layer_row(0.0, 140.0, 300.0, true, false, true, false, false, false, false, false, true);
         let row_video =
-            compute_layer_row(0.0, 140.0, 300.0, true, false, false, false, false, false, false, false);
+            compute_layer_row(0.0, 140.0, 300.0, true, false, false, false, false, false, false, false, false);
 
         let label = row_gen.rect(LayerControl::GenType);
         let name_gen = row_gen.rect(LayerControl::Name);
@@ -3136,7 +3257,7 @@ pub(super) mod tests {
         // fully inside `TrackHeight::Collapsed`, mirroring
         // `expanded_audio_content_fits_normal_track_height` below.
         let height = color::COLLAPSED_TRACK_HEIGHT;
-        let row = compute_layer_row(0.0, height, 300.0, true, false, false, true, false, false, false, false);
+        let row = compute_layer_row(0.0, height, 300.0, true, false, false, true, false, false, false, false, false);
         assert!(!row.has(LayerControl::Gain));
         assert!(!row.has(LayerControl::Send));
         for c in [LayerControl::Mute, LayerControl::Solo, LayerControl::Analysis] {
@@ -3157,7 +3278,7 @@ pub(super) mod tests {
         // bottom edge sits inside `TrackHeight::Normal` — the state-only
         // height budget the card must fit without a per-type exception.
         let height = color::TRACK_HEIGHT;
-        let row = compute_layer_row(0.0, height, 300.0, false, false, false, true, false, false, false, false);
+        let row = compute_layer_row(0.0, height, 300.0, false, false, false, true, false, false, false, false, false);
         for c in [
             LayerControl::Mute,
             LayerControl::Solo,

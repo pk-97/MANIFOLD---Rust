@@ -973,6 +973,7 @@ fn placeholder_param_info() -> ParamRow {
         },
         value: crate::param_surface::RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false },
         audio: AudioRowState::default(),
+        clip_trigger: None,
         modulation: RowMod::default(),
         mapping: RowMapping {
             osc_address: None,

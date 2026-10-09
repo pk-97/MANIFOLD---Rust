@@ -625,6 +625,7 @@ mod tests {
                 },
                 value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
                 audio: Default::default(),
+                clip_trigger: None,
                 modulation: Default::default(),
                 mapping: RowMapping {
                     osc_address: None,

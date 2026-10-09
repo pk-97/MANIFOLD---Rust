@@ -4,6 +4,41 @@ use crate::layer::Layer;
 use crate::params::ClipTriggerSource;
 use crate::types::LayerType;
 
+/// Authored timing dependency for a source, including its available session
+/// patterns. Launch cursors, meters, media settings and display metadata are
+/// deliberately absent. Streams directly into SHA-256 without allocating.
+pub fn clip_trigger_pattern_digest(layer: &Layer, session: &crate::session::SessionGrid) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+
+    fn text(hash: &mut Sha256, value: &str) {
+        hash.update((value.len() as u64).to_le_bytes());
+        hash.update(value.as_bytes());
+    }
+    fn clips(hash: &mut Sha256, clips: &[crate::clip::TimelineClip]) {
+        hash.update((clips.len() as u64).to_le_bytes());
+        for clip in clips {
+            text(hash, clip.id.as_str());
+            hash.update(clip.start_beat.0.to_le_bytes());
+            hash.update(clip.duration_beats.0.to_le_bytes());
+            hash.update([u8::from(clip.is_muted)]);
+        }
+    }
+
+    let mut hash = Sha256::new();
+    hash.update(b"manifold.clip-control-pattern\0v1");
+    text(&mut hash, layer.layer_id.as_str());
+    // Parent/group mute is not a control gate. Trigger mute is.
+    hash.update([u8::from(layer.is_trigger() && layer.is_muted)]);
+    clips(&mut hash, &layer.clips);
+    for slot in session.slots.iter().filter(|slot| slot.layer_id == layer.layer_id) {
+        hash.update(b"slot");
+        text(&mut hash, slot.scene_id.as_str());
+        hash.update(slot.sequence.length_beats.0.to_le_bytes());
+        clips(&mut hash, &slot.sequence.clips);
+    }
+    hash.finalize().into()
+}
+
 #[derive(Clone, Copy)]
 pub struct ClipTriggerLayer<'a> {
     pub layer_type: LayerType,
@@ -127,7 +162,10 @@ impl crate::project::Project {
         let Some(owner) = self.graph_target_owner(target) else {
             return false;
         };
-        if owner.params.get(param_id).is_none() {
+        let Some(param) = owner.params.get(param_id) else {
+            return false;
+        };
+        if param.spec.is_trigger_gate {
             return false;
         }
         match source {
@@ -351,6 +389,20 @@ mod tests {
         assert!(project.clip_trigger_target_layer(&GraphTarget::Effect(EffectId::new("clip-effect"))).is_none());
         assert!(project.clip_trigger_target_layer(&GraphTarget::Effect(trigger_effect_id)).is_none());
         assert!(project.clip_trigger_target_layer(&GraphTarget::Effect(EffectId::new("master"))).is_none());
+    }
+
+    #[test]
+    fn clip_trigger_assignment_rejects_trigger_gate_parameters() {
+        let mut project = crate::project::Project::default();
+        let mut gate = generator_layer("gate", LayerType::Generator, None);
+        let gate_id = gate.layer_id.clone();
+        gate.gen_params_mut().unwrap().params.get_mut("clipFire").unwrap().spec.is_trigger_gate = true;
+        project.timeline.layers.push(gate);
+        assert!(!project.can_assign_clip_trigger_source(
+            &GraphTarget::Generator(gate_id),
+            "clipFire",
+            &ClipTriggerSource::OwnLayer,
+        ));
     }
 
     #[test]
