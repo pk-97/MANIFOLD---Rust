@@ -1657,6 +1657,7 @@ impl Application {
                             empty_label: "No fonts match",
                             label_in_own_font: true,
                             current: families.iter().position(|f| *f == current),
+                            ..Default::default()
                         };
                         let trigger = manifold_ui::node::Rect::new(r.x, r.y, r.width, r.height);
                         self.ws.ui_root.open_action_list(families, actions, list, trigger);

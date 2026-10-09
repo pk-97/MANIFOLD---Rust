@@ -6,8 +6,11 @@
 kinds, media exclusion, ownership editing, shared arrangement/live/session timing
 and source-timed delivery are landed. The combined foundation gate passed.
 Header/drawer authoring, atomic response arming and backward-clock cancellation
-pass focused tests and clippy. The 34-step assignment UI flow passed with rendered
-header/drawer states inspected. Source-pattern invalidation and actual numeric
+pass focused tests and clippy. The persistent header checklist and Edit navigation
+pass the 42-step assignment and 42-step force UI flows, including force assignment
+save/reload; rendered header and response drawers were inspected. Generic scene
+property navigation uses projected object/section ownership and passes focused
+CPU checks. Source-pattern invalidation and actual numeric
 playback through real save/load, disconnect and undo pass focused CPU checks.
 Full feature acceptance, including rendered force isolation, is still open.
 **Tracking:** `BUG-tqtel` (feature).
@@ -161,8 +164,10 @@ Removing a header check disconnects that lane and disables the clip response;
 it must not unexpectedly return the parameter to firing on main-lane clips.
 The drawer can explicitly choose Main lane to restore that behaviour.
 
-The first target plus a count fits the header. The picker shows all targets and
-offers navigation to each drawer. Selecting a drawer source reveals/highlights its
+The first target plus a count fits the header. The picker stays open while checking
+targets and offers an Edit button beside each target to reveal its existing drawer.
+Compatible targets are numeric responses and named Fire parameters; ordinary toggles
+and whole-preset Gate controls are excluded. Selecting a drawer source reveals/highlights its
 lane. Response controls stay in the existing shared drawer, not in a second header
 inspector. Collapsing child rows affects layout only, never playback.
 

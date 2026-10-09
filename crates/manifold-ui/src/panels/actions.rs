@@ -687,6 +687,7 @@ pub enum ParamsAction {
     /// Both trigger assignment surfaces carry stable addresses captured at open.
     OpenClipTriggerSource(crate::view::UiGraphTarget, ParamId),
     OpenTriggerTargets(LayerId),
+    ShowClipTriggerResponse(crate::view::UiGraphTarget, ParamId),
     AssignClipTriggerSource(crate::view::UiGraphTarget, ParamId, crate::view::UiClipTriggerSource),
     CreateTriggerLane {
         owner: LayerId,

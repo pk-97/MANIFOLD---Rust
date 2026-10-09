@@ -243,6 +243,24 @@ impl RowHost {
 
     }
 
+    /// Screen-space bounds of a row's label, shared by every row host. Slider
+    /// and toggle/trigger rows use different id bundles, but navigation uses
+    /// the same addressable row surface.
+    pub(crate) fn param_row_rect(&self, tree: &UITree, row: usize) -> Option<Rect> {
+        let label_id = self
+            .slider_ids
+            .get(row)
+            .and_then(|ids| ids.as_ref())
+            .and_then(|ids| ids.label)
+            .or_else(|| {
+                self.toggle_ids
+                    .get(row)
+                    .and_then(|ids| ids.as_ref())
+                    .and_then(|ids| ids.label_id)
+            })?;
+        Some(tree.get_bounds(label_id))
+    }
+
     /// Install all ids returned by the shared slider-row builder.  Keep this
     /// destructure exhaustive: adding a field to `ParamRowIds` must force both
     /// card consumers through this registration seam.

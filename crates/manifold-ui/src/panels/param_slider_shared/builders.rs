@@ -852,6 +852,32 @@ pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamRow, i: usi
     v
 }
 
+/// Height reserved below one parameter row for its active response drawer.
+/// Shared by card and scene-property navigation so reveal bounds follow the
+/// same active-tab and compact rules as the renderer.
+pub(crate) fn row_drawer_height(
+    compact: bool,
+    mod_state: &ParamModState,
+    mod_active_tab: &[ModTab],
+    info: &ParamRow,
+    i: usize,
+) -> f32 {
+    if compact {
+        return 0.0;
+    }
+    let active = active_mod_tabs(mod_state, info, i);
+    let h = match active.len() {
+        0 => return 0.0,
+        1 => mod_config_height(active[0], info, mod_state, i),
+        _ => {
+            let stored = mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver);
+            let shown = resolve_active_tab(&active, stored).unwrap_or(active[0]);
+            MOD_TAB_STRIP_H + mod_config_height(shown, info, mod_state, i)
+        }
+    };
+    h + DRAWER_BOTTOM_GAP
+}
+
 
 /// Which config is shown in the drawer: the stored choice if it's still active,
 /// otherwise the first active one. `None` when nothing is active.

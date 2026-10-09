@@ -85,6 +85,43 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
     }
 
     match action {
+        ParamsAction::ShowClipTriggerResponse(target, param_id) => {
+            let address = crate::editing_host::to_graph_target(target);
+            let Some(owner) = ctx.project.clip_trigger_target_layer(&address) else {
+                return DispatchResult::handled();
+            };
+            if !ctx.project.can_assign_clip_trigger_source(&address, param_id.as_ref(),
+                &manifold_core::params::ClipTriggerSource::Disabled)
+            {
+                return DispatchResult::handled();
+            }
+            let owner_id = owner.layer_id.clone();
+            expand_layer_ancestors(&owner_id, ctx);
+            ctx.selection.select_layer(owner_id.clone());
+            *ctx.active_layer = Some(owner_id);
+            if crate::ui_bridge::projection::trigger_routing::response_uses_scene_panel(ctx.project, &address, param_id.as_ref())
+                && !ctx.ui.scene_setup_panel.is_open()
+            {
+                ctx.ui.toggle_scene_dock();
+            }
+            ctx.ui.pending_trigger_response_reveal = Some((target.clone(), param_id.clone()));
+            // Card/rack folding is presentation state, using the existing
+            // content-thread mutation path; the source and response stay intact.
+            ContentCommand::send(ctx.content_tx, ContentCommand::MutateProject(Box::new(move |project| {
+                let group = project.graph_target_owner_mut(&address).and_then(|instance| {
+                    instance.collapsed = false;
+                    instance.group_id.clone()
+                });
+                if let Some(group) = group {
+                    for layer in &mut project.timeline.layers {
+                        for rack in layer.effect_groups.iter_mut().flatten() {
+                            if rack.id == group { rack.collapsed = false; }
+                        }
+                    }
+                }
+            })));
+            DispatchResult::structural()
+        }
         ParamsAction::OpenClipTriggerSource(..) | ParamsAction::OpenTriggerTargets(_) => {
             DispatchResult::handled()
         }
@@ -1260,6 +1297,45 @@ mod trigger_dispatch_tests {
         assert!(owner.envelopes.as_ref().is_none_or(Vec::is_empty));
         assert!(editing.redo(&mut project));
         assert!(project.graph_target_owner(&target).unwrap().envelopes.is_some());
+    }
+
+    #[test]
+    fn response_navigation_selects_owner_and_only_queues_presentation_changes() {
+        let (mut project, target, lane_id, _) = assignment_project();
+        let owner_id = project.timeline.layers[0].layer_id.clone();
+        project.graph_target_owner_mut(&target).unwrap().collapsed = true;
+        let before = serde_json::to_value(&project).unwrap();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = manifold_ui::UIState::default();
+        selection.select_layer(lane_id.clone());
+        let mut active_layer = Some(lane_id);
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = crate::ui_bridge::ScrubState::default();
+        let ui_target = crate::editing_host::to_ui_graph_target(&target);
+        let result = crate::ui_bridge::dispatch(
+            &PanelAction::Params(ParamsAction::ShowClipTriggerResponse(ui_target.clone(), "amount".into())),
+            &mut crate::ui_bridge::DispatchCtx {
+                project: &mut project, content_tx: &content_tx, content_state: &content_state,
+                ui: &mut ui, selection: &mut selection, active_layer: &mut active_layer,
+                user_prefs: &mut user_prefs, editor_target: None, scrub: &mut scrub,
+            },
+        );
+        assert!(result.structural_change);
+        assert_eq!(active_layer, Some(owner_id.clone()));
+        assert_eq!(selection.primary_selected_layer_id, Some(owner_id));
+        assert_eq!(ui.pending_trigger_response_reveal, Some((ui_target, "amount".into())));
+        assert_eq!(serde_json::to_value(&project).unwrap(), before, "UI snapshot is read-only");
+        for command in content_rx.try_iter() {
+            let ContentCommand::MutateProject(presentation) = command else {
+                panic!("navigation must not author an assignment or response");
+            };
+            presentation(&mut project);
+        }
+        assert!(!project.graph_target_owner(&target).unwrap().collapsed);
+        project.graph_target_owner_mut(&target).unwrap().collapsed = true;
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
     }
 
     #[test]

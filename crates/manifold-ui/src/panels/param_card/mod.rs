@@ -1198,18 +1198,7 @@ impl ParamCardPanel {
     /// never overlaps the last card row" class-kill.
     pub fn param_row_rect(&self, tree: &UITree, param_id: &str) -> Option<Rect> {
         let i = self.rows.iter().position(|p| p.id == param_id)?;
-        let label_id = self.row_host
-            .slider_ids
-            .get(i)
-            .and_then(|s| s.as_ref())
-            .and_then(|ids| ids.label)
-            .or_else(|| {
-                self.row_host.toggle_ids
-                    .get(i)
-                    .and_then(|t| t.as_ref())
-                    .and_then(|ids| ids.label_id)
-            })?;
-        Some(tree.get_bounds(label_id))
+        self.row_host.param_row_rect(tree, i)
     }
 
     /// The D5 section headers built this frame, as `(node_id, section_name)`

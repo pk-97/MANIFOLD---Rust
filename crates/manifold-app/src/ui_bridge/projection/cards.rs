@@ -1276,6 +1276,8 @@ mod modifier_audio_projection_tests {
         assert_eq!(route.source_label, "Hits");
         let catalog = super::super::trigger_routing::TriggerRoutingCatalog::project(&project);
         assert_eq!(catalog.targets.iter().filter(|target| target.param_id.as_ref() == strength).count(), 1);
+        assert!(super::super::trigger_routing::response_uses_scene_panel(&project,
+            &manifold_core::GraphTarget::Generator("layer".into()), &strength));
         let saved = serde_json::to_vec(&project).unwrap();
         let mut loaded: manifold_core::project::Project = serde_json::from_slice(&saved).unwrap();
         assert_eq!(loaded.reconcile_param_manifests(), 0);

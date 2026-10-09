@@ -45,6 +45,32 @@ pub(crate) fn to_core_source(source: &UiClipTriggerSource) -> ClipTriggerSource 
     }
 }
 
+/// Resolve navigation against the same curated generator surface the inspector
+/// builds. Scene-owned properties and forces open in Scene Setup instead.
+pub(crate) fn response_uses_scene_panel(project: &Project, target: &GraphTarget, param_id: &str) -> bool {
+    let GraphTarget::Generator(layer_id) = target else { return false; };
+    let Some(instance) = project.graph_target_owner(target) else { return false; };
+    let bundled = instance.graph.is_none()
+        .then(|| manifold_nodes::bundled_presets::bundled_preset_def(instance.generator_type())).flatten();
+    let Some(graph) = instance.graph.as_ref().or(bundled.as_deref()) else { return false; };
+    if manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(graph).is_none() {
+        return false;
+    }
+    if let Some(modifier_id) = graph.preset_metadata.as_ref().and_then(|metadata| {
+        metadata.bindings.iter().find_map(|binding| match &binding.target {
+            manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, .. }
+                if binding.id == param_id => Some(modifier_id),
+            _ => None,
+        })
+    }) {
+        return graph.scene_modifiers.iter().any(|modifier| modifier.id == *modifier_id
+            && manifold_core::scene_modifier_preset::is_force_recipe(&modifier.graph));
+    }
+    let surface = super::cards::gen_params_to_surface(instance, layer_id.as_str(), None, &[],
+        super::cards::SurfaceVisibility::CuratedCard, (project.settings.bpm, project.settings.frame_rate));
+    !surface.rows.iter().any(|row| row.id == param_id)
+}
+
 /// Scene modifier rows retain the host generator address. Binding metadata is
 /// still enough to give those shared host parameters their friendly card label.
 fn modifier_label_for_param(

@@ -165,7 +165,9 @@ impl crate::project::Project {
         let Some(param) = owner.params.get(param_id) else {
             return false;
         };
-        if param.spec.is_trigger_gate {
+        // Clip responses are numeric modulation or named Fire. Plain toggles
+        // have no response drawer; Gate keeps its existing broadcast contract.
+        if param.spec.is_trigger_gate || (param.spec.is_toggle && !param.spec.is_trigger) {
             return false;
         }
         match source {
@@ -326,6 +328,27 @@ mod tests {
             0,
             cycle_lookup,
         ));
+    }
+
+    #[test]
+    fn source_assignment_accepts_numeric_and_named_fire_responses_only() {
+        let mut project = crate::project::Project::default();
+        let mut owner = effect_layer("owner", LayerType::Video, None);
+        owner.effects.as_mut().unwrap()[0].params = crate::params::ParamManifest::from_params(
+            [("numeric", false, false, false), ("fire", false, true, false),
+             ("toggle", true, false, false), ("gate", true, false, true)]
+                .into_iter().map(|(id, is_toggle, is_trigger, is_trigger_gate)| {
+                    crate::params::Param::bundled(ParamSpecDef {
+                        id: id.into(), is_toggle, is_trigger, is_trigger_gate, ..Default::default()
+                    })
+                }).collect(),
+        );
+        project.timeline.layers = vec![owner, trigger("lane", "owner")];
+        let target = GraphTarget::Effect(EffectId::new("owner-effect"));
+        for (id, expected) in [("numeric", true), ("fire", true), ("toggle", false), ("gate", false)] {
+            assert_eq!(project.can_assign_clip_trigger_source(&target, id,
+                &ClipTriggerSource::Lane { layer_id: "lane".into() }), expected, "{id}");
+        }
     }
 
     #[test]

@@ -312,5 +312,194 @@
       "check": "Exists"
     }
   },
-  "Snapshot"
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "\u00d7",
+          "under_name": "scene_setup",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Physics Solids",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "RightClick": null
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Add trigger lane",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Trigger 1",
+          "type": "Button"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Assign\u2026",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Physics Solids / Uniform Force",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Physics Solids / Uniform Force / Strength (m/s\u00b2)",
+          "type": "Button"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Physics Solids / Uniform Force / Strength (m/s\u00b2)",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "\u2713 Physics Solids / Uniform Force / Strength (m/s\u00b2)",
+          "type": "Button"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Edit",
+          "type": "Button",
+          "nth": 3
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "\u26a1 Uniform Force",
+          "type": "Button"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Trigger 1",
+          "type": "Button",
+          "under_name": "scene_setup"
+        }
+      },
+      "check": {
+        "RectWithin": {
+          "x": 624.0,
+          "y": 733.0,
+          "width": 288.0,
+          "height": 22.0
+        }
+      }
+    }
+  },
+  "Snapshot",
+  "SaveReloadProject",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Trigger 1",
+          "type": "Button",
+          "under_name": "scene_setup"
+        }
+      },
+      "check": {
+        "RectWithin": {
+          "x": 624.0,
+          "y": 733.0,
+          "width": 288.0,
+          "height": 22.0
+        }
+      }
+    }
+  }
 ]

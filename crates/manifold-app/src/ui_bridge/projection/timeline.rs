@@ -104,6 +104,7 @@ pub fn sync_project_data(
     // not walk or allocate from the project on the input hot path.
     ui.automation_chooser_candidates = automation_chooser_candidates(project);
     ui.trigger_routing = TriggerRoutingCatalog::project(project);
+    ui.refresh_trigger_target_picker();
     ui.pinned_automation_lanes.clone_from(&selection.pinned_automation_lanes);
     {
         // Rebuild CoordinateMapper Y-layout FIRST so layer headers and viewport share

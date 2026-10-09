@@ -322,43 +322,46 @@ fn trigger_source_menu_items(
     items
 }
 
-/// Build the searchable header picker. A selected target gets a visible check
-/// prefix because the shared action-list surface supports one current cursor,
-/// while this picker intentionally permits multiple assignments.
+struct TriggerTargetPicker {
+    items: Vec<manifold_ui::panels::picker_core::PickerItem>,
+    actions: Vec<PanelAction>,
+    secondary_actions: Vec<Option<PanelAction>>,
+    categories: Vec<String>,
+}
+
+/// Both buttons carry the manifest address; item IDs only retain picker focus.
 fn trigger_target_picker_items(
     layer_id: &LayerId,
     targets: &[crate::ui_bridge::TriggerTargetChoice],
-) -> (Vec<manifold_ui::panels::picker_core::PickerItem>, Vec<PanelAction>) {
-    let mut items = Vec::new();
-    let mut actions = Vec::new();
+) -> TriggerTargetPicker {
+    let mut picker = TriggerTargetPicker {
+        items: Vec::new(), actions: Vec::new(), secondary_actions: Vec::new(), categories: Vec::new(),
+    };
     for target in targets.iter().filter(|target| target.eligible_sources.contains(layer_id)) {
         let assigned = target.source
             == manifold_ui::view::UiClipTriggerSource::Lane(layer_id.clone());
-        let label = if assigned {
-            format!("✓ {}", target.label)
-        } else {
-            target.label.clone()
-        };
-        items.push(manifold_ui::panels::picker_core::PickerItem {
-            type_id: items.len().to_string(),
-            label,
+        if !picker.categories.contains(&target.group_label) {
+            picker.categories.push(target.group_label.clone());
+        }
+        picker.items.push(manifold_ui::panels::picker_core::PickerItem {
+            type_id: format!("{:?}/{}", target.target, target.param_id),
+            label: if assigned { format!("✓ {}", target.label) } else { target.label.clone() },
             category: Some(target.group_label.clone()),
-            search_text: None,
-            source: None,
-            thumbnail: None,
+            search_text: None, source: None, thumbnail: None,
         });
         let source = if assigned {
             manifold_ui::view::UiClipTriggerSource::Disabled
         } else {
             manifold_ui::view::UiClipTriggerSource::Lane(layer_id.clone())
         };
-        actions.push(PanelAction::Params(ParamsAction::AssignClipTriggerSource(
-            target.target.clone(),
-            target.param_id.clone(),
-            source,
+        picker.actions.push(PanelAction::Params(ParamsAction::AssignClipTriggerSource(
+            target.target.clone(), target.param_id.clone(), source,
         )));
+        picker.secondary_actions.push(Some(PanelAction::Params(ParamsAction::ShowClipTriggerResponse(
+            target.target.clone(), target.param_id.clone(),
+        ))));
     }
-    (items, actions)
+    picker
 }
 
 #[cfg(test)]
@@ -1072,28 +1075,21 @@ impl UIRoot {
             }
             PanelAction::Params(ParamsAction::OpenTriggerTargets(layer_id)) => {
                 use manifold_ui::panels::browser_popup::*;
-                let (items, actions) =
-                    trigger_target_picker_items(layer_id, &self.trigger_routing.targets);
-                let mut categories = Vec::new();
-                for item in &items {
-                    if let Some(category) = &item.category
-                        && !categories.contains(category)
-                    {
-                        categories.push(category.clone());
-                    }
-                }
+                let picker = trigger_target_picker_items(layer_id, &self.trigger_routing.targets);
                 self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
                 self.browser_popup.open_actions(BrowserPopupRequest {
                     mode: BrowserPopupMode::Actions,
                     tab: self.inspector.last_effect_tab(),
                     layer_id: Some(layer_id.clone()),
-                    items,
-                    category_names: categories,
+                    items: picker.items,
+                    category_names: picker.categories,
                     spawn_graph_pos: None,
                     paste_count: 0,
                     screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
-                }, actions, ActionListOptions {
+                }, picker.actions, ActionListOptions {
                     empty_label: "No compatible trigger targets",
+                    secondary_actions: picker.secondary_actions,
+                    keep_open: true,
                     ..Default::default()
                 });
                 self.overlay_dirty = true;
@@ -2405,10 +2401,13 @@ mod led_browser_scoped_open_tests {
             source: UiClipTriggerSource::Lane(LayerId::new("lane")),
             eligible_sources: vec![LayerId::new("lane")],
         };
-        let (items, actions) = super::trigger_target_picker_items(
+        let super::TriggerTargetPicker { items, actions, secondary_actions, .. } = super::trigger_target_picker_items(
             &LayerId::new("lane"),
             &[target],
         );
+        assert!(matches!(&secondary_actions[0], Some(PanelAction::Params(
+            manifold_ui::ParamsAction::ShowClipTriggerResponse(UiGraphTarget::Generator(id), param)
+        )) if id == &LayerId::new("owner") && param.as_ref() == "fire"));
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].label, "✓ Owner / Fire");
         assert_eq!(items[0].category.as_deref(), Some("Owner"));
@@ -2418,5 +2417,19 @@ mod led_browser_scoped_open_tests {
                 UiGraphTarget::Generator(id), param, UiClipTriggerSource::Disabled
             ))
         ] if id == &LayerId::new("owner") && param.as_ref() == "fire"));
+    }
+}
+
+impl UIRoot {
+    /// Called only when a new project snapshot updates the derived catalog.
+    pub(crate) fn refresh_trigger_target_picker(&mut self) {
+        let Some(source) = self.browser_popup.persistent_actions_layer().cloned() else { return; };
+        if !self.trigger_routing.sources.iter().any(|item| item.id == source) {
+            self.browser_popup.close();
+        } else {
+            let picker = trigger_target_picker_items(&source, &self.trigger_routing.targets);
+            self.browser_popup.refresh_actions(picker.items, picker.categories, picker.actions, picker.secondary_actions);
+        }
+        self.overlay_dirty = true;
     }
 }

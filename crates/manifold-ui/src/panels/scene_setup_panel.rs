@@ -35,6 +35,8 @@ mod material_inspector;
 mod object_modifiers;
 #[path = "scene_setup_panel/forces.rs"]
 mod forces;
+#[path = "scene_setup_panel/parameter_navigation.rs"]
+mod parameter_navigation;
 #[path = "scene_setup_panel/fluid_roles.rs"]
 mod fluid_roles;
 
@@ -1024,6 +1026,9 @@ pub struct ScenePanel {
     /// Shared parameter cards for force recipes in the selected scene.
     force_cards: Vec<ParamCardPanel>,
     force_pressed_card: Option<(LayerId, FoundationNodeId)>,
+    /// A clip response reveal queued for the next structural build. The
+    /// address is shared by force cards, object modifiers, and scene rows.
+    pending_parameter_reveal: Option<(crate::view::UiGraphTarget, manifold_foundation::ParamId)>,
     /// P2 slice 2a: the scene panel's bound layer's FULL generator
     /// `ParamSurface` (every exposed param, every section) — built by
     /// `state_sync` the SAME way the main inspector's generator card is
@@ -1183,6 +1188,7 @@ impl Default for ScenePanel {
             object_modifier_pressed_card: None,
             force_cards: Vec::new(),
             force_pressed_card: None,
+            pending_parameter_reveal: None,
             full_params: None,
             full_param_id_index: ahash::AHashMap::new(),
             add_object_id: None,
@@ -1281,6 +1287,7 @@ impl ScenePanel {
     /// staleness").
     pub fn configure(&mut self, state: SceneSetupState) {
         self.state = state;
+        self.clear_stale_parameter_reveal();
         if !matches!(self.state, SceneSetupState::Live(_)) { self.clear_force_cards(); }
         self.rebuild_object_modifier_cards_from_projection();
     }
@@ -1302,6 +1309,7 @@ impl ScenePanel {
             }
         }
         self.full_params = config;
+        self.clear_stale_parameter_reveal();
         self.rebuild_object_modifier_cards_from_projection();
     }
 
@@ -1574,6 +1582,7 @@ impl ScenePanel {
             }
             self.reveal_properties = false;
         }
+        self.reveal_pending_parameter_response(tree);
         self.rebuild_object_modifier_drag_overlay(tree);
     }
 
@@ -1682,6 +1691,7 @@ impl ScenePanel {
     /// alone doesn't trigger one (it has no `PanelAction` dispatch loop to
     /// push through, unlike `handle_event`'s click arm).
     pub fn set_selection(&mut self, layer_id: LayerId, sel: SceneSelection) {
+        self.pending_parameter_reveal = None;
         self.selected_object_modifier = None;
         self.selection.insert(layer_id, sel);
         self.reveal_properties = true;
@@ -2406,6 +2416,7 @@ impl ScenePanel {
         // Keep optional features directly above their Add controls.
         retained.sort_by_key(|&index| self.material_row_feature(&config.rows[index]).is_some());
         self.properties_card.configure_from_filtered(&config, &retained);
+        self.prepare_pending_parameter_properties();
         self.properties_card.restore_live(&target);
 
         if retained.is_empty() {

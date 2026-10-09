@@ -139,6 +139,35 @@ impl PickerCore {
         self.rebuild_filtered();
     }
 
+    /// Replace the item and category snapshots while retaining the live
+    /// search, chips, cursor, and scroll position. A cursor follows its
+    /// item's stable type id so a refreshed action list can reorder rows
+    /// without moving the user's selection.
+    pub fn replace_items(&mut self, items: Vec<PickerItem>, categories: Vec<String>) {
+        let cursor_type_id = self
+            .cursor
+            .and_then(|cursor| self.filtered.get(cursor).copied())
+            .and_then(|item_index| self.items.get(item_index))
+            .map(|item| item.type_id.clone());
+        self.items = items;
+        self.categories = categories;
+        if self
+            .active_category
+            .as_ref()
+            .is_some_and(|active| !self.categories.iter().any(|category| category == active))
+        {
+            self.active_category = None;
+        }
+        self.rebuild_filtered();
+        self.cursor = cursor_type_id.and_then(|type_id| {
+            self.filtered.iter().position(|&item_index| {
+                self.items
+                    .get(item_index)
+                    .is_some_and(|item| item.type_id == type_id)
+            })
+        });
+    }
+
     /// The active source chip, if any.
     pub fn active_source(&self) -> Option<Source> {
         self.active_source
@@ -453,6 +482,47 @@ mod tests {
         p.set_source(Some(Source::MyLibrary));
         let labels: Vec<&str> = p.filtered().map(|(_, it)| it.label.as_str()).collect();
         assert_eq!(labels, vec!["Bloom 2"]);
+    }
+
+    #[test]
+    fn replace_items_retains_filter_category_cursor_and_scroll_by_type_id() {
+        let mut p = PickerCore::new(
+            vec![
+                item("First", Some("A"), None),
+                item("Keep", Some("A"), None),
+                item("Last", Some("B"), None),
+            ],
+            vec!["A".to_string(), "B".to_string()],
+        );
+        p.set_category(Some("A".to_string()));
+        p.set_filter("keep".to_string());
+        p.key_nav(Key::Down, 1, 1);
+        p.scroll.set_content_height(100.0);
+        p.scroll.set_scroll_offset(12.0);
+
+        p.replace_items(
+            vec![
+                item("New", Some("A"), None),
+                item("Keep", Some("A"), None),
+                item("First", Some("A"), None),
+            ],
+            vec!["A".to_string()],
+        );
+        assert_eq!(p.filter(), "keep");
+        assert_eq!(p.active_category(), Some("A"));
+        assert_eq!(p.cursor(), Some(0));
+        assert_eq!(p.scroll.scroll_offset(), 12.0);
+        assert_eq!(p.filtered().next().map(|(_, item)| item.label.as_str()), Some("Keep"));
+    }
+
+    #[test]
+    fn replace_items_clears_unavailable_category_and_cursor() {
+        let mut p = sample();
+        p.set_category(Some("Spatial".to_string()));
+        p.key_nav(Key::Down, 1, 1);
+        p.replace_items(vec![item("Only Filmic", Some("Filmic"), None)], vec!["Filmic".to_string()]);
+        assert_eq!(p.active_category(), None);
+        assert_eq!(p.cursor(), None);
     }
 
     #[test]

@@ -1409,6 +1409,11 @@ pub fn sync_inspector_data(
             .clip_chrome_mut()
             .set_mode(false, false, false, false, false);
     }
+    if let Some((target, param)) = ui.pending_trigger_response_reveal.take()
+        && !ui.inspector.reveal_clip_response(&target, &param)
+    {
+        ui.scene_setup_panel.reveal_clip_response(&target, &param);
+    }
 }
 
 /// Convert a slice of `PresetInstance` into [`ParamSurface`]s for the UI.

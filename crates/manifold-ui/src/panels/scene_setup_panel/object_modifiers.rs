@@ -511,6 +511,17 @@ impl ScenePanel {
 
     pub fn object_cards_animating(&self) -> bool { self.object_cards_animating }
 
+    /// Settle shared card motion for scripted frames without a running UI clock.
+    pub fn skip_cards_to_settled(&mut self, tree: &mut UITree) -> bool {
+        let mut any = false;
+        for card in self.object_modifier_cards.iter_mut().chain(self.force_cards.iter_mut()) {
+            any |= card.skip_to_settled(tree);
+        }
+        self.object_cards_animating = false;
+        self.object_cards_were_animating = false;
+        any
+    }
+
     pub fn update_object_card_fire_meters(&self, tree: &mut UITree, fire_level: &dyn Fn(u64) -> Option<f32>, dt: f32) {
         for card in &self.object_modifier_cards {
             if card.node_count() > 0 { card.update_fire_meters(tree, fire_level, dt); }
