@@ -38,7 +38,8 @@ from gate_policy import (
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
-    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, CATALOG_PACKAGE, GPU_CONTRACT_TARGETS, is_inert_plan_path,
+    GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, CATALOG_PACKAGE, GPU_CONTRACT_TARGETS,
+    GPU_FILTER_TARGETS, is_inert_plan_path,
 )
 from gate_workspace import Workspace
 
@@ -238,11 +239,30 @@ class Plan:
             package, target, prefix = route
             runs.append({'package': package, 'targets': [target], 'lib': False, 'target': target,
                          'filters': [prefix] if prefix else [], 'skips': [], 'budgeted': False})
-        return runs
+        available = {(run['package'], run['target']) for run in runs}
+        for name in self.final_filters():
+            owner = GPU_FILTER_TARGETS.get(name)
+            if owner is not None and owner not in available:
+                raise ValueError(f'GPU filter {name!r} has no runnable Cargo owner: {owner[0]}/{owner[1]}')
+        if self.glb or self.ui_paint:
+            return runs
+        # Unknown filters keep their current coverage. Whole selections and
+        # the folded glTF harness retain their independent selection rules.
+        return [run for run in runs
+                if not run['filters'] or (route and route[:2] == (run['package'], run['target']))
+                or any(name not in GPU_FILTER_TARGETS
+                       or GPU_FILTER_TARGETS[name] == (run['package'], run['target'])
+                       for name in run['filters'])]
 
     def describe(self):
         lines = [f"{len(self.paths)} GPU path(s) touched; smoke + mapped filters"]
         lines.append(f"  filters: {', '.join(self.final_filters())}")
+        if self.whole_packages:
+            lines.append("  whole packages (filters do not limit these): " +
+                         ", ".join(sorted(self.whole_packages)))
+        if self.required_binaries:
+            lines.append("  whole test binaries: " + ", ".join(
+                f"{package}/{target}" for package, target in sorted(self.required_binaries)))
         skips = [s for s in self.final_skips()
                  if any(f in s or s in f for f in self.final_filters())]
         if skips:

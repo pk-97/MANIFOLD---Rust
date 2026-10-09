@@ -35,6 +35,35 @@ def run_gate(*, targets=None, lib=False, full_suite=False, filters=None, skips=N
 
 
 class GpuProofsGateTests(unittest.TestCase):
+    def test_builds_selected_targets_once_per_package_without_running_tests(self):
+        runs = [
+            dict(package="catalog", targets=[], lib=True, full=False),
+            dict(package="catalog", targets=["gpu_proofs"], lib=False, full=False),
+            dict(package="catalog", targets=["main"], lib=False, full=False),
+            dict(package="catalog", targets=["gpu_proofs"], lib=False, full=False),
+            dict(package="scene", targets=["gpu_proofs"], lib=False, full=False),
+        ]
+        with patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as cargo:
+            self.assertEqual(gate.build_tests(Path("/tmp/Cargo.toml"), runs), 0)
+        commands = [call.args[0] for call in cargo.call_args_list]
+        self.assertEqual(len(commands), 2)
+        self.assertIn("--lib", commands[0])
+        self.assertNotIn("--lib", commands[1])
+        targets = lambda cmd: {cmd[i + 1] for i, arg in enumerate(cmd[:-1]) if arg == "--test"}
+        self.assertEqual(targets(commands[0]), {"gpu_proofs", "main"})
+        self.assertEqual(targets(commands[1]), {"gpu_proofs"})
+        self.assertTrue(all("--no-run" in command and "--" not in command for command in commands))
+
+    def test_full_package_build_subsumes_selected_targets_and_failure_stops_builds(self):
+        runs = [dict(package="catalog", targets=["gpu_proofs"], lib=False, full=False),
+                dict(package="catalog", targets=None, lib=False, full=True),
+                dict(package="scene", targets=[], lib=True, full=False)]
+        with patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 7)) as cargo:
+            self.assertEqual(gate.build_tests(Path("/tmp/Cargo.toml"), runs), 7)
+        cargo.assert_called_once()
+        self.assertNotIn("--test", cargo.call_args.args[0])
+        self.assertNotIn("--lib", cargo.call_args.args[0])
+
     def test_committed_allowances_have_package_target_test_keys(self):
         path = Path(__file__).with_name("gpu_test_times.json")
         rows = json.loads(path.read_text())["tests"]
@@ -57,7 +86,7 @@ class GpuProofsGateTests(unittest.TestCase):
 
     class Workspace:
         packages = {name: {"features": ["gpu-proofs"]} for name in
-                    ("manifold-nodes", "manifold-node-engine", "manifold-ui-paint")}
+                    ("manifold-nodes", "manifold-node-engine", "manifold-ui-paint", "manifold-nodes-scene")}
 
         def __init__(self, repo=None):
             self.repo = Path(repo or Path.cwd()).resolve()
@@ -65,6 +94,7 @@ class GpuProofsGateTests(unittest.TestCase):
                 "manifold-nodes": "crates/manifold-nodes",
                 "manifold-node-engine": "crates/manifold-node-engine",
                 "manifold-ui-paint": "crates/manifold-ui-paint",
+                "manifold-nodes-scene": "crates/manifold-nodes-scene",
             }
 
         def ownership_errors(self, paths, base=None):
@@ -80,6 +110,7 @@ class GpuProofsGateTests(unittest.TestCase):
                     {"name": "renderer", "kind": ["lib"],
                      "src_path": str(self.repo / "crates/manifold-nodes/src/lib.rs")},
                     {"name": "gpu_proofs", "kind": ["test"],
+                     "required-features": ["gpu-proofs"],
                      "src_path": str(self.repo / "crates/manifold-nodes/tests/gpu_proofs.rs")},
                     {"name": "glb_conformance", "kind": ["test"],
                      "src_path": str(self.repo / "crates/manifold-nodes/tests/gpu_proofs/glb_conformance.rs")},
@@ -88,6 +119,9 @@ class GpuProofsGateTests(unittest.TestCase):
                                            "src_path": str(self.repo / "crates/manifold-node-engine/src/lib.rs")}],
                 "manifold-ui-paint": [{"name": "paint", "kind": ["lib"],
                                         "src_path": str(self.repo / "crates/manifold-ui-paint/src/lib.rs")}],
+                "manifold-nodes-scene": [{"name": "gpu_proofs", "kind": ["test"],
+                                          "required-features": ["gpu-proofs"],
+                                          "src_path": str(self.repo / "crates/manifold-nodes-scene/tests/gpu_proofs/main.rs")}],
             }[package]
             return [target for target in targets if kind is None or kind in target["kind"]]
 
@@ -324,7 +358,7 @@ class GpuProofsGateTests(unittest.TestCase):
         self.assertEqual(code, 0)
 
     def run_main(self, argv, repo_changed=None, build_exit=0, measured=(), run_exit=0,
-                 run_output="", run_hung=(), passed=None):
+                 run_output="", run_hung=(), passed=None, owned_proofs=True):
         calls = []
         self.events = events = []
 
@@ -335,6 +369,10 @@ class GpuProofsGateTests(unittest.TestCase):
                               lib=lib, package=package, target=target, budgeted=budgeted))
             events.append(("run", gate.cargo_test_cmd(manifest, targets, full, lib, package)))
             timings.extend(measured)
+            if owned_proofs:
+                timings.extend(gate.timing_entry(package, target, name + "proof", 0, "ok", budgeted)
+                               for name in filters
+                               if gate.gpu_scope.GPU_FILTER_TARGETS.get(name) == (package, target))
             hung.extend(run_hung)
             return run_exit, run_output
 
@@ -390,19 +428,37 @@ class GpuProofsGateTests(unittest.TestCase):
                            for kind, cmd in self.events if kind == "build"})
         self.assertEqual(
             kinds,
-            ["build"] * 3 + ["hold-enter"] + ["run"] * 3 + ["hold-exit"],
+            ["build"] * 4 + ["hold-enter"] + ["run"] * 5 + ["hold-exit"],
         )
         builds = [cmd for kind, cmd in self.events if kind == "build"]
         runs = [cmd for kind, cmd in self.events if kind == "run"]
-        for commands in (builds, runs):
-            self.assertCountEqual(
-                [cmd[cmd.index("-p") + 1] for cmd in commands], packages)
+        self.assertCountEqual([cmd[cmd.index("-p") + 1] for cmd in builds], packages)
+        self.assertEqual({cmd[cmd.index("-p") + 1] for cmd in runs}, set(packages))
         builds_by_package = {cmd[cmd.index("-p") + 1]: cmd for cmd in builds}
         for run in runs:
             package = run[run.index("-p") + 1]
-            self.assertEqual(builds_by_package[package], run + ["--no-run"])
+            build = builds_by_package[package]
+            if '--lib' in run:
+                self.assertIn('--lib', build)
+            for i, arg in enumerate(run[:-1]):
+                if arg == '--test':
+                    self.assertIn(run[i + 1], build)
 
-    def test_each_distinct_run_builds_once_before_any_test(self):
+    def test_missing_owned_proof_fails_without_a_green_receipt(self):
+        passed = object.__new__(gate.gate_passes.Pass)
+        passed.key, passed.label, passed.record = 'earlier', 'gpu-proofs', None
+        passed.unchanged = lambda: True
+        passed.path = self.learned.parent / 'pass.json'
+        passed.path.write_text('{"pass": true}')
+        code, _, output = self.run_main(
+            ['--package', 'manifold-nodes', '--test', 'gpu_proofs',
+             '--filter', 'alpha_contract::effects_preserve_transparency'],
+            passed=passed, owned_proofs=False)
+        self.assertNotEqual(code, 0)
+        self.assertIn('did not pass owned filters: alpha_contract::effects_preserve_transparency', output)
+        self.assertFalse(passed.path.exists())
+
+    def test_every_run_target_is_built_before_any_test(self):
         code, calls, _ = self.run_main(
             [], repo_changed=["crates/manifold-nodes/tests/gpu_proofs/glb_conformance.rs"])
         self.assertEqual(code, 0)
@@ -413,8 +469,17 @@ class GpuProofsGateTests(unittest.TestCase):
         self.assertTrue(all(k == "build" for k in kinds[:first_hold]))
         self.assertNotIn("build", kinds[first_hold:])
         self.assertEqual(len(builds), len({tuple(b) for b in builds}))
-        runs = {tuple(cmd + ["--no-run"]) for kind, cmd in self.events if kind == "run"}
-        self.assertEqual(runs, {tuple(b) for b in builds})
+        def artifacts(commands):
+            selected = set()
+            for cmd in commands:
+                package = cmd[cmd.index('-p') + 1]
+                if '--lib' in cmd:
+                    selected.add((package, 'lib'))
+                selected.update((package, cmd[i + 1])
+                                for i, arg in enumerate(cmd[:-1]) if arg == '--test')
+            return selected
+        runs = [cmd for kind, cmd in self.events if kind == 'run']
+        self.assertEqual(artifacts(builds), artifacts(runs))
 
     def test_build_failure_takes_no_lock_and_runs_nothing(self):
         code, calls, text = self.run_main(["--all"], build_exit=101)
@@ -427,14 +492,14 @@ class GpuProofsGateTests(unittest.TestCase):
         code, calls, text = self.run_main(["--build-only", "--all"])
         self.assertEqual(code, 0)
         self.assertEqual(calls, [])
-        self.assertEqual([kind for kind, _ in self.events], ["build"] * 3)
+        self.assertEqual([kind for kind, _ in self.events], ["build"] * len(self.Workspace.packages))
         self.assertIn("GPU-PROOFS GATE: BUILT", text)
 
     def test_default_is_scoped_from_diff_and_prints_mode(self):
         p = "crates/manifold-nodes/src/registry.rs"
         code, calls, text = self.run_main([], repo_changed=[p])
         self.assertEqual(code, 0)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual({call['package'] for call in calls}, set(self.Workspace.packages))
         self.assertTrue(calls[0]["lib"])
         self.assertFalse(calls[0]["full"])
         self.assertIn("registry::", calls[0]["filters"])
@@ -464,12 +529,11 @@ class GpuProofsGateTests(unittest.TestCase):
         code, calls, _ = self.run_main(
             [], repo_changed=["crates/manifold-ui-paint/src/ui_renderer.rs"])
         self.assertEqual(code, 0)
-        self.assertEqual([call["package"] for call in calls],
-                         ["manifold-nodes", "manifold-node-engine", "manifold-ui-paint"])
-        self.assertTrue(calls[2]["lib"])
-        self.assertEqual(calls[2]["targets"], [])
-        builds = [cmd for kind, cmd in self.events if kind == "build"]
-        runs = [cmd for kind, cmd in self.events if kind == "run"]
+        paint = next(call for call in calls if call['package'] == 'manifold-ui-paint')
+        self.assertTrue(paint["lib"])
+        self.assertEqual(paint["targets"], [])
+        builds = [cmd for kind, cmd in self.events if kind == "build" and 'manifold-ui-paint' in cmd]
+        runs = [cmd for kind, cmd in self.events if kind == "run" and 'manifold-ui-paint' in cmd]
         self.assertEqual(builds, [cmd + ["--no-run"] for cmd in runs])
 
     def test_all_keeps_slow_tests_and_scoped_preserves_owning_slow_tests(self):
@@ -610,8 +674,10 @@ class GpuProofsGateTests(unittest.TestCase):
     def test_gltf_paths_add_a_separate_unbudgeted_glb_run(self):
         code, calls, _ = self.run_main(
             [], repo_changed=["crates/manifold-nodes/tests/gpu_proofs/glb_conformance.rs"])
-        self.assertEqual([c["targets"] for c in calls], [[], [], [], ["glb_conformance"]])
-        self.assertEqual(calls[3]["filters"], [])
+        sweeps = [c for c in calls if not c['budgeted']]
+        self.assertEqual(len(sweeps), 1)
+        self.assertEqual(sweeps[0]["targets"], ["glb_conformance"])
+        self.assertEqual(sweeps[0]["filters"], [])
 
 
 class WatchdogTests(unittest.TestCase):

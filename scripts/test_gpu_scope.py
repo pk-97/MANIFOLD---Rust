@@ -59,6 +59,64 @@ def fixture_workspace(repo):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_audited_catalog_edit_selects_three_owned_harnesses(self):
+        repo = Path(__file__).resolve().parents[1]
+        result = g.plan_for_paths([
+            "crates/manifold-nodes/src/bundled_presets.rs",
+            "crates/manifold-nodes/src/bundled_generator_presets.rs",
+        ], repo)
+        self.assertEqual(
+            {(run["package"], run["target"]) for run in result.runs()},
+            {("manifold-nodes", "lib"), ("manifold-nodes", "gpu_proofs"),
+             ("manifold-nodes-scene", "gpu_proofs")},
+        )
+        self.assertTrue(all(run["filters"] == result.final_filters() for run in result.runs()))
+
+    def test_unknown_filter_keeps_all_filtered_harnesses(self):
+        workspace = fixture_workspace(Path("/nonexistent"))
+        result = g.Plan(paths=["synthetic"], workspace=workspace,
+                        filters=set(g.SMOKE_FILTERS) | {"future::filter"})
+        runs = result.runs()
+        self.assertEqual(len(runs), 13)
+        self.assertTrue(all(run["filters"] == result.final_filters() for run in runs))
+
+    def test_whole_package_override_survives_filter_pruning(self):
+        workspace = fixture_workspace(Path("/nonexistent"))
+        result = g.Plan(paths=["synthetic"], workspace=workspace,
+                        filters=set(g.SMOKE_FILTERS), whole_packages={"manifold-compositor"})
+        run = next(run for run in result.runs() if run["package"] == "manifold-compositor")
+        self.assertEqual(run["filters"], [])
+
+    def test_missing_audited_owner_fails_before_pruning(self):
+        workspace = fixture_workspace(Path("/nonexistent"))
+        workspace.packages["manifold-nodes-scene"]["targets"] = [
+            target for target in workspace.packages["manifold-nodes-scene"]["targets"]
+            if target["name"] != "gpu_proofs"
+        ]
+        result = g.Plan(paths=["synthetic"], workspace=workspace,
+                        filters=set(g.SMOKE_FILTERS))
+        with self.assertRaisesRegex(ValueError, "camera_conformance.*manifold-nodes-scene/gpu_proofs"):
+            result.runs()
+
+    def test_audited_filter_owners_match_the_source_harnesses(self):
+        repo = Path(__file__).resolve().parents[1]
+        workspace = g.Workspace(repo)
+        for name, (package, target) in g.GPU_FILTER_TARGETS.items():
+            module, _, function = name.partition('::')
+            root = next(Path(row['src_path']) for row in workspace.targets(package)
+                        if ('lib' in row['kind'] if target == 'lib' else row['name'] == target))
+            self.assertIn(f'mod {module};', root.read_text())
+            source = (root.parent / (module + '.rs')).read_text()
+            self.assertIn(f'fn {function}(' if function else '#[test]', source)
+
+    def test_scope_report_exposes_unfiltered_package_and_target_expansion(self):
+        result = g.Plan(paths=[R + '../Cargo.toml'],
+                        whole_packages={'manifold-nodes'},
+                        required_binaries={('manifold-app', 'renderer_contracts')})
+        report = result.describe()
+        self.assertIn('whole packages (filters do not limit these): manifold-nodes', report)
+        self.assertIn('whole test binaries: manifold-app/renderer_contracts', report)
+
     def test_every_primitive_directory_selects_both_catalog_layout_proofs(self):
         import cpu_scope
         from gate_policy import PRIMITIVE_PATHS, CATALOG_PATHS
@@ -245,16 +303,21 @@ class ScopeTests(unittest.TestCase):
         renderer = workspace.packages['manifold-nodes']
         standalone = next(t for t in renderer['targets'] if t['name'] == 'glb_conformance')
         renderer['targets'].remove(standalone)
+        owner = next(target for target in renderer['targets'] if target['name'] == 'gpu_proofs')
+        catalog_source = owner['src_path']
+        owner['src_path'] = str(repo.resolve() / 'crates/manifold-nodes/tests/gpu_proofs/owner_main.rs')
         scene = dict(renderer, name='manifold-nodes', targets=[{
             'name': 'catalog_gpu_checks', 'kind': ['test'], 'required-features': ['gpu-proofs'],
-            'src_path': str(repo / 'crates/manifold-nodes/tests/gpu_proofs/main.rs'),
-        }])
+            'src_path': catalog_source,
+        }, *renderer['targets']])
         workspace.packages[scene['name']] = scene
         workspace.roots[scene['name']] = 'crates/manifold-nodes'
-        root = Path(scene['targets'][0]['src_path'])
+        root = Path(next(target['src_path'] for target in scene['targets']
+                         if target['name'] == 'catalog_gpu_checks'))
         root.parent.mkdir(parents=True)
         attribute = '#[path = "glb_conformance.rs"]\n' if module != 'glb_conformance' else ''
         root.write_text(f'{attribute}mod {module};\nmod other;\n')
+        (root.parent / 'owner_main.rs').write_text('mod other;\n')
         (root.parent / 'glb_conformance.rs').write_text('#[test] fn glb_conformance_sweep() {}\n')
         return workspace
 
@@ -287,11 +350,14 @@ class ScopeTests(unittest.TestCase):
                     'lib': False, 'target': 'catalog_gpu_checks', 'filters': ['glb_conformance::'],
                     'skips': [], 'budgeted': False,
                 })
-                regular = next(r for r in runs if r['package'] == 'manifold-nodes' and r['budgeted'])
+                regular = next(r for r in runs if r['package'] == 'manifold-nodes'
+                               and r['target'] == 'catalog_gpu_checks' and r['budgeted'])
                 self.assertIn('glb_conformance::', regular['skips'])
             result.glb = False
             self.assertTrue(all(r['budgeted'] for r in result.runs()))
-            regular = next(r for r in result.runs() if r['package'] == 'manifold-nodes')
+            regular = next(r for r in result.runs()
+                           if r['package'] == 'manifold-nodes'
+                           and r['target'] == 'catalog_gpu_checks')
             self.assertIn('glb_conformance::', regular['skips'])
 
     def test_folded_glb_resolves_module_alias(self):
