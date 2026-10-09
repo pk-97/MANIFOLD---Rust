@@ -1,0 +1,490 @@
+{
+  "date": "2026-10-09",
+  "decision": "Neither trial adopted; frozen confirmed_persistence candidate remains unchanged.",
+  "reference": {
+    "passages": [
+      {
+        "passage": "apricots_128bpm",
+        "strict_50ms": {
+          "matched": 14,
+          "missed": 0,
+          "extra": 0
+        },
+        "association_minus35_plus200ms": {
+          "matched": 14,
+          "missed": 0,
+          "extra": 0
+        }
+      },
+      {
+        "passage": "bad_guy_128bpm",
+        "strict_50ms": {
+          "matched": 15,
+          "missed": 0,
+          "extra": 17
+        },
+        "association_minus35_plus200ms": {
+          "matched": 15,
+          "missed": 0,
+          "extra": 17
+        }
+      },
+      {
+        "passage": "feel_the_vibration_174bpm",
+        "strict_50ms": {
+          "matched": 12,
+          "missed": 3,
+          "extra": 5
+        },
+        "association_minus35_plus200ms": {
+          "matched": 15,
+          "missed": 0,
+          "extra": 2
+        }
+      },
+      {
+        "passage": "inhale_exhale_145bpm",
+        "strict_50ms": {
+          "matched": 11,
+          "missed": 1,
+          "extra": 13
+        },
+        "association_minus35_plus200ms": {
+          "matched": 11,
+          "missed": 1,
+          "extra": 13
+        }
+      },
+      {
+        "passage": "tears_140bpm",
+        "strict_50ms": {
+          "matched": 10,
+          "missed": 0,
+          "extra": 7
+        },
+        "association_minus35_plus200ms": {
+          "matched": 10,
+          "missed": 0,
+          "extra": 7
+        }
+      },
+      {
+        "passage": "late_night_kick_heavy",
+        "strict_50ms": {
+          "matched": 23,
+          "missed": 6,
+          "extra": 1
+        },
+        "association_minus35_plus200ms": {
+          "matched": 23,
+          "missed": 6,
+          "extra": 1
+        }
+      },
+      {
+        "passage": "late_night_bass_heavy",
+        "strict_50ms": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 0
+        },
+        "association_minus35_plus200ms": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 0
+        }
+      },
+      {
+        "passage": "midnight_patience_kick_heavy",
+        "strict_50ms": {
+          "matched": 17,
+          "missed": 18,
+          "extra": 0
+        },
+        "association_minus35_plus200ms": {
+          "matched": 17,
+          "missed": 18,
+          "extra": 0
+        }
+      },
+      {
+        "passage": "midnight_patience_bass_heavy",
+        "strict_50ms": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 0
+        },
+        "association_minus35_plus200ms": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 0
+        }
+      }
+    ],
+    "totals": {
+      "strict_50ms": {
+        "matched": 102,
+        "missed": 28,
+        "extra": 43
+      },
+      "association_minus35_plus200ms": {
+        "matched": 105,
+        "missed": 25,
+        "extra": 40
+      }
+    }
+  },
+  "experiments": {
+    "episode": {
+      "passages": [
+        {
+          "passage": "apricots_128bpm",
+          "strict_50ms": {
+            "matched": 14,
+            "missed": 0,
+            "extra": 0
+          },
+          "association_minus35_plus200ms": {
+            "matched": 14,
+            "missed": 0,
+            "extra": 0
+          }
+        },
+        {
+          "passage": "bad_guy_128bpm",
+          "strict_50ms": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 17
+          },
+          "association_minus35_plus200ms": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 17
+          }
+        },
+        {
+          "passage": "feel_the_vibration_174bpm",
+          "strict_50ms": {
+            "matched": 13,
+            "missed": 2,
+            "extra": 5
+          },
+          "association_minus35_plus200ms": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 3
+          }
+        },
+        {
+          "passage": "inhale_exhale_145bpm",
+          "strict_50ms": {
+            "matched": 12,
+            "missed": 0,
+            "extra": 13
+          },
+          "association_minus35_plus200ms": {
+            "matched": 12,
+            "missed": 0,
+            "extra": 13
+          }
+        },
+        {
+          "passage": "tears_140bpm",
+          "strict_50ms": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 12
+          },
+          "association_minus35_plus200ms": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 12
+          }
+        },
+        {
+          "passage": "late_night_kick_heavy",
+          "strict_50ms": {
+            "matched": 23,
+            "missed": 6,
+            "extra": 1
+          },
+          "association_minus35_plus200ms": {
+            "matched": 23,
+            "missed": 6,
+            "extra": 1
+          }
+        },
+        {
+          "passage": "late_night_bass_heavy",
+          "strict_50ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          },
+          "association_minus35_plus200ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          }
+        },
+        {
+          "passage": "midnight_patience_kick_heavy",
+          "strict_50ms": {
+            "matched": 18,
+            "missed": 17,
+            "extra": 5
+          },
+          "association_minus35_plus200ms": {
+            "matched": 17,
+            "missed": 18,
+            "extra": 6
+          }
+        },
+        {
+          "passage": "midnight_patience_bass_heavy",
+          "strict_50ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          },
+          "association_minus35_plus200ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          }
+        }
+      ],
+      "totals": {
+        "strict_50ms": {
+          "matched": 105,
+          "missed": 25,
+          "extra": 53
+        },
+        "association_minus35_plus200ms": {
+          "matched": 106,
+          "missed": 24,
+          "extra": 52
+        }
+      }
+    },
+    "continuity": {
+      "passages": [
+        {
+          "passage": "apricots_128bpm",
+          "strict_50ms": {
+            "matched": 3,
+            "missed": 11,
+            "extra": 0
+          },
+          "association_minus35_plus200ms": {
+            "matched": 3,
+            "missed": 11,
+            "extra": 0
+          }
+        },
+        {
+          "passage": "bad_guy_128bpm",
+          "strict_50ms": {
+            "matched": 0,
+            "missed": 15,
+            "extra": 1
+          },
+          "association_minus35_plus200ms": {
+            "matched": 0,
+            "missed": 15,
+            "extra": 1
+          }
+        },
+        {
+          "passage": "feel_the_vibration_174bpm",
+          "strict_50ms": {
+            "matched": 1,
+            "missed": 14,
+            "extra": 1
+          },
+          "association_minus35_plus200ms": {
+            "matched": 1,
+            "missed": 14,
+            "extra": 1
+          }
+        },
+        {
+          "passage": "inhale_exhale_145bpm",
+          "strict_50ms": {
+            "matched": 7,
+            "missed": 5,
+            "extra": 3
+          },
+          "association_minus35_plus200ms": {
+            "matched": 7,
+            "missed": 5,
+            "extra": 3
+          }
+        },
+        {
+          "passage": "tears_140bpm",
+          "strict_50ms": {
+            "matched": 9,
+            "missed": 1,
+            "extra": 3
+          },
+          "association_minus35_plus200ms": {
+            "matched": 9,
+            "missed": 1,
+            "extra": 3
+          }
+        },
+        {
+          "passage": "late_night_kick_heavy",
+          "strict_50ms": {
+            "matched": 2,
+            "missed": 27,
+            "extra": 0
+          },
+          "association_minus35_plus200ms": {
+            "matched": 2,
+            "missed": 27,
+            "extra": 0
+          }
+        },
+        {
+          "passage": "late_night_bass_heavy",
+          "strict_50ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          },
+          "association_minus35_plus200ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          }
+        },
+        {
+          "passage": "midnight_patience_kick_heavy",
+          "strict_50ms": {
+            "matched": 2,
+            "missed": 33,
+            "extra": 0
+          },
+          "association_minus35_plus200ms": {
+            "matched": 2,
+            "missed": 33,
+            "extra": 0
+          }
+        },
+        {
+          "passage": "midnight_patience_bass_heavy",
+          "strict_50ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          },
+          "association_minus35_plus200ms": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          }
+        }
+      ],
+      "totals": {
+        "strict_50ms": {
+          "matched": 24,
+          "missed": 106,
+          "extra": 8
+        },
+        "association_minus35_plus200ms": {
+          "matched": 24,
+          "missed": 106,
+          "extra": 8
+        }
+      }
+    }
+  },
+  "methods": {
+    "episode": "One fixed recovery trial: retain v5 evidence inside a body-attack episode.\n\nStart on body fast/slow >2 after rearm (<1.2), collect balance and combined rise\nfor at most35ms, and require two adjacent body-attack hops. A return below1.2\nends the episode. Original v5 eligibility is always retained. This is not the\nprevious unrestricted temporal-predicate accumulator. No threshold sweep.\n",
+    "continuity": {
+      "description": "Measure a fixed causal AR veto for the frozen sustained-bass fires.\n\nThis is a CPU-only development measurement.  The predictor is fit on the 80 ms\nimmediately before a 20 ms evaluation window, using only past samples.  A fire\nis vetoed when residual energy is at most 10 percent of observed energy.",
+      "settings": {
+        "predictor": "zero-intercept order-8 linear autoregression",
+        "train_window_s": 0.08,
+        "evaluation_window_s": 0.02,
+        "ridge_relative_to_mean_xtx_diagonal": 0.001,
+        "veto_score_max": 0.1,
+        "insufficient_history": "unassessed/keep",
+        "silence": "unassessed/keep"
+      }
+    }
+  },
+  "findings": [
+    "Event-scoped evidence retention recovers the visually labelled Inhale Exhale12.620s kick. Wider-associated label count105\u2192106, unmatched events40\u219252; no old associated labels lost.",
+    "Strict50ms matches102\u2192105 include the Inhale recovery, a Feel hit moving inside50ms, and a Midnight trigger45.333ms before a label. The latter fails the fixed35ms early allowance; do not present all3as newly recovered kicks.",
+    "Most missed Late Night and Midnight kicks do not show the required combined power rise inside the examined35ms interval; retaining nonexistent evidence cannot rescue them. This is a diagnostic observation with provisional labels, not a DSP impossibility claim.",
+    "AR continuity rejects81of105wider-associated kicks while removing32of40unmatched fires. One-step predictability also applies to short tonal kicks; this fixed score does not establish bass identity. No threshold tuned."
+  ],
+  "verification": {
+    "episode_tests": 4,
+    "continuity_tests": 4,
+    "native_and_improved_references_replayed_per_trial": 7,
+    "continuity_kept_hops_verified_against_each_event_decision": true
+  },
+  "limitations": [
+    "Development-only sequential experiments with global settings. Provisional visual event labels and qualitative listening feedback; no new labels.",
+    "No changes to app, frozen improved reference, output timing tolerances, or held-out Miracle/Heavy On Mind recordings.",
+    "All decisions use recorded available hop time. Continuity filter/predictor CPU throughput is not a native callback or perceptual latency guarantee."
+  ],
+  "source_sha256": {
+    "episode": {
+      "kick_episode_trial.py": "89f720273dfc6ac958537c6dfef6a97910c5776c44085cd49deb42ffc1c8685f",
+      "kick_dsp_experiments.py": "e5595079d48ef086e0731ac871f9c4fc07c53e7de87e2796f51cbe5c3983dd3b",
+      "kick_sustain_audit.py": "d72f8fc18bc8414bf72ee85e7aa2bfa27669e6f2fd951dede86b29209eb34917",
+      "kick_attack_rejection.py": "cb5e8ad261f64ae5b6e3bafce2f232e14ec99bb3fc54c0599f113dcfaed6a144",
+      "kick_hybrid_experiment.py": "9f16149655e367952cab586b2e89d900d5ca3bcb07e0cf5cbead4fa2ecd42aa8",
+      "run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615",
+      "live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2",
+      "master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145"
+    },
+    "continuity": {
+      "kick_bass_continuity.py": "3e48b637e191e73d1ab11739a73aae9ebde23561806b097a674cdacdabcc7535",
+      "kick_attack_rejection.py": "cb5e8ad261f64ae5b6e3bafce2f232e14ec99bb3fc54c0599f113dcfaed6a144",
+      "kick_sustain_audit.py": "d72f8fc18bc8414bf72ee85e7aa2bfa27669e6f2fd951dede86b29209eb34917",
+      "kick_dsp_experiments.py": "e5595079d48ef086e0731ac871f9c4fc07c53e7de87e2796f51cbe5c3983dd3b",
+      "run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615",
+      "live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2",
+      "master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145"
+    }
+  },
+  "labels_sha256": {
+    "inhale_exhale_145bpm.csv": "a29b9892456588294efbf6f506da912d4f2d996fc105f9551b1b9d6db4077f4e",
+    "bad_guy_128bpm.csv": "d657d298ad98bee09e048922b465de4b4a69386a1482d8327be3207a37444ef7",
+    "attack_review.csv": "b29e872c8a8ec9d05902c7f76bc68b5a16399fc9cf0fd1ef669c598c8711a9ae",
+    "feel_the_vibration_174bpm.csv": "922be87c9a6a9eb03002b68ce5f87915e1fec4652921795c20cf6975a2bc21e8",
+    "apricots_128bpm.csv": "fa38b535e88b55580df3f90956935420070d95fb89441b30e625b1cdce45b163",
+    "tears_140bpm.csv": "f3ce02e72f191bd53bc86c611fce2efe56a55db4cb19b6f1434bdba80ce28576",
+    "master_passages_2026-10-09.json": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c"
+  },
+  "audio_sha256": {
+    "apricots_128bpm": "fde3593f372875579a15b95d80cb1d4408971ba62dd80b84110623eecbba28c4",
+    "bad_guy_128bpm": "351ad2f07dc5778690b8f04c0af12c1acc8f83fdb3c253fc988e26a433cff7a8",
+    "feel_the_vibration_174bpm": "57458b322198b9c12ac821180874466a6636c15dda56d33bc29d616f46f80533",
+    "inhale_exhale_145bpm": "26163ae92e4b7aaf74cafc6a5fff3b6bad2a566a60474bb8b8b53386add18514",
+    "tears_140bpm": "49c7c4ee799e93690e4023665b332c617f0fa170314a83d05c79a2c675d5b334",
+    "late_night": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+    "midnight_patience": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2"
+  },
+  "raw_reports": {
+    "episode": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-continuity-2026-10-09/episode.json",
+      "sha256": "1b36142769798addea22c87ed6cdf2af834cde4a68040a82db80ce0a01a6d0d5"
+    },
+    "continuity": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-continuity-2026-10-09/continuity.json",
+      "sha256": "b03fc1a198d799f2d800384be67ec38056ce82d0e7131a9fcee4028ded2748a3"
+    }
+  },
+  "reproduction": {
+    "episode": "PYTHONPATH=tools/audio_analysis python3 -m eval.kick_episode_trial --audio-root '/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio' --cache /Users/peterkiemann/.cache/manifold/kick-dsp-experiments-2026-10-09 --reference /Users/peterkiemann/.cache/manifold/kick-sustain-audit-2026-10-09/audit.json --out PATH",
+    "continuity": "PYTHONPATH=tools/audio_analysis python3 -m eval.kick_bass_continuity --audio-root '/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio' --reference /Users/peterkiemann/.cache/manifold/kick-sustain-audit-2026-10-09/audit.json --out PATH"
+  }
+}

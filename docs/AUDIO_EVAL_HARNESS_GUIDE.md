@@ -329,6 +329,17 @@ This remains offline: unequal waits shorten some output gaps below 60 ms outside
 reviewed passages, and held-out evaluation/native latency are unverified. See
 `tools/audio_analysis/eval/scoreboard/kick_sustain_audit_2026-10-09.json`.
 
+**Evidence retention and bass continuity, 2026-10-09 — neither adopted:**
+Keeping balance/growth evidence inside one body-attack episode recovers the
+Inhale Exhale 12.620 s label, but wider unmatched fires increase from 40 to 52.
+A fixed past-trained AR(8) predictor on 45–400 Hz audio rejects 81 of the
+105 associated kicks: predictable waveform continuation does not identify bass.
+Strict 50 ms scores are 105/25/53 for episode retention and 24/106/8 for the
+predictor, versus the improved reference's 102/28/43 (matched/missed/extra).
+Eight focused tests and both sets of seven reference replays pass. The prior
+sustained-bass improvement remains frozen; no held-out or live change was made.
+See `tools/audio_analysis/eval/scoreboard/kick_continuity_trials_2026-10-09.json`.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
