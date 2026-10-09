@@ -55,7 +55,7 @@ fn offline_history_drain_crosses_fluid_history_capacity_without_reset() {
         .find(|(name, _)| *name == "simulation_time")
         .unwrap()
         .1;
-    let backend = runtime.executor.backend();
+    let backend = runtime.backend_for_test();
     let published = backend
         .slot_for(resource)
         .and_then(|slot| backend.scalar(slot))
@@ -64,9 +64,8 @@ fn offline_history_drain_crosses_fluid_history_capacity_without_reset() {
         published.is_none_or(|value| value == 0.0),
         "intermediate native progress must not publish graph outputs: {published:?}"
     );
-    runtime
-        .executor
-        .execute_frame(&mut runtime.graph, &runtime.plan, time(36.0));
+    let water = runtime.water();
+    water.executor.execute_frame(water.graph, water.plan, time(36.0));
     assert_eq!(observed_fluid_time(), Some(36.0));
 }
 

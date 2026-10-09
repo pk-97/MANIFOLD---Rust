@@ -2288,6 +2288,7 @@ dependencies = [
  "manifold-nodes",
  "manifold-nodes-image",
  "manifold-nodes-scene",
+ "manifold-nodes-water",
  "manifold-physics",
  "manifold-playback",
  "manifold-profiler",
@@ -2473,26 +2474,20 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "arc-swap",
- "arrayvec",
  "bytemuck",
- "glam",
  "half",
  "image",
  "inventory",
  "log",
  "manifold-core",
- "manifold-fluids",
  "manifold-foundation",
  "manifold-gpu",
- "manifold-physics",
  "manifold-playback",
  "naga",
- "objc2 0.6.4",
  "png",
  "serde",
  "serde_json",
  "sha2",
- "zstd",
 ]
 
 [[package]]
@@ -2519,6 +2514,7 @@ dependencies = [
  "manifold-nodes",
  "manifold-nodes-image",
  "manifold-nodes-scene",
+ "manifold-nodes-water",
  "manifold-physics",
  "manifold-playback",
  "naga",
@@ -2549,7 +2545,6 @@ dependencies = [
  "manifold-native",
  "manifold-node-engine",
  "manifold-nodes-image",
- "manifold-physics",
  "naga",
  "serde_json",
  "tiff 0.9.1",
@@ -2579,6 +2574,32 @@ dependencies = [
  "serde_json",
  "sha2",
  "urlencoding",
+]
+
+[[package]]
+name = "manifold-nodes-water"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "arrayvec",
+ "bytemuck",
+ "glam",
+ "half",
+ "image",
+ "inventory",
+ "log",
+ "manifold-core",
+ "manifold-fluids",
+ "manifold-foundation",
+ "manifold-gpu",
+ "manifold-node-engine",
+ "manifold-physics",
+ "naga",
+ "objc2 0.6.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "zstd",
 ]
 
 [[package]]

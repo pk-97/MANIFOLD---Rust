@@ -43,7 +43,7 @@ pub struct Fixture {
 }
 
 pub(super) fn triangle_table() -> Vec<[i32; 16]> {
-    let source = include_str!("../../../../manifold-fluids/native/flip_engine/polygonizer3d.cpp");
+    let source = include_str!("../../../manifold-fluids/native/flip_engine/polygonizer3d.cpp");
     let start = source.find("_triTable[256][16] = {").unwrap();
     source[start..]
         .lines()

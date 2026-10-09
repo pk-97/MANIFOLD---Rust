@@ -321,7 +321,7 @@ fn physics_carry_rejects_setup_changes_and_output_resize() {
     assert!(changed.water_ref().water.last_frame_time.is_none());
     assert_eq!(frame(&mut changed, 0.5).pos[1], 8.0);
     let mut resized = runtime(5.0, false);
-    resized.width += 1;
+    resized.set_dimensions_for_test(resized.width_for_test() + 1, resized.height_for_test());
     resized.carry_generator_state_from(&mut prior);
     assert!(resized.water_ref().water.last_frame_time.is_none());
     assert_ne!(frame(&mut resized, 0.5), fallen);

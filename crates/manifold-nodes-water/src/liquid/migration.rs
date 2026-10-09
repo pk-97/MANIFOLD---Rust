@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(flat.wires.iter().filter(|w| w.to_port == "display_cursor").count(), 1);
         // A saved project layer from before the cursor gets it from its domain.
         let mut saved: EffectGraphDef = serde_json::from_str(include_str!(
-            "../../../../manifold-io/tests/fixtures/water_layer_graph_v1160.json"
+            "../../../manifold-io/tests/fixtures/water_layer_graph_v1160.json"
         ))
         .expect("saved layer");
         saved.scene_modifiers.clear();

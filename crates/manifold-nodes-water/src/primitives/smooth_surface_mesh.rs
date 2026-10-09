@@ -1,7 +1,7 @@
 //! FLIP Fluids trianglemesh.cpp smooth(value, iterations), using the shared
 //! generated relaxation pass. Iteration dependencies materialize between passes.
 use crate::primitives::relax_surface_mesh::{RelaxSurfaceMesh, SurfaceMeshPass};
-use manifold_node_engine::float_param;
+use crate::float_param;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};

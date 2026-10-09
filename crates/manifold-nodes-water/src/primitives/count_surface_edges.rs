@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use super::count_surface_triangles::MARCHING_CUBES_COMMON;
-use manifold_node_engine::float_param;
+use crate::float_param;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -164,7 +164,7 @@ mod tests {
 
     fn upstream_triangle_table() -> Vec<[i32; 16]> {
         let source =
-            include_str!("../../../../manifold-fluids/native/flip_engine/polygonizer3d.cpp");
+            include_str!("../../../manifold-fluids/native/flip_engine/polygonizer3d.cpp");
         let start = source
             .find("_triTable[256][16] = {")
             .expect("upstream triangle table");

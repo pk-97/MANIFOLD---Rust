@@ -33,6 +33,7 @@ optional = true
 
 [dev-dependencies]
 glam = "0.29.3"
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

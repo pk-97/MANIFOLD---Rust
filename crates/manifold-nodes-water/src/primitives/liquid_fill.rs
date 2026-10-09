@@ -12,7 +12,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
-use manifold_node_engine::float_param;
+use crate::float_param;
 use super::sort_particles_into_cells::{int_param};
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};

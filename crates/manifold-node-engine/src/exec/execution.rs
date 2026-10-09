@@ -1049,7 +1049,7 @@ impl Executor {
 
     /// Logical resource availability, including upstream pending inputs.
     /// Rebuild handoff must not publish a pending CPU value as ready.
-    pub(crate) fn mesh_pending_of(&self, res: ResourceId) -> bool {
+    pub fn mesh_pending_of(&self, res: ResourceId) -> bool {
         self.mesh_pending.get(res.0 as usize).copied().unwrap_or(false)
     }
 

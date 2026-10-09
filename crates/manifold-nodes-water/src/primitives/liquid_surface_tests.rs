@@ -719,7 +719,7 @@ use manifold_node_engine::mesh::MeshVertex;
 /// Upstream's triangle table, parsed from the vendored source so the packed
 /// WGSL table is checked against its origin, not against itself.
 fn upstream_triangle_table() -> Vec<[i32; 16]> {
-    let source = include_str!("../../../../manifold-fluids/native/flip_engine/polygonizer3d.cpp");
+    let source = include_str!("../../../manifold-fluids/native/flip_engine/polygonizer3d.cpp");
     let start = source.find("_triTable[256][16] = {").expect("upstream triangle table");
     source[start..]
         .lines()

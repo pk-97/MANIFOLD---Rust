@@ -2,7 +2,7 @@
 use crate::primitives::count_surface_triangles::MARCHING_CUBES_COMMON;
 use crate::primitives::liquid_bricks;
 use crate::primitives::relax_surface_mesh::SurfaceMeshPass;
-use manifold_node_engine::float_param;
+use crate::float_param;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};

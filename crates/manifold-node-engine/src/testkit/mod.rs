@@ -23,7 +23,6 @@ pub mod codegen_support;
 #[cfg(any(test, feature = "testkit"))]
 pub mod proof_support;
 
-
 #[cfg(any(test, feature = "testkit"))]
 pub mod mesh_revision;
 
@@ -34,9 +33,6 @@ pub mod array_harness;
 #[cfg(any(test, feature = "testkit"))]
 pub mod shader_source;
 
-
-
-
 #[cfg(feature = "gpu-proofs")]
 #[cfg(any(test, feature = "testkit"))]
 pub mod atom;
@@ -45,16 +41,13 @@ pub mod atom;
 #[cfg(any(test, feature = "testkit"))]
 pub mod water_codegen;
 
-
 #[cfg(test)]
 pub(crate) mod fusion_fixtures;
 
 pub mod substep_nodes;
 
-
-#[cfg(test)]
-pub(crate) mod document_fixtures;
+#[cfg(any(test, feature = "testkit"))]
+pub mod document_fixtures;
 
 #[cfg(feature = "gpu-proofs")]
 pub mod gpu_harness;
-

@@ -47,7 +47,7 @@ use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Solve, Stop, Wate
 use super::liquid_solid_distance::{SolidDistanceJob, encode_solid_distance};
 use super::liquid_stats::{SOLVER_WORDS, with_stats_layout};
 use super::prefix_scan::ScanLabels;
-use manifold_node_engine::float_param;
+use crate::float_param;
 use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, int_param};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;

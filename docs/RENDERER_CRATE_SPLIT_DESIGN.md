@@ -149,7 +149,7 @@ Forbidden edges, normal and build dependencies (dev-deps may cross downward only
 
 | Crate | May depend on | Must never depend on |
 |---|---|---|
-| `manifold-node-engine` | foundation, core, gpu, native, playback, physics, fluids | ui, editing, io, media, app, any `manifold-nodes*`, compositor, ui-paint |
+| `manifold-node-engine` | foundation, core, gpu, native, playback | physics, fluids, ui, editing, io, media, app, any `manifold-nodes*`, compositor, ui-paint |
 | `manifold-nodes-{image,scene,water}` | graph + graph's allowed set | each other, `manifold-nodes`, ui, editing, io, app, compositor, ui-paint |
 | `manifold-nodes` | graph, the three families | ui, editing, io, app, compositor, ui-paint |
 | `manifold-compositor` | graph, core, gpu, playback, foundation | any `manifold-nodes*` (dev-dep on `manifold-nodes` allowed), ui, editing, io, app |
@@ -242,6 +242,29 @@ The P0 closure/seam census assumed the monolithic renderer layout and was retire
 - **What it decides (not decided here, by design):** the `PresetRuntime` extension seam for physics sources, the `substeps`↔`liquid` clock contract (owned by the live sim clock design — coordinate, don't amend), whether `scene_modifier_expand` follows. Mechanism constraint already fixed: registration through `inventory`, like D5; no new shared state; no trait object constructed per frame. The phase ends with `manifold-nodes-water` existing per D1, the hub free of `physics`/`fluids` dependencies (layering row flips), and INV-9's trace clean.
 - **Gate:** every invariant above plus `scripts/gpu_proofs_gate.py` with the water proof set (`fluid-perf-proofs` features on) and `scripts/rt_noise_gate.py` unchanged.
 - **Demo:** L2 — Peter's water demo project renders identically (pixel diff at threshold 0 on the three fixed frames the FLIP proofs already capture).
+
+#### P5 move and compiler review (in progress)
+
+`docs/crate-moves/t2-water` records the 398-file move in `dc6736839`.
+Replay reproduces its complete tree. The second identity check reports 202
+residue lines: reviewed manifest transfers, preserved module attributes,
+path changes inside registrations/macros/assertions, shader include paths,
+and diff headers. No numerical expressions, assertions or shader bytes change.
+Its four template digests match the committed plan. The verifier remains red;
+this is an explicit residue review under INV-2, not a claimed zero-residue pass.
+
+The first compile against the extracted crate identified the D8 widenings:
+`exec::instance_upload::{InstanceSnapshotUpload, prewarm, upload}` and its module;
+`load::expand::{impulse_recipients, contains_fragments}` and their definitions;
+`ProjectTempo::{map, fallback_bpm, shares_mapping}`;
+`AtomExtent::input`; and `Executor::mesh_pending_of`.
+These remain generic engine operations; water borrows them without native
+types entering the engine. The instance uploader retains its private state and
+dispatch helper. Test-only access exposes the existing document registration
+and a dimension setter; executor observations reuse existing runtime access.
+Macro imports and relative includes are corrected separately from the move.
+The empty image integration harness is removed after its three tests move to
+the catalog. Both test censuses, behavioral gates and landing remain required.
 
 #### P5 preparation seam (verified 2026-10-09 at `d5d226167`)
 

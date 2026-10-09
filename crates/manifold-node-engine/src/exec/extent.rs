@@ -110,7 +110,7 @@ impl AtomExtent<'_> {
         format!("{} ({})", self.node.node_id.as_str(), self.node.node.type_id().as_str())
     }
 
-    pub(crate) fn input(&self, port: &str) -> Option<ResourceId> {
+    pub fn input(&self, port: &str) -> Option<ResourceId> {
         self.step.inputs.iter().find(|(name, _)| *name == port).map(|&(_, resource)| resource)
     }
 

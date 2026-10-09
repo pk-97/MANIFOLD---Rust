@@ -13,7 +13,7 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use super::prefix_scan::{PrefixScan, ScanLabels};
-use manifold_node_engine::float_param;
+use crate::float_param;
 use super::sort_particles_into_cells::{bin_param, read_searched_bins};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use crate::fluid_particles::{CellRange, FluidBlob};

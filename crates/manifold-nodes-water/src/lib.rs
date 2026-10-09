@@ -1,4 +1,6 @@
 //! Water and physics graph adapters.
+//! Owns native simulation nodes and their graph runtime extensions.
+//! Depends on the engine and native solvers, never other node families or UI.
 
 pub mod fluid;
 mod graph_install;

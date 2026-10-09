@@ -2080,4 +2080,8 @@ impl EffectSlot {
 impl PresetRuntime {
     pub fn width_for_test(&self) -> u32 { self.width }
     pub fn height_for_test(&self) -> u32 { self.height }
+    pub fn set_dimensions_for_test(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+    }
 }

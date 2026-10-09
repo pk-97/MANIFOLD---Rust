@@ -23,13 +23,13 @@ const LAYERS: &[Layer] = &[
     },
     Layer {
         package: "manifold-nodes",
-        normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene"],
-        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-physics", "manifold-playback"],
+        normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water"],
+        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback"],
     },
     Layer {
         package: "manifold-app",
-        normal_and_build: &["manifold-audio", "manifold-compositor", "manifold-core", "manifold-editing", "manifold-gpu", "manifold-io", "manifold-led", "manifold-media", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-playback", "manifold-profiler", "manifold-recording", "manifold-nodes", "manifold-spectral", "manifold-ui", "manifold-ui-paint"],
-        dev: &["manifold-foundation", "manifold-physics", "manifold-fluids", "manifold-nodes", "manifold-compositor", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene"],
+        normal_and_build: &["manifold-audio", "manifold-compositor", "manifold-core", "manifold-editing", "manifold-gpu", "manifold-io", "manifold-led", "manifold-media", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-playback", "manifold-profiler", "manifold-recording", "manifold-nodes", "manifold-spectral", "manifold-ui", "manifold-ui-paint"],
+        dev: &["manifold-foundation", "manifold-physics", "manifold-fluids", "manifold-nodes", "manifold-compositor", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water"],
     },
 
     Layer {
@@ -40,15 +40,21 @@ const LAYERS: &[Layer] = &[
 
     Layer {
         package: "manifold-nodes-image",
-        normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu", "manifold-native", "manifold-node-engine", "manifold-physics"],
+        normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu", "manifold-native", "manifold-node-engine"],
         dev: &["manifold-node-engine", "manifold-nodes-image"],
     },
 
     Layer {
         package: "manifold-node-engine",
         normal_and_build: &["manifold-foundation", "manifold-core", "manifold-gpu",
-                            "manifold-native", "manifold-playback", "manifold-physics", "manifold-fluids"],
+                            "manifold-native", "manifold-playback"],
         dev: &["manifold-nodes"],
+    },
+    Layer {
+        package: "manifold-nodes-water",
+        normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu",
+                            "manifold-node-engine", "manifold-physics", "manifold-fluids"],
+        dev: &["manifold-node-engine"],
     },
     Layer {
         package: "manifold-ui-paint",
@@ -99,6 +105,10 @@ fn workspace_dependencies_obey_layering() {
     for source in ["manifold-nodes", "manifold-app"] {
         assert!(normal_and_build.contains(&(source, "manifold-nodes-scene")),
                 "missing leaf dependency: {source} -> manifold-nodes-scene");
+    }
+    for source in ["manifold-nodes", "manifold-app"] {
+        assert!(normal_and_build.contains(&(source, "manifold-nodes-water")),
+                "missing water dependency: {source} -> manifold-nodes-water");
     }
     assert!(normal_and_build.contains(&("manifold-app", "manifold-compositor")),
             "missing leaf dependency: manifold-app -> manifold-compositor");

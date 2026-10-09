@@ -30,11 +30,6 @@ core-text = "20"
 core-graphics = "0.23"
 core-foundation = "0.9"
 
-[[test]]
-name = "main"
-path = "tests/main.rs"
-
-
 [features]
 testkit = ["manifold-node-engine/testkit"]
 gpu-proofs = ["manifold-node-engine/gpu-proofs", "manifold-node-engine/testkit"]

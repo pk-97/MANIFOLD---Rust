@@ -3,7 +3,7 @@
 //! Section 2.5 audit: redistance_lattice computes nearest triangle distance,
 //! which is not the engine upwind rule. This atom is a pure stencil sweep;
 //! whitewater owns convergence reduction and calls its generated pipeline.
-use manifold_node_engine::float_param;
+use crate::float_param;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};

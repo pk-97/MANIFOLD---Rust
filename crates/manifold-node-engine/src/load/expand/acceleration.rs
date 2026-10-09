@@ -246,7 +246,7 @@ pub(super) fn recipient_key(
 /// Prepare the same physical selection for discrete hits. Several visible
 /// material parts may share one body; several bodies may share one world.
 /// Merge both cases before delivery so one hit reaches each body only once.
-pub(crate) fn impulse_recipients(
+pub fn impulse_recipients(
     owner: &EffectGraphDef,
     scene: &SceneNodeRef,
     selection: &SceneTargetSelection,

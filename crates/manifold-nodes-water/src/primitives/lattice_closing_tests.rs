@@ -79,7 +79,7 @@ fn point(i: usize, n: usize, h: f64) -> DVec3 {
     DVec3::new((i % n) as f64, ((i / n) % n) as f64, (i / (n * n)) as f64) * h
 }
 fn table() -> Vec<Vec<usize>> {
-    let source = include_str!("../../../../manifold-fluids/native/flip_engine/polygonizer3d.cpp");
+    let source = include_str!("../../../manifold-fluids/native/flip_engine/polygonizer3d.cpp");
     let start = source
         .find("_triTable[256][16] = {")
         .expect("upstream MC table");

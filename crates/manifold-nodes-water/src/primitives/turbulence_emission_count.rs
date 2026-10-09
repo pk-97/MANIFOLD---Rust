@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 
-use manifold_node_engine::float_param;
+use crate::float_param;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
