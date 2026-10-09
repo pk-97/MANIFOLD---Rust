@@ -2594,6 +2594,7 @@ dependencies = [
  "manifold-gpu",
  "manifold-node-engine",
  "manifold-physics",
+ "manifold-playback",
  "naga",
  "objc2 0.6.4",
  "serde",

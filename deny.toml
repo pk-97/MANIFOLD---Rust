@@ -90,7 +90,7 @@ deny = [
     { name = "manifold-nodes-scene", wrappers = ["manifold-app", "manifold-nodes", "manifold-nodes-scene"], reason = "Physics and UI dependency boundaries" },
     { name = "manifold-nodes-water", wrappers = ["manifold-app", "manifold-nodes"], reason = "Physics and UI dependency boundaries" },
     { name = "manifold-physics", wrappers = ["manifold-app", "manifold-fluids", "manifold-nodes", "manifold-nodes-water"], reason = "Physics and UI dependency boundaries" },
-    { name = "manifold-playback", wrappers = ["manifold-app", "manifold-audio", "manifold-compositor", "manifold-media", "manifold-node-engine", "manifold-nodes"], reason = "Physics and UI dependency boundaries" },
+    { name = "manifold-playback", wrappers = ["manifold-app", "manifold-audio", "manifold-compositor", "manifold-media", "manifold-node-engine", "manifold-nodes", "manifold-nodes-water"], reason = "Physics and UI dependency boundaries; water uses playback only in contract tests" },
     { name = "manifold-profiler", wrappers = ["manifold-app"], reason = "Physics and UI dependency boundaries" },
     { name = "manifold-recording", wrappers = ["manifold-app"], reason = "Physics and UI dependency boundaries" },
     { name = "manifold-spectral", wrappers = ["manifold-app", "manifold-audio"], reason = "Physics and UI dependency boundaries" },
