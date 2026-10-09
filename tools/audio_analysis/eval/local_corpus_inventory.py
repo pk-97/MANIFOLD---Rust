@@ -223,13 +223,11 @@ def run(out):
         fixtures=fixtures, stem_folders=stem_groups, final_masters=masters,
         additional_identified_masters=identified_other_masters,
         unopened_archives=archives, resident_header_reads=header_reads,
-        proposed_split=dict(status='lead_approved_whole_family_reserve_2026-10-09',
-            whole_song_reserve_candidates=['waypoints', 'know_youre_there'],
-            locked_reserve_families=['waypoints', 'know_youre_there'],
-            reserve_rule='No audio samples, features or labels from any version of either family '
-            'until the lead freezes the candidate for final validation.',
-            reserve_reason='Finished resident masters and matching named stem folders; no detector '
-            'use found in audited committed records. Lead approved this whole-family reserve.',
+        proposed_split=dict(status='no_reserve_peter_2026-10-10',
+            whole_song_reserve_candidates=[],
+            locked_reserve_families=[],
+            reserve_rule='None. Peter, 2026-10-10: Waypoints and Know You\'re There are ordinary data; '
+            'the 2026-10-09 lead reserve of both families is void.',
             immediate_expansion_priority=['late_night', 'midnight_patience', 'miracle', 'heavy_on_mind'],
             additional_development_priority=['pattern', 'all_in_for_you', 'integer'],
             development_reason='Already exposed in earlier liveshow detector evaluations; cannot claim '

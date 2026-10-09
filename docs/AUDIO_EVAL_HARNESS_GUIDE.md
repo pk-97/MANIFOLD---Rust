@@ -459,9 +459,10 @@ by SVD, but their independently matched sets cover only 114 labels. This does
 not establish a successful ensemble. See
 `tools/audio_analysis/eval/scoreboard/kick_trajectory_2026-10-09.json`.
 
-The local corpus inventory now locks Waypoints and Know You're There, including
-all versions/stems, as final-validation reserves. Their audio content has not
-been analysed for this work. Broader development starts with additional sections
+Waypoints and Know You're There are ordinary data (Peter, 2026-10-10). The
+2026-10-09 inventory locked them as final-validation reserves without his say;
+that lock is void, and later "remain untouched" lines only describe those runs.
+Broader development starts with additional sections
 of the four isolated-kick/master pairs, then Pattern, All In For You and Integer.
 Existing liveshow labels are visual clip placements with detector-affinity class
 tags, not independently observed acoustic onsets: Pattern duplicates 30 kick
