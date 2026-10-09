@@ -1372,7 +1372,7 @@ class DiffScopeTests(unittest.TestCase):
             src.mkdir(parents=True)
             (crate / "Cargo.toml").write_text('[package]\nname = "manifold-ui-paint"\n')
             (src / "ui_renderer.rs").write_text(
-                '#[cfg(all(test, feature = "gpu-proofs"))]\nmod tests {}\n')
+                '#[cfg(all(test, feature = "gpu-proofs"))]\nmod tests { #[test] fn pixel() {} }\n')
             (src / "native_text.rs").write_text('#[cfg(test)]\nmod tests {}\n')
             paths = ["crates/manifold-ui-paint/src/ui_renderer.rs",
                      "crates/manifold-ui-paint/src/native_text.rs"]
@@ -1380,6 +1380,20 @@ class DiffScopeTests(unittest.TestCase):
             plan = cpu_scope.plan_for_paths(paths, d, workspace=workspace)
             self.assertNotIn("test(/^ui_renderer::/)", plan.filterset)
             self.assertIn("test(/^native_text::/)", plan.filterset)
+
+    def test_gpu_test_modules_ignore_cpu_helpers_but_keep_cpu_tests(self):
+        with tempfile.TemporaryDirectory() as d:
+            source = Path(d) / "source.rs"
+            gpu = '#[cfg(all(test, feature = "gpu-proofs"))] mod pixels { #[test] fn pixel() {} }\n'
+            source.write_text('#[cfg(test)] fn readback_helper() {}\n' + gpu)
+            self.assertTrue(cpu_scope.gpu_proofs_only(source))
+            for cpu in ('#[cfg(test)] mod tests { #[test] fn cpu() {} }',
+                        '#[test] fn cpu() {}', '#[cfg(test)] mod tests;',
+                        '#[cfg(test)] make_tests!();',
+                        '#[cfg(test)] // #[cfg(all(test, feature = "gpu-proofs"))]\nmod tests { #[test] fn cpu() {} }'):
+                with self.subTest(cpu=cpu):
+                    source.write_text(gpu + cpu)
+                    self.assertFalse(cpu_scope.gpu_proofs_only(source))
 
     def test_deleted_integration_test_selects_no_binary(self):
         with tempfile.TemporaryDirectory() as d:
