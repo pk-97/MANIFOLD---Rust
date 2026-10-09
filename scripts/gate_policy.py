@@ -5,8 +5,8 @@ import re
 
 def is_inert_plan_path(path):
     """Committed crate-move plans are replay data, never live build inputs."""
-    roots = (".claude/orchestration/crate-split", "docs/crate-moves")
-    return any(path == root or path.startswith(root + "/") for root in roots)
+    root = ".claude/orchestration/crate-split"
+    return path == root or path.startswith(root + "/")
 
 
 SHARED_ASSETS = ['crates/manifold-foundation/assets/fonts']
