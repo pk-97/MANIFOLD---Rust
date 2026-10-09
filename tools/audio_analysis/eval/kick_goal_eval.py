@@ -12,7 +12,8 @@ Protocol, fixed before any scoring:
 - Tail fire: an unmatched fire whose candidate onset has no fresh kick-stem
   attack within [-70, +35] ms while the kick stem is ringing (within 30 dB of
   its peak). Core fire: a fire inside a kick-free core (the nine dev cores; on
-  new songs, spans of at least 4 s with no label and a silent kick stem).
+  new songs, spans of at least 4 s with no label, drum-bus kicks included, and a
+  silent kick stem).
 - Target: pooled recall and precision >= 0.90 at 70 ms, every song >= 0.80
   recall, zero core fires, zero tail fires.
 """
@@ -114,7 +115,7 @@ class Goal:
         truth = [t for t in info['labels'] if not any(a <= t <= b for a, b in merged)]
         src = dict(track=name, group='original_five', truth=truth,
                    regions=[dict(start_s=a, end_s=b, reason='uncertain') for a, b in merged])
-        rec = dict(track=name, source=src, ref=None, sample_rate=sr, hop=hop, candidates=cand, available=avail,
+        rec = dict(track=name, source=src, ref=None, sample_rate=sr, hop=hop, candidates=cand, available=avail, all_labels=info['labels'],
                    features=feats, duration=dur, removed=[], lag=shift)
         self._finish(rec, NEW[name]['kick'])
         return rec
@@ -139,7 +140,7 @@ class Goal:
 
     @staticmethod
     def _free_spans(rec, silent):
-        truth = np.asarray(rec['source']['truth'])
+        truth = np.asarray(rec.get('all_labels', rec['source']['truth']))
         spans, start = [], None
         for i, s in enumerate(silent):
             t = i * .001 + rec['lag']
