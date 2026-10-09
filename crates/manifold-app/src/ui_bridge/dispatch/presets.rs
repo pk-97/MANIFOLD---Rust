@@ -20,7 +20,7 @@ pub(crate) fn dispatch_preset(
     match kind {
         PresetActionKind::MakeUnique => {
             let source = if matches!(target, GraphTarget::SceneModifier { .. }) {
-                crate::graph_target::resolve(ctx.project, &target).cloned()
+                crate::graph_target::resolve(ctx.project, &target).map(|graph| (*graph).clone())
             } else {
                 preset_source_def(&target, ctx.project).map(|(def, _)| def)
             };
@@ -94,16 +94,16 @@ pub(crate) fn dispatch_preset(
         }
         PresetActionKind::RevertToLibrary => {
             let resolved = if matches!(target, GraphTarget::SceneModifier { .. }) {
-                let Some(host) = target
-                    .host_target()
-                    .and_then(|host| crate::graph_target::resolve(ctx.project, host))
-                else {
+                let Some(host_target) = target.host_target() else {
+                    return DispatchResult::handled();
+                };
+                let Some(host) = crate::graph_target::resolve(ctx.project, host_target) else {
                     return DispatchResult::handled();
                 };
                 let Some(local) = crate::graph_target::resolve(ctx.project, &target) else {
                     return DispatchResult::handled();
                 };
-                match crate::modifier_preset::library_baseline(host, local) {
+                match crate::modifier_preset::library_baseline(&host, &local) {
                     Ok(def) => def,
                     Err(error) => {
                         ContentCommand::send(
@@ -116,7 +116,7 @@ pub(crate) fn dispatch_preset(
             } else {
                 ctx.project
                     .instance_preset_id(&target)
-                    .and_then(|id| manifold_nodes::bundled_presets::bundled_preset_def(&id).cloned())
+                    .and_then(|id| manifold_nodes::bundled_presets::bundled_preset_def(&id).map(|def| (*def).clone()))
             };
             let mut command = RevertToLibraryCommand::new(target.clone(), resolved.is_some());
             if let Some(def) = resolved {

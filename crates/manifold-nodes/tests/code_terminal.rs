@@ -79,7 +79,7 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
     compile(&graph).expect("CodeTerminal graph compiles");
     let base = loaded_preset_view_by_id(&manifold_core::PresetTypeId::new("CodeTerminal")).unwrap();
     assert!(
-        manifold_node_engine::freeze::install::fused_view_for(&roundtrip, base).is_some(),
+        manifold_node_engine::freeze::install::fused_view_for(&roundtrip, &base).is_some(),
         "CodeTerminal graph supports fusion"
     );
     assert!(
@@ -429,7 +429,7 @@ mod gpu {
             let base = loaded_preset_view_by_id(&manifold_core::PresetTypeId::new("CodeTerminal"))
                 .expect("CodeTerminal loaded view");
             let (render_def, bindings, mesh_rules) = if fused {
-                let view = fused_view_for(def, base).expect("CodeTerminal has a fused region");
+                let view = fused_view_for(def, &base).expect("CodeTerminal has a fused region");
                 (
                     view.canonical_def.clone(),
                     view.bindings.clone(),
@@ -1498,7 +1498,7 @@ mod gpu {
 
         let base = loaded_preset_view_by_id(&manifold_core::PresetTypeId::new("CodeTerminal"))
             .expect("CodeTerminal loaded view");
-        let fused_view = fused_view_for(&def, base).expect("CodeTerminal has a fused view");
+        let fused_view = fused_view_for(&def, &base).expect("CodeTerminal has a fused view");
         let fused_nodes = fused_view
             .canonical_def
             .nodes

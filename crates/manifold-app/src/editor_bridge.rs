@@ -554,13 +554,19 @@ pub(crate) fn resolve_canvas_binding(
             .find(|binding| matches!(&binding.target,
                 manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, param_id }
                     if target_modifier_id(target) == Some(modifier_id) && param_id == &local_binding.id))?;
-        let outer = crate::graph_target::modifier_host_binding(project, target, &outer.id)?;
-        let spec = owner.params.get(&outer.id)?.spec.clone();
-        return Some((
-            outer.id.clone(), outer.label.clone(), spec.min, spec.max,
-            spec.invert, spec.curve, outer.scale, outer.offset,
-            range, is_angle, spec.section,
-        ));
+        return crate::graph_target::modifier_host_binding(
+            project,
+            target,
+            &outer.id,
+            |outer| {
+                let spec = owner.params.get(&outer.id)?.spec.clone();
+                Some((
+                    outer.id.clone(), outer.label.clone(), spec.min, spec.max,
+                    spec.invert, spec.curve, outer.scale, outer.offset,
+                    range, is_angle, spec.section,
+                ))
+            },
+        ).flatten();
     }
     let instance = project.preset_instance(target?)?;
     let view;
@@ -568,7 +574,7 @@ pub(crate) fn resolve_canvas_binding(
         def
     } else {
         view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(instance.effect_type())?;
-        &view.canonical_def
+        view.canonical_def.as_ref()
     };
     let binding = def.preset_metadata.as_ref()?.bindings.iter().find(|b| {
         matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
@@ -881,11 +887,16 @@ impl Application {
     ) -> Option<(String, f32, f32, bool, manifold_core::macro_bank::MacroCurve, f32, f32)> {
         if matches!(target, manifold_core::GraphTarget::SceneModifier { .. }) {
             let owner = self.local_project.graph_target_owner(target)?;
-            let binding = crate::graph_target::modifier_host_binding(&self.local_project, target, param_id)?;
+            let binding = crate::graph_target::modifier_host_binding(
+                &self.local_project,
+                target,
+                param_id,
+                |binding| (binding.scale, binding.offset),
+            )?;
             let spec = &owner.params.get(param_id)?.spec;
             return Some((
                 spec.name.clone(), spec.min, spec.max, spec.invert, spec.curve,
-                binding.scale, binding.offset,
+                binding.0, binding.1,
             ));
         }
         let instance = self.local_project.preset_instance(target)?;
@@ -893,7 +904,7 @@ impl Application {
             return full_reshape_from_instance(instance, def, param_id);
         }
         let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(instance.effect_type())?;
-        full_reshape_from_instance(instance, &view.canonical_def, param_id)
+        full_reshape_from_instance(instance, view.canonical_def.as_ref(), param_id)
     }
 
     /// The card binding (if any) governing `(node_id, param_name)` on the
@@ -928,7 +939,7 @@ impl Application {
             return binding_for_node_param(&instance.params, def, scope_path, node_id, param_name);
         }
         let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(instance.effect_type())?;
-        binding_for_node_param(&instance.params, &view.canonical_def, scope_path, node_id, param_name)
+        binding_for_node_param(&instance.params, view.canonical_def.as_ref(), scope_path, node_id, param_name)
     }
 
     /// BUG-282: the current value of `(node_id, param_name)` on the watched
@@ -960,7 +971,7 @@ impl Application {
             return false;
         };
         crate::graph_target::resolve(&self.local_project, target)
-            .is_some_and(|def|node_param_is_wired(def, scope_path, node_id, param_name))
+            .is_some_and(|def| node_param_is_wired(&def, scope_path, node_id, param_name))
     }
 
     /// The catalog graph def to seed the instance's per-instance graph
@@ -981,7 +992,8 @@ impl Application {
     /// default. Cloned (copy is a rare authoring action). `None` when nothing is
     /// watched.
     pub(crate) fn watched_def_cloned(&self) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
-        crate::graph_target::resolve(&self.local_project, self.watched_graph_target.as_ref()?).cloned()
+        crate::graph_target::resolve(&self.local_project, self.watched_graph_target.as_ref()?)
+            .map(|graph| (*graph).clone())
     }
 
     /// Authoring values for viewport geometry, including exposed controls.
@@ -1291,7 +1303,7 @@ impl Application {
             let mut ui = crate::ui_translate::graph_snapshot_to_ui(src);
             if let Some(target @ manifold_core::GraphTarget::SceneModifier { .. }) = self.watched_graph_target.as_ref()
                 && let Some(local) = crate::graph_target::resolve(&self.local_project, target) {
-                annotate_preparation_controls(&mut ui.nodes, local);
+                annotate_preparation_controls(&mut ui.nodes, &local);
             }
             self.editor_ui_graph = Some((src.clone(), std::sync::Arc::new(ui)));
         }

@@ -163,8 +163,9 @@ chain-fusion worker and sent to the content thread). Inside the views, today's l
 the chain state-cache eviction, `EFFECT_CHAIN_LIFECYCLE.md`). Fix the at-cap refresh nit
 (`install.rs:258,291,462`) in the same phase: `m.len() < CAP || m.contains_key(&key)`.
 Migration is compiler-driven: change the cache value type and the struct fields, follow the
-errors; the canonical bundled-preset views (loaded once, genuinely session-lived) may stay
-`&'static` — the seam is the FUSED artifacts only.
+errors. This phase left canonical bundled-preset views unchanged. Post-T1 cleanup
+extends `Arc` ownership to canonical views and parsed definitions because catalog
+reloads replace them; see `FREEZE_COMPILER_MAP.md` section 8.
 *Rejected: raising the cap — doesn't remove the class. Rejected: evicting leaked values — eviction
 can't reclaim a leak; ownership has to change first, which is the whole point.*
 Consequences, stated honestly: this touches the type that threads through chain building
@@ -329,7 +330,8 @@ this list.
 4. `BufferIndex` externals never union across domain (D3).
 5. Table/String params are boundary by nature, not debt (D4).
 6. `MAX_VIRTUAL_CHAIN=1` is correct — the 4^depth recompute cliff is real (D4).
-7. Canonical bundled-preset views stay `&'static`; only fused artifacts move to Arc (D5).
+7. D5 covered fused artifacts. Post-T1 cleanup also gives canonical catalog views
+   `Arc` ownership so obsolete reload generations can be freed.
 8. The companion Sonnet sweep's items are out of this doc's scope and vice versa.
 
 ## 6. Deferred

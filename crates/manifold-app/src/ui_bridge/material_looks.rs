@@ -165,8 +165,7 @@ mod tests {
         let mut def = manifold_nodes::bundled_presets::bundled_preset_def(
             project.preset_instance(&target).unwrap().effect_type(),
         )
-        .expect("PhysicsSolids is bundled")
-        .clone();
+        .expect("PhysicsSolids is bundled").as_ref().clone();
         manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
         let (object, material) =
             material_object_refs(&def).expect("PhysicsSolids has a PBR object");

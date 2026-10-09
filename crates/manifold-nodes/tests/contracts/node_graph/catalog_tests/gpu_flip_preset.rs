@@ -589,7 +589,7 @@ use serde_json::{Value, json};
     fn gpu_flip_shipped_scene_rows_keep_authored_names() {
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
         let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(SHIPPED_PRESET)).unwrap();
-        let vm = SceneVm::from_def(def).expect("shipped scene resolves");
+        let vm = SceneVm::from_def(def.as_ref()).expect("shipped scene resolves");
         let names: Vec<_> = vm.objects.iter().filter_map(|object| match object {
             SceneObjectVm::Known(row) => Some(row.name.as_str()),
             _ => None,

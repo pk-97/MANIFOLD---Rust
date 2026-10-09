@@ -19,7 +19,7 @@ use manifold_nodes_scene::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
         let preset_type = manifold_core::PresetTypeId::from_string("Scene".to_string());
         let d = manifold_nodes::bundled_presets::bundled_preset_def(&preset_type)
             .expect("Scene is a bundled preset");
-        let vm = SceneVm::from_def(d).expect("Scene resolves");
+        let vm = SceneVm::from_def(d.as_ref()).expect("Scene resolves");
         assert_eq!(vm.objects.len(), 1, "Cube");
         for obj in &vm.objects {
             let SceneObjectVm::Known(row) = obj else {
@@ -78,7 +78,7 @@ use manifold_nodes_scene::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
             let preset_type = manifold_core::PresetTypeId::new(preset);
             let def = manifold_nodes::bundled_presets::bundled_preset_def(&preset_type)
                 .expect("water family preset");
-            let vm = SceneVm::from_def(def).expect("water family scene resolves");
+            let vm = SceneVm::from_def(def.as_ref()).expect("water family scene resolves");
             let family: Vec<_> = vm.objects.iter().filter_map(|object| match object {
                 SceneObjectVm::Known(row)
                     if row.name == "Water" || row.parent_group_id.is_some() => Some(row),

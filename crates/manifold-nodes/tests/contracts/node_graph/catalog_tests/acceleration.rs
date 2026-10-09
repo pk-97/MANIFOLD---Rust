@@ -36,7 +36,7 @@ fn scene_modifier_grouped_water_add_and_retarget_expand() {
 
     let owner = manifold_nodes::bundled_presets::bundled_preset_def(
         &manifold_core::PresetTypeId::new("WaterDamBreakGpuFlip"),
-    ).expect("shipped Dam Break after load migrations").clone();
+    ).expect("shipped Dam Break after load migrations").as_ref().clone();
     let scene = scene(&owner);
     let water = SceneNodeRef::locate(&owner, &NodeId::new("water_object")).unwrap();
     assert_eq!(water.scope.len(), 1);

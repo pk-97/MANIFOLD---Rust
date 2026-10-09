@@ -387,13 +387,18 @@ see that design doc for the deletion decision and its measured cost.
   Per-process seed — fine, all caches are in-memory. Exposed params live in
   `param_values`, NOT the def ⇒ instances differing only in live modulation
   share one kernel, and exposed params are never baked.
-- **Caches** (all thread-local to the content thread, all `Box::leak`'d
-  `&'static`, all capped at `FUSED_CACHE_CAP=512`, all negative-caching):
-  `FUSED_EFFECT_CACHE` (key → `Option<&LoadedPresetView>`),
-  `FUSED_GENERATOR_CACHE` (key → `Option<&EffectGraphDef>`),
+- **Fusion caches** (thread-local to the content thread, capped at
+  `FUSED_CACHE_CAP=512`, with LRU eviction and negative caching):
+  `FUSED_EFFECT_CACHE` (key → `Option<Arc<LoadedPresetView>>`),
+  `FUSED_GENERATOR_CACHE` (key → `Option<Arc<FusedGeneratorView>>`),
   `SEGMENT_CACHE` (positional hash of member content keys →
-  `Option<&SegmentView>`). Past the cap: recompute-on-miss, never evict
-  (values are leaked statics).
+  `Option<Arc<SegmentView>>`). Readers retain evicted values only while needed.
+- **Catalog definitions and canonical views** use generation-stamped `ArcSwap`
+  snapshots and return `Arc` values. Reload replaces the cache; old readers and
+  queued segment jobs retain their generation until they finish. Binding labels
+  are owned through `Cow`. Steady-state lookups clone handles without allocating
+  or locking. `project_preset_overlay::project_generator_preset_resolves_via_overlay_then_clears`
+  checks that old definitions/views survive reload and are freed after readers drop.
 - **Segments** compile on the `chain-fusion-worker` thread; lookups return
   Ready/Pending/Refused; `pump_segment_results()` (chain dispatch entry)
   drains results and bumps `SEGMENT_GENERATION` so pending runtimes rebuild.

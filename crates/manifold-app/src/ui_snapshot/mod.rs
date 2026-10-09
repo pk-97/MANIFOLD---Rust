@@ -470,7 +470,7 @@ fn run_graph_preset(preset: &str) {
         );
         std::process::exit(2);
     };
-    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view) else {
+    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view) else {
         eprintln!("ui-snap graph: snapshot_for_view failed for '{preset}' (def failed to materialize)");
         std::process::exit(2);
     };
@@ -485,7 +485,7 @@ fn run_graph_preset(preset: &str) {
     // per-node thumbnails; the snapshot drives the canvas layout.
     render::render_graph_to_png(
         &gv_snap,
-        &view.canonical_def,
+        view.canonical_def.as_ref(),
         tex_w,
         tex_h,
         SCALE,
@@ -512,7 +512,7 @@ fn run_editor_preset(
         );
         std::process::exit(2);
     };
-    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view) else {
+    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view) else {
         eprintln!("ui-snap editor: snapshot_for_view failed for '{preset}' (def failed to materialize)");
         std::process::exit(2);
     };
@@ -535,7 +535,7 @@ fn run_editor_preset(
         &target,
         &selection,
         &gv_snap,
-        &view.canonical_def,
+        view.canonical_def.as_ref(),
         tex_w,
         tex_h,
         SCALE,
@@ -564,7 +564,7 @@ fn run_gltf_editor(want_dump: bool) {
         );
         std::process::exit(2);
     };
-    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view) else {
+    let Some(rg_snap) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view) else {
         eprintln!("ui-snap gltfeditor: snapshot_for_view failed for the imported def");
         std::process::exit(2);
     };
@@ -612,7 +612,7 @@ fn run_gltf_editor(want_dump: bool) {
         &target,
         &data.selection,
         &gv_snap,
-        &view.canonical_def,
+        view.canonical_def.as_ref(),
         tex_w,
         tex_h,
         SCALE,
@@ -658,7 +658,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
 
     // ── BEFORE: identical to plain `gltfeditor` (pristine import, no
     // per-instance override yet — the canonical def IS the effective graph).
-    let Some(rg_snap_before) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view) else {
+    let Some(rg_snap_before) = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view) else {
         eprintln!("ui-snap gltfeditor-add*: snapshot_for_view failed (before)");
         std::process::exit(2);
     };
@@ -669,7 +669,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         &target,
         &data.selection,
         &gv_snap_before,
-        &view.canonical_def,
+        view.canonical_def.as_ref(),
         tex_w,
         tex_h,
         SCALE,
@@ -932,7 +932,7 @@ fn run_group_demo(want_dump: bool) {
         &target,
         &selection,
         &gv_snap,
-        &view.canonical_def,
+        view.canonical_def.as_ref(),
         tex_w,
         tex_h,
         SCALE,
@@ -953,7 +953,7 @@ fn run_group_demo(want_dump: bool) {
         &target,
         &selection,
         &gv_snap,
-        &view.canonical_def,
+        view.canonical_def.as_ref(),
         tex_w,
         tex_h,
         SCALE,
@@ -1617,7 +1617,7 @@ mod editor_window_harness {
         let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
         let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(&pid)
             .expect("FluidSim2D preset must be loadable");
-        let rg_snap = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view)
+        let rg_snap = manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view)
             .expect("FluidSim2D snapshot must materialize");
         let (project, target, selection) = fixtures::generator_editor_fixture(preset)
             .expect("FluidSim2D is a generator preset");

@@ -1634,14 +1634,14 @@ impl ContentThread {
                     // — `snapshot_for_view` does `from_def(canonical_def)` +
                     // `outer_routings_from_view`.
                     let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(gen_type)?;
-                    manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view)?
+                    manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view)?
                 }
             }
             GraphTarget::SceneModifier { .. } => {
                 let local = crate::graph_target::resolve(project, target)?;
                 let owner = project.graph_target_owner(target)?;
-                let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(local)?;
-                let mut projection = local.clone();
+                let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(&local)?;
+                let mut projection = (*local).clone();
                 let metadata = projection.preset_metadata.as_mut()?;
                 metadata.bindings = crate::graph_target::modifier_bindings(project, target)?;
                 metadata.params = owner.params.iter().map(|param|param.spec.clone()).collect();

@@ -152,7 +152,7 @@ impl GeneratorRegistry {
         } else {
             // Use the migrated catalog definition so generated scene bindings
             // are present in the runtime view.
-            let parsed = bundled_preset_def(gen_type).cloned();
+            let parsed = bundled_preset_def(gen_type).map(|def| (*def).clone());
             (parsed, false)
         };
 
@@ -206,7 +206,7 @@ impl GeneratorRegistry {
                 && override_def.is_none_or(|def| def.scene_modifiers.is_empty())
                 && let Some(def) = bundled_preset_def(gen_type) {
                 match PresetRuntime::from_def_with_device(
-                    def.clone(),
+                    (*def).clone(),
                     &registry,
                     device,
                     width,
@@ -227,13 +227,6 @@ impl GeneratorRegistry {
 
         log::warn!("Generator type {:?} not found in the preset catalog", gen_type);
         None
-    }
-
-    pub fn known_type_ids(&self) -> Vec<manifold_core::PresetTypeId> {
-        let mut out: Vec<manifold_core::PresetTypeId> =
-            bundled_preset_type_ids(PresetKind::Generator).collect();
-        out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        out
     }
 }
 

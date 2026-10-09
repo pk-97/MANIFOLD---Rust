@@ -2091,7 +2091,7 @@ impl Application {
                                 log::error!("[preset] local modifier preset {id} is unavailable for revert");
                                 continue;
                             };
-                            cmd = cmd.with_resolved_def(def.clone());
+                            cmd = cmd.with_resolved_def(def.as_ref().clone());
                         }
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }

@@ -907,16 +907,17 @@ impl PresetRuntime {
             // "effective def" is the user's edited graph when present, else the
             // canonical preset — also the splice source when unfused.
             let effective_def: &EffectGraphDef =
-                fx.graph.as_ref().unwrap_or(&base_view.canonical_def);
+                fx.graph.as_ref().unwrap_or(base_view.canonical_def.as_ref());
             let (fused_view, fused_pending) =
                 crate::freeze::install::select_card_fused_view(
                     fx,
-                    base_view,
+                    base_view.as_ref(),
                     primitives,
                     preview_effect == Some(&fx.id),
                 );
             pending_fused_effects |= fused_pending;
-            let view: &LoadedPresetView = fused_view.as_deref().unwrap_or(base_view);
+            let view: &LoadedPresetView =
+                fused_view.as_deref().unwrap_or(base_view.as_ref());
             // The def actually spliced into the chain:
             //   - fused  → the fused def (already contains the relight template
             //              with default params if the toggle is on; live values
@@ -928,11 +929,11 @@ impl PresetRuntime {
             // it always builds — recording a divergent error when we were trying
             // the user's edited graph or a fused kernel.
             let splice_def: &EffectGraphDef = if fused_view.is_some() {
-                &view.canonical_def
+                view.canonical_def.as_ref()
             } else if let Some(def) = &fx.graph {
                 def
             } else {
-                &view.canonical_def
+                view.canonical_def.as_ref()
             };
             // D8/P7: when the card is fused, the relight template is already
             // folded into `splice_def`; do NOT re-augment. On the unfused path
@@ -962,7 +963,7 @@ impl PresetRuntime {
                 card_input,
                 splice_def,
                 &view.mesh_rules,
-                &base_view.canonical_def,
+                base_view.canonical_def.as_ref(),
                 &base_view.mesh_rules,
                 primitives,
                 relight_params,
@@ -1071,7 +1072,8 @@ impl PresetRuntime {
                 // preset spec carried on `b` (ParamBinding), with the
                 // effective def's scale/offset patched in when this instance
                 // carries a per-instance reshape. The clone reuses `b`'s
-                // `&'static` label/param pointers, so the override never leaks.
+                // Cow-backed labels and params preserve their borrowed or owned
+                // storage, so the override never leaks.
                 let patched;
                 let b = match reshape_override.get(b.id.as_ref()) {
                     Some(&(scale, offset)) if (scale, offset) != (b.scale, b.offset) => {
