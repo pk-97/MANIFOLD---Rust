@@ -28,23 +28,21 @@ use std::ffi::c_void;
 const SHADER: &str = include_str!("../shaders/spectrum_line.wgsl");
 
 /// Number of historical Mid frames kept for the spectrogram. One column is
-/// written per VQT hop; at 5.33 ms/hop, 2048 cols ≈ 10.9 s of scroll-back,
-/// enough to fill a wide window.
+/// written per 256-sample display interval; at 48 kHz, 2048 cols ≈ 10.9 s
+/// of scroll-back, enough to fill a wide window.
 pub const HISTORY_COLS: u32 = 2048;
 
 /// VQT parameters. See `spectrum_worker::CqtBuildParams` for the runtime
 /// struct consumed by the worker. Constants live here because the shader
 /// also needs fmin + bpo for its log-y mapping.
-pub const CQT_N_FFT: usize = 65_536;
 pub const CQT_FMIN_HZ: f32 = 10.0;
 pub const CQT_FMAX_HZ: f32 = 22_000.0;
 pub const CQT_BINS_PER_OCTAVE: usize = 24;
 const CQT_GAMMA_LO_HZ: f32 = 10.0;
 const CQT_GAMMA_HI_HZ: f32 = 20.0;
 const CQT_GAMMA_TRANSITION_HZ: f32 = 200.0;
-const CQT_THRESHOLD_REL: f32 = 1e-4;
+const CQT_THRESHOLD_REL: f32 = 1e-6;
 pub const CQT_HOP_SAMPLES: usize = 256;
-const CQT_MIN_KERNEL_LEN: usize = 4 * CQT_HOP_SAMPLES;
 const CQT_CAUSAL_WINDOW: bool = false;
 
 const FLOOR_DB: f32 = -140.0;
@@ -54,26 +52,58 @@ const FLOOR_DB: f32 = -140.0;
 /// layout.
 pub fn cqt_build_params(sample_rate: f32) -> CqtBuildParams {
     let fmax = CQT_FMAX_HZ.min(sample_rate * 0.5);
+    let alpha = 2.0_f32.powf(1.0 / CQT_BINS_PER_OCTAVE as f32) - 1.0;
+    let gamma_at = |frequency: f32| {
+        let t = (frequency / CQT_GAMMA_TRANSITION_HZ).clamp(0.0, 1.0);
+        CQT_GAMMA_LO_HZ + (CQT_GAMMA_HI_HZ - CQT_GAMMA_LO_HZ) * t
+    };
+    let kernel_len = |frequency: f32| {
+        (sample_rate / (alpha * frequency + gamma_at(frequency)))
+            .ceil()
+            .max(4.0) as usize
+    };
+    let n_fft = kernel_len(CQT_FMIN_HZ).next_power_of_two();
+    let shortest_kernel = kernel_len(fmax);
+    let hop_limit = (shortest_kernel / 4).max(1);
+    let hop_samples = (1usize << (usize::BITS - hop_limit.leading_zeros() - 1))
+        .min(CQT_HOP_SAMPLES);
     CqtBuildParams {
-        n_fft: CQT_N_FFT,
+        n_fft,
         fmin: CQT_FMIN_HZ,
         fmax,
         bpo: CQT_BINS_PER_OCTAVE,
         gamma_lo: CQT_GAMMA_LO_HZ,
         gamma_hi: CQT_GAMMA_HI_HZ,
         gamma_transition: CQT_GAMMA_TRANSITION_HZ,
-        min_kernel_len: CQT_MIN_KERNEL_LEN,
         causal: CQT_CAUSAL_WINDOW,
         threshold_rel: CQT_THRESHOLD_REL,
-        hop_samples: CQT_HOP_SAMPLES,
+        hop_samples,
+        display_hop_samples: CQT_HOP_SAMPLES,
         history_cols: HISTORY_COLS,
+    }
+}
+
+#[cfg(test)]
+mod cqt_parameter_tests {
+    use super::*;
+
+    #[test]
+    fn default_cqt_uses_longest_kernel_and_quarter_window_hop() {
+        for sample_rate in [44_100.0, 48_000.0, 96_000.0] {
+            let params = cqt_build_params(sample_rate);
+            assert!(params.n_fft.is_power_of_two());
+            assert!(params.n_fft >= 4);
+            assert!(params.hop_samples >= 1);
+            assert!(params.hop_samples.is_power_of_two());
+            assert!(params.hop_samples <= params.display_hop_samples);
+        }
     }
 }
 
 /// Display options driving the spectrum / spectrogram fragment shader.
 /// Smoothing controls used to live here too (`smooth_half_oct_log2`,
 /// `smoothing_mode`) but were dropped when MS-curve smoothing moved
-/// to a CPU per-column pass — the GUI thread runs `sample_bh_smoothed_db`
+/// to a CPU per-column pass — the GUI thread applies a cached power-domain projection
 /// directly and uploads the smoothed values, so the shader doesn't
 /// need to know which smoothing mode is active.
 #[derive(Copy, Clone, Debug)]
