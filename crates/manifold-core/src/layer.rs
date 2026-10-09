@@ -498,29 +498,46 @@ impl Layer {
     /// IMPORTANT: Caches must be up-to-date before calling. Either call
     /// `ensure_sorted()` first, or use `collect_active_clips_at_beat_mut()`.
     pub fn collect_active_clips_at_beat(&self, beat: Beats, results: &mut Vec<usize>) {
-        if self.clips.is_empty() {
+        self.collect_clips_in_beat_window(beat, beat, results);
+    }
+
+    /// Collect clips covering any beat from `from` through `through`, inclusive:
+    /// `clip.start_beat <= through && clip.end_beat > from`.
+    /// A zero-width window is therefore the same query as
+    /// [`Self::collect_active_clips_at_beat`].
+    ///
+    /// Call `ensure_sorted()` first to update the query caches.
+    pub fn collect_clips_in_beat_window(
+        &self,
+        from: Beats,
+        through: Beats,
+        results: &mut Vec<usize>,
+    ) {
+        if from > through || self.clips.is_empty() {
             return;
         }
+
         // Caches must already be sorted (caller's responsibility via ensure_sorted)
 
-        // Count of clips with start_beat <= beat (sorted by start)
-        let started_count = Self::upper_bound_start_beat(&self.clips, beat);
+        // Count of clips with start_beat <= through (sorted by start)
+        let started_count = Self::upper_bound_start_beat(&self.clips, through);
         if started_count == 0 {
             return;
         }
 
-        // Index into clips_by_end_indices where end_beat > beat starts
+        // Index into clips_by_end_indices where end_beat > from starts
         let end_idx =
-            Self::lower_bound_end_beat(&self.clips, &self.clips_by_end_indices, beat);
+            Self::lower_bound_end_beat(&self.clips, &self.clips_by_end_indices, from);
         let ending_after_count = self.clips_by_end_indices.len() - end_idx;
 
-        // Iterate the smaller candidate set. Non-overlap is a write-time
-        // invariant on Layer, so at most one clip per layer can contain `beat`.
+        // Iterate the smaller candidate set. The write-time non-overlap
+        // invariant still makes point queries singular; windows may return
+        // several clips in chronological index order.
         if started_count <= ending_after_count {
-            // Scan the start-sorted prefix: clips 0..started_count where start_beat <= beat
+            // Scan the start-sorted prefix through the window's upper boundary.
             for i in 0..started_count {
                 let clip = &self.clips[i];
-                if beat < clip.end_beat() {
+                if clip.end_beat() > from {
                     results.push(i);
                 }
             }
@@ -532,7 +549,7 @@ impl Layer {
             for i in end_idx..self.clips_by_end_indices.len() {
                 let ci = self.clips_by_end_indices[i];
                 let clip = &self.clips[ci];
-                if clip.start_beat <= beat {
+                if clip.start_beat <= through {
                     results.push(ci);
                 }
             }
@@ -1494,6 +1511,48 @@ mod tests {
         results.clear();
         layer.collect_active_clips_at_beat(Beats(8.0 - 1e-9), &mut results);
         assert_eq!(results, vec![0], "just before the join the outgoing clip renders");
+    }
+
+    #[test]
+    fn beat_window_handles_boundaries_short_clips_and_both_indexes() {
+        let mut layer = Layer::new("Window".into(), LayerType::Video, 0);
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(0.0),
+            duration_beats: Beats(2.0),
+            ..TimelineClip::default()
+        });
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(4.0),
+            duration_beats: Beats(1.0),
+            ..TimelineClip::default()
+        });
+        layer.restore_clip(TimelineClip {
+            start_beat: Beats(6.0),
+            duration_beats: Beats(4.0),
+            ..TimelineClip::default()
+        });
+        layer.ensure_sorted();
+
+        let mut results = vec![99];
+        // The start-sorted candidate branch includes the short clip inside the
+        // window and preserves the caller's existing prefix.
+        layer.collect_clips_in_beat_window(Beats(1.0), Beats(5.0), &mut results);
+        assert_eq!(results, vec![99, 0, 1]);
+
+        results.clear();
+        // The end-sorted candidate branch finds the later long clip.
+        layer.collect_clips_in_beat_window(Beats(5.0), Beats(9.0), &mut results);
+        assert_eq!(results, vec![2]);
+
+        results.clear();
+        // End equality excludes the outgoing clip; start equality includes
+        // the incoming clip at the other boundary.
+        layer.collect_clips_in_beat_window(Beats(2.0), Beats(4.0), &mut results);
+        assert_eq!(results, vec![1]);
+
+        results.push(88);
+        layer.collect_clips_in_beat_window(Beats(5.0), Beats(4.0), &mut results);
+        assert_eq!(results, vec![1, 88], "reversed windows add nothing");
     }
 
     #[test]

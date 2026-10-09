@@ -123,7 +123,33 @@ impl ClipScheduler {
     /// Record controls from the same desired membership used for media sync.
     /// A renderer retry cannot generate another source event. Rebinding an
     /// active clip to a different layer updates its source silently.
-    pub(crate) fn record_controls(&mut self, result: &SyncResult, controls: &mut ClipControlFrame) {
+    pub(crate) fn record_controls(
+        &mut self,
+        result: &SyncResult,
+        timeline_window: &[ActiveClipRef],
+        from: Option<Beats>,
+        current: Beats,
+        controls: &mut ClipControlFrame,
+    ) {
+        // The same timeline query supplies both current media membership and
+        // clips that ended inside this control interval. Only the latter need
+        // recording here; active refs are handled below.
+        for entry in timeline_window.iter().filter(|entry| entry.end_beat() <= current) {
+            if entry.is_visible() {
+                controls.record_span(entry.layer_id.clone(), ClipControlSpan {
+                    clip_id: entry.clip_id.clone(),
+                    start_beat: entry.start_beat,
+                    end_beat: Some(entry.end_beat()),
+                });
+            }
+            if from.is_some_and(|from| from < entry.start_beat && entry.start_beat <= current) {
+                controls.record_start(entry.layer_id.clone(), ClipControlStart {
+                    clip_id: entry.clip_id.clone(),
+                    beat: entry.start_beat,
+                    is_muted: entry.is_muted,
+                });
+            }
+        }
         self.control_active.retain(|id, _| self.should_be_active_ids.contains(id));
         for entry in &result.should_be_active {
             if entry.is_visible() {
@@ -278,7 +304,7 @@ mod tests {
             Seconds::ZERO, beat, refs, &[], &[], &AHashSet::new(), &AHashSet::new(), Beats(1.0),
         );
         controls.clear_spans();
-        scheduler.record_controls(&result, controls);
+        scheduler.record_controls(&result, &[], None, beat, controls);
         controls.finish();
         scheduler.reclaim(result);
     }

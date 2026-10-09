@@ -190,10 +190,11 @@ pub struct PlaybackEngine {
     stopped_this_tick: Vec<ClipId>,
     ready_clips_list: Vec<ActiveClipRef>,
     timeline_active_scratch: Vec<ActiveClipRef>,
-    /// Pre-allocated scratch for timeline active clip indices from get_active_clips_at_beat.
+    timeline_control_scratch: Vec<ActiveClipRef>,
+    /// Pre-allocated scratch for the shared timeline beat-window query.
     active_indices_scratch: Vec<(usize, usize)>,
     /// Pre-allocated scratch for per-layer active clip indices passed to
-    /// `get_active_clips_at_beat_ref`.
+    /// `get_clips_in_beat_window_ref`.
     active_layer_indices_scratch: Vec<usize>,
     /// Pre-allocated scratch for live slot refs (avoids per-frame Vec allocation).
     live_slot_refs_scratch: Vec<ActiveClipRef>,
@@ -212,6 +213,10 @@ pub struct PlaybackEngine {
     sync_heal_scratch: Vec<ActiveClipRef>,
     /// Shared source timing and pending starts, produced only by clip sync.
     clip_controls: crate::clip_controls::ClipControlFrame,
+    /// Last reconciled beat: controls cover each forward interval once.
+    clip_control_cursor: Option<Beats>,
+    /// Keep phase coverage back to the last evaluation across out-of-tick syncs.
+    clip_control_sample_start: Option<Beats>,
     /// section 8 param triggers: reusable scratch for the most recent
     /// `evaluate_modulation` call. Captured pulses move into
     /// `trigger_delivery` immediately after evaluation and remain there until
@@ -323,6 +328,7 @@ impl PlaybackEngine {
             stopped_this_tick: Vec::with_capacity(16),
             ready_clips_list: Vec::with_capacity(32),
             timeline_active_scratch: Vec::with_capacity(32),
+            timeline_control_scratch: Vec::with_capacity(32),
             active_indices_scratch: Vec::with_capacity(32),
             active_layer_indices_scratch: Vec::with_capacity(8),
             live_slot_refs_scratch: Vec::with_capacity(8),
@@ -331,6 +337,8 @@ impl PlaybackEngine {
             sync_start_scratch: Vec::with_capacity(4),
             sync_heal_scratch: Vec::with_capacity(2),
             clip_controls: crate::clip_controls::ClipControlFrame::default(),
+            clip_control_cursor: None,
+            clip_control_sample_start: None,
             modulation_trigger_scratch: crate::modulation::TriggerPulseBuffer::with_capacity(
                 trigger_delivery::DEFAULT_TRIGGER_DELIVERY_CAPACITY,
             ),
@@ -888,6 +896,8 @@ impl PlaybackEngine {
         // there is no wrapping reset that could make old captures ambiguous.
         let _ = self.trigger_delivery.reset();
         self.clip_controls.clear_starts();
+        self.clip_control_cursor = None;
+        self.clip_control_sample_start = None;
     }
 
     fn capture_trigger_pulses(&mut self, pulses: &mut crate::modulation::TriggerPulseBuffer) {
@@ -949,6 +959,11 @@ impl PlaybackEngine {
 
     /// Playing-state tick. Matches C# PlaybackController.Update lines 1135-1218.
     fn tick_playing(&mut self, ctx: TickContext) -> TickResult {
+        // Direct state transitions (including export) need the same initial
+        // membership as play(), before advancing past a short first clip.
+        if self.clip_control_cursor.is_none() {
+            self.sync_clips_to_time();
+        }
         // 1. Advance time (unless external sync source is the clock authority).
         //    Port of C# lines 1141-1150.
         if !self.external_time_sync {
@@ -1063,6 +1078,7 @@ impl PlaybackEngine {
         self.capture_trigger_pulses(&mut pulses);
         self.modulation_trigger_scratch = pulses;
         self.clip_controls.clear_starts();
+        self.clip_control_sample_start = Some(Beats(self.current_beat));
         // Automation folds into the same compositor-dirty path modulation
         // uses — a lane write is just as much a reason to re-send the UI
         // snapshot as a driver/envelope write.
@@ -1205,6 +1221,7 @@ impl PlaybackEngine {
         self.capture_trigger_pulses(&mut pulses);
         self.modulation_trigger_scratch = pulses;
         self.clip_controls.clear_starts();
+        self.clip_control_sample_start = Some(Beats(self.current_beat));
 
         // 4. Filter ready clips for compositor.
         //    Port of C# UpdateCompositor (lines 1126-1132).
@@ -1249,6 +1266,10 @@ impl PlaybackEngine {
     /// Uses split borrows to avoid cloning the project.
     /// Stamps `timeline_query_frame` so callers later in the same frame can skip re-query.
     fn query_active_timeline_clips(&mut self) {
+        self.query_timeline_clips(Beats(self.current_beat));
+    }
+
+    fn query_timeline_clips(&mut self, from: Beats) {
         // Step 1: ensure layer sort caches are up-to-date (needs &mut project)
         if let Some(p) = &mut self.project {
             p.timeline.ensure_layers_sorted();
@@ -1257,9 +1278,11 @@ impl PlaybackEngine {
         // Step 2: query active clips and build lightweight refs
         // (split borrow: project.timeline vs self.timeline_active_scratch/active_indices_scratch/active_layer_indices_scratch)
         self.timeline_active_scratch.clear();
+        self.timeline_control_scratch.clear();
         if let Some(project) = &mut self.project {
             let beat = Beats(self.current_beat);
-            project.timeline.get_active_clips_at_beat_ref(
+            project.timeline.get_clips_in_beat_window_ref(
+                from,
                 beat,
                 &mut self.active_indices_scratch,
                 &mut self.active_layer_indices_scratch,
@@ -1280,7 +1303,7 @@ impl PlaybackEngine {
                     continue;
                 }
                 if let Some(clip) = layer.clips.get(*ci) {
-                    self.timeline_active_scratch.push(ActiveClipRef {
+                    let entry = ActiveClipRef {
                         clip_id: clip.id.clone(),
                         layer_index: *li as i32,
                         clip_index: *ci as u32,
@@ -1290,7 +1313,11 @@ impl PlaybackEngine {
                         is_video: !clip.video_clip_id.is_empty(),
                         is_muted: clip.is_muted,
                         layer_id: layer.layer_id.clone(),
-                    });
+                    };
+                    if clip.is_active_at_beat(Beats(self.current_beat)) {
+                        self.timeline_active_scratch.push(entry.clone());
+                    }
+                    self.timeline_control_scratch.push(entry);
                 }
             }
         }
@@ -1386,6 +1413,8 @@ impl PlaybackEngine {
     pub fn stop_all_clips(&mut self) {
         self.scheduler.reset_controls();
         self.clip_controls.reset();
+        self.clip_control_cursor = None;
+        self.clip_control_sample_start = None;
         self.stop_buffer.clear();
         self.stop_buffer
             .extend(self.active_clip_ids.iter().cloned());
@@ -1553,7 +1582,17 @@ impl PlaybackEngine {
             return false;
         }
 
-        self.query_active_timeline_clips();
+        let current_beat = Beats(self.current_beat);
+        let from = self.clip_control_cursor.filter(|previous| {
+            self.is_playing() && *previous <= current_beat
+        });
+        let sample_from = from.map_or(current_beat, |previous| {
+            self.clip_control_sample_start.unwrap_or(previous).min(previous)
+        });
+        if from.is_none() {
+            self.clip_control_sample_start = Some(current_beat);
+        }
+        self.query_timeline_clips(sample_from);
 
         let bpm = self
             .project
@@ -1600,7 +1639,14 @@ impl PlaybackEngine {
         if let Some(project) = &self.project {
             self.clip_controls.retain_sources(|id| project.timeline.layer_index_for_id(id).is_some());
         }
-        self.scheduler.record_controls(&sync_result, &mut self.clip_controls);
+        self.scheduler.record_controls(
+            &sync_result,
+            &self.timeline_control_scratch,
+            from,
+            current_beat,
+            &mut self.clip_controls,
+        );
+        self.clip_control_cursor = Some(current_beat);
 
         for clip_id in &sync_result.to_stop {
             self.stop_clip(clip_id);

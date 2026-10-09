@@ -211,6 +211,68 @@ fn session_launch_and_loop_advance_the_same_envelope_source() {
     assert_eq!(envelope_step_value_of(&engine, 0), Some(2.0));
 }
 
+fn short_pattern_engine() -> PlaybackEngine {
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[0].clips = [0.0, 0.2, 0.4].into_iter()
+        .map(|start| TimelineClip::new_generator(Beats(start), Beats(0.05)))
+        .collect();
+    let mut engine = PlaybackEngine::new(Vec::new());
+    engine.initialize(project);
+    engine.set_state(PlaybackState::Playing);
+    engine
+}
+
+#[test]
+fn short_pattern_is_independent_of_frame_partition_and_repeated_sync() {
+    let mut fine = short_pattern_engine();
+    tick_n(&mut fine, 50, 0.005);
+    assert_eq!(envelope_step_value_of(&fine, 0), Some(3.0));
+
+    let mut coarse = short_pattern_engine();
+    tick_n(&mut coarse, 1, 0.25);
+    assert_eq!(envelope_step_value_of(&coarse, 0), Some(3.0));
+    // The completed clip's phase remains available to retained samples.
+    let owner = &coarse.project().unwrap().timeline.layers[0].layer_id;
+    let elapsed = coarse.clip_controls().elapsed(
+        &manifold_core::params::ClipTriggerSource::OwnLayer, Some(owner), Beats(0.22),
+    ).unwrap();
+    assert!((elapsed.0 - 0.02).abs() < 1e-9);
+
+    let mut repeated = short_pattern_engine();
+    repeated.sync_clips_to_time();
+    repeated.set_time(Seconds(0.15));
+    repeated.sync_clips_to_time();
+    repeated.sync_clips_to_time();
+    repeated.set_time(Seconds(0.25));
+    repeated.sync_clips_to_time();
+    tick_n(&mut repeated, 1, 0.0);
+    assert_eq!(envelope_step_value_of(&repeated, 0), Some(3.0));
+    tick_n(&mut repeated, 1, 0.0);
+    assert_eq!(envelope_step_value_of(&repeated, 0), Some(3.0));
+
+    let mut export = short_pattern_engine();
+    export.set_export_mode(true);
+    export.set_export_origin(Seconds::ZERO);
+    for frame_count in 0..2 {
+        let result = export.tick(TickContext {
+            frame_count,
+            export_fixed_dt: Seconds(0.25),
+            ..Default::default()
+        });
+        export.reclaim_tick_result(result);
+    }
+    assert_eq!(envelope_step_value_of(&export, 0), Some(3.0));
+}
+
+#[test]
+fn seek_skips_short_pattern_instead_of_replaying_the_interval() {
+    let mut engine = short_pattern_engine();
+    engine.sync_clips_to_time();
+    engine.seek_to(Seconds(0.25));
+    tick_n(&mut engine, 1, 0.0);
+    assert_eq!(envelope_step_value_of(&engine, 0), None);
+}
+
 #[test]
 fn timeline_clip_start_fires_step_envelope() {
     let mut engine = create_engine();

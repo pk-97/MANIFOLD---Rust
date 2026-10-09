@@ -3,8 +3,9 @@
 <!-- index: Child trigger lanes with no thumbnails; shared assignment from lane headers and parameter drawers. Current-code audit, proposed architecture, and first-slice acceptance contract. -->
 
 **Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence, undoable
-assignment and shared active-source timing are implemented. Interval event delivery,
-trigger-lane ownership, media exclusion and authoring UI remain pending.
+assignment, shared active-source timing and arrangement interval scheduling are
+implemented. Session interval delivery, trigger-lane ownership, media exclusion
+and authoring UI remain pending.
 **Tracking:** `BUG-tqtel` (feature).
 **Prerequisites:** crate refactor landed; reverify the audited seams against subsequent cleanup.
 **Execution contract:** read `DESIGN_DOC_STANDARD.md` sections 5–6 before briefing
@@ -179,8 +180,8 @@ before consolidation; do not silently change existing show timing. A single pure
 composer can serve both while input-advancement policy remains explicit.
 
 The timing migration now builds each retained hop's `ControlSample` at the hop's
-timestamp and tempo-derived beat. The producer still needs interval coverage across
-clip boundaries; sampling the correct time against only current spans is insufficient.
+timestamp and tempo-derived beat. Arrangement spans cover the interval since the
+last evaluation. Session and ended live-note coverage still need the same guarantee.
 
 Small typed interfaces should expose only what their consumers need: clip events
 and phase to modulation, evaluated controls/events to rendering, and snapshots plus
@@ -226,9 +227,21 @@ UI/control state, not scene impulse delivery. Export already uses engine ticks.
 
 Focused CPU checks cover source isolation, disabled/missing sources, adjacent starts,
 renderer independence, mute, source deletion, seek cancellation and session launch.
-Full acceptance below remains open: crossed short clips and multiple loop boundaries,
-historical spans, clip event timestamps through delivery, and snapshot/retained
-composition consolidation must be completed before exposing trigger lanes.
+Arrangement queries now use the existing dual sorted indexes for a beat window;
+point queries delegate to equal endpoints. Media membership filters that same
+result at the current beat. The scheduler also emits starts from clips wholly
+crossed during forward playback, independent of media lifetime. A separate
+evaluation boundary retains phase coverage across out-of-tick syncs; source
+events use the last reconciled beat so those syncs cannot deliver a start twice.
+Initial membership is reconciled before the first time advance. Explicit seeks
+discard pending starts and traverse no skipped region; backwards clock movement
+also uses destination membership only. A CPU engine proof compares the same short
+pattern at fine/coarse display intervals, repeated syncs and fixed export time.
+
+Full acceptance below remains open: multiple session loop boundaries, historical
+session/live spans, external-clock discontinuities, clip event timestamps through
+delivery, and snapshot/retained composition consolidation must be completed before
+exposing trigger lanes.
 
 ### Model, scheduling and delivery
 
