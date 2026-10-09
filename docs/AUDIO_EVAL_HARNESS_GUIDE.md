@@ -298,6 +298,18 @@ or app code changed. See
 `tools/audio_analysis/eval/scoreboard/kick_complex_audit_2026-10-09.json` for
 per-track results, timing sensitivity, limitations and reproduction instructions.
 
+**Timbre-template trial, 2026-10-09 — rejected:** fixed 80-element fingerprints
+combine four trailing spectra in 20 frequency bands. Cosine matching uses
+reviewed mix/stem references, excluding the evaluated song and all its stems
+as one group. A fixed zero-margin veto reduces 50 ms matches from 103 to 81
+and extras from 50 to 42. No threshold was tuned. Label-guided timing probes
+and secondary kick-free tests expose strong timing/context dependence; they
+are not recovered trigger recall. Nine focused tests pass, and all 868
+original-fire classifications replay exactly after adding those diagnostics.
+No live change or held-out evaluation was made. See
+`tools/audio_analysis/eval/scoreboard/kick_timbre_trial_2026-10-09.json` for
+per-track results, reference provenance, limitations and reproduction commands.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
