@@ -120,6 +120,25 @@ actions bypass Attack/Release while the drawer still offers those controls.
 
 ## 1. Running it
 
+**Additional source pack, 2026-10-09:**
+`tools/audio_analysis/eval/additional_stem_sources.json` records Peter's Dropbox
+source paths, complete-file hashes, formats, supplied BPMs and alignment checks.
+Late Night (108 BPM) and Midnight Patience (132 BPM) are development material;
+Miracle (148 BPM) and Heavy On Mind (158 BPM), including alternate versions,
+are reserved for validation. Only metadata/hash checks have run on the latter.
+There are 29 named stems, two alternate mixes and four mastered references.
+All stems are 48 kHz / 24-bit stereo; Miracle/Heavy masters are 44.1 kHz.
+
+Stems propose candidate events; score the actual mastered mixes after reviewing
+those events. Peter confirms stem sums and masters differ, so exact waveform
+reconstruction is not required. Midnight's master has 6,546 leading silent
+frames: map candidate stem times by **+0.136375 seconds**, supported by sampled
+native-rate alignment with no detected drift. This is source alignment, not
+detector-latency compensation. Late Night's alternate NO VOX reference aligns
+with its master in three sampled passages; kick-envelope peaks shift with
+mastering, so no automatic onset offset has been applied to its individual
+stems. No originals were warped, and no new reviewed labels exist yet.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
