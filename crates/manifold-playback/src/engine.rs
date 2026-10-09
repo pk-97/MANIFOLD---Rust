@@ -1672,6 +1672,12 @@ impl PlaybackEngine {
             current_beat,
             &mut self.clip_controls,
         );
+        if self.trigger_delivery.failure().is_some() {
+            // An incomplete interval cannot advance Step/Random while Fire
+            // delivery is stopped. Seek/stop clears the existing failure latch.
+            self.clip_controls.clear_spans();
+            self.clip_controls.clear_starts();
+        }
         if let Some(project) = &self.project {
             self.clip_controls.retain_sources(|id| project.timeline.layer_index_for_id(id).is_some());
             // Trigger output has its own mute policy. Parent visibility and

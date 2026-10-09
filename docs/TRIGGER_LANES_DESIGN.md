@@ -260,6 +260,9 @@ or stops. It retains completed spans across repeated syncs, closes arrangement
 coverage at the first session launch and avoids firing arrangement clips when a
 session launch starts transport. A bounded interval that cannot be retained latches
 the existing delivery failure instead of publishing a partial Fire stream.
+While that failure is latched, synchronization clears clip spans and starts
+before modulation can consume them. The overflow regression also checks that
+Step state does not partially advance and seeking restores source delivery.
 
 `TriggerSourceStamp` distinguishes snapshot, audio-hop and clip events. Clip Fire
 events retain source layer, clip and beat separately from destination identity.

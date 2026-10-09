@@ -298,10 +298,19 @@ fn short_session_loops_are_independent_of_frame_partition_and_repeated_sync() {
 #[test]
 fn session_interval_overflow_stops_delivery_instead_of_publishing_a_partial_stream() {
     let mut engine = short_session_engine();
+    tick_n(&mut engine, 1, 0.005);
+    let before = envelope_step_value_of(&engine, 0);
     tick_n(&mut engine, 1, 1000.0);
     assert_eq!(engine.trigger_delivery_failure().unwrap().kind,
         manifold_playback::engine::trigger_delivery::TriggerDeliveryError::CapacityOverflow);
     assert!(engine.with_trigger_pulses(|_, _, _| ()).is_none());
+    assert_eq!(envelope_step_value_of(&engine, 0), before);
+    tick_n(&mut engine, 1, 0.1);
+    assert_eq!(envelope_step_value_of(&engine, 0), before);
+    engine.seek_to(Seconds::ZERO);
+    assert!(engine.trigger_delivery_failure().is_none());
+    let owner = &engine.project().unwrap().timeline.layers[0].layer_id;
+    assert!(!engine.clip_controls().starts(&manifold_core::params::ClipTriggerSource::OwnLayer, Some(owner)).is_empty());
 }
 
 fn short_pattern_engine() -> PlaybackEngine {
