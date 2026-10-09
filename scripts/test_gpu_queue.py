@@ -537,7 +537,7 @@ class GpuQueueTests(unittest.TestCase):
                                     "send_signal": lambda self, sig: None})()
         command = [
             "cargo", "+nightly", "--locked", "nextest", "run", "--release",
-            "--features", "gpu-proofs", "-p", "demo", "-E", "test(contracts)",
+            "--features", "gpu-proofs", "-p", "demo", "-E", "test(contracts)", "--no-fail-fast",
             "--", "--nocapture",
         ]
         with patch.object(gpu_queue.subprocess, "run", side_effect=lambda cmd: events.append(("build", cmd)) or subprocess.CompletedProcess(cmd, 0)), \
@@ -551,9 +551,9 @@ class GpuQueueTests(unittest.TestCase):
                 "--features", "gpu-proofs", "-p", "demo", "-E", "test(contracts)",
                 "--no-run", "--", "--nocapture",
             ]),
-            ("hold-enter", "cargo +nightly --locked nextest run --release --features gpu-proofs -p demo -E test(contracts) -- --nocapture"),
+            ("hold-enter", "cargo +nightly --locked nextest run --release --features gpu-proofs -p demo -E test(contracts) --no-fail-fast -- --nocapture"),
             ("run", command),
-            ("hold-exit", "cargo +nightly --locked nextest run --release --features gpu-proofs -p demo -E test(contracts) -- --nocapture"),
+            ("hold-exit", "cargo +nightly --locked nextest run --release --features gpu-proofs -p demo -E test(contracts) --no-fail-fast -- --nocapture"),
         ])
 
     def test_cargo_nextest_no_run_takes_no_lock(self):

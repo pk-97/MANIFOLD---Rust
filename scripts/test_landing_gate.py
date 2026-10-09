@@ -1058,7 +1058,7 @@ class NightlyQueueTests(unittest.TestCase):
         gpu = [event for event in events if isinstance(event, tuple) and event[1]]
         self.assertTrue(all(not locked for _, locked in cpu))
         self.assertEqual(cpu[3][0], ["cargo", "clippy", "--workspace", "--tests", "--", "-D", "warnings"])
-        self.assertEqual(cpu[4][0], ["cargo", "nextest", "run", "--workspace", "--no-fail-fast", "--no-run"])
+        self.assertEqual(cpu[4][0], ["cargo", "nextest", "run", "--workspace", "--no-run"])
         self.assertEqual([cmd[1] for cmd, _ in gpu], ["nextest", "scripts/gpu_proofs_gate.py",
             "scripts/rt_noise_gate.py", "scripts/rt_noise_gate.py", "scripts/bridge_probe_gate.py"])
         self.assertTrue(all(locked for _, locked in gpu))

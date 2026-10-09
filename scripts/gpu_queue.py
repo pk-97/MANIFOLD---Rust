@@ -673,11 +673,14 @@ def _cargo_kind(command):
     return command[index]
 
 
-def _cargo_build_command(command, kind):
+def cargo_build_command(command, kind):
     """Derive the lock-free Cargo build for a supported invocation."""
     separator = next((index for index, arg in enumerate(command) if arg == "--"), None)
     if kind in {"test", "nextest-run"}:
         head = list(command if separator is None else command[:separator])
+        if kind == "nextest-run":
+            # Nextest rejects this execution policy in compile-only mode.
+            head = [arg for arg in head if arg != "--no-fail-fast"]
         if "--no-run" not in head:
             head.append("--no-run")
         if separator is None:
@@ -766,7 +769,7 @@ def run_queued(command, label=None, **kwargs):
     label = label or " ".join(command)
     try:
         kind = _cargo_kind(command)
-        build_command = _cargo_build_command(command, kind) if kind else None
+        build_command = cargo_build_command(command, kind) if kind else None
     except UnsupportedCargoInvocation as err:
         print(f"gpu_queue: {err}", file=sys.stderr)
         return 2
