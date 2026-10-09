@@ -43,3 +43,6 @@ raw-window-handle = "0.6"
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSThread"] }
 objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSView", "NSResponder"] }
+
+[features]
+gpu-proofs = []
