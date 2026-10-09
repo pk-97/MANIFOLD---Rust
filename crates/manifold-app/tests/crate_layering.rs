@@ -23,8 +23,8 @@ const LAYERS: &[Layer] = &[
     },
     Layer {
         package: "manifold-nodes",
-        normal_and_build: &["manifold-core", "manifold-fluids", "manifold-foundation", "manifold-gpu", "manifold-native", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-physics", "manifold-playback"],
-        dev: &["manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene"],
+        normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene"],
+        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-physics", "manifold-playback"],
     },
     Layer {
         package: "manifold-app",
