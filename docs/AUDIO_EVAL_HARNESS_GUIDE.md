@@ -432,6 +432,21 @@ repeating the unchanged experiment. These remain exploratory development results
 no live change. See
 `tools/audio_analysis/eval/scoreboard/kick_fusion_parallel_2026-10-09.json`.
 
+**Threshold refinement and error audit, 2026-10-09:** adding 51 inner-only
+cutoffs inside each selected coarse interval changes the bandwise ±70 ms result
+from 98 matches/41 extras to 102/45; ±50 ms changes 66/73 to 68/79. All four
+kick-free cores remain clean. This is a small tradeoff, not a prototype replacement.
+Stored-model replay identifies 16 drum-dependent Bad Guy extras ranked above most
+matched kicks. Existing measurements show broader attacks, higher body/low balance,
+less low buildup and slower upper decay, but the learned score rewards their
+centroid rise and attack strength. This is descriptive evidence on one song,
+not cross-song separability or identified drum species. Midnight extras comprise
+seven bass-dominated events and four kick-stem-dominated events (two duplicate
+decisions and two following excluded labels). Counts and labels remain frozen.
+Twelve new tests pass; the audit's nearest-label context was repaired and tested
+without repeating DSP. See
+`tools/audio_analysis/eval/scoreboard/kick_fusion_refinement_audit_2026-10-09.json`.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
