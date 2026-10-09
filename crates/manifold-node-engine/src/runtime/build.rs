@@ -18,6 +18,7 @@ pub fn chain_topology_hash(
     compute_topology_hash(effects, groups, width, height, preview_effect)
 }
 
+manifold_core::testkit_visible! {
 /// Topology hash — captures only the layout-affecting fields of
 /// `effects` + `groups`. Per-frame param values, drivers,
 /// envelopes, AND continuous wet/dry values are EXCLUDED so live
@@ -34,7 +35,7 @@ pub fn chain_topology_hash(
 /// `amount = 0` still runs as a normal effect at `amount = 0`. The
 /// only structural skip is `PresetInstance.enabled`; that is
 /// already hashed below.
-pub fn compute_topology_hash(
+pub(crate) fn compute_topology_hash(
     effects: &[PresetInstance],
     groups: &[EffectGroup],
     width: u32,
@@ -83,6 +84,7 @@ pub fn compute_topology_hash(
     width.hash(&mut h);
     height.hash(&mut h);
     h.finish()
+}
 }
 
 /// Result of `assign_texture2d_slots`: one physical slot per logical
@@ -281,12 +283,13 @@ impl PresetRuntime {
         Self::from_def_for_render(doc, registry, manifest, false)
     }
 
+manifold_core::testkit_visible! {
     /// Compile a generator runtime from an already prepared render definition.
     /// The caller owns scene-modifier expansion; this method performs the
     /// common graph validation, binding setup, and resource preparation.
     /// `mesh_rules` is the fused view's prepared mesh-revision sidecar
     /// (design §3.3); canonical/unfused defs pass an empty map.
-    pub fn from_render_def(
+    pub(crate) fn from_render_def(
         mut doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
@@ -691,5 +694,6 @@ impl PresetRuntime {
         g.apply_string_defaults();
         Ok(g)
     }
+}
 
 }

@@ -1,6 +1,6 @@
 # Renderer Crate Split — one engine crate, node families as leaves
 
-**Status:** IN PROGRESS · P0–P3 landed · P4 review and measurement owed · P5 waits for Peter. Section 5 (Phasing).
+**Status:** IN PROGRESS · Tier 1 shipped · P5 open, waits for Peter. Section 5 (Phasing).
 **Prerequisites:** none.
 **Work items:** epic BUG-hkbdp (renderer crate split epic); phases BUG-jo1qt (P0 census and seams), BUG-k452g (P1a ui-paint), BUG-9hndn (P1 carve manifold-node-engine), BUG-vnbdt (P2 leaves), BUG-uones (P3 catalog), BUG-l6ltu (P4 review and measurement), BUG-t2jwg (P5 water seam). Status is recorded only above.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before any phase. Lead: Opus 5.5. Lanes: Astra (Codex) for every mechanical phase (Peter, 2026-10-07: *"please use Astra agents for this work"*); this overrides `feedback_astra_review_only` for this campaign only. Lanes make one commit then stop; the lead lands.
@@ -24,7 +24,7 @@ Companion docs: `PHYSICS_ENGINE_BOUNDARY_DESIGN.md` (owns the physics graph-adap
 | Piece | Where | State |
 |---|---|---|
 | Crate size | `crates/manifold-renderer`: 487,842 lines of Rust, 53% of the workspace (next: app 120,894). `node_graph/` 361k; `node_graph/primitives/` 199k in 455 flat files; `preset_runtime/` 25k; root files 36k. 3,406 `#[test]` in `src/`; 45 integration test binaries (67k lines) in `tests/` | SPLIT |
-| Rebuild cost after touching one primitive (`primitives/vignette.rs`, warm target, `CARGO_BUILD_JOBS=4`, measured this session) | lib 5.1s · lib test binary 57.7s (255 CPU-s) · app 38.1s | The test binary is the cost. Baseline for P4's after-measurement |
+| Rebuild cost after touching one primitive (`primitives/vignette.rs`, warm target, `CARGO_BUILD_JOBS=4`, measured this session) | lib 5.1s · lib test binary 57.7s (255 CPU-s) · app 38.1s | The test binary is the cost. The P4 after-measurement was skipped by Peter (2026-10-09): other sessions shared the cores, so timings would be noise |
 | Node registration | `node_graph/primitive.rs:1276` `macro_rules! primitive` — 91 `$crate::` paths, zero bare `crate::` inside the macro body; expands to `inventory::submit!` (`:1408`, `:1421`). `persistence.rs:216` `register_builtin` iterates `inventory::iter::<PrimitiveFactory>`; `descriptor.rs:206`, `param_doc.rs:33` collect the same way | EXISTS — cross-crate registration needs no engine change |
 | Other `inventory::iter` consumers | `catalog_gen.rs:181,755`, `validation.rs:2226`, `palette.rs:99,131`, `ports.rs:754` | Work unchanged as long as the family crates are linked (D6) |
 | Engine core → primitives, non-test | `rg 'primitives::' node_graph/{execution,graph_loader,validation,effect_node}.rs node_graph/freeze` outside tests: `wgsl_compute` (freeze/install.rs:854), `render_scene::rt_proof::RtProbeScene` (effect_node.rs:1386, `cfg(feature="gpu-proofs")`), `liquid_frame::{WHITEWATER_INPUTS,WHITEWATER_OUTPUTS}` (graph_loader.rs:805), `liquid_stats`/`gpu_flip_preset` re-exports (node_graph/mod.rs:102–103) | The cheap seams — P0 cuts them |

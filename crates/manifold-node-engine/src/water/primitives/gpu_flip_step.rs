@@ -63,11 +63,15 @@ const STEP_SHADER: &str = include_str!("shaders/gpu_flip_step.wgsl");
 const MASK_SHADER: &str = include_str!("shaders/gpu_flip_commit_mask.wgsl");
 const NAME: &str = "GPU FLIP Step";
 
+manifold_core::testkit_visible! {
 /// Layers of valid faces the step's face grid holds around the water at
 /// least: both extensions run `band_layers` ≥ 5.
-pub const FACE_VALID_LAYERS: u32 = 2;
+pub(crate) const FACE_VALID_LAYERS: u32 = 2;
+}
+manifold_core::testkit_visible! {
 /// Configured engine CFL, shared with the clock.
-pub const ENGINE_CFL: u32 = 5;
+pub(crate) const ENGINE_CFL: u32 = 5;
+}
 
 /// A fenced maximum for the exact incoming marker state can prove that the
 /// GPU scheduler's first step consumes the entire interval. Keep a 1% margin
@@ -84,14 +88,18 @@ fn one_step_cfl_safe(marker_speed: f32, obstacle_speed: f32, interval: f32, cell
             < f64::from(ENGINE_CFL) * f64::from(cell_size)
 }
 
+manifold_core::testkit_visible! {
 /// FLIP Fluids _extrapolateFluidVelocities: configured CFL, never travel.
-pub fn band_layers(cfl: u32) -> u32 {
+pub(crate) fn band_layers(cfl: u32) -> u32 {
     (3f64.sqrt() * f64::from(cfl)).ceil() as u32 + 3
 }
+}
 
+manifold_core::testkit_visible! {
 /// Bytes of the step's face grid at `cells`: one record per padded cell.
-pub fn face_bytes(cells: [u32; 3]) -> u64 {
+pub(crate) fn face_bytes(cells: [u32; 3]) -> u64 {
     cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * size_of::<FaceSample>() as u64
+}
 }
 
 /// Half-cell sites sources emit at: eight a cell (gpu_flip_step.wgsl
@@ -104,9 +112,11 @@ fn cell_bytes(cells: [u32; 3]) -> u64 {
     cells.iter().map(|&n| u64::from(n)).product::<u64>() * 4
 }
 
+manifold_core::testkit_visible! {
 /// Cells per tile side (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
 /// table)). Partial edge tiles are allowed: no lattice side rule.
-pub const TILE: u32 = 8;
+pub(crate) const TILE: u32 = 8;
+}
 
 /// The cell passes' reach from a particle-holding cell, in cells: the tile
 /// set C is every tile within it (`tiles_classify` writes the distance).
@@ -114,21 +124,27 @@ pub const TILE: u32 = 8;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub const CELL_REACH: u32 = 2;
 
+manifold_core::testkit_visible! {
 /// Tiles per axis, the last one partial when the side is not a multiple of
 /// [`TILE`].
-pub fn tile_counts(cells: [u32; 3]) -> [u32; 3] {
+pub(crate) fn tile_counts(cells: [u32; 3]) -> [u32; 3] {
     cells.map(|n| n.div_ceil(TILE))
 }
-
-pub fn tile_total(cells: [u32; 3]) -> u64 {
-    tile_counts(cells).iter().map(|&t| u64::from(t)).product()
 }
 
+manifold_core::testkit_visible! {
+pub(crate) fn tile_total(cells: [u32; 3]) -> u64 {
+    tile_counts(cells).iter().map(|&t| u64::from(t)).product()
+}
+}
+
+manifold_core::testkit_visible! {
 /// The farthest tile ring any extend layer reaches at `band` layers: a
 /// layer fills faces `1 + layer` cells from the water. A per-step constant,
 /// not a cap: the table is sized for it.
-pub fn ring_max(band: u32) -> u32 {
+pub(crate) fn ring_max(band: u32) -> u32 {
     (1 + band).div_ceil(TILE)
+}
 }
 
 /// Words of the tile counts: word 0 the cell set C's size, word k in
@@ -273,10 +289,11 @@ fn pocket_sum_bytes(cells: [u32; 3]) -> u64 {
     3 * cell_bytes(cells) + 8
 }
 
+manifold_core::testkit_visible! {
 /// The shader's `Params`; field meanings are documented there.
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct StepParams {
+pub(crate) struct StepParams {
     pub(crate) n: [u32; 3],
     pub(crate) capacity: u32,
     pub(crate) box_min: [f32; 3],
@@ -324,6 +341,7 @@ pub struct StepParams {
     /// (`manifold_physics::coupled_motion::coupled_substep`).
     pub(crate) coupled_h: f32,
     pub(crate) _pad: [u32; 2],
+}
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -662,8 +680,9 @@ struct NarrowHistory {
     last_tick: i32,
 }
 
+manifold_core::testkit_visible! {
 #[derive(Default)]
-pub struct StepState {
+pub(crate) struct StepState {
     identity_ops: super::particle_identity::ParticleIdentity,
     pipelines: Option<Pipelines>,
     mask_pipeline: Option<GpuComputePipeline>,
@@ -711,6 +730,7 @@ pub struct StepState {
     surface: super::whitewater_distance::SurfaceDistance,
     sheeting: super::gpu_flip_sheeting::GpuSheeting,
     sheet_order: Option<GpuBuffer>,
+}
 }
 
 /// Zero bytes bound for an unwired input: the uniform-sized arrays, and an

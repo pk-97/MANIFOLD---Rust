@@ -463,11 +463,13 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
         self.output_storage_retained
     }
 
+manifold_core::testkit_visible! {
     /// Executor-only builder for the output-storage retention proof.
-    pub fn with_outputs_retained(mut self, retained: bool) -> Self {
+    pub(crate) fn with_outputs_retained(mut self, retained: bool) -> Self {
         self.output_storage_retained = retained;
         self
     }
+}
 
     /// Declare that this node's outputs this frame are allocated but not
     /// yet valid — async content is still in flight (e.g.

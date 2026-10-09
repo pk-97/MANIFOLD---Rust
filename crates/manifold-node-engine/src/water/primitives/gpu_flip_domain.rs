@@ -40,9 +40,10 @@ use crate::water::physics_events::ResolvedNodeImpulse;
 use crate::primitive::Primitive;
 use crate::scene::transform::Transform;
 
+manifold_core::testkit_visible! {
 /// Everything whose change restarts the liquid.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GpuFlipSetup {
+pub(crate) struct GpuFlipSetup {
     pub(crate) lattice: LiquidLattice,
     pub(crate) pool_sites: u32,
     pub(crate) box_sites: [[u32; 2]; 3],
@@ -50,11 +51,13 @@ pub struct GpuFlipSetup {
     /// emit into the slots past the live particles.
     pub(crate) particle_capacity: u32,
 }
+}
 
+manifold_core::testkit_visible! {
 /// The domain's setup and the layout it came from, computed from params and
 /// wires alone: the node and the extent checker both call [`gpu_flip_geometry`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GpuFlipGeometry {
+pub(crate) struct GpuFlipGeometry {
     pub(crate) layout: FluidDomainLayout,
     pub(crate) setup: GpuFlipSetup,
     pub(crate) particles: u64,
@@ -66,10 +69,12 @@ pub struct GpuFlipGeometry {
     /// Live sheet seeding rate; changing it does not restart the liquid.
     pub(crate) sheet_fill_rate: f32,
 }
+}
 
 impl GpuFlipGeometry {
+manifold_core::testkit_visible! {
     /// The scalar outputs fixed by the setup, by name.
-    pub fn outputs(&self) -> [(&'static str, f32); 23] {
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 23] {
         let GpuFlipSetup { lattice, pool_sites, box_sites, particle_capacity } = self.setup;
         let h = self.layout.cell_size;
         let surface = lattice.surface();
@@ -100,6 +105,7 @@ impl GpuFlipGeometry {
             ("mesh_wall_inset", solver.wall_inset()),
         ]
     }
+}
 }
 
 /// The fill in the layout's half-cell sites: the pool's height and the
@@ -139,12 +145,13 @@ fn fill_sites(
     Ok((pool, sites))
 }
 
+manifold_core::testkit_visible! {
 /// The domain box, lattice and fill from the domain's params and wires
 /// (`read` is `scalar_or_param`). Refused by name, in this order: a lattice
 /// the pressure solve cannot take, a solve level the lattice lacks, a fill
 /// that does not fit the domain, and a fill past the count a wire carries
 /// exactly.
-pub fn gpu_flip_geometry(
+pub(crate) fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
     domain: Option<Transform>,
     initial_volume: Option<Transform>,
@@ -177,6 +184,7 @@ pub fn gpu_flip_geometry(
         particle_capacity: particle_capacity as u32,
     };
     Ok(GpuFlipGeometry { layout, setup, particles, solve_level, max_iterations, sheet_fill_rate })
+}
 }
 
 impl GpuFlipGeometry {

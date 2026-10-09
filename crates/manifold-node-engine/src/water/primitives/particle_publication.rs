@@ -31,11 +31,13 @@ fn pair_bytes(slots: u32) -> u64 {
     u64::from(slots) * 8
 }
 
+manifold_core::testkit_visible! {
 /// Everything the publisher allocates for a target of `slots` records: two
 /// pair arrays, the live-count word and the digit scan's storage.
-pub fn scratch_bytes(slots: u32) -> u64 {
+pub(crate) fn scratch_bytes(slots: u32) -> u64 {
     let slots = slots.max(1);
     2 * pair_bytes(slots) + 16 + storage_words((DIGITS * tiles(slots)) as usize) as u64 * 4
+}
 }
 
 #[derive(Default)]
@@ -45,7 +47,8 @@ pub struct ParticlePublication {
     live: Option<GpuBuffer>,
     scan: PrefixScan,
 }
-pub struct Publication<'a> {
+manifold_core::testkit_visible! {
+pub(crate) struct Publication<'a> {
     pub source: &'a GpuBuffer,
     pub target: &'a GpuBuffer,
     pub identity: &'a GpuBuffer,
@@ -53,8 +56,10 @@ pub struct Publication<'a> {
     pub metadata: &'a GpuBuffer,
     pub count: u32,
 }
+}
 impl ParticlePublication {
-    pub fn prepare(&mut self, device: &GpuDevice) {
+manifold_core::testkit_visible! {
+    pub(crate) fn prepare(&mut self, device: &GpuDevice) {
         if self.pipelines.is_none() {
             let shader = with_stats_layout(SHADER);
             self.pipelines = Some(["first_upsweep", "upsweep", "downsweep", "gather"].map(
@@ -63,7 +68,9 @@ impl ParticlePublication {
         }
         self.scan.prepare(device);
     }
-    pub fn encode(
+}
+manifold_core::testkit_visible! {
+    pub(crate) fn encode(
         &mut self,
         device: &GpuDevice,
         enc: &mut GpuEncoder,
@@ -150,6 +157,7 @@ impl ParticlePublication {
         enc.compute_memory_barrier_buffers();
         Ok(())
     }
+}
     /// Bytes held now: `scratch_bytes` of the largest target published.
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub fn held_bytes(&mut self, device: &GpuDevice) -> u64 {

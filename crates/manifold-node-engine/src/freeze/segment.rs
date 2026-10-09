@@ -144,6 +144,7 @@ pub fn concat_defs(cards: &[&EffectGraphDef]) -> Option<EffectGraphDef> {
     })
 }
 
+manifold_core::testkit_visible! {
 /// Segment eligibility: a card may join a segment only when its (flattened)
 /// def carries NO cross-frame state — no state-capture loop, no aliased
 /// in-place buffer IO, AND no StateStore-backed primitive. Stateful cards stay
@@ -164,7 +165,7 @@ pub fn concat_defs(cards: &[&EffectGraphDef]) -> Option<EffectGraphDef> {
 ///     rebuild (gain snapped to unity mid-show, BUG-009). `requires().state_store`
 ///     is runtime-enforced (the executor withholds the StateStore and the node's
 ///     `evaluate` panics if it lied), so it is a reliable statefulness signal.
-pub fn def_is_segment_stateless(
+pub(crate) fn def_is_segment_stateless(
     def: &EffectGraphDef,
     registry: &crate::persistence::PrimitiveRegistry,
 ) -> bool {
@@ -184,6 +185,7 @@ pub fn def_is_segment_stateless(
             None => false,
         }
     })
+}
 }
 
 fn single_node_of_type(def: &EffectGraphDef, type_id: &str) -> Option<u32> {

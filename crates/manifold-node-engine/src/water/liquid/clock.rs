@@ -4,6 +4,7 @@ pub use manifold_physics::clock::{ClockFrame, SimulationClock as LiquidClock};
 /// Initial field-buffer reserve, not a time or quality cap.
 pub const FIELD_RESERVE_INTERVALS: u32 = 3;
 
+manifold_core::testkit_visible! {
 /// Every node input that takes the accepted simulation interval in seconds,
 /// as (node type, input). Each is fed by its liquid domain's
 /// `interval_duration` output: the GPU FLIP builder wires them, the graph
@@ -11,13 +12,14 @@ pub const FIELD_RESERVE_INTERVALS: u32 = 3;
 /// `gpu_flip_builder_graphs_feed_every_interval_input` fails a shipped preset
 /// that leaves one to a param. A param holds its 1/60 s default at every Sim
 /// Rate, so a duration input left on its param runs at the wrong rate.
-pub const INTERVAL_DURATION_INPUTS: [(&str, &str); 5] = [
+pub(crate) const INTERVAL_DURATION_INPUTS: [(&str, &str); 5] = [
     ("node.gpu_flip_step", "interval_duration"),
     ("node.matter_state", "interval_duration"),
     ("node.whitewater_step", "dt"),
     ("node.liquid_solid_distance", "tick_seconds"),
     ("node.whitewater_obstacle_source", "tick_seconds"),
 ];
+}
 
 #[cfg(test)]
 mod tests {

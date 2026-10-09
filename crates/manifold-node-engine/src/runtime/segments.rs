@@ -30,21 +30,24 @@ pub(super) fn build_segment_cards(
     cards
 }
 
+manifold_core::testkit_visible! {
 /// Chain-fusion segment eligibility for one card (docs/CHAIN_FUSION_DESIGN.md).
 /// Shared between the chain build and the project-load prewarm so the two can
 /// never disagree about what forms a segment.
 #[derive(Clone, Copy, PartialEq, Debug)]
 #[doc(hidden)]
-pub enum SegmentMember {
+pub(crate) enum SegmentMember {
     /// Never joins or spans a segment (watched / grouped / stateful /
     /// string-bound / no view).
     Boundary,
     /// Fusable segment member.
     Fuse,
 }
+}
 
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub fn classify_segment_member(
+pub(crate) fn classify_segment_member(
     fx: &PresetInstance,
     preview_effect: Option<&EffectId>,
     primitives: &PrimitiveRegistry,
@@ -70,18 +73,21 @@ pub fn classify_segment_member(
         SegmentMember::Boundary
     }
 }
+}
 
+manifold_core::testkit_visible! {
 /// Scan one maximal segment run starting at `i` (caller guarantees
 /// `members[i] == Fuse`): returns `(j, fuse_idxs)` — the exclusive end
 /// and the fusable indices within `[i, j)`.
 #[doc(hidden)]
-pub fn segment_run(members: &[SegmentMember], i: usize) -> (usize, Vec<usize>) {
+pub(crate) fn segment_run(members: &[SegmentMember], i: usize) -> (usize, Vec<usize>) {
     let mut j = i;
     while j < members.len() && members[j] != SegmentMember::Boundary {
         j += 1;
     }
     let fuse_idxs = (i..j).filter(|&k| members[k] == SegmentMember::Fuse).collect();
     (j, fuse_idxs)
+}
 }
 
 /// Project-load PREWARM (chain fusion): walk one chain's effect list with the

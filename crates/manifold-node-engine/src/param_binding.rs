@@ -279,6 +279,7 @@ pub struct ResolvedBinding {
     pub default_mirrors_node_param: bool,
 }
 
+manifold_core::testkit_visible! {
 /// Non-identity card mapping applied to a User binding's value at the write
 /// boundary in two stages. First the slider response: when `invert` or a
 /// non-Linear `curve` is set, normalize within `[min, max]`, invert, apply the
@@ -291,13 +292,14 @@ pub struct ResolvedBinding {
 /// curve != Linear, scale != 1, or offset != 0), so every existing show carries
 /// `None` and stays byte-identical with zero per-frame cost.
 #[derive(Debug, Clone, Copy)]
-pub struct Reshape {
+pub(crate) struct Reshape {
     min: f32,
     max: f32,
     invert: bool,
     curve: manifold_core::macro_bank::MacroCurve,
     scale: f32,
     offset: f32,
+}
 }
 
 impl Reshape {
@@ -480,6 +482,7 @@ impl ResolvedBinding {
         ))
     }
 
+manifold_core::testkit_visible! {
     /// The single field-assembly point for a resolved binding. Every
     /// constructor — `from_static`, `from_user`, and the generator path in
     /// [`crate::generators::json_graph_generator`] — funnels through here, so
@@ -488,7 +491,7 @@ impl ResolvedBinding {
     /// over-drove a folded deg→rad affine 57×; this constructor is why that
     /// can't recur — there is no second literal to forget.)
     #[allow(clippy::too_many_arguments)]
-    pub fn assemble(
+    pub(crate) fn assemble(
         id: ParamId,
         label: Cow<'static, str>,
         default_value: f32,
@@ -513,6 +516,7 @@ impl ResolvedBinding {
             default_mirrors_node_param,
         }
     }
+}
 
     /// Re-bake the card reshape from the live manifest spec (min/max/curve/
     /// invert — the D4 authority) plus a scale/offset pair: the override

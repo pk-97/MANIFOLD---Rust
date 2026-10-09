@@ -45,14 +45,18 @@ use errors::record_chain_error;
 mod bindings;
 use bindings::{StringBindingResolution, def_string_param_value, RelightParamWrite, build_relight_writes};
 
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub mod segments;
+pub(crate) mod segments;
+}
 pub use segments::{prewarm_chain_segments, prewarm_project_chain_segments};
 pub use crate::freeze::install::prewarm_worker_pending_count;
 use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
 
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub mod build;
+pub(crate) mod build;
+}
 mod device;
 pub use build::chain_topology_hash;
 use build::{assign_texture2d_slots, compute_topology_hash};
@@ -64,13 +68,15 @@ mod math_view;
 mod math_view_events;
 mod lifecycle;
 
-pub mod core;
-pub use core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
+manifold_core::testkit_visible! {
+pub(crate) mod core;
+}
+pub use self::core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
 mod resize;
 pub use resize::PreparedRuntimeResize;
 mod debug;
 pub use debug::{ChainDebugInfo, StepDebugInfo};
-use core::{EffectSlot, PresetIo};
+use self::core::{EffectSlot, PresetIo};
 
 
 mod dump_sets;

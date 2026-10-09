@@ -330,12 +330,15 @@ impl PresetRuntime {
         }
     }
 
+manifold_core::testkit_visible! {
     #[doc(hidden)]
-    pub fn carry_pending_trigger_from(&mut self, prior: &Self) {
+    pub(crate) fn carry_pending_trigger_from(&mut self, prior: &Self) {
         self.pending_trigger_baseline = prior.pending_trigger_baseline;
     }
+}
 
-    pub fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
+manifold_core::testkit_visible! {
+    pub(crate) fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
         for view in &mut self.math_views {
             if let Some(previous) = prior.math_views.iter_mut().find(|previous| previous.modifier_id == view.modifier_id) {
                 view.events.carry_from(&previous.events);
@@ -361,6 +364,7 @@ impl PresetRuntime {
             );
         }
     }
+}
 
     /// Update the `system.generator_input` node's per-frame context. No-op on
     /// an effect-chain runtime.

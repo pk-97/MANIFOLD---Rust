@@ -1,10 +1,11 @@
+manifold_core::testkit_visible! {
 /// Build the stock MaskBlob from the resolved BlobTrackingV2 detector group.
 /// The detector body is cloned from the catalog entry at load time; only the
 /// mask consumer tail is authored here. This keeps detector controls and
 /// wiring coupled to the source preset while each MaskBlob instance still gets
 /// independent primitive state after the normal graph loader clones the def.
 #[doc(hidden)]
-pub fn synthesize_mask_blob_json(blob_tracking_json: &str) -> Result<String, String> {
+pub(crate) fn synthesize_mask_blob_json(blob_tracking_json: &str) -> Result<String, String> {
     use serde_json::{Value, json};
 
     fn node_id(node: &Value) -> Option<&str> {
@@ -241,4 +242,5 @@ pub fn synthesize_mask_blob_json(blob_tracking_json: &str) -> Result<String, Str
     );
     serde_json::to_string(&source)
         .map_err(|error| format!("MaskBlob synthesis failed to serialize: {error}"))
+}
 }

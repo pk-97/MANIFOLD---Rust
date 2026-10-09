@@ -39,9 +39,11 @@ use crate::water::liquid::tick_samples::TickSamples;
 use crate::water::physics::ResolvedRigidImpulse;
 use crate::water::physics_events::{ResolvedNodeImpulse, map_rigid_receipt};
 
+manifold_core::testkit_visible! {
 /// Trilinear reads of a field lattice; pure math, included by each atom that
 /// reads one (its own buffer reads stay in its body).
-pub const LIQUID_FIELD: &str = include_str!("../primitives/shaders/liquid_field.wgsl");
+pub(crate) const LIQUID_FIELD: &str = include_str!("../primitives/shaders/liquid_field.wgsl");
+}
 
 /// Impulses held at once: queued, discarded and undrained receipts together.
 pub const IMPULSE_CAPACITY: usize = 256;
@@ -146,9 +148,10 @@ impl FieldFrame {
     }
 }
 
+manifold_core::testkit_visible! {
 /// The field scalars and lattices an atom binds: wired lattices too small
 /// for the wired field are refused by name; unwired ones read nothing.
-pub struct FieldBinding<'a> {
+pub(crate) struct FieldBinding<'a> {
     pub nodes: [i32; 3],
     pub spacing: f32,
     pub force_lattices: i32,
@@ -156,6 +159,7 @@ pub struct FieldBinding<'a> {
     pub first_tick: i32,
     pub forces: Option<&'a GpuBuffer>,
     pub impulses: Option<&'a GpuBuffer>,
+}
 }
 
 impl<'a> FieldBinding<'a> {

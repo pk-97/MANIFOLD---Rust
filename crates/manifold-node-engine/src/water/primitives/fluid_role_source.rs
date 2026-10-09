@@ -2,7 +2,9 @@
 //! CPU `FluidRole` wire.  The node has no solver state, native handles, timing,
 //! or rendering responsibilities.
 
-pub mod geometry;
+manifold_core::testkit_visible! {
+pub(crate) mod geometry;
+}
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -21,10 +23,21 @@ use geometry::{GeometryMode, prepare_geometry, prepare_wired_geometry};
 const GEOMETRY_MODES: &[&str] = &["Collision Proxy", "Closed Mesh"];
 const FLUID_ROLE_KINDS: &[&str] = &["Initial Fill", "Inflow", "Outflow", "Collider"];
 
+manifold_core::testkit_visible! {
+    testkit {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CompoundPreparation {
     pub materials: [Option<i32>; 64],
     pub part_transforms: [Transform; 64],
+}
+    }
+    production {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CompoundPreparation {
+    pub(crate) materials: [Option<i32>; 64],
+    pub(crate) part_transforms: [Transform; 64],
+}
+    }
 }
 
 pub(crate) const MESH_PORTS: [&str; 64] = [
@@ -38,14 +51,26 @@ pub(crate) const MESH_PORTS: [&str; 64] = [
     "mesh_57", "mesh_58", "mesh_59", "mesh_60", "mesh_61", "mesh_62", "mesh_63",
 ];
 
+manifold_core::testkit_visible! {
+    testkit {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WiredPreparation {
     pub sources: [Option<MeshSource>; 64],
     pub part_transforms: [Transform; 64],
 }
-
+    }
+    production {
 #[derive(Clone, Debug, PartialEq)]
-pub struct PreparationKey {
+pub(crate) struct WiredPreparation {
+    pub(crate) sources: [Option<MeshSource>; 64],
+    pub(crate) part_transforms: [Transform; 64],
+}
+    }
+}
+
+manifold_core::testkit_visible! {
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PreparationKey {
     path: String,
     selection: MeshSelection,
     shape: u32,
@@ -54,6 +79,7 @@ pub struct PreparationKey {
     mode: GeometryMode,
     compound: Option<CompoundPreparation>,
     wired: Option<Box<WiredPreparation>>,
+}
 }
 
 impl PreparationKey {
@@ -675,7 +701,8 @@ fn resolve_compound(
     Ok(Some(compound))
 }
 
-pub fn default_selection(collider_parts: u32) -> MeshSelection {
+manifold_core::testkit_visible! {
+pub(crate) fn default_selection(collider_parts: u32) -> MeshSelection {
     MeshSelection {
         mesh: -1,
         primitive: -1,
@@ -687,6 +714,7 @@ pub fn default_selection(collider_parts: u32) -> MeshSelection {
         fragment_index: 0,
         collider_parts,
     }
+}
 }
 
 fn resolve_collider_parts(ctx: &EffectNodeContext<'_, '_>) -> Result<u32, String> {

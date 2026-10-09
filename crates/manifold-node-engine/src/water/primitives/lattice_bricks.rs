@@ -48,13 +48,15 @@ struct BrickUniforms {
     blob_count: u32,
 }
 
+manifold_core::testkit_visible! {
 /// Dimensions and storage size of one brick layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BrickLayout {
+pub(crate) struct BrickLayout {
     pub nodes: [u32; 3],
     pub bricks: [u32; 3],
     pub count: u32,
     pub words: u32,
+}
 }
 
 /// Public extra-field wrapper for the shared private PrefixScan state. The
@@ -100,9 +102,10 @@ pub(crate) fn refined_nodes(solid_nodes: [u32; 3], resolution_scale: u32) -> Opt
     Some(nodes)
 }
 
+manifold_core::testkit_visible! {
 /// Compute the layout with checked integer arithmetic.  A missing layout is a
 /// named capacity error at the node boundary rather than a wrapped dispatch.
-pub fn brick_layout(solid_nodes: [u32; 3], resolution_scale: u32) -> Option<BrickLayout> {
+pub(crate) fn brick_layout(solid_nodes: [u32; 3], resolution_scale: u32) -> Option<BrickLayout> {
     let nodes = refined_nodes(solid_nodes, resolution_scale)?;
     // Every dense sample index in the generated consumers is a u32.
     nodes[0].checked_mul(nodes[1])?.checked_mul(nodes[2])?;
@@ -118,6 +121,7 @@ pub fn brick_layout(solid_nodes: [u32; 3], resolution_scale: u32) -> Option<Bric
         count,
         words,
     })
+}
 }
 
 fn param_u32(params: &ParamValues, name: &str, default: u32) -> u32 {
