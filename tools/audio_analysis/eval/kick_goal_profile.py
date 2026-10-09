@@ -26,3 +26,23 @@ def rise_profile(spec, cand, avail):
         out[n, :PAIRS] = paired[c:mid].max(axis=0) - base
         out[n, PAIRS:] = paired[mid:a + 1].max(axis=0) - base if a + 1 > mid else out[n, :PAIRS]
     return out
+
+
+FALL_NAMES = tuple(f'fall_late_{b}' for b in range(PAIRS))
+
+
+def fall_profile(spec, cand, avail):
+    """Per paired band: the late-half minimum minus the pre-onset base, in dB.
+
+    Sidechain ducking: producers duck pads and bass under the kick, so energy
+    in bands the kick leaves alone falls 20-40 ms after a kick; a tom or clap
+    never ducks the mix."""
+    paired = 10 * np.log10(0.5 * (10 ** spec[:, 0::2] + 10 ** spec[:, 1::2]))
+    out = np.zeros((len(cand), PAIRS))
+    for n, (c, a) in enumerate(zip(cand, avail)):
+        if c < 6 or a >= len(paired):
+            continue
+        base = paired[c - 5:c - 2].mean(axis=0)
+        mid = c + max(1, (a - c + 1) // 2)
+        out[n] = paired[mid:a + 1].min(axis=0) - base if a + 1 > mid else 0.0
+    return out

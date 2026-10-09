@@ -80,7 +80,7 @@ def _window_bounds(index: int, deadline: int, hop: int, sample_rate: int) -> tup
 
 
 def fusion_features(
-    samples: np.ndarray, sample_rate: int
+    samples: np.ndarray, sample_rate: int, deadline_s: float = 0.040
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """Return candidate hops, deadline hops, fixed features, and native hop size."""
     values = _validate_samples(samples, sample_rate)
@@ -104,7 +104,7 @@ def fusion_features(
     # The upper helper uses bands 1000-2000, 2000-4000, and 4000-8000.
     upper_fast = np.sum(upper[:, 1:, 0], axis=1)
     upper_slow = np.sum(upper[:, 1:, 1], axis=1)
-    deadline_offset = math.ceil(0.040 * sample_rate / hop)
+    deadline_offset = math.ceil(deadline_s * sample_rate / hop)
     candidates = np.flatnonzero(edges)
     candidates = candidates[candidates + deadline_offset < count]
     available = candidates + deadline_offset

@@ -64,7 +64,7 @@ def _bandwise_features(
 
 
 def fusion_features(
-    samples: np.ndarray, sample_rate: int
+    samples: np.ndarray, sample_rate: int, deadline_s: float = 0.040
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """Return the frozen grid and nine columns followed by six bandwise columns.
 
@@ -73,7 +73,7 @@ def fusion_features(
     15 ms. Both reductions use the frozen inclusive candidate/deadline bounds.
     The shared 2048-sample Hann FFT is trailing; no deadline is extended.
     """
-    candidates, available, features, hop = base.fusion_features(samples, sample_rate)
+    candidates, available, features, hop = base.fusion_features(samples, sample_rate, deadline_s)
     if len(candidates) == 0:
         return candidates, available, np.zeros((0, len(FEATURE_NAMES))), hop
     spectra = base._spectra(np.asarray(samples, dtype=np.float64), sample_rate, hop)
