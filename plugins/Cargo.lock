@@ -1576,10 +1576,13 @@ name = "manifold-analyzer-dsp"
 version = "0.1.0"
 dependencies = [
  "crossbeam-queue",
+ "miniz_oxide",
  "realfft",
  "rustfft",
  "serde",
+ "serde_json",
  "symphonia",
+ "tempfile",
 ]
 
 [[package]]
@@ -1602,6 +1605,7 @@ dependencies = [
  "rfd",
  "rustfft",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

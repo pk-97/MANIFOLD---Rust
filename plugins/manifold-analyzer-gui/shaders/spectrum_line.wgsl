@@ -1,22 +1,10 @@
 // Spectrum + spectrogram — fullscreen fragment shader.
 //
-// Top region (y < spectrum_height):
-//   Mid + Side line/fill curves. Pipeline:
-//     1. For each curve, compute dB at the pixel centre frequency and at
-//        ±1 px in log-freq (for anti-aliased line SDF).
-//     2. Apply 1/N-oct frequency smoothing in the power domain.
-//     3. Apply +slope dB/oct tilt around a reference frequency and a
-//        scalar align-0-dB offset.
-//     4. Convert dB → y pixel, evaluate SDF to adjacent pixel anchors, AA.
-//     5. Compose: bg → side fill → side line → mid fill → mid line.
-//   Side is drawn underneath Mid so the primary curve reads as foreground.
-//
-// Bottom region (y >= spectrum_height):
-//   Scrolling Mid spectrogram sampled from a ring buffer. One row of pixels
-//   = one historical column. Newest column is at the top (just below the
-//   spectrum line), flowing down with age. dB → colour via inferno-like
-//   ramp, with the same display tilt applied so the ramp has headroom at
-//   low frequencies.
+// The CPU projects and weights spectrum curves at screen-column resolution.
+// The lower pane displays time left-to-right and frequency bottom-to-top.
+// CQT density is averaged in power over analysis hops and normalized to a
+// 100 Hz equivalent bandwidth before display weighting. Frequency pixels
+// integrate the stored bands when downsampling; colours and hover agree.
 
 struct Uniforms {
     resolution: vec2<f32>,
@@ -147,41 +135,38 @@ fn colormap(t_in: f32) -> vec3<f32> {
     return mix(c6, c7, (t - 0.90) / 0.10);
 }
 
-// History is pre-resampled to `log_bins` log-spaced dB values per column
-// by the CPU side — at low freq each log bin is finer than an FFT bin
-// (upsampled via power-domain linear interp), at high freq each log bin
-// integrates power across many FFT bins (anti-aliased). Indexing is
-// simple: `log_bin=0` is `freq_min` (bottom), `log_bin=log_bins-1` is
-// `freq_max` (top). Pixel-side interpolation is one 2-tap linear blend.
-fn sample_history_db(col: i32, log_bin_f: f32, log_bins_i: i32) -> f32 {
-    let clamped = clamp(log_bin_f, 0.0, f32(log_bins_i) - 1.0);
-    let lo = i32(floor(clamped));
-    let hi = min(lo + 1, log_bins_i - 1);
-    let frac = fract(clamped);
-    let db_lo = history[col * log_bins_i + lo];
-    let db_hi = history[col * log_bins_i + hi];
-    let p_lo = pow(10.0, db_lo * 0.1);
-    let p_hi = pow(10.0, db_hi * 0.1);
-    let p = mix(p_lo, p_hi, frac);
-    return 10.0 * log(p + 1e-24) / log(10.0);
+// Integrate the linear-power reconstruction over a frequency pixel when
+// downsampling. Point sampling can entirely miss a narrow sharpened band.
+fn history_power(buffer_id: i32, col: i32, bin: i32, count: i32) -> f32 {
+    let index = col * count + clamp(bin, 0, count - 1);
+    if (buffer_id == 0) { return pow(10.0, history[index] * 0.1); }
+    return pow(10.0, history2[index] * 0.1);
 }
 
-// Same lookup against the secondary spectrogram buffer (Right channel
-// in L+R stacked mode). WGSL doesn't allow taking storage-array
-// references as parameters, so the two paths are duplicated rather
-// than parameterised. Kept identical to `sample_history_db` so any
-// future fix lands in both.
-fn sample_history2_db(col: i32, log_bin_f: f32, log_bins_i: i32) -> f32 {
-    let clamped = clamp(log_bin_f, 0.0, f32(log_bins_i) - 1.0);
-    let lo = i32(floor(clamped));
-    let hi = min(lo + 1, log_bins_i - 1);
-    let frac = fract(clamped);
-    let db_lo = history2[col * log_bins_i + lo];
-    let db_hi = history2[col * log_bins_i + hi];
-    let p_lo = pow(10.0, db_lo * 0.1);
-    let p_hi = pow(10.0, db_hi * 0.1);
-    let p = mix(p_lo, p_hi, frac);
-    return 10.0 * log(p + 1e-24) / log(10.0);
+fn history_db(buffer_id: i32, col: i32, bin: f32, count: i32, span: f32) -> f32 {
+    let center = clamp(bin, 0.0, f32(count - 1));
+    if (span <= 1.0) {
+        let lo = i32(floor(center));
+        let p = mix(history_power(buffer_id,col,lo,count),
+                    history_power(buffer_id,col,lo+1,count),fract(center));
+        return 10.0 * log(p + 1e-24) / log(10.0);
+    }
+    let start = center - span * 0.5;
+    let end = center + span * 0.5;
+    var at = start;
+    var sum = 0.0;
+    loop {
+        if (at >= end) { break; }
+        let lo = i32(floor(at));
+        let stop = min(end, f32(lo + 1));
+        let p0 = history_power(buffer_id,col,lo,count);
+        let p1 = history_power(buffer_id,col,lo+1,count);
+        let left = mix(p0,p1,at-f32(lo));
+        let right = mix(p0,p1,stop-f32(lo));
+        sum += (left+right)*0.5*(stop-at);
+        at = stop;
+    }
+    return 10.0 * log(sum / span + 1e-24) / log(10.0);
 }
 
 // Per-pixel raw dB lookup against the supplied history buffer (Buffer 0
@@ -196,6 +181,7 @@ fn spectrogram_raw_db(
     px_x: f32,
     history_cols_i: i32,
     write_col_i: i32,
+    bin_span: f32,
 ) -> f32 {
     if (u.sync_mode > 0.5) {
         let rel_x = clamp(px_x / max(u.resolution.x, 1.0), 0.0, 0.9999);
@@ -206,11 +192,11 @@ fn spectrogram_raw_db(
         var db_lo: f32;
         var db_hi: f32;
         if (buffer_id == 0) {
-            db_lo = sample_history_db(col_lo, log_bin_f, log_bins_i);
-            db_hi = sample_history_db(col_hi, log_bin_f, log_bins_i);
+            db_lo = history_db(0, col_lo, log_bin_f, log_bins_i, bin_span);
+            db_hi = history_db(0, col_hi, log_bin_f, log_bins_i, bin_span);
         } else {
-            db_lo = sample_history2_db(col_lo, log_bin_f, log_bins_i);
-            db_hi = sample_history2_db(col_hi, log_bin_f, log_bins_i);
+            db_lo = history_db(1, col_lo, log_bin_f, log_bins_i, bin_span);
+            db_hi = history_db(1, col_hi, log_bin_f, log_bins_i, bin_span);
         }
         let p_lo = pow(10.0, db_lo * 0.1);
         let p_hi = pow(10.0, db_hi * 0.1);
@@ -228,9 +214,9 @@ fn spectrogram_raw_db(
     var c = write_col_i - history_idx;
     c = ((c % history_cols_i) + history_cols_i) % history_cols_i;
     if (buffer_id == 0) {
-        return sample_history_db(c, log_bin_f, log_bins_i);
+        return history_db(0, c, log_bin_f, log_bins_i, bin_span);
     }
-    return sample_history2_db(c, log_bin_f, log_bins_i);
+    return history_db(1, c, log_bin_f, log_bins_i, bin_span);
 }
 
 fn raw_to_color(freq: f32, raw_db: f32) -> vec4<f32> {
@@ -302,6 +288,7 @@ fn spectrogram_pixel(px: vec2<f32>) -> vec4<f32> {
         px.x,
         history_cols_i,
         write_col_i,
+        u.cqt_bins_per_octave * log2(u.freq_max / u.freq_min) / sub_h,
     );
     return raw_to_color(freq, raw_db);
 }

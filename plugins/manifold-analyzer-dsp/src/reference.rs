@@ -6,23 +6,24 @@
 //! plugin uses (one pass per FFT size in the live plugin's dropdown so
 //! the per-bin distribution overlays the live MS without binwidth
 //! offset), maintain bounded per-bin quantile histograms, then reduce
-//! to low/mid/high approximate percentile envelopes at a fixed log-spaced
-//! frequency grid. Integrated LUFS is computed via the same BS.1770 meter so the
+//! to low/mid/high percentile envelopes at every FFT bin. Integrated LUFS is computed via the same BS.1770 meter so the
 //! GUI can gain-match the ref to the live mix.
 //!
 //! Nothing here runs on the audio thread; the analysis is kicked off from
 //! the GUI thread on file-pick and typically runs on a worker thread.
-//! The persisted envelope keeps the ~1 K log-grid points used by the display
-//! plus complete per-FFT-bin percentile triples for accurate overlays.
+//! New persisted envelopes keep complete per-FFT-bin percentile triples for
+//! accurate overlays; the older ~1 K log-grid representation remains readable.
 //!
 //! LAME tag parsing lives here too — used to learn a per-file lowpass
 //! cutoff (e.g. 16 kHz for 128 kbps MP3) so the band doesn't misleadingly
 //! taper off at the codec's brickwall.
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use serde::de::Error as DeError;
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 
 use crate::median::QuantizedHistogram;
@@ -60,7 +61,7 @@ pub const REF_PERCENTILE_HIGH: f32 = 0.90;
 /// FFT size the live plugin offers so the GUI can pick the matching
 /// envelope at draw time and curves overlay the live MS without any
 /// binwidth offset (per-bin dB scales with `10·log₁₀(N)` for broadband).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct RefEnvelopeAtFft {
     pub fft_size: usize,
     /// Triples of approximate `[low_db, mid_db, high_db]` (10 / 50 / 90
@@ -70,9 +71,159 @@ pub struct RefEnvelopeAtFft {
     /// Per-FFT-bin percentile triples, including bins that are not represented
     /// by the persisted log-spaced display grid. Empty bins contain the
     /// `MIN_DB` floor triple. This preserves the full-resolution history for
-    /// overlays that need to read a specific FFT bin.
-    #[serde(default, rename = "binBounds")]
+    /// overlays that need to read a specific FFT bin. The field is kept in
+    /// memory as triples, but serialized as a compact compressed f32 payload.
     pub bin_bounds: Vec<[f32; 3]>,
+}
+
+const BIN_BOUNDS_VERSION: u8 = 1;
+const BIN_BOUNDS_COMPONENTS: usize = 3;
+const BIN_BOUNDS_MAX_COUNT: usize = 1_048_576;
+const BIN_BOUNDS_MAX_COMPRESSED_BYTES: usize = 16 * 1024 * 1024;
+const BIN_BOUNDS_MAX_RAW_BYTES: usize = BIN_BOUNDS_MAX_COUNT * BIN_BOUNDS_COMPONENTS * 4;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CompactBinBounds {
+    version: u8,
+    count: usize,
+    data: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum BinBoundsOnDisk {
+    Compact(CompactBinBounds),
+    Legacy(Vec<[f32; 3]>),
+}
+
+impl Serialize for RefEnvelopeAtFft {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("RefEnvelopeAtFft", 3)?;
+        state.serialize_field("fft_size", &self.fft_size)?;
+        // New analyses have all full-resolution bins, so the old 1024-point
+        // grid would only duplicate data. Retain it when it is present for
+        // compatibility with states written by older versions.
+        if !self.bounds.is_empty() {
+            state.serialize_field("bounds", &self.bounds)?;
+        }
+        if !self.bin_bounds.is_empty() {
+            state.serialize_field("binBounds", &compact_bin_bounds(&self.bin_bounds))?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RefEnvelopeAtFft {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            fft_size: usize,
+            #[serde(default)]
+            bounds: Vec<[f32; 3]>,
+            #[serde(default, rename = "binBounds")]
+            bin_bounds: Option<BinBoundsOnDisk>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let bin_bounds = match wire.bin_bounds {
+            None => Vec::new(),
+            Some(BinBoundsOnDisk::Legacy(bounds)) => {
+                validate_bin_bounds_count(bounds.len()).map_err(D::Error::custom)?;
+                bounds
+            }
+            Some(BinBoundsOnDisk::Compact(compact)) => {
+                decode_compact_bin_bounds(wire.fft_size, compact).map_err(D::Error::custom)?
+            }
+        };
+        Ok(Self {
+            fft_size: wire.fft_size,
+            bounds: wire.bounds,
+            bin_bounds,
+        })
+    }
+}
+
+fn expected_bin_count(fft_size: usize) -> Option<usize> {
+    fft_size.checked_div(2)?.checked_add(1)
+}
+
+fn validate_bin_bounds_size(fft_size: usize, count: usize) -> Result<(), String> {
+    validate_bin_bounds_count(count)?;
+    if count == 0 {
+        return Ok(());
+    }
+    let expected = expected_bin_count(fft_size).unwrap_or(0);
+    if count != expected {
+        return Err(format!(
+            "binBounds count {count} does not match FFT size {fft_size} ({expected})"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bin_bounds_count(count: usize) -> Result<(), String> {
+    if count > BIN_BOUNDS_MAX_COUNT {
+        return Err(format!("binBounds count {count} exceeds limit"));
+    }
+    Ok(())
+}
+
+fn compact_bin_bounds(bounds: &[[f32; 3]]) -> CompactBinBounds {
+    let mut raw = Vec::with_capacity(bounds.len() * BIN_BOUNDS_COMPONENTS * 4);
+    for triple in bounds {
+        for value in triple {
+            raw.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    let data = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+    CompactBinBounds {
+        version: BIN_BOUNDS_VERSION,
+        count: bounds.len(),
+        data,
+    }
+}
+
+fn decode_compact_bin_bounds(
+    fft_size: usize,
+    compact: CompactBinBounds,
+) -> Result<Vec<[f32; 3]>, String> {
+    if compact.version != BIN_BOUNDS_VERSION {
+        return Err(format!("unsupported binBounds version {}", compact.version));
+    }
+    validate_bin_bounds_size(fft_size, compact.count)?;
+    if compact.data.len() > BIN_BOUNDS_MAX_COMPRESSED_BYTES {
+        return Err("compressed binBounds payload exceeds limit".into());
+    }
+    let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
+        &compact.data,
+        BIN_BOUNDS_MAX_RAW_BYTES,
+    )
+    .map_err(|err| format!("invalid compressed binBounds payload: {err:?}"))?;
+    let expected_bytes = compact
+        .count
+        .checked_mul(BIN_BOUNDS_COMPONENTS * 4)
+        .ok_or_else(|| "binBounds size overflow".to_string())?;
+    if expected_bytes > BIN_BOUNDS_MAX_RAW_BYTES || raw.len() != expected_bytes {
+        return Err(format!(
+            "binBounds payload has {} bytes, expected {expected_bytes}",
+            raw.len()
+        ));
+    }
+    let mut bounds = Vec::with_capacity(compact.count);
+    for chunk in raw.chunks_exact(BIN_BOUNDS_COMPONENTS * 4) {
+        bounds.push([
+            f32::from_le_bytes(chunk[0..4].try_into().unwrap()),
+            f32::from_le_bytes(chunk[4..8].try_into().unwrap()),
+            f32::from_le_bytes(chunk[8..12].try_into().unwrap()),
+        ]);
+    }
+    Ok(bounds)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -191,7 +342,12 @@ pub fn analyze_ref_file(path: &Path, fft_sizes: &[usize]) -> Result<RefAnalysis,
     let mut right = Vec::new();
     let mut mid = Vec::new();
     let mut side = Vec::new();
-    let mut analysis_error = None;
+    let spool = if fft_sizes.len() > 1 {
+        Some(BufWriter::new(tempfile::tempfile().map_err(RefError::Io)?))
+    } else {
+        None
+    };
+    let mut spool = spool;
 
     let (source_sr, decoded_frames) = decode_file(path, |interleaved, channels, sr| {
         if meter.is_none() {
@@ -223,19 +379,25 @@ pub fn analyze_ref_file(path: &Path, fft_sizes: &[usize]) -> Result<RefAnalysis,
             mid[frame] = 0.5 * (l + r);
             side[frame] = 0.5 * (l - r);
         }
+        if let Some(spool) = spool.as_mut() {
+            for (&mid_sample, &side_sample) in mid.iter().zip(&side) {
+                spool
+                    .write_all(&mid_sample.to_le_bytes())
+                    .map_err(RefError::Io)?;
+                spool
+                    .write_all(&side_sample.to_le_bytes())
+                    .map_err(RefError::Io)?;
+            }
+        }
         meter
             .as_mut()
             .expect("meter initialized on first packet")
             .process(&left, &right);
         if let Some(pass) = first_pass.as_mut() {
-            if let Err(err) = pass.process(&mid, &side) {
-                analysis_error = Some(err);
-            }
+            pass.process(&mid, &side)?;
         }
+        Ok(())
     })?;
-    if let Some(err) = analysis_error {
-        return Err(err);
-    }
 
     let source_sr = source_sr.max(1.0);
     let duration_secs = decoded_frames as f32 / source_sr;
@@ -248,48 +410,25 @@ pub fn analyze_ref_file(path: &Path, fft_sizes: &[usize]) -> Result<RefAnalysis,
         mid_per_fft.push(pass.mid.finish(source_sr));
         side_per_fft.push(pass.side.finish(source_sr));
     }
+    let mut spool = spool
+        .map(|spool| {
+            spool
+                .into_inner()
+                .map_err(|err| RefError::Io(err.into_error()))
+        })
+        .transpose()?;
+    let mut spool = spool.take().map(BufReader::new);
     for &n_fft in fft_sizes.iter().skip(1) {
-        let mut pass = None;
-        let mut left = Vec::new();
-        let mut right = Vec::new();
-        let mut mid = Vec::new();
-        let mut side = Vec::new();
-        let mut analysis_error = None;
-        decode_file(path, |interleaved, channels, sr| {
-            if pass.is_none() {
-                pass = Some(ReferenceFftPass::new(sr, n_fft));
-            }
-            let frame_count = interleaved.len() / channels.max(1);
-            left.resize(frame_count, 0.0);
-            right.resize(frame_count, 0.0);
-            mid.resize(frame_count, 0.0);
-            side.resize(frame_count, 0.0);
-            for frame in 0..frame_count {
-                let base = frame * channels;
-                let l = interleaved[base];
-                let r = if channels >= 2 {
-                    interleaved[base + 1]
-                } else {
-                    l
-                };
-                left[frame] = l;
-                right[frame] = r;
-                mid[frame] = 0.5 * (l + r);
-                side[frame] = 0.5 * (l - r);
-            }
-            if let Some(pass) = pass.as_mut() {
-                if let Err(err) = pass.process(&mid, &side) {
-                    analysis_error = Some(err);
-                }
-            }
-        })?;
-        if let Some(err) = analysis_error {
-            return Err(err);
-        }
-        if let Some(pass) = pass {
-            mid_per_fft.push(pass.mid.finish(source_sr));
-            side_per_fft.push(pass.side.finish(source_sr));
-        }
+        let Some(spool) = spool.as_mut() else {
+            return Err(RefError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "reference replay spool is unavailable",
+            )));
+        };
+        let mut pass = ReferenceFftPass::new(source_sr, n_fft);
+        replay_spool(spool, &mut pass, decoded_frames)?;
+        mid_per_fft.push(pass.mid.finish(source_sr));
+        side_per_fft.push(pass.side.finish(source_sr));
     }
     let mid_env = RefEnvelope {
         per_fft: mid_per_fft,
@@ -338,6 +477,34 @@ impl ReferenceFftPass {
     }
 }
 
+fn replay_spool(
+    spool: &mut BufReader<File>,
+    pass: &mut ReferenceFftPass,
+    frame_count: usize,
+) -> Result<(), RefError> {
+    const CHUNK_FRAMES: usize = 8192;
+    let mut bytes = vec![0u8; CHUNK_FRAMES * 2 * std::mem::size_of::<f32>()];
+    let mut mid = vec![0.0f32; CHUNK_FRAMES];
+    let mut side = vec![0.0f32; CHUNK_FRAMES];
+    spool.seek(SeekFrom::Start(0)).map_err(RefError::Io)?;
+    let mut frames_read = 0usize;
+    while frames_read < frame_count {
+        let frames = (frame_count - frames_read).min(CHUNK_FRAMES);
+        let byte_count = frames * 2 * std::mem::size_of::<f32>();
+        spool
+            .read_exact(&mut bytes[..byte_count])
+            .map_err(RefError::Io)?;
+        for frame in 0..frames {
+            let offset = frame * 8;
+            mid[frame] = f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+            side[frame] = f32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap());
+        }
+        pass.process(&mid[..frames], &side[..frames])?;
+        frames_read += frames;
+    }
+    Ok(())
+}
+
 struct SpectrumPass {
     analyzer: Analyzer,
     histograms: Vec<QuantizedHistogram>,
@@ -377,88 +544,20 @@ impl SpectrumPass {
         error.map_or(Ok(()), Err)
     }
 
-    fn finish(self, sr: f32) -> RefEnvelopeAtFft {
-        collapse_to_log_grid(&self.histograms, sr, self.fft_size)
+    fn finish(self, _sr: f32) -> RefEnvelopeAtFft {
+        RefEnvelopeAtFft {
+            fft_size: self.fft_size,
+            bounds: Vec::new(),
+            bin_bounds: dense_bin_bounds(&self.histograms),
+        }
     }
 }
 
-/// Reduce per-FFT-bin approximate quantile estimates to a `REF_POINTS`
-/// log-spaced grid.
-///
-/// Each FFT bin is reduced once to its approximate [low, mid, high] percentile
-/// triple, then
-/// every log-spaced display point linearly interpolates between the two
-/// FFT bins straddling its frequency. This eliminates the visible
-/// "staircase" at low frequency where one 2.7 Hz bin spans many log
-/// slots — adjacent slots now ramp smoothly between the percentiles of
-/// the FFT bins on either side, instead of all snapping to the same
-/// nearest bin's value. At high frequencies where each log slot covers
-/// many bins, the fractional part is small and interpolation degenerates
-/// gracefully to "use the closer bin's percentile."
-///
-/// Percentile-of-mixed-distributions ≠ mix-of-percentiles, but for visual
-/// envelope display the linear blend is the right trade-off: it removes
-/// the bin-aligned discontinuities that read as "broken" without
-/// introducing a smoothing kernel that would distort actual content.
-fn collapse_to_log_grid(samples: &[QuantizedHistogram], sr: f32, n_fft: usize) -> RefEnvelopeAtFft {
-    let bin_hz = sr / n_fft as f32;
-    let log_min = REF_FREQ_MIN.ln();
-    let log_max = REF_FREQ_MAX.ln();
-    let denom = (REF_POINTS - 1) as f32;
-
-    // `None` = bin was empty / above source Nyquist. Each estimate is
-    // produced by a bounded sparse histogram, so no frame history is kept.
-    let bin_percentiles: Vec<Option<[f32; 3]>> =
-        samples.iter().map(QuantizedHistogram::estimates).collect();
-    let bin_bounds = bin_percentiles
+fn dense_bin_bounds(samples: &[QuantizedHistogram]) -> Vec<[f32; 3]> {
+    samples
         .iter()
-        .map(|bounds| bounds.unwrap_or([MIN_DB; 3]))
-        .collect();
-
-    // Pass 2: linear interpolation between the two FFT bins straddling
-    // each log slot's frequency. When one neighbor sits at the silence
-    // floor (typical for low-energy bins between bass partials, or above
-    // source Nyquist), fall back to the valid neighbor — naively
-    // averaging would drag a real value into the floor and the renderer
-    // would then break the line at that slot.
-    let floor_threshold = MIN_DB + 1.0;
-    let blend = |x: f32, y: f32, frac: f32| -> f32 {
-        let x_valid = x > floor_threshold;
-        let y_valid = y > floor_threshold;
-        match (x_valid, y_valid) {
-            (true, true) => x + (y - x) * frac,
-            (true, false) => x,
-            (false, true) => y,
-            (false, false) => MIN_DB,
-        }
-    };
-    let mut bounds = Vec::with_capacity(REF_POINTS);
-    for p in 0..REF_POINTS {
-        let t = p as f32 / denom;
-        let freq = (log_min + t * (log_max - log_min)).exp();
-        let bin_f = (freq / bin_hz).max(0.0);
-        let bin_lo = bin_f.floor() as usize;
-        let bin_hi = bin_lo + 1;
-        let frac = bin_f - bin_lo as f32;
-        let pair_lo = bin_percentiles.get(bin_lo).and_then(|c| *c);
-        let pair_hi = bin_percentiles.get(bin_hi).and_then(|c| *c);
-        let triple = match (pair_lo, pair_hi) {
-            (Some(a), Some(b)) => [
-                blend(a[0], b[0], frac),
-                blend(a[1], b[1], frac),
-                blend(a[2], b[2], frac),
-            ],
-            (Some(a), None) => a,
-            (None, Some(b)) => b,
-            (None, None) => [MIN_DB, MIN_DB, MIN_DB],
-        };
-        bounds.push(triple);
-    }
-    RefEnvelopeAtFft {
-        fft_size: n_fft,
-        bounds,
-        bin_bounds,
-    }
+        .map(|bounds| bounds.estimates().unwrap_or([MIN_DB; 3]))
+        .collect()
 }
 
 // ---------------------------------------------------------------------
@@ -467,7 +566,7 @@ fn collapse_to_log_grid(samples: &[QuantizedHistogram], sr: f32, n_fft: usize) -
 
 fn decode_file<F>(path: &Path, mut on_frames: F) -> Result<(f32, usize), RefError>
 where
-    F: FnMut(&[f32], usize, f32),
+    F: FnMut(&[f32], usize, f32) -> Result<(), RefError>,
 {
     use symphonia::core::audio::SampleBuffer;
     use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
@@ -544,7 +643,7 @@ where
         let frames = buf.samples();
         let frame_channels = spec.channels.count().max(1);
         let n_frames = frames.len() / frame_channels;
-        on_frames(frames, frame_channels, sample_rate);
+        on_frames(frames, frame_channels, sample_rate)?;
         decoded_frames = decoded_frames.saturating_add(n_frames);
     }
 
@@ -645,6 +744,50 @@ mod tests {
     }
 
     #[test]
+    fn replayed_spool_matches_serial_processing_across_packet_boundaries() {
+        let frame_count = 20_000;
+        let mid: Vec<f32> = (0..frame_count)
+            .map(|frame| {
+                let t = frame as f32 / 48_000.0;
+                (std::f32::consts::TAU * 997.0 * t).sin() * 0.25
+                    + (std::f32::consts::TAU * 2_113.0 * t).sin() * 0.1
+            })
+            .collect();
+        let side: Vec<f32> = (0..frame_count)
+            .map(|frame| {
+                let t = frame as f32 / 48_000.0;
+                (std::f32::consts::TAU * 431.0 * t).cos() * 0.2
+            })
+            .collect();
+
+        let mut serial = ReferenceFftPass::new(48_000.0, 1_024);
+        let mut offset = 0;
+        while offset < frame_count {
+            let end = (offset + 137).min(frame_count);
+            serial.process(&mid[offset..end], &side[offset..end]).unwrap();
+            offset = end;
+        }
+
+        let mut spool = BufWriter::new(tempfile::tempfile().unwrap());
+        for (&mid_sample, &side_sample) in mid.iter().zip(&side) {
+            spool.write_all(&mid_sample.to_le_bytes()).unwrap();
+            spool.write_all(&side_sample.to_le_bytes()).unwrap();
+        }
+        let file = spool.into_inner().unwrap();
+        let mut replay = ReferenceFftPass::new(48_000.0, 1_024);
+        replay_spool(&mut BufReader::new(file), &mut replay, frame_count).unwrap();
+
+        assert_eq!(
+            serial.mid.finish(48_000.0).bin_bounds,
+            replay.mid.finish(48_000.0).bin_bounds
+        );
+        assert_eq!(
+            serial.side.finish(48_000.0).bin_bounds,
+            replay.side.finish(48_000.0).bin_bounds
+        );
+    }
+
+    #[test]
     fn empty_envelope_has_no_data() {
         let e = RefEnvelope::empty();
         assert!(e.per_fft.is_empty());
@@ -742,9 +885,9 @@ mod tests {
         assert_eq!(analysis.source_sample_rate, 8_000.0);
         assert!((analysis.duration_secs - 1.0).abs() < 0.01);
         assert_eq!(analysis.mid.per_fft.len(), 1);
-        assert_eq!(analysis.mid.per_fft[0].bounds.len(), REF_POINTS);
+        assert!(analysis.mid.per_fft[0].bounds.is_empty());
         assert!(analysis.mid.per_fft[0]
-            .bounds
+            .bin_bounds
             .iter()
             .any(|bound| bound[1] > MIN_DB));
     }
@@ -855,6 +998,87 @@ mod tests {
         assert_eq!(envelope.fft_size, 8192);
         assert_eq!(envelope.bounds.len(), 1);
         assert!(envelope.bin_bounds.is_empty());
+    }
+
+    #[test]
+    fn compact_bin_bounds_round_trip_and_omit_redundant_grid() {
+        let envelope = RefEnvelopeAtFft {
+            fft_size: 8,
+            bounds: Vec::new(),
+            bin_bounds: vec![
+                [MIN_DB, MIN_DB, MIN_DB],
+                [-12.5, -3.25, 4.75],
+                [1.0, 2.0, 3.0],
+                [4.0, 5.0, 6.0],
+                [7.0, 8.0, 9.0],
+            ],
+        };
+        let value = serde_json::to_value(&envelope).unwrap();
+        assert!(value.get("bounds").is_none());
+        assert_eq!(value["binBounds"]["version"], BIN_BOUNDS_VERSION);
+        assert_eq!(value["binBounds"]["count"], 5);
+        let decoded: RefEnvelopeAtFft = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.bin_bounds, envelope.bin_bounds);
+    }
+
+    #[test]
+    fn compact_bin_bounds_are_smaller_than_legacy_json() {
+        let bin_bounds: Vec<[f32; 3]> = (0..8193)
+            .map(|index| {
+                let value = (index as f32 * 0.013).sin() * 80.0 - 100.0;
+                [value, value + 0.25, value + 0.5]
+            })
+            .collect();
+        let compact = serde_json::to_vec(&RefEnvelopeAtFft {
+            fft_size: 16_384,
+            bounds: Vec::new(),
+            bin_bounds: bin_bounds.clone(),
+        })
+        .unwrap();
+        let legacy = serde_json::to_vec(&serde_json::json!({
+            "fft_size": 16_384,
+            "binBounds": bin_bounds,
+        }))
+        .unwrap();
+        assert!(
+            compact.len() < legacy.len(),
+            "compact {} bytes, legacy {} bytes",
+            compact.len(),
+            legacy.len()
+        );
+    }
+
+    #[test]
+    fn legacy_dense_bin_bounds_still_deserialize() {
+        let value = serde_json::json!({
+            "fft_size": 8,
+            "bounds": [[1.0, 2.0, 3.0]],
+            "binBounds": [
+                [-240.0, -240.0, -240.0],
+                [-12.5, -3.25, 4.75],
+                [1.0, 2.0, 3.0],
+                [4.0, 5.0, 6.0],
+                [7.0, 8.0, 9.0]
+            ]
+        });
+        let decoded: RefEnvelopeAtFft = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.bounds.len(), 1);
+        assert_eq!(decoded.bin_bounds.len(), 5);
+        assert_eq!(decoded.bin_bounds[1], [-12.5, -3.25, 4.75]);
+    }
+
+    #[test]
+    fn compact_bin_bounds_reject_invalid_size_before_decompression() {
+        let value = serde_json::json!({
+            "fft_size": 8,
+            "binBounds": {
+                "version": BIN_BOUNDS_VERSION,
+                "count": BIN_BOUNDS_MAX_COUNT + 1,
+                "data": []
+            }
+        });
+        let error = serde_json::from_value::<RefEnvelopeAtFft>(value).unwrap_err();
+        assert!(error.to_string().contains("exceeds limit"));
     }
 
     #[test]
