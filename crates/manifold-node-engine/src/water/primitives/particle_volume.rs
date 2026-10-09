@@ -344,7 +344,7 @@ mod cpu_tests {
 
     #[test]
     fn native_mesh_interior_samples_simulation_cell_centres() {
-        let layout = crate::water::fluid::domain_layout(None, 2.0, 8).unwrap();
+        let layout = crate::scene::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
         let mesh = crate::water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
         let field: Vec<f32> = (0..8u32.pow(3)).map(|i| (i % 8) as f32 + 0.5).collect();
         for i in 0..8 {

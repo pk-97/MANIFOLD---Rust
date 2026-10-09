@@ -4,7 +4,7 @@
 //! live when its radius is positive and its position finite (FLIP frames carry
 //! no ids).
 
-use crate::water::fluid::FluidDomainLayout;
+use crate::scene::fluid_domain::FluidDomainLayout;
 use crate::water::fluid_particles::FluidParticle;
 
 /// The authored cell grid of a domain.

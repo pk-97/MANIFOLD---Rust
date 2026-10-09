@@ -8,7 +8,7 @@ use manifold_core::Seconds;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use super::*;
 use crate::parameters::ParamType;
-use crate::water::fluid::FluidDomainState;
+use crate::scene::fluid_domain::FluidDomainState;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};

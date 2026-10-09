@@ -2,17 +2,11 @@
 //! Render materials and project appearance are deliberately outside this seam.
 use sha2::{Digest, Sha256};
 
-/// Family-owned source inputs that invalidate recorded physics results.
-pub struct PhysicsSourceIdentity {
-    pub name: &'static str,
-    pub identity: &'static str,
-}
-
-inventory::collect!(PhysicsSourceIdentity);
+use crate::scene::source_asset::SourceImplementationIdentity;
 
 pub(in super::super) fn solver_identity() -> [u8; 32] {
-    static SOURCES: std::sync::LazyLock<Vec<&'static PhysicsSourceIdentity>> = std::sync::LazyLock::new(|| {
-        let mut sources: Vec<_> = inventory::iter::<PhysicsSourceIdentity>.into_iter().collect();
+    static SOURCES: std::sync::LazyLock<Vec<&'static SourceImplementationIdentity>> = std::sync::LazyLock::new(|| {
+        let mut sources: Vec<_> = inventory::iter::<SourceImplementationIdentity>.into_iter().collect();
         sources.sort_unstable_by_key(|source| source.name);
         assert!(sources.windows(2).all(|pair| pair[0].name != pair[1].name), "duplicate physics source identity");
         sources
@@ -28,7 +22,7 @@ pub(in super::super) fn solver_identity() -> [u8; 32] {
     )
 }
 
-fn compose_solver_identity(engine_sources: [&str; 4], family_sources: &[&PhysicsSourceIdentity]) -> [u8; 32] {
+fn compose_solver_identity(engine_sources: [&str; 4], family_sources: &[&SourceImplementationIdentity]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"manifold-physics-sources-v1\0");
     for source in engine_sources {
@@ -49,7 +43,7 @@ mod tests {
     #[test]
     fn solver_identity_composes_engine_and_family_sources() {
         let sources = ["fixture fluids", "fixture physics", "fixture core", "fixture integration"];
-        let family = PhysicsSourceIdentity { name: "fixture family", identity: "fixture family identity" };
+        let family = SourceImplementationIdentity { name: "fixture family", identity: "fixture family identity" };
         let mut expected = Sha256::new();
         expected.update(b"manifold-physics-sources-v1\0");
         for identity in sources.into_iter().chain([family.identity]) {
@@ -63,7 +57,7 @@ mod tests {
             changed[index] = "changed engine identity";
             assert_ne!(compose_solver_identity(changed, &[&family]), expected);
         }
-        let changed_family = PhysicsSourceIdentity { name: family.name, identity: "changed family identity" };
+        let changed_family = SourceImplementationIdentity { name: family.name, identity: "changed family identity" };
         assert_ne!(compose_solver_identity(sources, &[&changed_family]), expected);
         assert_ne!(compose_solver_identity(sources, &[]), expected);
     }

@@ -1,5 +1,14 @@
 //! Scene-space recipient selections for authored physics impulses.
 
+/// Live tick-start diagnostics. These counters are not a recorded physics take.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SceneImpulseDiagnostics {
+    pub started: u64,
+    pub late: u64,
+    /// Hits fired while the simulation was held (pause, Speed 0).
+    pub discarded: u64,
+}
+
 /// A fixed set of ordinary body slots and the reset-latched copy group.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

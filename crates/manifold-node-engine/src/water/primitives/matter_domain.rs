@@ -18,7 +18,8 @@ use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::FieldValue;
 
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::water::fluid::{CoupledRigidFrame, CoupledRigidInputs, FluidDomainLayout, TICK, domain_layout};
+use crate::scene::fluid_domain::{FluidDomainLayout, domain_layout};
+use crate::water::fluid::{CoupledRigidFrame, CoupledRigidInputs, TICK};
 use crate::water::fluid_role::{FluidRole, MAX_FLUID_ROLES};
 use crate::water::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::water::liquid::body_buffers::LiquidBodyBuffers;

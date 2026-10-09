@@ -39,13 +39,17 @@ use super::fluid_cache::{CacheReader, CacheWriter};
 use super::fluid_role::FluidRole;
 #[cfg(feature = "gpu-proofs")]
 use super::physics_events::ResolvedNodeImpulse;
+#[cfg(feature = "gpu-proofs")]
 use crate::scene::transform::Transform;
+#[cfg(feature = "gpu-proofs")]
+use crate::scene::fluid_domain::{FluidDomainLayout, FluidDomainSnapshot, FluidDomainState};
 #[cfg(feature = "gpu-proofs")]
 use crate::water::vector_field::ContinuousField;
 #[cfg(feature = "gpu-proofs")]
 use crate::mesh::{InstanceTransform, MeshVertex};
 
 mod coupled;
+#[cfg(any(test, feature = "gpu-proofs"))]
 mod domain;
 #[cfg(feature = "gpu-proofs")]
 pub mod identity;
@@ -67,7 +71,8 @@ mod roles;
 mod take;
 pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};
 pub(crate) use coupled::Layout as CoupledRigidLayout;
-pub use domain::{FluidDomainLayout, domain_layout};
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(super) use domain::FluidDomainNative;
 #[cfg(feature = "gpu-proofs")]
 use impulses::IMPULSE_CAPACITY;
 #[cfg(feature = "gpu-proofs")]
@@ -99,21 +104,6 @@ pub(crate) fn display_blend(s: f64, t_a: f64, t_b: f64) -> (f32, f32) {
 const HISTORY_CAPACITY: usize = 8192;
 #[cfg(feature = "gpu-proofs")]
 const BATCH: usize = 4;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FluidDomainState {
-    Initializing,
-    Ready,
-    PendingInputs,
-    Failed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FluidDomainSnapshot {
-    pub epoch: u64,
-    pub state: FluidDomainState,
-    pub accepted_layout: Option<FluidDomainLayout>,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

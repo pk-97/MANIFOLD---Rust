@@ -121,7 +121,7 @@ fn fluid_graph_recording_receives_authoritative_project_tempo_and_exact_breakpoi
 
 #[test]
 fn fluid_graph_cache_ignores_appearance_but_rejects_authored_force_edits() {
-    use crate::water::fluid::FluidDomainState;
+    use crate::scene::fluid_domain::FluidDomainState;
     let directory = std::env::temp_dir().join(format!(
         "manifold-fluid-source-graph-{}",
         std::process::id()
@@ -202,7 +202,7 @@ fn fluid_graph_cache_ignores_appearance_but_rejects_authored_force_edits() {
 
 #[test]
 fn fluid_graph_cache_validates_host_controls_without_treating_effectives_as_edits() {
-    use crate::water::fluid::{FluidDomainSnapshot, FluidDomainState};
+    use crate::scene::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
     use manifold_core::effects::{ParameterDriver, PresetInstance};
     use manifold_core::params::{Param, ParamManifest};
     use manifold_core::types::{BeatDivision, DriverWaveform};

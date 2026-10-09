@@ -24,7 +24,9 @@ use super::{Request, Setup};
 use super::CoupledRigidFrame;
 use crate::water::physics::{MAX_BODIES, RigidSceneInputs, RigidSimulation};
 #[cfg(feature = "gpu-proofs")]
-use crate::water::fluid::{FluidDomainLayout, FluidRuntime, Sample, TICK};
+use crate::scene::fluid_domain::FluidDomainLayout;
+#[cfg(feature = "gpu-proofs")]
+use crate::water::fluid::{FluidDomainNative, FluidRuntime, Sample, TICK};
 
 /// How a prepared rigid world's bodies map onto a [`CoupledRigidFrame`]:
 /// shared by every liquid that owns a rigid world in-thread.

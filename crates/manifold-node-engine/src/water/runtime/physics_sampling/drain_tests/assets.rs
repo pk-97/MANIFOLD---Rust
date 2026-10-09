@@ -125,7 +125,7 @@ fn time(seconds: f64) -> FrameTime {
     }
 }
 
-fn state(runtime: &PresetRuntime) -> crate::water::fluid::FluidDomainState {
+fn state(runtime: &PresetRuntime) -> crate::scene::fluid_domain::FluidDomainState {
     let fluid = runtime
         .graph
         .instance_by_node_id(&NodeId::new("fluid"))
@@ -148,7 +148,7 @@ fn directory(label: &str) -> std::path::PathBuf {
 
 #[test]
 fn native_take_requires_loaded_asset_content_and_refreshes_after_rebuild() {
-    use crate::water::fluid::FluidDomainState;
+    use crate::scene::fluid_domain::FluidDomainState;
 
     for (label, status) in [("pending", PENDING), ("failed", FAILED)] {
         let directory = directory(label);

@@ -2,7 +2,6 @@ use manifold_node_engine::runtime::chain_dispatch::{clear_chain_state, dispatch_
 use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 use manifold_node_engine::runtime::effect::PostProcessEffect;
 use manifold_node_engine::runtime::PresetRuntime;
-use manifold_node_engine::water::runtime::WaterRuntimeExt;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -3088,7 +3087,7 @@ impl Compositor for LayerCompositor {
         &self,
         output: &mut Vec<(
             NodeId,
-            manifold_node_engine::water::fluid::FluidDomainSnapshot,
+            manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot,
         )>,
     ) {
         if self.scene_viewport_error.is_some() {
@@ -3102,7 +3101,7 @@ impl Compositor for LayerCompositor {
             .chain(self.group_effect_chains.values());
         for chain in chains.filter_map(|chain| chain.as_ref()) {
             if chain.scene_viewport_status().is_some() {
-                chain.water_ref().write_fluid_domains(effect_id, output);
+                chain.write_fluid_domains(effect_id, output);
             }
         }
     }

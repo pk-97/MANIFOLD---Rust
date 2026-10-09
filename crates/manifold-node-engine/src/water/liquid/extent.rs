@@ -765,7 +765,7 @@ mod tests {
     }
 
 
-    use crate::water::fluid::domain_layout;
+    use crate::scene::fluid_domain::domain_layout;
     use crate::water::matter::{block_sort_box, lattice_blocks};
 
     use crate::water::primitives::matter_domain::admit_lattice;

@@ -1509,7 +1509,8 @@ impl PresetRuntime {
         // slot is at rest, and the outer reclaims control as soon as
         // it moves. Effects are looked up by their captured
         // `legacy_index` (stable across a topology-stable lifetime).
-        for (_slot_index, slot) in self.effect_nodes.iter_mut().enumerate() {
+        for slot_index in 0..self.effect_nodes.len() {
+            let slot = &mut self.effect_nodes[slot_index];
             let Some(fx) = effects.get(slot.legacy_index) else {
                 // Index drifted (caller mutated `effects` without
                 // letting the topology hash catch it). Tolerate
@@ -1528,7 +1529,7 @@ impl PresetRuntime {
             if fx.graph_version != slot.applied_graph_version {
                 #[cfg(feature = "gpu-proofs")]
                 for extension in &mut self.extensions {
-                    extension.refresh_slot(&mut self.graph, _slot_index, slot.extension_scope(), fx);
+                    extension.refresh_slot(&mut self.graph, slot_index, slot.extension_scope(), fx);
                 }
                 // `slot.card_prefix` translates `fx.graph`'s (unprefixed,
                 // per-card) node ids into the segment's `c{i}.`-prefixed
@@ -1593,7 +1594,7 @@ impl PresetRuntime {
             slot.bound.apply(&mut self.graph, &fx.params);
             #[cfg(feature = "gpu-proofs")]
             for extension in &mut self.extensions {
-                extension.after_slot_bindings(&mut self.graph, _slot_index, fx);
+                extension.after_slot_bindings(&mut self.graph, slot_index, fx);
             }
             // Push the "3D Shading" D3 relight knobs into the spliced graph
             // every frame. Float-knob edits are no longer structural (D8/P7),

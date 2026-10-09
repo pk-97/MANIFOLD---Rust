@@ -14,7 +14,8 @@ use manifold_core::Seconds;
 use manifold_fluids::{CaptureError, ParticleRecord, SurfaceOptions, SurfaceVertex, WhitewaterOptions};
 
 use super::native::seeded_world;
-use super::{FluidSettings, Transform};
+use super::{FluidDomainNative, FluidSettings, Transform};
+use crate::scene::fluid_domain::FluidDomainLayout;
 use crate::water::primitives::gpu_flip_race_tests::{Breakup, Motion, Packing, Splash, breakup, motion, packing, print_height, print_lid_layer, print_side_sheet, print_splash, report_breakup, report_motion, report_water, splash};
 use crate::water::primitives::gpu_flip_still::write_still;
 use crate::water::primitives::gpu_flip_volume::{VolumeDrift, volume_and_area};
@@ -56,7 +57,7 @@ fn triangles(vertices: &[SurfaceVertex]) -> impl Iterator<Item = [[f32; 3]; 3]> 
 /// capture asks for.
 fn engine_motion(
     world: &mut manifold_fluids::FluidWorld,
-    domain: super::FluidDomainLayout,
+    domain: FluidDomainLayout,
     records: &mut Vec<ParticleRecord>,
     solid: &mut Vec<f32>,
 ) -> (Motion, Packing, Splash, Breakup, usize) {
@@ -84,7 +85,7 @@ fn engine_motion(
 
 /// The engine's own cells in scene coordinates: its native grid, 1.5 cells
 /// of solid padding past the authored box on every side.
-fn engine_grid(domain: super::FluidDomainLayout) -> ([f64; 3], [usize; 3]) {
+fn engine_grid(domain: FluidDomainLayout) -> ([f64; 3], [usize; 3]) {
     (domain.native_origin().map(f64::from), domain.config(FluidSettings::default()).cells.map(|n| n as usize))
 }
 

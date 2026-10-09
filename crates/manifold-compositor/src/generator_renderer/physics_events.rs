@@ -61,7 +61,7 @@ impl GeneratorRenderer {
             || state.generator_type != *layer.generator_type()
             || state.applied_relight != (params.relight_active(), params.relight_params)
             || state.generator.awaiting_forced_outputs_rebuild()
-            || !state.generator.water_ref().is_scene_impulse_param(param)
+            || !state.generator.is_scene_impulse_param(param)
         {
             return Err("Impulse: render the changed scene before firing".into());
         }
@@ -80,11 +80,10 @@ impl GeneratorRenderer {
         state.generator.set_project_tempo(project_tempo);
         state
             .generator
-            .water()
             .fire_scene_impulse(param, source, &mut self.next_physics_event)
     }
 
-    pub fn scene_impulse_diagnostics(&self) -> manifold_node_engine::water::runtime::scene_impulses::SceneImpulseDiagnostics {
+    pub fn scene_impulse_diagnostics(&self) -> manifold_node_engine::scene::impulse::SceneImpulseDiagnostics {
         self.scene_impulse_diagnostics
     }
 }

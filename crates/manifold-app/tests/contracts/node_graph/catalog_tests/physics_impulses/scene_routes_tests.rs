@@ -67,14 +67,12 @@ fn scene_impulse_routes_capture_each_click_with_selected_body_and_edited_strengt
         let mut sequence = 41;
         assert!(
             runtime
-                .water()
                 .fire_scene_impulse(&fire, time(0.0), &mut sequence)
                 .is_err()
         );
         runtime.execute_frame(time(0.0));
         assert!(
             runtime
-                .water()
                 .fire_scene_impulse(&fire, time(0.0), &mut sequence)
                 .unwrap()
         );
@@ -84,7 +82,6 @@ fn scene_impulse_routes_capture_each_click_with_selected_body_and_edited_strengt
             .value = 7.0;
         runtime.apply_param_values(&manifest);
         runtime
-            .water()
             .fire_scene_impulse(&fire, time(0.0), &mut sequence)
             .unwrap();
         manifest
@@ -108,7 +105,6 @@ fn scene_impulse_routes_capture_each_click_with_selected_body_and_edited_strengt
         }
         assert!(
             !runtime
-                .water()
                 .fire_scene_impulse("ordinary-trigger", time(DT), &mut sequence)
                 .unwrap()
         );
@@ -129,7 +125,7 @@ fn scene_impulse_routes_reload_does_not_replay_saved_counter_and_empty_targets_s
         runtime.execute_frame(time(0.0));
         runtime.execute_frame(time(DT));
         runtime.water().drain_scene_impulses(|_, _| panic!("saved counters must not generate events"));
-        let result = runtime.water().fire_scene_impulse(&fire, time(DT), &mut 0);
+        let result = runtime.fire_scene_impulse(&fire, time(DT), &mut 0);
         if targets.is_empty() {
             assert!(result.unwrap_err().contains("select a simulated object"));
         } else {
@@ -146,17 +142,21 @@ fn scene_impulse_routes_acknowledged_receipts_allow_more_than_queue_capacity() {
             .unwrap();
     let fire = alias(&def, "fire");
     runtime.execute_frame(time(0.0));
+    assert!(runtime.is_scene_impulse_param(&fire));
+    assert!(!runtime.is_scene_impulse_param("ordinary-trigger"));
     let mut sequence = 0;
-    let mut receipts = 0;
+    let mut diagnostics = manifold_node_engine::scene::impulse::SceneImpulseDiagnostics::default();
     for frame in 0..300 {
         runtime
-            .water()
             .fire_scene_impulse(&fire, time(frame as f64 * DT), &mut sequence)
             .unwrap();
         runtime.execute_frame(time((frame + 1) as f64 * DT));
-        runtime.water().drain_scene_impulses(|_, _| receipts += 1);
+        runtime.drain_scene_impulse_diagnostics(&mut diagnostics);
     }
-    assert_eq!(receipts, 300);
+    runtime.drain_scene_impulse_diagnostics(&mut diagnostics);
+    assert_eq!(diagnostics.started, 300);
+    assert_eq!(diagnostics.late, 0);
+    assert_eq!(diagnostics.discarded, 0);
 }
 
 #[test]
@@ -168,7 +168,6 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
     let fire = alias(&def, "fire");
     runtime.execute_frame(time(0.0));
     runtime
-        .water()
         .fire_scene_impulse(&fire, time(0.0), &mut 0)
         .unwrap();
     // CPU equivalent of reset_state's identity and native reset; no GPU device needed.
@@ -178,13 +177,11 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
     }
     assert!(
         runtime
-            .water()
             .fire_scene_impulse(&fire, time(0.0), &mut 1)
             .is_err()
     );
     runtime.execute_frame(time(0.0));
     runtime
-        .water()
         .fire_scene_impulse(&fire, time(0.0), &mut 1)
         .unwrap();
     runtime.execute_frame(time(DT));
@@ -223,7 +220,6 @@ fn scene_impulse_routes_share_rigid_and_fluid_targets_and_wait_for_domain_edits(
     runtime.execute_frame(time(0.0));
     let mut sequence = 0;
     runtime
-        .water()
         .fire_scene_impulse(&fire, time(0.0), &mut sequence)
         .unwrap();
     runtime.execute_frame(time(DT));
@@ -235,10 +231,14 @@ fn scene_impulse_routes_share_rigid_and_fluid_targets_and_wait_for_domain_edits(
     });
     recipients.sort();
     assert_eq!(recipients, ["fluid"], "one shared owner admits the source hit once");
+    let mut domains = Vec::new();
+    runtime.write_fluid_domains_watched(&mut domains);
+    assert_eq!(domains.len(), 1);
+    assert_eq!(domains[0].0.as_str(), "fluid");
+    assert_eq!(domains[0].1.accepted_layout.unwrap().cells, [8; 3]);
     edit(&mut runtime, "domain", "pos_x", 2.0);
     assert!(
         runtime
-            .water()
             .fire_scene_impulse(&fire, time(DT), &mut sequence)
             .unwrap_err()
             .contains("changed scene setup")
@@ -247,7 +247,6 @@ fn scene_impulse_routes_share_rigid_and_fluid_targets_and_wait_for_domain_edits(
     runtime.execute_frame(time(DT));
     assert!(
         runtime
-            .water()
             .fire_scene_impulse(&fire, time(DT), &mut sequence)
             .unwrap()
     );
@@ -263,20 +262,17 @@ fn scene_impulse_routes_report_exhaustion_and_recover_after_native_reset() {
     let mut sequence = 0;
     for _ in 0..256 {
         runtime
-            .water()
             .fire_scene_impulse(&fire, time(0.0), &mut sequence)
             .unwrap();
     }
     assert!(
         runtime
-            .water()
             .fire_scene_impulse(&fire, time(0.0), &mut sequence)
             .unwrap_err()
             .contains("retained")
     );
     assert!(
         runtime
-            .water()
             .fire_scene_impulse(&fire, time(0.0), &mut sequence)
             .unwrap_err()
             .contains("previous admission failed")
@@ -284,7 +280,6 @@ fn scene_impulse_routes_report_exhaustion_and_recover_after_native_reset() {
     edit(&mut runtime, "world", "reset", 1.0);
     runtime.execute_frame(time(0.0));
     runtime
-        .water()
         .fire_scene_impulse(&fire, time(0.0), &mut sequence)
         .unwrap();
     runtime.execute_frame(time(DT));
@@ -316,9 +311,9 @@ fn scene_impulse_routes_accept_audio_hits_stamped_ahead_of_the_last_render() {
         runtime.execute_frame(time(DT));
         let mut sequence = 0;
         // Manual: the last rendered time.
-        runtime.water().fire_scene_impulse(&fire, time(DT), &mut sequence).unwrap();
+        runtime.fire_scene_impulse(&fire, time(DT), &mut sequence).unwrap();
         // Audio: the next frame's time, before it renders.
-        runtime.water().fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).unwrap();
+        runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).unwrap();
         runtime.execute_frame(time(2.0 * DT));
         runtime.execute_frame(time(3.0 * DT));
         let mut sequences = Vec::new();
@@ -326,7 +321,7 @@ fn scene_impulse_routes_accept_audio_hits_stamped_ahead_of_the_last_render() {
         sequences.sort();
         assert_eq!(sequences, [0, 1], "fluid {with_fluid}: each hit applies once");
         // Older than the latest observation: stale, refused.
-        assert!(runtime.water().fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).is_err());
+        assert!(runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).is_err());
     };
     check(false);
     #[cfg(feature = "gpu-proofs")]

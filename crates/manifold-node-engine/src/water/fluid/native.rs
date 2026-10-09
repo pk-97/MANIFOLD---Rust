@@ -11,6 +11,7 @@ use crate::mesh::MeshVertex;
 
 use super::impulses::ImpulseSum;
 use super::{FluidRuntime, Reply, Request, cancelled_reply};
+use super::FluidDomainNative;
 use super::{coupled, roles};
 use crate::water::fluid_cache::{CacheMode, CacheReader, CacheWriter};
 
@@ -41,7 +42,7 @@ impl PreparedTick<'_> {
 /// and the initial volume, before roles or coupling.
 pub(super) fn seeded_world(
     settings: super::FluidSettings,
-    domain: super::FluidDomainLayout,
+    domain: crate::scene::fluid_domain::FluidDomainLayout,
     surface_meshing: bool,
 ) -> Result<FluidWorld, String> {
     let mut new = FluidWorld::new_seeded(domain.config(settings), settings.seed)
@@ -99,7 +100,7 @@ impl NativeSimulation {
         &mut self,
         request: &Request,
         coupled: Option<&coupled::Request>,
-        domain: super::FluidDomainLayout,
+        domain: crate::scene::fluid_domain::FluidDomainLayout,
     ) -> Result<(), String> {
         if self
             .world
@@ -131,7 +132,7 @@ impl NativeSimulation {
         native_roles: &roles::NativeRoles,
         native: &mut FluidWorld,
         request: &'request Request,
-        domain: super::FluidDomainLayout,
+        domain: crate::scene::fluid_domain::FluidDomainLayout,
         tick: u64,
         sample_time: Seconds,
     ) -> Result<PreparedTick<'request>, String> {
@@ -201,7 +202,7 @@ impl NativeSimulation {
     fn step_plain_live_interval<'request>(
         native: &mut FluidWorld,
         request: &'request Request,
-        domain: super::FluidDomainLayout,
+        domain: crate::scene::fluid_domain::FluidDomainLayout,
         interval: StepInterval,
         prepared: &PreparedTick<'request>,
     ) -> Result<FrameStats, String> {
@@ -281,7 +282,7 @@ impl NativeSimulation {
     fn capture_output(
         &mut self,
         request: &mut Request,
-        domain: super::FluidDomainLayout,
+        domain: crate::scene::fluid_domain::FluidDomainLayout,
         tick: u64,
         pose: super::Transform,
         stats: FrameStats,

@@ -46,7 +46,7 @@ use manifold_core::effect_graph_def::{
 };
 
 use manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
-use manifold_node_engine::water::fluid::{FluidDomainLayout, domain_layout};
+use manifold_node_engine::scene::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_node_engine::scene::transform::Transform;
 
 /// `node.render_scene`'s own type_id string (curated vocabulary anchor).

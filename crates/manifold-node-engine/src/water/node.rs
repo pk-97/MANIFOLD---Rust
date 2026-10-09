@@ -11,7 +11,7 @@ pub trait PhysicsNode: Send {
     /// Current accepted setup state for native fluid-domain bounds. Nodes that
     /// expose fluid-domain observations return `Some`; all other nodes return
     /// `None`.
-    fn fluid_domain_snapshot(&self) -> Option<crate::water::fluid::FluidDomainSnapshot> {
+    fn fluid_domain_snapshot(&self) -> Option<crate::scene::fluid_domain::FluidDomainSnapshot> {
         None
     }
 

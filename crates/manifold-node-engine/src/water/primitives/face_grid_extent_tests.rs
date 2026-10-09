@@ -9,7 +9,7 @@ use crate::water::primitives::gpu_flip_step::face_bytes;
 use crate::water::primitives::matter_face_component::{MatterFaceComponent, matter_cells};
 use crate::exec::effect_node::ParamValues;
 use crate::water::fluid_particles::FaceSample;
-use crate::water::fluid::domain_layout;
+use crate::scene::fluid_domain::domain_layout;
 use crate::water::liquid::grid::{face_dims, face_len};
 use crate::water::liquid::lattice::{LiquidLattice, PADDING_NODES};
 use crate::water::matter::lattice_nodes;

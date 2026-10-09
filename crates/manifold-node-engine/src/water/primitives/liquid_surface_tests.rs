@@ -1178,7 +1178,7 @@ fn fluid_volume_surface_mesh_matches_cpu_marching_cubes_on_a_sphere() {
 fn fluid_mesh_grid_native_plane_crossing_matches_engine() {
     let mut harness = Harness::new();
     for resolution in [8, 16] {
-        let layout = crate::water::fluid::domain_layout(None, 2.0, resolution).unwrap();
+        let layout = crate::scene::fluid_domain::domain_layout(None, 2.0, resolution).unwrap();
         let mesh = crate::water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
         // Translate Y/Z to X's origin so the existing cubic MC harness can
         // exercise the native grid against the authored low wall at x=-1.
@@ -1246,7 +1246,7 @@ fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
     use crate::water::liquid::bodies::{LiquidBody, LiquidShape};
     let mut harness = Harness::new();
     for resolution in [8, 16] {
-        let layout = crate::water::fluid::domain_layout(None, 2.0, resolution).unwrap();
+        let layout = crate::scene::fluid_domain::domain_layout(None, 2.0, resolution).unwrap();
         let mesh = crate::water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
         let n = mesh.nodes();
         let count = mesh.node_count() as usize;

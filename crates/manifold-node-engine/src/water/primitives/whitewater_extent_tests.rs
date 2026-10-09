@@ -14,7 +14,7 @@ use super::nearest_crossing::NearestCrossing;
 use super::particle_volume::{ParticleVolume, refined_nodes};
 use super::surface_crossings::SurfaceCrossings;
 use crate::exec::effect_node::ParamValues;
-use crate::water::fluid::domain_layout;
+use crate::scene::fluid_domain::domain_layout;
 use crate::water::liquid::lattice::LiquidLattice;
 use crate::water::matter::lattice_nodes;
 use crate::parameters::ParamValue;

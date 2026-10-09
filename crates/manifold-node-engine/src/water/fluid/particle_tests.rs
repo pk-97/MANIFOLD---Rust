@@ -6,6 +6,7 @@ use manifold_fluids::{Bounds, FluidWorld, ParticleRecord};
 use manifold_gpu::{FrameClock, GpuDevice, GpuEvent};
 
 use super::*;
+use crate::water::fluid::FluidDomainNative;
 use crate::water::fluid_particles::FluidParticle;
 
 fn settings() -> FluidSettings {

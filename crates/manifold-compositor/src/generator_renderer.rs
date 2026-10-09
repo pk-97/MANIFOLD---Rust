@@ -1,6 +1,5 @@
 use manifold_node_engine::runtime::generator_provider::{GeneratorProvider, generator_provider};
 use manifold_node_engine::runtime::PresetRuntime;
-use manifold_node_engine::water::runtime::WaterRuntimeExt;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::runtime::preset_context::{PresetContext, ProjectTempo};
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -16,7 +15,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
-use manifold_node_engine::water::fluid::FluidDomainSnapshot;
+use manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot;
 use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportHostError};
 use manifold_node_engine::runtime::ModifierPreviewContext;
 
@@ -60,7 +59,7 @@ const WARMUP_FRAMES: usize = 45;
 
 pub struct GeneratorRenderer {
     next_physics_event: u64,
-    scene_impulse_diagnostics: manifold_node_engine::water::runtime::scene_impulses::SceneImpulseDiagnostics,
+    scene_impulse_diagnostics: manifold_node_engine::scene::impulse::SceneImpulseDiagnostics,
     /// Shared handle to the GpuDevice owned by ContentPipeline. An `Arc`
     /// clone instead of a cached raw pointer means this survives any future
     /// move of `ContentPipeline`/`ContentThread` (BUG-054).
@@ -371,7 +370,7 @@ impl GeneratorRenderer {
         if let Some(context) = self.scene_viewport_modifier.as_deref() {
             state.generator.write_modifier_fluid_domains(context, output);
         } else {
-            state.generator.water_ref().write_fluid_domains_watched(output);
+            state.generator.write_fluid_domains_watched(output);
         }
     }
 
@@ -1002,16 +1001,9 @@ impl GeneratorRenderer {
                 active.anim_progress = new_progress;
                 // Acknowledge native tick-start receipts every rendered frame;
                 // otherwise completed clicks would fill the bounded event queue.
-                let diagnostics = &mut self.scene_impulse_diagnostics;
-                layer_state.generator.water().drain_scene_impulses(|_, event| {
-                    diagnostics.started = diagnostics.started.saturating_add(1);
-                    if event.lateness.0 > 0.0 {
-                        diagnostics.late = diagnostics.late.saturating_add(1);
-                    }
-                });
-                layer_state.generator.water().drain_discarded_scene_impulses(|_, _| {
-                    diagnostics.discarded = diagnostics.discarded.saturating_add(1);
-                });
+                layer_state.generator.drain_scene_impulse_diagnostics(
+                    &mut self.scene_impulse_diagnostics,
+                );
             }
         }
 

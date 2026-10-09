@@ -23,6 +23,54 @@ pub(crate) struct WaterRuntimeState {
 }
 
 impl RuntimeExtension for WaterRuntimeState {
+    fn write_fluid_domains(
+        &self,
+        graph: &Graph,
+        slot: crate::runtime::extensions::RuntimeSlot<'_>,
+        output: &mut Vec<(manifold_core::NodeId, crate::scene::fluid_domain::FluidDomainSnapshot)>,
+    ) {
+        for (node_id, instance) in slot.node_map {
+            if let Some(snapshot) = graph
+                .get_node(*instance)
+                .and_then(|node| crate::water::node::get(node.node.as_ref()))
+                .and_then(|node| node.fluid_domain_snapshot())
+            {
+                output.push((node_id.clone(), snapshot));
+            }
+        }
+    }
+
+    fn is_scene_impulse_param(&self, param: &str) -> bool {
+        Self::is_scene_impulse_param(self, param)
+    }
+
+    fn fire_scene_impulse(
+        &mut self,
+        runtime: &mut RuntimeContext<'_>,
+        param: &str,
+        source: FrameTime,
+        next_sequence: &mut u64,
+    ) -> Result<bool, String> {
+        super::WaterRuntime::borrow(self, runtime).fire_scene_impulse(param, source, next_sequence)
+    }
+
+    fn drain_scene_impulse_diagnostics(
+        &mut self,
+        runtime: &mut RuntimeContext<'_>,
+        diagnostics: &mut crate::scene::impulse::SceneImpulseDiagnostics,
+    ) {
+        let mut water = super::WaterRuntime::borrow(self, runtime);
+        water.drain_scene_impulses(|_, event| {
+            diagnostics.started = diagnostics.started.saturating_add(1);
+            if event.lateness.0 > 0.0 {
+                diagnostics.late = diagnostics.late.saturating_add(1);
+            }
+        });
+        water.drain_discarded_scene_impulses(|_, _| {
+            diagnostics.discarded = diagnostics.discarded.saturating_add(1);
+        });
+    }
+
     fn before_frame(&mut self, runtime: &mut RuntimeContext<'_>, time: FrameTime) {
         super::WaterRuntime::borrow(self, runtime).sample_physics_history(time);
     }

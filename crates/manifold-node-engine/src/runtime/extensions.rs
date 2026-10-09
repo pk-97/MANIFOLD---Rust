@@ -17,6 +17,7 @@ use crate::{
     load::expand::{SceneModifierExpandError, SceneModifierImpulseRoute},
     param_binding::ResolvedBinding,
     persistence::PrimitiveRegistry,
+    scene::{fluid_domain::FluidDomainSnapshot, impulse::SceneImpulseDiagnostics},
     validation::GraphError,
 };
 
@@ -70,6 +71,31 @@ pub struct RuntimeContext<'a> {
 }
 
 pub trait RuntimeExtension: AsAny + Send + 'static {
+    fn write_fluid_domains(
+        &self,
+        _graph: &Graph,
+        _slot: RuntimeSlot<'_>,
+        _output: &mut Vec<(NodeId, FluidDomainSnapshot)>,
+    ) {
+    }
+    fn is_scene_impulse_param(&self, _param: &str) -> bool {
+        false
+    }
+    fn fire_scene_impulse(
+        &mut self,
+        _runtime: &mut RuntimeContext<'_>,
+        _param: &str,
+        _source: FrameTime,
+        _next_sequence: &mut u64,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
+    fn drain_scene_impulse_diagnostics(
+        &mut self,
+        _runtime: &mut RuntimeContext<'_>,
+        _diagnostics: &mut SceneImpulseDiagnostics,
+    ) {
+    }
     fn before_frame(&mut self, _runtime: &mut RuntimeContext<'_>, _time: FrameTime) {}
     fn after_frame(&mut self, _graph: &Graph, _time: FrameTime) {}
     fn reset(&mut self) {}

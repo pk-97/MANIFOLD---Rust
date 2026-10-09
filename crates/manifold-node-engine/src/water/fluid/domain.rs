@@ -1,18 +1,14 @@
-//! One scene/native mapping for simulation, roles, whitewater and editor bounds.
+//! Native solver mapping for shared scene-space fluid geometry.
+
 #[cfg(feature = "gpu-proofs")]
 use manifold_fluids::{Bounds, Config};
 
-use super::Transform;
+use crate::scene::fluid_domain::FluidDomainLayout;
 #[cfg(feature = "gpu-proofs")]
 use super::FluidSettings;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FluidDomainLayout {
-    pub min: [f32; 3],
-    pub size: [f32; 3],
-    pub cells: [u32; 3],
-    pub cell_size: f64,
-}
+#[cfg(feature = "gpu-proofs")]
+use crate::scene::fluid_domain::domain_layout;
+use crate::scene::transform::Transform;
 
 #[cfg(feature = "gpu-proofs")]
 impl FluidSettings {
@@ -21,87 +17,35 @@ impl FluidSettings {
     }
 }
 
-/// The scene box and uniform cells of a liquid domain, shared by every
-/// liquid solver so they agree on cell size (GPU_MPM_SOLVER_DESIGN.md D17).
-/// `domain` is the authored axis-aligned box (scale = full size); without
-/// one, a `domain_size` cube centred in X/Z with its floor at Y = 0.
-pub fn domain_layout(
-    domain: Option<Transform>,
-    domain_size: f32,
-    resolution: u32,
-) -> Result<FluidDomainLayout, String> {
-    if resolution < 8 {
-        return Err("Fluid: resolution must be at least 8 cells".into());
-    }
-    let pose = domain.unwrap_or(Transform {
-        pos: [0.0, domain_size * 0.5, 0.0],
-        scale: [domain_size; 3],
-        ..Transform::default()
-    });
-    if pose.billboard
-        || pose
-            .rot_euler
-            .iter()
-            .any(|v| !v.is_finite() || v.abs() > 1e-6)
-    {
-        return Err("Fluid: the domain must be axis-aligned; rotation and billboarding are not supported".into());
-    }
-    if pose.pos.iter().any(|v| !v.is_finite())
-        || pose
-            .scale
-            .iter()
-            .any(|v| !v.is_finite() || !(0.5..=20.0).contains(v))
-    {
-        return Err("Fluid: domain position must be finite and each dimension must be between 0.5 and 20 metres".into());
-    }
-    let shortest = pose.scale.into_iter().fold(f32::INFINITY, f32::min) as f64;
-    let longest = pose.scale.into_iter().fold(0.0_f32, f32::max) as f64;
-    let cell_size = (longest / f64::from(resolution)).min(shortest / 8.0);
-    let cells: [u32; 3] = std::array::from_fn(|i| {
-        let ratio = f64::from(pose.scale[i]) / cell_size;
-        // Division can place an exact grid multiple a few ULPs above its
-        // integer. Do not add a whole cell for that arithmetic roundoff.
-        let count = if (ratio - ratio.round()).abs() < 1e-9 {
-            ratio.round()
-        } else {
-            ratio.ceil()
-        };
-        count as u32
-    });
-    if cells.iter().any(|n| *n < 8)
-        || cells.iter().try_fold(1u64, |total, n| total.checked_mul(u64::from(*n) + 4))
-            .is_none_or(|total| total > i32::MAX as u64) {
-        return Err("Fluid: padded grid exceeds the native solver's 32-bit grid indexing".into());
-    }
-    let size = cells.map(|n| (f64::from(n) * cell_size) as f32);
-    let min = std::array::from_fn(|i| pose.pos[i] - size[i] * 0.5);
-    if min
-        .iter()
-        .any(|v| !v.is_finite() || *v + cell_size as f32 <= *v)
-    {
-        return Err(
-            "Fluid: domain position is too far from the scene origin for its cell size".into(),
-        );
-    }
-    Ok(FluidDomainLayout {
-        min,
-        size,
-        cells,
-        cell_size,
-    })
+/// Native solver conversions for the shared scene-space domain layout.
+pub(crate) trait FluidDomainNative {
+    #[cfg(feature = "gpu-proofs")]
+    /// Convert shared authored geometry into the native solver config.
+    fn config(self, settings: FluidSettings) -> Config;
+    #[cfg(feature = "gpu-proofs")]
+    fn to_native(self, point: [f32; 3]) -> [f32; 3];
+    #[cfg(feature = "gpu-proofs")]
+    fn to_scene(self, point: [f32; 3]) -> [f32; 3];
+    #[cfg(any(test, feature = "gpu-proofs"))]
+    /// Native origin including the solver's boundary padding.
+    fn native_origin(self) -> [f32; 3];
+    #[cfg(any(test, feature = "gpu-proofs"))]
+    /// Scene box and node counts of the FLIP solid lattice.
+    /// The padded native grid uses node `(i, j, k)` at
+    /// `min + (i, j, k)·size/(nodes − 1)`.
+    fn solid_lattice(self) -> (Transform, [u32; 3]);
+    #[cfg(feature = "gpu-proofs")]
+    /// Refuse grids exceeding the configured native budget.
+    /// The padded grid over `budget_mcells` million cells is refused by name.
+    fn admit_flip_grid(self, budget_mcells: f32) -> Result<(), String>;
+    #[cfg(feature = "gpu-proofs")]
+    fn bounds(self, pose: Transform) -> Bounds;
 }
 
-impl FluidDomainLayout {
-    pub fn transform(self) -> Transform {
-        Transform {
-            pos: std::array::from_fn(|i| self.min[i] + self.size[i] * 0.5),
-            scale: self.size,
-            ..Transform::default()
-        }
-    }
-
+#[cfg(any(test, feature = "gpu-proofs"))]
+impl FluidDomainNative for FluidDomainLayout {
     #[cfg(feature = "gpu-proofs")]
-    pub(super) fn config(self, settings: FluidSettings) -> Config {
+    fn config(self, settings: FluidSettings) -> Config {
         Config {
             // FLIP reserves 1.5 cells at each closed boundary. They belong
             // outside the authored domain, not inside its initial fill.
@@ -113,26 +57,22 @@ impl FluidDomainLayout {
     }
 
     #[cfg(feature = "gpu-proofs")]
-    pub(super) fn to_native(self, point: [f32; 3]) -> [f32; 3] {
+    fn to_native(self, point: [f32; 3]) -> [f32; 3] {
         let origin = self.native_origin();
         std::array::from_fn(|i| point[i] - origin[i])
     }
 
     #[cfg(feature = "gpu-proofs")]
-    pub(super) fn to_scene(self, point: [f32; 3]) -> [f32; 3] {
+    fn to_scene(self, point: [f32; 3]) -> [f32; 3] {
         let origin = self.native_origin();
         std::array::from_fn(|i| point[i] + origin[i])
     }
 
-    #[cfg(any(test, feature = "gpu-proofs"))]
-    pub(super) fn native_origin(self) -> [f32; 3] {
+    fn native_origin(self) -> [f32; 3] {
         self.min.map(|value| value - (1.5 * self.cell_size) as f32)
     }
 
-    /// Scene box and node counts of the FLIP solid lattice: the padded
-    /// native grid, node (i, j, k) at `min + (i, j, k)·size/(nodes − 1)`.
-    #[cfg(any(test, feature = "gpu-proofs"))]
-    pub(crate) fn solid_lattice(self) -> (Transform, [u32; 3]) {
+    fn solid_lattice(self) -> (Transform, [u32; 3]) {
         let origin = self.native_origin();
         let size: [f32; 3] = std::array::from_fn(|axis| (f64::from(self.cells[axis] + 3) * self.cell_size) as f32);
         let bounds = Transform {
@@ -143,10 +83,8 @@ impl FluidDomainLayout {
         (bounds, self.cells.map(|cells| cells + 4))
     }
 
-    /// The FLIP Grid Budget gate: the padded grid over `budget_mcells`
-    /// million cells is refused by name.
     #[cfg(feature = "gpu-proofs")]
-    pub(crate) fn admit_flip_grid(self, budget_mcells: f32) -> Result<(), String> {
+    fn admit_flip_grid(self, budget_mcells: f32) -> Result<(), String> {
         let cells = self.cells.into_iter().map(|n| u64::from(n) + 3).product::<u64>();
         if !budget_mcells.is_finite() || budget_mcells <= 0.0 || cells as f64 > f64::from(budget_mcells) * 1e6 {
             return Err(format!(
@@ -158,7 +96,7 @@ impl FluidDomainLayout {
     }
 
     #[cfg(feature = "gpu-proofs")]
-    pub(super) fn bounds(self, pose: Transform) -> Bounds {
+    fn bounds(self, pose: Transform) -> Bounds {
         let centre = self.to_native(pose.pos);
         Bounds {
             min: std::array::from_fn(|i| centre[i] - pose.scale[i] * 0.5),
@@ -221,7 +159,10 @@ mod tests {
 
     #[test]
     fn scene_physics_domain_rejects_invalid_geometry_and_validates_local_fill() {
-        let high_res = FluidSettings { resolution: 128, ..FluidSettings::default() };
+        let high_res = FluidSettings {
+            resolution: 128,
+            ..FluidSettings::default()
+        };
         high_res.validate().unwrap();
         assert_eq!(high_res.domain_layout().unwrap().cells, [128; 3]);
 

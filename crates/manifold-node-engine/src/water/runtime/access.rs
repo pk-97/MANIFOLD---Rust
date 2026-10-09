@@ -1,7 +1,6 @@
 //! Borrow the water extension without giving it ownership of the generic runtime.
 
 use super::WaterRuntimeState;
-use crate::runtime::ModifierPreviewContext;
 use crate::{
     exec::{execution::Executor, execution_plan::ExecutionPlan},
     graph::Graph,
@@ -29,7 +28,6 @@ pub struct WaterRuntimeRef<'a> {
     pub(super) water: &'a WaterRuntimeState,
     pub(super) graph: &'a Graph,
     pub(super) plan: &'a ExecutionPlan,
-    pub(super) effect_nodes: RuntimeSlots<'a>,
     pub(super) last_forced_outputs_epoch: u64,
     pub(super) forced_outputs_stale: bool,
 }
@@ -87,7 +85,6 @@ impl<'a> WaterRuntime<'a> {
             water: self.water,
             graph: self.graph,
             plan: self.plan,
-            effect_nodes: self.effect_nodes,
             last_forced_outputs_epoch: self.last_forced_outputs_epoch,
             forced_outputs_stale: self.forced_outputs_stale,
         }
@@ -97,14 +94,6 @@ impl<'a> WaterRuntime<'a> {
 pub trait WaterRuntimeExt {
     fn water(&mut self) -> WaterRuntime<'_>;
     fn water_ref(&self) -> WaterRuntimeRef<'_>;
-    fn write_modifier_fluid_domains(
-        &self,
-        context: &ModifierPreviewContext,
-        output: &mut Vec<(
-            manifold_core::NodeId,
-            crate::water::fluid::FluidDomainSnapshot,
-        )>,
-    );
 }
 
 impl WaterRuntimeExt for PresetRuntime {
@@ -122,34 +111,8 @@ impl WaterRuntimeExt for PresetRuntime {
                 .expect("water runtime extension is linked"),
             graph: &self.graph,
             plan: &self.plan,
-            effect_nodes: self.extension_slots(),
             last_forced_outputs_epoch: self.compiled_outputs_epoch(),
             forced_outputs_stale: self.awaiting_forced_outputs_rebuild(),
         }
-    }
-    /// Append fluid snapshots from the selected generated modifier copy and
-    /// translate each generated node id back to its authored address in place.
-    fn write_modifier_fluid_domains(
-        &self,
-        context: &ModifierPreviewContext,
-        output: &mut Vec<(
-            manifold_core::NodeId,
-            crate::water::fluid::FluidDomainSnapshot,
-        )>,
-    ) {
-        let start = output.len();
-        self.water_ref().write_fluid_domains_watched(output);
-        let mut write = start;
-        for read in start..output.len() {
-            let authored = self
-                .modifier_preview_local_node(context, output[read].0.as_str())
-                .cloned();
-            if let Some(authored) = authored {
-                let snapshot = output[read].1;
-                output[write] = (authored, snapshot);
-                write += 1;
-            }
-        }
-        output.truncate(write);
     }
 }

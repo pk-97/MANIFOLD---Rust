@@ -24,7 +24,8 @@ use super::gpu_flip_step::{read_max_iterations, read_sheet_fill_rate, read_solve
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use super::matter_domain::closed_faces;
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::water::fluid::{CoupledRigidFrame, CoupledRigidInputs, FluidDomainLayout, domain_layout};
+use crate::scene::fluid_domain::{FluidDomainLayout, domain_layout};
+use crate::water::fluid::{CoupledRigidFrame, CoupledRigidInputs};
 use crate::water::fluid_role::{FluidRole, MAX_FLUID_ROLES};
 use crate::water::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::water::liquid::body_buffers::LiquidBodyBuffers;

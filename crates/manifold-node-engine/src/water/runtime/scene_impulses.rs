@@ -3,7 +3,7 @@ use ahash::{AHashMap, AHashSet};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 
-use super::{WaterRuntime, WaterRuntimeRef};
+use super::{WaterRuntime, WaterRuntimeState};
 use crate::{
     exec::effect_node::FrameTime,
     water::runtime::physics_impulses::CapturedSceneImpulse,
@@ -24,15 +24,6 @@ pub(crate) struct SceneImpulses {
     // Inputs excluded from historical CPU sampling need a completed full frame.
     setup: Vec<(NodeInstanceId, ParamValues)>,
     setup_observed: bool,
-}
-
-/// Live tick-start diagnostics. These counters are not a recorded physics take.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SceneImpulseDiagnostics {
-    pub started: u64,
-    pub late: u64,
-    /// Hits fired while the simulation was held (pause, Speed 0).
-    pub discarded: u64,
 }
 
 fn invalid(id: &NodeId, detail: String) -> SceneModifierExpandError {
@@ -133,9 +124,9 @@ impl WaterRuntime<'_> {
 
 }
 
-impl WaterRuntimeRef<'_> {
-    pub fn is_scene_impulse_param(&self, param: &str) -> bool {
-        self.water.scene_impulses.aliases.contains_key(param)
+impl WaterRuntimeState {
+    pub(super) fn is_scene_impulse_param(&self, param: &str) -> bool {
+        self.scene_impulses.aliases.contains_key(param)
     }
 }
 
@@ -149,7 +140,7 @@ impl WaterRuntime<'_> {
         source: FrameTime,
         next_sequence: &mut u64,
     ) -> Result<bool, String> {
-        if !self.as_ref().is_scene_impulse_param(param) {
+        if !self.water.is_scene_impulse_param(param) {
             return Ok(false);
         }
         let mut state = std::mem::take(&mut self.water.scene_impulses);

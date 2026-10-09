@@ -3,7 +3,11 @@
 //! with 1.5-cell padding. Both retain the authored box and uniform spacing.
 
 use crate::exec::effect_node::EffectNodeContext;
-use crate::water::fluid::FluidDomainLayout;
+use crate::scene::fluid_domain::FluidDomainLayout;
+#[cfg(test)]
+use crate::scene::fluid_domain::domain_layout;
+#[cfg(test)]
+use crate::water::fluid::FluidDomainNative;
 use crate::scene::transform::Transform;
 
 /// Nodes added outside the authored box on every side (taichi `padding = 3`).
@@ -233,7 +237,7 @@ mod tests {
     #[test]
     fn flip_solver_grid_matches_native_counts_without_reinterpreting_authored_wires() {
         for resolution in [8, 31, 64] {
-            let layout = crate::water::fluid::domain_layout(None, 4.0, resolution).unwrap();
+            let layout = domain_layout(None, 4.0, resolution).unwrap();
             let authored = LiquidLattice::from_layout(&layout);
             let solver = FlipSolverGrid::from_lattice(authored);
             assert_eq!(authored.cells(), [resolution; 3]);
@@ -256,7 +260,7 @@ mod tests {
     #[test]
     fn flip_wall_distance_matches_native_face_edge_corner_and_absolute_epsilon() {
         for size in [1.0, 8.0] {
-            let layout = crate::water::fluid::domain_layout(None, size, 8).unwrap();
+            let layout = domain_layout(None, size, 8).unwrap();
             let surface = LiquidLattice::from_layout(&layout).surface();
             let n = surface.nodes();
             let distance = surface.flip_wall_distance(63);
@@ -279,7 +283,7 @@ mod tests {
         // subtracts 1.5h; particlemesher.cpp multiplies by subdivision then
         // adds one; polygonizer3d.cpp emits h * index without another shift.
         for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
-            let layout = crate::water::fluid::domain_layout(None, size, resolution).unwrap();
+            let layout = domain_layout(None, size, resolution).unwrap();
             let mesh = LiquidLattice::from_layout(&layout).surface();
             let (native_bounds, native_nodes) = layout.solid_lattice();
             assert_eq!(mesh.nodes(), native_nodes);
@@ -329,7 +333,7 @@ mod tests {
 
     #[test]
     fn liquid_lattice_pads_the_authored_box() {
-        let layout = crate::water::fluid::domain_layout(None, 4.0, 64).unwrap();
+        let layout = domain_layout(None, 4.0, 64).unwrap();
         let lattice = LiquidLattice::from_layout(&layout);
         assert_eq!(lattice.nodes(), [71; 3]);
         assert_eq!(lattice.cell_size(), 0.0625);
@@ -341,7 +345,7 @@ mod tests {
     /// instead of clamping to a one-node lattice.
     #[test]
     fn liquid_lattice_wires_refuse_by_name() {
-        let layout = crate::water::fluid::domain_layout(None, 4.0, 32).unwrap();
+        let layout = domain_layout(None, 4.0, 32).unwrap();
         let lattice = LiquidLattice::from_layout(&layout);
         let wires = |name: &str| match name {
             "nodes_x" | "nodes_y" | "nodes_z" => lattice.nodes()[0] as f32,
@@ -360,7 +364,7 @@ mod tests {
 
     #[test]
     fn liquid_wall_distance_is_signed_distance_to_closed_faces() {
-        let layout = crate::water::fluid::domain_layout(None, 1.0, 8).unwrap();
+        let layout = domain_layout(None, 1.0, 8).unwrap();
         let lattice = LiquidLattice::from_layout(&layout);
         let dx = lattice.cell_size();
         let all = lattice.wall_distance(63);
@@ -384,7 +388,7 @@ mod tests {
     fn liquid_lattice_padding_is_solid_behind_closed_walls() {
         for domain in [0.5f32, 4.0, 20.0] {
             for resolution in [8u32, 33, 64] {
-                let layout = crate::water::fluid::domain_layout(None, domain, resolution).unwrap();
+                let layout = domain_layout(None, domain, resolution).unwrap();
                 let lattice = LiquidLattice::from_layout(&layout);
                 let distance = lattice.wall_distance(63);
                 let half_cell = 0.5 * lattice.cell_size();

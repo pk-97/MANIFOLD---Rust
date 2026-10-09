@@ -23,7 +23,8 @@ use manifold_physics::{BodyHandle, BodyImpulse, PhysicsWorld, Seconds, TickStamp
 use super::bodies::{pack_supports, unpack_supports, BodySupports, LiquidBody};
 #[cfg(test)]
 use crate::water::fluid::TICK;
-use crate::water::fluid::{CoupledRigidFrame, CoupledRigidLayout, FluidDomainLayout};
+use crate::scene::fluid_domain::FluidDomainLayout;
+use crate::water::fluid::{CoupledRigidFrame, CoupledRigidLayout};
 use crate::water::fluid_role::PreparedFluidGeometry;
 use crate::scene::impulse::RigidImpulseTargets;
 use crate::water::physics::{RigidBody, RigidSceneInputs, RigidSimulation};

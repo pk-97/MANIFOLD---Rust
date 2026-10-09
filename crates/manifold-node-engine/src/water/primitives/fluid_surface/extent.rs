@@ -12,6 +12,7 @@ use crate::water::fluid_particles::FluidParticle;
 use crate::water::primitives::fluid_surface::boundary_collisions;
 #[cfg(feature = "gpu-proofs")]
 use crate::water::primitives::fluid_surface::fluid_settings;
+use crate::water::fluid::FluidDomainNative;
 use crate::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, lattice_total};
 
 fn fluid_surface(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

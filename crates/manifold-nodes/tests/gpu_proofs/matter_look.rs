@@ -11,7 +11,7 @@
 use std::sync::OnceLock;
 
 use manifold_node_engine::scene::transform::Transform;
-use manifold_node_engine::water::fluid::domain_layout;
+use manifold_node_engine::scene::fluid_domain::domain_layout;
 use manifold_node_engine::water::fluid_particles::FluidParticle;
 use manifold_node_engine::water::matter::look::{ALIGNMENT_TICKS, Cells, LookRecorder};
 
