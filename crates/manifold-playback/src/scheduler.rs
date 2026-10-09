@@ -96,6 +96,7 @@ pub struct ClipScheduler {
     should_be_active_ids: AHashSet<ClipId>,
     /// Logical source membership, independent of renderer acquisition.
     control_active: AHashMap<ClipId, ActiveClipRef>,
+    control_window_ids: AHashSet<ClipId>,
     // Internal buffers — drained into SyncResult each call, reclaimed next call.
     _merged_list: Vec<ActiveClipRef>,
     _to_stop: Vec<ClipId>,
@@ -111,6 +112,7 @@ impl ClipScheduler {
         Self {
             should_be_active_ids: AHashSet::with_capacity(32),
             control_active: AHashMap::with_capacity(32),
+            control_window_ids: AHashSet::with_capacity(32),
             _merged_list: Vec::with_capacity(64),
             _to_stop: Vec::with_capacity(16),
             _to_start: Vec::with_capacity(16),
@@ -126,15 +128,16 @@ impl ClipScheduler {
     pub(crate) fn record_controls(
         &mut self,
         result: &SyncResult,
-        timeline_window: &[ActiveClipRef],
+        source_window: &[ActiveClipRef],
         from: Option<Beats>,
         current: Beats,
         controls: &mut ClipControlFrame,
     ) {
-        // The same timeline query supplies both current media membership and
-        // clips that ended inside this control interval. Only the latter need
-        // recording here; active refs are handled below.
-        for entry in timeline_window.iter().filter(|entry| entry.end_beat() <= current) {
+        // The source query also supplies completed clips and session iterations.
+        // An observed session span can end at current even while the same clip
+        // remains active; its event belongs to the current-membership walk below.
+        self.control_window_ids.clear();
+        for entry in source_window.iter().filter(|entry| entry.end_beat() <= current) {
             if entry.is_visible() {
                 controls.record_span(entry.layer_id.clone(), ClipControlSpan {
                     clip_id: entry.clip_id.clone(),
@@ -142,15 +145,30 @@ impl ClipScheduler {
                     end_beat: Some(entry.end_beat()),
                 });
             }
-            if from.is_some_and(|from| from < entry.start_beat && entry.start_beat <= current) {
+            let is_current = self.should_be_active_ids.contains(&entry.clip_id)
+                && result.should_be_active.iter().any(|active| active.clip_id == entry.clip_id
+                    && active.layer_id == entry.layer_id && active.start_beat == entry.start_beat);
+            let starts = if entry.is_live_slot() {
+                // A complete note can arrive at the previous sync boundary.
+                // Keep its membership until modulation consumes this window.
+                self.control_window_ids.insert(entry.clip_id.clone());
+                !self.control_active.contains_key(&entry.clip_id)
+            } else {
+                from.is_some_and(|from| from < entry.start_beat && entry.start_beat <= current)
+            };
+            if !is_current && starts {
                 controls.record_start(entry.layer_id.clone(), ClipControlStart {
                     clip_id: entry.clip_id.clone(),
                     beat: entry.start_beat,
                     is_muted: entry.is_muted,
                 });
             }
+            if entry.is_live_slot() && !is_current {
+                self.control_active.insert(entry.clip_id.clone(), entry.clone());
+            }
         }
-        self.control_active.retain(|id, _| self.should_be_active_ids.contains(id));
+        self.control_active.retain(|id, _| self.should_be_active_ids.contains(id)
+            || self.control_window_ids.contains(id));
         for entry in &result.should_be_active {
             if entry.is_visible() {
                 controls.record_span(entry.layer_id.clone(), ClipControlSpan {
@@ -176,6 +194,7 @@ impl ClipScheduler {
 
     pub(crate) fn reset_controls(&mut self) {
         self.control_active.clear();
+        self.control_window_ids.clear();
     }
 
     /// Compute what clips should start, stop, or continue playing.
@@ -342,6 +361,58 @@ mod tests {
         clip.start_beat = Beats(4.0);
         controls_tick(&mut scheduler, &mut controls, std::slice::from_ref(&clip), Beats(4.0));
         assert_eq!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&clip.layer_id)).len(), 1);
+    }
+
+    #[test]
+    fn completed_live_controls_deliver_once_across_sync_cadences() {
+        use manifold_core::params::ClipTriggerSource;
+        for observed_live in [false, true] {
+            let mut scheduler = ClipScheduler::new();
+            let mut controls = ClipControlFrame::default();
+            let clip = make_live_ref("short-note", 0, 1.0, 0.25);
+            let owner = clip.layer_id.clone();
+            if observed_live {
+                controls_tick(&mut scheduler, &mut controls, std::slice::from_ref(&clip), Beats(1.0));
+            }
+            // NoteOn can equal the previous sync beat. NoteOff has already
+            // removed the slot, but the interval survives until modulation.
+            for beat in [Beats(1.5), Beats(1.75)] {
+                let result = scheduler.compute_sync(
+                    Seconds::ZERO, beat, &[], &[], &[],
+                    &AHashSet::new(), &AHashSet::new(), Beats::ZERO,
+                );
+                controls.clear_spans();
+                scheduler.record_controls(&result, std::slice::from_ref(&clip), Some(Beats(1.0)), beat, &mut controls);
+                assert_eq!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&owner)).len(), 1);
+                assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.125)), Some(Beats(0.125)));
+                assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.25)), None);
+                scheduler.reclaim(result);
+            }
+            controls.clear_starts();
+            controls_tick(&mut scheduler, &mut controls, &[], Beats(2.0));
+            assert!(controls.starts(&ClipTriggerSource::OwnLayer, Some(&owner)).is_empty());
+            assert!(scheduler.control_active.is_empty());
+        }
+    }
+
+    #[test]
+    fn completed_live_controls_preserve_retrigger_boundaries() {
+        use manifold_core::params::ClipTriggerSource;
+        let mut scheduler = ClipScheduler::new();
+        let mut controls = ClipControlFrame::default();
+        let first = make_live_ref("first-note", 0, 1.0, 0.25);
+        let second = make_live_ref("second-note", 0, 1.25, 4.0);
+        let owner = first.layer_id.clone();
+        let result = scheduler.compute_sync(
+            Seconds::ZERO, Beats(1.5), &[], &[second], &[],
+            &AHashSet::new(), &AHashSet::new(), Beats::ZERO,
+        );
+        scheduler.record_controls(&result, &[first], Some(Beats(1.0)), Beats(1.5), &mut controls);
+        controls.finish();
+        let starts = controls.starts(&ClipTriggerSource::OwnLayer, Some(&owner));
+        assert_eq!(starts.iter().map(|start| start.beat).collect::<Vec<_>>(), vec![Beats(1.0), Beats(1.25)]);
+        assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.125)), Some(Beats(0.125)));
+        assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.375)), Some(Beats(0.125)));
     }
 
     fn make_ref(id: &str, layer_index: i32, start_beat: f32, duration_beats: f32) -> ActiveClipRef {

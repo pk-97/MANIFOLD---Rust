@@ -10,7 +10,9 @@
 
 pub mod composition;
 mod pulses;
-pub use pulses::{TriggerPulse, TriggerPulseBuffer, TriggerPulseKind, TriggerPulseSink};
+pub use pulses::{
+    TriggerPulse, TriggerPulseBuffer, TriggerPulseKind, TriggerPulseSink, TriggerSourceStamp,
+};
 use crate::clip_controls::ClipControlFrame;
 
 use composition::{
@@ -19,7 +21,7 @@ use composition::{
 };
 
 use manifold_core::audio_features::{
-    AudioFeatureSnapshot, AudioHopStamp, SendFeatures,
+    AudioFeatureSnapshot, AudioHopError, AudioHopStamp, SendFeatures,
 };
 use manifold_core::audio_mod::{
     AudioFeatureKind, AudioModContribution, AudioModObservation, HopClock, HopValue,
@@ -389,7 +391,7 @@ pub fn evaluate_modulation(
     // precedence. An empty hop_batches vector is the legacy snapshot contract.
     let retained_hops = !audio.hop_batches.is_empty();
     if retained_hops {
-        advance_audio_hops(project, audio, controls, trigger_pulses, Some(current_time));
+        advance_audio_hops(project, audio, controls, trigger_pulses, current_time);
         reset_all_effectives(project);
         return compose_retained_controls(
             project, current_beat, current_time, controls, fire_meters,
@@ -425,7 +427,7 @@ pub fn evaluate_modulation(
     // marks the compositor dirty on its own (the renderer's own dirty
     // tracking covers the visible effect).
     let any_audio = evaluate_all_audio_mods(
-        project, audio, dt, controls, trigger_pulses, fire_meters,
+        project, audio, dt, current_time, controls, trigger_pulses, fire_meters,
     );
 
     // Phase 3: Evaluate clip/layer/generator ADSR envelopes (additive on top
@@ -506,11 +508,8 @@ fn record_hop_values(
                 envelopes: instance.envelopes.as_deref().unwrap_or_default(),
                 audio_mods: mods,
             };
-            if let Some(last) = m.audio_observations.hops().last() {
-                settle_hop_clock(&mut timeline.clock, last, sample.time);
-            }
             for observation in m.audio_observations.hops() {
-                let Some(time) = hop_time(timeline.clock, observation) else {
+                let Some(time) = hop_time(timeline.clock, observation.stamp) else {
                     continue;
                 };
                 let hop_state = match observation.contribution {
@@ -549,11 +548,10 @@ fn record_hop_values(
 
 /// Transport time of a hop: the export's stamped time, else the live sample
 /// clock anchored to the evaluation time.
-fn hop_time(clock: Option<HopClock>, observation: &AudioModObservation) -> Option<Seconds> {
-    if let Some(time) = observation.stamp.timeline_time {
+fn hop_time(clock: Option<HopClock>, stamp: AudioHopStamp) -> Option<Seconds> {
+    if let Some(time) = stamp.timeline_time {
         return Some(time);
     }
-    let stamp = observation.stamp;
     clock
         .filter(|c| c.epoch == stamp.epoch && c.sample_rate == stamp.sample_rate)
         .map(|c| Seconds(c.time_of(stamp.end_sample)))
@@ -561,12 +559,11 @@ fn hop_time(clock: Option<HopClock>, observation: &AudioModObservation) -> Optio
 
 /// Re-anchor the live clock, judged once per update on its latest hop, so the
 /// hops within one update keep their audio spacing.
-fn settle_hop_clock(clock: &mut Option<HopClock>, last: &AudioModObservation, eval: Seconds) {
-    let stamp = last.stamp;
+fn settle_hop_clock(clock: &mut Option<HopClock>, stamp: AudioHopStamp, eval: Seconds) {
     if stamp.timeline_time.is_some() || stamp.sample_rate == 0 {
         return;
     }
-    let eval = last.evaluation_time.unwrap_or(eval).0;
+    let eval = eval.0;
     let stale = clock.is_none_or(|c| {
         let mapped = c.time_of(stamp.end_sample);
         c.epoch != stamp.epoch
@@ -684,7 +681,7 @@ fn advance_audio_hops(
     snapshot: &AudioFeatureSnapshot,
     controls: &ClipControlFrame,
     pulses: &mut impl TriggerPulseSink,
-    evaluation_time: Option<Seconds>,
+    evaluation_time: Seconds,
 ) {
     pulses.clear_events();
     let sends = &project.audio_setup.sends;
@@ -710,9 +707,8 @@ fn advance_audio_hops(
     }
 }
 
-/// The existing scheduler owns clip edges. Fire parameters consume every edge
-/// it retained, independently of audio delivery or whether a hop completed.
-/// A clip event has no audio stamp: assigning the last hop would retime it.
+/// The existing scheduler owns clip starts. Fire parameters consume every
+/// retained start independently of audio delivery or whether a hop completed.
 fn fire_parameter_clip_starts(
     fx: &mut PresetInstance,
     controls: &ClipControlFrame,
@@ -731,11 +727,24 @@ fn fire_parameter_clip_starts(
         if !param.spec.is_trigger || param.spec.is_trigger_gate {
             continue;
         }
-        let count = controls.starts(&param.clip_trigger_source, owner).len();
-        for _ in 0..count {
-            fire_parameter(&fx.id, m, owner, None, pulses);
+        let starts = controls.starts(&param.clip_trigger_source, owner);
+        let Some(source_layer) = ClipControlFrame::source_layer(&param.clip_trigger_source, owner) else {
+            continue;
+        };
+        for start in starts {
+            fire_parameter(
+                &fx.id,
+                m,
+                owner,
+                TriggerSourceStamp::Clip {
+                    layer_id: source_layer.clone(),
+                    clip_id: start.clip_id.clone(),
+                    beat: start.beat,
+                },
+                pulses,
+            );
         }
-        if count != 0 {
+        if !starts.is_empty() {
             if let Some(param) = fx.params.get_mut(m.param_id.as_ref()) {
                 param.value = param.base + m.fire_count as f32;
             }
@@ -749,7 +758,7 @@ fn fire_parameter(
     owner: &manifold_core::EffectId,
     modulation: &mut manifold_core::audio_mod::ParameterAudioMod,
     layer: Option<&manifold_core::LayerId>,
-    audio_stamp: Option<AudioHopStamp>,
+    source_stamp: TriggerSourceStamp,
     pulses: &mut impl TriggerPulseSink,
 ) {
     modulation.fire_count = modulation.fire_count.wrapping_add(1);
@@ -758,7 +767,7 @@ fn fire_parameter(
         layer_id: layer.cloned(),
         owner_id: owner.clone(),
         param_key: fire_meter_key_for_param("", modulation.param_id.as_ref()),
-        audio_stamp,
+        source_stamp,
     });
 }
 
@@ -769,7 +778,7 @@ fn advance_instance_audio_hops(
     controls: &ClipControlFrame,
     layer_id: Option<&manifold_core::id::LayerId>,
     pulses: &mut impl TriggerPulseSink,
-    evaluation_time: Option<Seconds>,
+    evaluation_time: Seconds,
 ) {
     let Some(mods) = fx.audio_mods.as_mut().filter(|mods| !mods.is_empty()) else {
         return;
@@ -840,6 +849,20 @@ fn advance_instance_audio_hops(
             whole_numbers: p.whole_numbers(),
             base: p.base,
         };
+        let mut probe = m.audio_hop_cursor;
+        if let Some(last) = batch.hops().last()
+            && probe.accept(last.stamp).is_some()
+        {
+            settle_hop_clock(&mut m.hop_timeline.clock, last.stamp, evaluation_time);
+        }
+        if batch.hops().iter().any(|hop| {
+            hop_time(m.hop_timeline.clock, hop.stamp)
+                .is_none_or(|time| !time.0.is_finite())
+        }) {
+            m.audio_observations.invalidate(AudioHopError::InvalidInput);
+            reset_audio_conditioning(m);
+            continue;
+        }
         let mut accepted_any = false;
         for (hop_index, hop) in batch.hops().iter().enumerate() {
             let Some(new_epoch) = m.audio_hop_cursor.accept(hop.stamp) else {
@@ -857,8 +880,21 @@ fn advance_instance_audio_hops(
                         .is_empty()
                 });
             let on_last_hop = clip_edge && hop_index + 1 == batch.hops().len();
+            let source_time = hop_time(m.hop_timeline.clock, hop.stamp)
+                .expect("validated audio hop clock");
             let output = process_audio_sample(
-                &fx.id, m, info, &hop.features, hop.dt, Some(hop.stamp), on_last_hop, layer_id, pulses,
+                &fx.id,
+                m,
+                info,
+                &hop.features,
+                hop.dt,
+                TriggerSourceStamp::Audio {
+                    stamp: hop.stamp,
+                    time: source_time,
+                },
+                on_last_hop,
+                layer_id,
+                pulses,
             );
             if let Some(output) = output {
                 m.audio_held_output = Some(output);
@@ -886,7 +922,7 @@ fn advance_instance_audio_hops(
                     && matches!(contribution, AudioModContribution::Stepped(_))
                     && m.trigger_mode.unwrap_or(TriggerFireMode::Transient).wants_clip_edge();
                 if let Err(error) = m.audio_observations.push(AudioModObservation {
-                    stamp: hop.stamp, dt: hop.dt, evaluation_time,
+                    stamp: hop.stamp, dt: hop.dt, evaluation_time: Some(evaluation_time),
                     clip_edge,
                     contribution,
                 }) && !already_failed {
@@ -936,7 +972,7 @@ fn process_audio_sample(
     info: AudioParamInfo,
     features: &SendFeatures,
     dt: Seconds,
-    audio_stamp: Option<AudioHopStamp>,
+    source_stamp: TriggerSourceStamp,
     clip_edge: bool,
     layer_id: Option<&manifold_core::id::LayerId>,
     pulses: &mut impl TriggerPulseSink,
@@ -977,7 +1013,7 @@ fn process_audio_sample(
                 layer_id: layer_id.cloned(),
                 owner_id: owner_id.clone(),
                 param_key: fire_meter_key_for_param("", m.param_id.as_ref()),
-                audio_stamp,
+                source_stamp: source_stamp.clone(),
             });
         }
         return None;
@@ -988,7 +1024,7 @@ fn process_audio_sample(
         if m.trigger_edge.advance(conditioned, 0.5)
             && m.trigger_mode.unwrap_or(TriggerFireMode::Transient).wants_transient()
         {
-            fire_parameter(owner_id, m, layer_id, audio_stamp, pulses);
+            fire_parameter(owner_id, m, layer_id, source_stamp, pulses);
         }
         return Some(info.base + m.fire_count as f32);
     }
@@ -1116,13 +1152,14 @@ pub fn evaluate_all_audio_mods(
     project: &mut Project,
     snapshot: &AudioFeatureSnapshot,
     dt: Seconds,
+    current_time: Seconds,
     controls: &ClipControlFrame,
     pulses: &mut impl TriggerPulseSink,
     fire_meters: &mut FireMeterCapture,
 ) -> bool {
     pulses.clear_events();
     if !snapshot.hop_batches.is_empty() {
-        advance_audio_hops(project, snapshot, controls, pulses, None);
+        advance_audio_hops(project, snapshot, controls, pulses, current_time);
         return apply_retained_audio_mods(project, fire_meters);
     }
     clear_audio_observations(project);
@@ -1242,7 +1279,15 @@ fn evaluate_instance_audio_mods(
             .starts(&p.clip_trigger_source, layer_id.as_ref())
             .is_empty();
         let output = process_audio_sample(
-            &fx.id, m, info, features, dt, None, clip_edge, layer_id.as_ref(), pulses,
+            &fx.id,
+            m,
+            info,
+            features,
+            dt,
+            TriggerSourceStamp::Snapshot,
+            clip_edge,
+            layer_id.as_ref(),
+            pulses,
         );
         if let Some(output) = output {
             p.value = output;
@@ -1393,7 +1438,15 @@ mod tests {
             }
         }
         controls.finish();
-        evaluate_all_audio_mods(project, snapshot, dt, &controls, pulses, fire_meters)
+        evaluate_all_audio_mods(
+            project,
+            snapshot,
+            dt,
+            Seconds::ZERO,
+            &controls,
+            pulses,
+            fire_meters,
+        )
     }
 
     fn evaluate_modulation_fixture(
@@ -2045,6 +2098,35 @@ mod tests {
     }
 
     #[test]
+    fn selected_clip_fires_preserve_source_identity_and_beat_separately_from_destination() {
+        let (mut project, send) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send);
+        let destination = project.timeline.layers[0].layer_id.clone();
+        let source = manifold_core::LayerId::new("selected-source");
+        let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+        let param = fx.params.get_mut("amount").unwrap();
+        param.spec.is_trigger = true;
+        param.clip_trigger_source = manifold_core::params::ClipTriggerSource::Lane { layer_id: source.clone() };
+        fx.audio_mods_mut()[0].trigger_mode = Some(TriggerFireMode::ClipEdge);
+        let mut controls = ClipControlFrame::default();
+        for (id, beat) in [("first", 0.125), ("second", 0.375)] {
+            controls.record_start(source.clone(), crate::clip_controls::ClipControlStart {
+                clip_id: manifold_core::ClipId::new(id), beat: Beats(beat), is_muted: false,
+            });
+        }
+        let mut pulses = Vec::new();
+        fire_parameter_clip_starts(fx, &controls, Some(&destination), &mut pulses);
+        assert_eq!(pulses.len(), 2);
+        for (pulse, (id, beat)) in pulses.iter().zip([("first", 0.125), ("second", 0.375)]) {
+            assert_eq!(pulse.layer_id.as_ref(), Some(&destination));
+            assert_eq!(pulse.owner_id, fx.id);
+            assert_eq!(pulse.source_stamp, TriggerSourceStamp::Clip {
+                layer_id: source.clone(), clip_id: manifold_core::ClipId::new(id), beat: Beats(beat),
+            });
+        }
+    }
+
+    #[test]
     fn fire_parameter_modes_keep_audio_and_every_clip_edge_separate() {
         for (mode, audio_count, clip_count) in [
             (None, 2, 0),
@@ -2063,8 +2145,8 @@ mod tests {
             let snapshot = low_hop_batch(&[0.0, 1.0, 0.0, 1.0], 7, 0);
             let (pulses, _) = retained_tick(&mut project, &snapshot, Seconds(0.1), &[0, 1, 0]);
             assert_eq!(pulses.len(), audio_count + clip_count, "{mode:?}");
-            assert_eq!(pulses.iter().filter(|pulse| pulse.audio_stamp.is_some()).count(), audio_count);
-            assert_eq!(pulses.iter().filter(|pulse| pulse.audio_stamp.is_none()).count(), clip_count);
+            assert_eq!(pulses.iter().filter(|pulse| pulse.audio_stamp().is_some()).count(), audio_count);
+            assert_eq!(pulses.iter().filter(|pulse| pulse.audio_stamp().is_none()).count(), clip_count);
             for pulse in &pulses {
                 assert_eq!(pulse.kind, TriggerPulseKind::Parameter);
                 assert_eq!(pulse.owner_id, owner_id);
@@ -2101,7 +2183,7 @@ mod tests {
             };
             let (pulses, _) = retained_tick(&mut project, &snapshot, Seconds(0.1), &[0]);
             assert_eq!(pulses.len(), 1, "input {input}");
-            assert_eq!(pulses[0].audio_stamp, None);
+            assert_eq!(pulses[0].audio_stamp(), None);
             assert!(audio_control_capture_error(&project).is_none());
             let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
             assert_eq!(fx.params.get("amount").unwrap().value, 1.0);
@@ -2293,7 +2375,7 @@ mod tests {
                 for (chunk, samples) in levels.chunks(chunk_size).enumerate() {
                     let snapshot = low_hop_batch(samples, 1, chunk * chunk_size);
                     let (pulses, meters) = retained_tick(&mut project, &snapshot, display_dt, &[]);
-                    fired.extend(pulses.into_iter().map(|pulse| pulse.audio_stamp.unwrap().end_sample));
+                    fired.extend(pulses.into_iter().map(|pulse| pulse.audio_stamp().unwrap().end_sample));
                     let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
                     let m = &fx.audio_mods.as_ref().unwrap()[0];
                     observations.extend_from_slice(m.audio_observations.hops());
@@ -2339,20 +2421,176 @@ mod tests {
                 hop.stamp.end_sample * 1_000_000_000 / u64::from(hop.stamp.sample_rate)));
             snapshot.hop_batches[0].push(*hop).unwrap();
         }
-        let (pulses, _) = retained_tick(&mut project, &snapshot, Seconds(0.75), &[]);
+        let mut pulses = Vec::new();
+        evaluate_modulation_fixture(
+            &mut project,
+            Beats::ZERO,
+            Seconds(0.75),
+            Seconds(0.75),
+            &snapshot,
+            &mut pulses,
+            &[],
+            &mut FireMeterCapture::default(),
+        );
         assert_eq!(pulses.len(), 2);
         for (pulse, hop) in pulses.iter().zip([hops[1], hops[3]]) {
             assert_eq!(pulse.kind, TriggerPulseKind::Parameter);
             assert_eq!(pulse.layer_id.as_ref(), Some(&layer_id));
             assert_eq!(pulse.owner_id, owner_id);
             assert_eq!(pulse.param_key, fire_meter_key_for_param("", "amount"));
-            assert_eq!(pulse.audio_stamp, Some(hop.stamp));
+            assert_eq!(pulse.audio_stamp(), Some(hop.stamp));
         }
+        let source_times: Vec<_> = pulses
+            .iter()
+            .map(|pulse| match &pulse.source_stamp {
+                TriggerSourceStamp::Audio { time, .. } => *time,
+                _ => panic!("retained audio fire lost its source clock"),
+            })
+            .collect();
+        // Rising edges are at hops two and four: two 512-sample hops apart.
+        assert!((source_times[0].0 - (0.75 - 1024.0 / 48_000.0)).abs() < 1e-9);
+        assert_eq!(source_times[1], Seconds(0.75));
         assert_eq!(project.timeline.layers[0].effects.as_ref().unwrap()[0]
             .params.get("amount").unwrap().value, 19.0);
         assert!(retained_tick(&mut project, &snapshot, Seconds(1.0), &[]).0.is_empty());
         let mut reloaded: Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
         assert!(retained_tick(&mut reloaded, &snapshot_low_hop(0.0, 8, 512), Seconds(0.1), &[]).0.is_empty());
+    }
+
+    #[test]
+    fn generator_fire_source_times_match_hop_values_for_live_and_export_hops() {
+        fn project_with_generator() -> Project {
+            let mut project = project_with(generator_layer());
+            let send = AudioSend::new("GeneratorFire");
+            let send_id = send.id.clone();
+            project.audio_setup.sends.push(send);
+            let generator = project.timeline.layers[0].gen_params_mut().unwrap();
+            generator.params.get_mut("speed").unwrap().spec.is_trigger = true;
+            let mut audio = ParameterAudioMod::new(
+                "speed".into(),
+                send_id,
+                AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low),
+            );
+            audio.shape.attack_ms = 0.0;
+            audio.shape.release_ms = 0.0;
+            generator.audio_mods_mut().push(audio);
+            project
+        }
+
+        fn export_stamped(mut snapshot: AudioFeatureSnapshot) -> AudioFeatureSnapshot {
+            let hops = snapshot.hop_batches[0].hops().to_vec();
+            let epoch = snapshot.hop_batches[0].epoch();
+            snapshot.hop_batches[0].reset(epoch);
+            for (index, mut hop) in hops.into_iter().enumerate() {
+                hop.stamp.timeline_time = Some(Seconds(12.0 + index as f64 * 0.01));
+                snapshot.hop_batches[0].push(hop).unwrap();
+            }
+            snapshot
+        }
+
+        fn assert_pulse_times_match_values(
+            pulses: &[TriggerPulse],
+            values: &[HopValue],
+        ) -> Vec<Seconds> {
+            let times: Vec<_> = pulses
+                .iter()
+                .map(|pulse| match &pulse.source_stamp {
+                    TriggerSourceStamp::Audio { time, .. } => *time,
+                    _ => panic!("generator Fire pulse lost audio source time"),
+                })
+                .collect();
+            assert_eq!(times.len(), 2);
+            for time in &times {
+                assert!(
+                    values.iter().any(|value| value.time == *time),
+                    "Fire source time {time:?} did not match a retained HopValue"
+                );
+            }
+            times
+        }
+
+        let live = low_hop_batch(&[0.0, 1.0, 0.0, 1.0], 31, 0);
+        let mut live_project = project_with_generator();
+        let mut live_pulses = Vec::new();
+        evaluate_modulation_fixture(
+            &mut live_project,
+            Beats::ZERO,
+            Seconds(0.75),
+            Seconds(0.75),
+            &live,
+            &mut live_pulses,
+            &[],
+            &mut FireMeterCapture::default(),
+        );
+        let live_values = live_project.timeline.layers[0]
+            .gen_params()
+            .unwrap()
+            .audio_mods
+            .as_ref()
+            .unwrap()[0]
+            .hop_timeline
+            .values
+            .clone();
+        let live_times = assert_pulse_times_match_values(&live_pulses, &live_values);
+        assert!((live_times[0].0 - (0.75 - 1024.0 / 48_000.0)).abs() < 1e-9);
+        assert_eq!(live_times[1], Seconds(0.75));
+        let live_clock = live_project.timeline.layers[0]
+            .gen_params()
+            .unwrap()
+            .audio_mods
+            .as_ref()
+            .unwrap()[0]
+            .hop_timeline
+            .clock;
+        let mut replay = Vec::new();
+        evaluate_modulation_fixture(
+            &mut live_project,
+            Beats::ZERO,
+            Seconds(100.0),
+            Seconds(0.75),
+            &live,
+            &mut replay,
+            &[],
+            &mut FireMeterCapture::default(),
+        );
+        assert!(replay.is_empty());
+        assert_eq!(
+            live_project.timeline.layers[0]
+                .gen_params()
+                .unwrap()
+                .audio_mods
+                .as_ref()
+                .unwrap()[0]
+                .hop_timeline
+                .clock,
+            live_clock
+        );
+
+        let export = export_stamped(low_hop_batch(&[0.0, 1.0, 0.0, 1.0], 32, 0));
+        let mut export_project = project_with_generator();
+        let mut export_pulses = Vec::new();
+        evaluate_modulation_fixture(
+            &mut export_project,
+            Beats::ZERO,
+            Seconds(100.0),
+            Seconds(0.75),
+            &export,
+            &mut export_pulses,
+            &[],
+            &mut FireMeterCapture::default(),
+        );
+        let export_values = export_project.timeline.layers[0]
+            .gen_params()
+            .unwrap()
+            .audio_mods
+            .as_ref()
+            .unwrap()[0]
+            .hop_timeline
+            .values
+            .clone();
+        let export_times = assert_pulse_times_match_values(&export_pulses, &export_values);
+        assert!((export_times[0].0 - 12.01).abs() < 1e-12);
+        assert!((export_times[1].0 - 12.03).abs() < 1e-12);
     }
 
     #[test]
@@ -2859,7 +3097,7 @@ mod tests {
             layer_id: Some(layer_id),
             owner_id: project.timeline.layers[0].gen_params().unwrap().id.clone(),
             param_key: fire_meter_key_for_param("", "clip_trigger"),
-            audio_stamp: None,
+            source_stamp: TriggerSourceStamp::Snapshot,
         }]);
     }
 
@@ -2923,7 +3161,7 @@ mod tests {
         assert_eq!(pulses, vec![TriggerPulse {
             kind: crate::modulation::TriggerPulseKind::Gate,
             layer_id: None, owner_id: project.settings.master_effects[0].id.clone(), param_key: fire_meter_key_for_param("", "clip_trigger"),
-            audio_stamp: None,
+            source_stamp: TriggerSourceStamp::Snapshot,
         }]);
     }
 

@@ -118,7 +118,7 @@ impl ClipControlFrame {
             })
     }
 
-    fn source_layer<'a>(
+    pub(crate) fn source_layer<'a>(
         source: &'a ClipTriggerSource,
         owner: Option<&'a LayerId>,
     ) -> Option<&'a LayerId> {

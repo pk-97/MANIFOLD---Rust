@@ -3,9 +3,9 @@
 <!-- index: Child trigger lanes with no thumbnails; shared assignment from lane headers and parameter drawers. Current-code audit, proposed architecture, and first-slice acceptance contract. -->
 
 **Status:** IN PROGRESS · 2026-10-09 · Codex. Source persistence, undoable
-assignment, shared active-source timing and arrangement interval scheduling are
-implemented. Session interval delivery, trigger-lane ownership, media exclusion
-and authoring UI remain pending.
+assignment, shared active-source timing, arrangement/session intervals and typed
+clip-event delivery are implemented. Trigger-lane ownership, media exclusion,
+authoring UI and full runtime acceptance remain pending.
 **Tracking:** `BUG-tqtel` (feature).
 **Prerequisites:** crate refactor landed; reverify the audited seams against subsequent cleanup.
 **Execution contract:** read `DESIGN_DOC_STANDARD.md` sections 5–6 before briefing
@@ -181,7 +181,8 @@ composer can serve both while input-advancement policy remains explicit.
 
 The timing migration now builds each retained hop's `ControlSample` at the hop's
 timestamp and tempo-derived beat. Arrangement spans cover the interval since the
-last evaluation. Session and ended live-note coverage still need the same guarantee.
+last evaluation, including session loops and quantized replacement/stop boundaries.
+Ended live-note and Back to Arrangement transitions still need the same guarantee.
 
 Small typed interfaces should expose only what their consumers need: clip events
 and phase to modulation, evaluated controls/events to rendering, and snapshots plus
@@ -238,10 +239,37 @@ discard pending starts and traverse no skipped region; backwards clock movement
 also uses destination membership only. A CPU engine proof compares the same short
 pattern at fine/coarse display intervals, repeated syncs and fixed export time.
 
-Full acceptance below remains open: multiple session loop boundaries, historical
-session/live spans, external-clock discontinuities, clip event timestamps through
-delivery, and snapshot/retained composition consolidation must be completed before
-exposing trigger lanes.
+Session resolution now captures crossed iterations before applying pending launches
+or stops. It retains completed spans across repeated syncs, closes arrangement
+coverage at the first session launch and avoids firing arrangement clips when a
+session launch starts transport. A bounded interval that cannot be retained latches
+the existing delivery failure instead of publishing a partial Fire stream.
+
+`TriggerSourceStamp` distinguishes snapshot, audio-hop and clip events. Clip Fire
+events retain source layer, clip and beat separately from destination identity.
+Scene delivery converts that beat using the project tempo map. The existing native
+event queue already orders source timestamps and preserves equal-time events;
+there is no new delivery queue. CPU proofs cover provenance and tempo conversion;
+they do not establish rendered force isolation. Audio events now carry resolved
+transport seconds beside their original hop stamp. Advancement settles the existing
+hop clock once per new batch; parameter sampling reuses it, and replay cannot
+re-anchor it. Delivery converts those source seconds to beats, independently of
+the accepting display frame. Live phantom clips now retain their owning LayerId
+from creation. Focused CPU tests cover source-clock/sample agreement, replay,
+invalid-clock rejection and phantom identity; app compilation and clippy pass.
+Rendered timing remains unverified.
+
+Live NoteOff, replacement and one-shot expiry retain completed intervals until
+modulation samples them. Source starts are delivered once even when an entire
+note falls between syncs or begins at the previous sync boundary. NoteOff uses
+the accepted raw event beat; recording quantization remains separate. Focused
+CPU checks cover interval boundaries, repeated sync, existing MIDI guards and
+seek cancellation.
+
+Full acceptance below remains open: Back to Arrangement phase
+coverage, external-clock discontinuities, audio clip-Step/Random multiplicity,
+audio source-time verification, rendered scene timing and snapshot/retained composition
+consolidation must be completed before exposing trigger lanes.
 
 ### Model, scheduling and delivery
 

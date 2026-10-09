@@ -10,6 +10,22 @@ pub enum TriggerPulseKind {
     Parameter,
 }
 
+/// Clock provenance for a trigger pulse. Clip starts stay in the beat domain
+/// until delivery resolves them against the current project tempo map.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TriggerSourceStamp {
+    Snapshot,
+    Audio {
+        stamp: manifold_core::audio_features::AudioHopStamp,
+        time: manifold_core::Seconds,
+    },
+    Clip {
+        layer_id: manifold_core::LayerId,
+        clip_id: manifold_core::ClipId,
+        beat: manifold_core::Beats,
+    },
+}
+
 /// The existing modulation event payload, distinguishing gate events from
 /// named parameter events.
 #[derive(Debug, Clone, PartialEq)]
@@ -21,8 +37,19 @@ pub struct TriggerPulse {
     pub owner_id: manifold_core::EffectId,
     /// Allocation-free parameter token; owner identity is carried separately.
     pub param_key: u64,
-    /// Source analysis hop; `None` for legacy snapshot and clip-only fires.
-    pub audio_stamp: Option<manifold_core::audio_features::AudioHopStamp>,
+    /// Provenance of the source event; destination identity remains in the
+    /// fields above.
+    pub source_stamp: TriggerSourceStamp,
+}
+
+impl TriggerPulse {
+    /// Compatibility view for consumers that only need audio-hop provenance.
+    pub fn audio_stamp(&self) -> Option<manifold_core::audio_features::AudioHopStamp> {
+        match &self.source_stamp {
+            TriggerSourceStamp::Audio { stamp, .. } => Some(*stamp),
+            TriggerSourceStamp::Snapshot | TriggerSourceStamp::Clip { .. } => None,
+        }
+    }
 }
 
 /// Destination for modulation trigger events.
@@ -133,13 +160,16 @@ mod tests {
             layer_id: layer.map(LayerId::new),
             owner_id: EffectId::new(owner),
             param_key: key,
-            audio_stamp: Some(AudioHopStamp {
+            source_stamp: TriggerSourceStamp::Audio {
+                stamp: AudioHopStamp {
                 epoch: 7,
                 end_sample: sample,
                 sample_rate: 48_000,
                 source_time: None,
                 timeline_time: None,
-            }),
+                },
+                time: manifold_core::Seconds::ZERO,
+            },
         }
     }
 

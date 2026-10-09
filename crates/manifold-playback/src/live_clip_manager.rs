@@ -108,6 +108,10 @@ pub struct LiveClipManager {
     // trigger has no NoteOff, so the slot is ended here when the playhead passes
     // `end_beat` (see `expire_due_oneshots`). MIDI slots never appear here.
     oneshot_ends: HashMap<ClipId, (i32, f32)>,
+
+    // Completed live intervals retained until the scheduler samples their
+    // control state. Reuses the caller's scratch buffer when drained.
+    completed_control_refs: Vec<crate::scheduler::ActiveClipRef>,
 }
 
 impl LiveClipManager {
@@ -121,6 +125,7 @@ impl LiveClipManager {
             slot_creation_sequences: HashMap::with_capacity(8),
             clip_starts: HashMap::with_capacity(8),
             oneshot_ends: HashMap::with_capacity(8),
+            completed_control_refs: Vec::with_capacity(8),
         }
     }
 
@@ -143,10 +148,18 @@ impl LiveClipManager {
                 duration_beats: clip.duration_beats,
                 is_looping: clip.is_looping,
                 is_video: !clip.video_clip_id.is_empty(),
-                is_muted: false,
+                is_muted: clip.is_muted,
                 layer_id: clip.layer_id.clone(),
             });
         }
+    }
+
+    /// Drain completed live intervals into the scheduler's reusable buffer.
+    pub(crate) fn drain_completed_controls(
+        &mut self,
+        out: &mut Vec<crate::scheduler::ActiveClipRef>,
+    ) {
+        out.append(&mut self.completed_control_refs);
     }
     /// Look up a live slot clip by clip ID (for start_clip resolution).
     pub fn find_live_slot_clip(&self, clip_id: &str) -> Option<&TimelineClip> {
@@ -172,6 +185,7 @@ impl LiveClipManager {
         self.slot_creation_sequences.clear();
         self.clip_starts.clear();
         self.oneshot_ends.clear();
+        self.completed_control_refs.clear();
     }
 
     /// Clear live slots on large seek. Only clears when seek_delta > 1.0.
@@ -179,7 +193,7 @@ impl LiveClipManager {
     /// `stop_clip_fn` is called for each live slot clip before clearing (avoids
     /// self-referential borrow with LiveClipHost trait).
     pub fn clear_on_seek(&mut self, seek_delta: f32, stop_clip_fn: &mut dyn FnMut(&str)) {
-        if seek_delta > 1.0 && !self.live_slots.is_empty() {
+        if seek_delta > 1.0 {
             for (_, clip) in &self.live_slots_list {
                 stop_clip_fn(&clip.id);
             }
@@ -187,6 +201,7 @@ impl LiveClipManager {
             self.live_slots_list.clear();
             self.live_slot_clip_ids.clear();
             self.oneshot_ends.clear();
+            self.completed_control_refs.clear();
         }
     }
 
@@ -312,6 +327,34 @@ impl LiveClipManager {
 
     // ─── Activation ───
 
+    fn retain_completed_control(
+        &mut self,
+        layer_index: i32,
+        clip: &TimelineClip,
+        end_beat: Beats,
+    ) {
+        let duration_beats = end_beat - clip.start_beat;
+        if !end_beat.0.is_finite()
+            || !clip.start_beat.0.is_finite()
+            || !duration_beats.0.is_finite()
+            || duration_beats <= Beats::ZERO
+        {
+            return;
+        }
+        self.completed_control_refs
+            .push(crate::scheduler::ActiveClipRef {
+                clip_id: clip.id.clone(),
+                layer_index,
+                clip_index: crate::scheduler::ActiveClipRef::LIVE_SLOT,
+                start_beat: clip.start_beat,
+                duration_beats,
+                is_looping: clip.is_looping,
+                is_video: !clip.video_clip_id.is_empty(),
+                is_muted: clip.is_muted,
+                layer_id: clip.layer_id.clone(),
+            });
+    }
+
     /// Activate a live slot, stopping any existing slot on the same layer.
     /// Port of C# LiveClipManager.ActivateLiveSlotNow (lines 315-351).
     /// `stop_clip_fn` stops the old clip's renderer if replacing with a different ID.
@@ -319,6 +362,7 @@ impl LiveClipManager {
         &mut self,
         layer_index: i32,
         clip: TimelineClip,
+        current_beat: Beats,
         stop_clip_fn: &mut dyn FnMut(&str),
     ) {
         // Remove existing live slot on this layer — stop its renderer if different clip
@@ -326,6 +370,7 @@ impl LiveClipManager {
             if old_clip.id != clip.id {
                 stop_clip_fn(&old_clip.id);
             }
+            self.retain_completed_control(layer_index, &old_clip, current_beat);
             self.live_slot_clip_ids.remove(&old_clip.id);
             self.live_slots_list.retain(|(l, _)| *l != layer_index);
             // A retriggered layer drops the old one-shot's expiry so it can't
@@ -342,9 +387,9 @@ impl LiveClipManager {
 
     /// Internal activation without host stop callback (used by trigger methods
     /// that manage their own host interaction).
-    fn activate_live_slot_now(&mut self, layer_index: i32, clip: TimelineClip) {
+    fn activate_live_slot_now(&mut self, layer_index: i32, clip: TimelineClip, current_beat: Beats) {
         let mut noop = |_: &str| {};
-        self.activate_live_slot_now_with_stop(layer_index, clip, &mut noop);
+        self.activate_live_slot_now_with_stop(layer_index, clip, current_beat, &mut noop);
     }
 
     // ─── Trigger ───
@@ -398,6 +443,7 @@ impl LiveClipManager {
             duration_beats,
             Seconds::from_f32(in_point),
         );
+        clip.layer_id = project.timeline.layers[layer_index as usize].layer_id.clone();
         clip.recorded_bpm = host.get_bpm_at_beat(snap_beat);
 
         if event_absolute_tick >= 0 {
@@ -406,7 +452,7 @@ impl LiveClipManager {
             clip.has_start_absolute_tick = true;
         }
 
-        self.activate_live_slot_now(layer_index, clip.clone());
+        self.activate_live_slot_now(layer_index, clip.clone(), host.current_beat());
 
         // Track recording provenance. Port of C# ActivateLiveSlotNow line 350.
         self.track_recording_clip_start(host, project, &clip, midi_note);
@@ -461,6 +507,7 @@ impl LiveClipManager {
         );
 
         let mut clip = TimelineClip::new_generator(snap_beat, duration_beats);
+        clip.layer_id = project.timeline.layers[layer_index as usize].layer_id.clone();
         clip.recorded_bpm = host.get_bpm_at_beat(snap_beat);
 
         if event_absolute_tick >= 0 {
@@ -469,7 +516,7 @@ impl LiveClipManager {
             clip.has_start_absolute_tick = true;
         }
 
-        self.activate_live_slot_now(layer_index, clip.clone());
+        self.activate_live_slot_now(layer_index, clip.clone(), host.current_beat());
 
         // Track recording provenance. Port of C# ActivateLiveSlotNow line 350.
         self.track_recording_clip_start(host, project, &clip, midi_note);
@@ -584,14 +631,20 @@ impl LiveClipManager {
 
         let mut ended = Vec::with_capacity(due.len());
         for clip_id in due {
-            let Some((layer_index, _)) = self.oneshot_ends.remove(&clip_id) else {
+            let Some((layer_index, end_beat)) = self.oneshot_ends.remove(&clip_id) else {
                 continue;
             };
             // Only end it if this clip still owns the layer's slot — a retrigger
             // may already have replaced it (and dropped this entry, but guard
             // anyway).
             if self.live_slots.get(&layer_index).map(|c| &c.id) == Some(&clip_id) {
-                self.live_slots.remove(&layer_index);
+                if let Some(live_clip) = self.live_slots.remove(&layer_index) {
+                    self.retain_completed_control(
+                        layer_index,
+                        &live_clip,
+                        Beats::from_f32(end_beat),
+                    );
+                }
                 self.live_slots_list.retain(|(l, _)| *l != layer_index);
                 self.live_slot_clip_ids.remove(&clip_id);
                 self.slot_creation_times.remove(&layer_index);
@@ -723,6 +776,18 @@ impl LiveClipManager {
         }
 
         let start_beat = live_clip.start_beat;
+
+        // Control scheduling closes at the raw accepted event position. This
+        // deliberately bypasses recording quantization so future launch and
+        // NoteOff history retain the source's exact beat.
+        let control_end_beat = if event_absolute_tick >= 0 {
+            Beats(event_absolute_tick as f64 / MIDI_CLOCK_TICKS_PER_BEAT as f64)
+        } else {
+            beat_stamp
+                .map(Beats::from_f32)
+                .unwrap_or_else(|| host.get_beat_snapped_beat())
+        };
+        self.retain_completed_control(layer_index, &live_clip, control_end_beat);
 
         // Compute held duration
         let held_beats = if event_absolute_tick >= 0 {
@@ -998,5 +1063,160 @@ impl LiveClipManager {
 impl Default for LiveClipManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::layer::Layer;
+    use manifold_core::PresetTypeId;
+    use manifold_core::types::LayerType;
+    use manifold_editing::command::Command;
+
+    struct TestHost {
+        beat: Beats,
+        time: Seconds,
+        stopped: Vec<String>,
+    }
+
+    impl TestHost {
+        fn new() -> Self {
+            Self { beat: Beats::ZERO, time: Seconds::ZERO, stopped: Vec::new() }
+        }
+    }
+
+    impl LiveClipHost for TestHost {
+        fn current_beat(&self) -> Beats { self.beat }
+        fn current_time(&self) -> Seconds { self.time }
+        fn is_recording(&self) -> bool { false }
+        fn is_playing(&self) -> bool { true }
+        fn show_debug_logs(&self) -> bool { false }
+        fn get_bpm_at_beat(&self, _beat: Beats) -> f32 { 120.0 }
+        fn get_tempo_source_at_beat(&self, _beat: Beats) -> TempoPointSource { TempoPointSource::Unknown }
+        fn get_beat_snapped_beat(&self) -> Beats { self.beat }
+        fn get_current_absolute_tick(&self) -> i32 { -1 }
+        fn stop_clip(&mut self, clip_id: &str) { self.stopped.push(clip_id.to_owned()); }
+        fn mark_compositor_dirty(&mut self) {}
+        fn invalidate_lookahead_prewarm(&mut self) {}
+        fn register_clip_lookup(&mut self, _clip_id: &str, _clip: &TimelineClip) {}
+        fn record_command(&mut self, _cmd: Box<dyn Command>) {}
+        fn beat_to_timeline_time(&self, beat: Beats) -> Seconds { Seconds(beat.0 * 0.5) }
+    }
+
+    fn project() -> Project {
+        let mut project = Project::default();
+        project.timeline.insert_layer(0, Layer::new("Live".into(), LayerType::Video, 0));
+        project
+    }
+
+    fn generator_clip(start: Beats, duration: Beats) -> TimelineClip {
+        let mut clip = TimelineClip::new_generator(start, duration);
+        clip.layer_id = manifold_core::LayerId::new("stable-layer");
+        clip.is_muted = true;
+        clip
+    }
+
+    #[test]
+    fn completed_controls_preserve_identity_mute_and_exact_interval() {
+        let mut manager = LiveClipManager::new();
+        let clip = generator_clip(Beats(2.0), Beats(1.0));
+        manager.retain_completed_control(4, &clip, Beats(2.375));
+        let mut refs = Vec::new();
+        manager.drain_completed_controls(&mut refs);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].clip_id, clip.id);
+        assert_eq!(refs[0].layer_index, 4);
+        assert_eq!(refs[0].clip_index, crate::scheduler::ActiveClipRef::LIVE_SLOT);
+        assert_eq!(refs[0].layer_id, clip.layer_id);
+        assert_eq!(refs[0].start_beat, Beats(2.0));
+        assert_eq!(refs[0].duration_beats, Beats(0.375));
+        assert!(refs[0].is_muted);
+        assert_eq!(refs[0].is_looping, clip.is_looping);
+    }
+
+    #[test]
+    fn accepted_noteoff_uses_raw_tick_and_guarded_noteoff_is_inert() {
+        let mut project = project();
+        let mut host = TestHost::new();
+        let mut manager = LiveClipManager::new();
+        project.settings.quantize_mode = QuantizeMode::Beat;
+        let clip = manager
+            .trigger_live_generator_clip(
+                &mut project, &host, PresetTypeId::PLASMA, 0, 4.0, None, -1, false, 1.0, 60,
+            )
+            .unwrap();
+        manager.commit_live_clip(&mut project, &mut host, 0, Some(&clip.id), None, 30, 1.1, 60);
+        let mut refs = Vec::new();
+        manager.drain_completed_controls(&mut refs);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].duration_beats, Beats(1.25));
+        refs.clear();
+
+        let clip = manager
+            .trigger_live_generator_clip(
+                &mut project, &host, PresetTypeId::PLASMA, 0, 4.0, None, -1, false, 2.0, 60,
+            )
+            .unwrap();
+        manager.commit_live_clip(&mut project, &mut host, 0, Some(&clip.id), None, -1, 2.001, 60);
+        manager.drain_completed_controls(&mut refs);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn replacement_expiry_future_cancel_and_clear_preserve_interval_policy() {
+        let mut project = project();
+        let mut host = TestHost::new();
+        let mut manager = LiveClipManager::new();
+        let first = manager
+            .trigger_live_generator_clip(
+                &mut project, &host, PresetTypeId::PLASMA, 0, 4.0, None, -1, false, 1.0, 60,
+            )
+            .unwrap();
+        host.beat = Beats(0.25);
+        manager
+            .trigger_live_generator_clip(
+                &mut project, &host, PresetTypeId::PLASMA, 0, 4.0, None, -1, false, 1.1, 60,
+            )
+            .unwrap();
+        let mut refs = Vec::new();
+        manager.drain_completed_controls(&mut refs);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].clip_id, first.id);
+        assert_eq!(refs[0].duration_beats, Beats(0.25));
+
+        host.beat = Beats(0.0);
+        project.timeline.layers[0].source_clip_ids = vec!["source".into()];
+        let mut manager = LiveClipManager::new();
+        let oneshot = manager.fire_layer_oneshot(&mut project, &host, 0, Beats(1.0), 0.0).unwrap();
+        assert!(manager.expire_due_oneshots(0.5).is_empty());
+        assert_eq!(manager.expire_due_oneshots(1.0), vec![(0, oneshot.id.clone())]);
+        refs.clear();
+        manager.drain_completed_controls(&mut refs);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].duration_beats, Beats(1.0));
+
+        host.beat = Beats(2.0);
+        let mut manager = LiveClipManager::new();
+        let future = manager
+            .trigger_live_generator_clip(
+                &mut project, &host, PresetTypeId::PLASMA, 0, 4.0, None, -1, false, 3.0, 60,
+            )
+            .unwrap();
+        manager.commit_live_clip(&mut project, &mut host, 0, Some(&future.id), None, 0, 3.1, 60);
+        refs.clear();
+        manager.drain_completed_controls(&mut refs);
+        assert!(refs.is_empty());
+
+        manager.retain_completed_control(0, &generator_clip(Beats(1.0), Beats(1.0)), Beats(1.5));
+        manager.clear_all();
+        refs.clear();
+        manager.drain_completed_controls(&mut refs);
+        assert!(refs.is_empty());
+
+        manager.retain_completed_control(0, &generator_clip(Beats(1.0), Beats(1.0)), Beats(1.5));
+        manager.clear_on_seek(2.0, &mut |_| {});
+        manager.drain_completed_controls(&mut refs);
+        assert!(refs.is_empty());
     }
 }
