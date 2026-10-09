@@ -118,6 +118,48 @@ fn envelope_step_value_of(engine: &PlaybackEngine, layer_index: usize) -> Option
 
 const DT: f64 = 1.0 / 60.0;
 
+fn child_source(owner: &Layer) -> Layer {
+    let mut source = Layer::new_trigger("Source".into(), owner.layer_id.clone(), 1);
+    source.clips.push(TimelineClip::new_trigger(Beats(4.0), Beats(4.0)));
+    source
+}
+
+#[test]
+fn reparenting_rechecks_group_source_scope_without_changing_saved_assignment() {
+    use manifold_core::params::ClipTriggerSource;
+    use manifold_core::types::LayerType;
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers.truncate(1);
+    let group = Layer::new("Group".into(), LayerType::Group, 1);
+    let group_id = group.layer_id.clone();
+    let mut source = child_source(&group);
+    source.clips = [0.0, 1.0, 2.0].into_iter()
+        .map(|beat| TimelineClip::new_trigger(Beats(beat), Beats(0.25))).collect();
+    let selection = ClipTriggerSource::Lane { layer_id: source.layer_id.clone() };
+    let owner_id = project.timeline.layers[0].layer_id.clone();
+    project.timeline.layers[0].parent_layer_id = Some(group_id.clone());
+    project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut("level").unwrap()
+        .clip_trigger_source = selection.clone();
+    project.timeline.layers.extend([group, source]);
+    let mut engine = PlaybackEngine::new(Vec::new());
+    engine.initialize(project);
+    let owner_index = engine.project().unwrap().timeline.layer_index_for_id(&owner_id).unwrap();
+    engine.set_state(PlaybackState::Playing);
+    tick_n(&mut engine, 1, 0.1);
+    assert_eq!(envelope_step_value_of(&engine, owner_index), Some(1.0));
+
+    // Mutate only hierarchy here: this isolates playback scope validation
+    // from the separately tested editing command and undo machinery.
+    engine.project_mut().unwrap().timeline.layers[owner_index].parent_layer_id = None;
+    tick_n(&mut engine, 1, 0.5);
+    assert_eq!(envelope_step_value_of(&engine, owner_index), Some(1.0));
+    engine.project_mut().unwrap().timeline.layers[owner_index].parent_layer_id = Some(group_id);
+    tick_n(&mut engine, 1, 0.5);
+    assert_eq!(envelope_step_value_of(&engine, owner_index), Some(2.0));
+    assert_eq!(engine.project().unwrap().timeline.layers[owner_index].gen_params().unwrap()
+        .params.get("level").unwrap().clip_trigger_source, selection);
+}
+
 #[test]
 fn child_patterns_keep_step_responses_isolated_without_audio_or_renderer() {
     use manifold_core::audio_mod::{AudioFeature, ParameterAudioMod};
@@ -180,6 +222,7 @@ fn child_patterns_keep_step_responses_isolated_without_audio_or_renderer() {
 #[test]
 fn selected_source_fires_without_a_renderer_or_unmuted_owner() {
     let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[1] = child_source(&project.timeline.layers[0]);
     let source_id = project.timeline.layers[1].layer_id.clone();
     project.timeline.layers[0].is_muted = true;
     project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut("level").unwrap()
@@ -222,6 +265,7 @@ fn muted_main_clip_does_not_advance_an_envelope() {
 #[test]
 fn deleting_a_source_cancels_its_unconsumed_start() {
     let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[1] = child_source(&project.timeline.layers[0]);
     let source_id = project.timeline.layers[1].layer_id.clone();
     project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut("level").unwrap()
         .clip_trigger_source = manifold_core::params::ClipTriggerSource::Lane { layer_id: source_id };

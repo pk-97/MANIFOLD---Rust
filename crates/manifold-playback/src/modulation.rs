@@ -751,7 +751,7 @@ fn advance_instance_audio_hops(
         let clip_starts = if info.accepts_clip_response(m) {
             controls.starts(&p.clip_trigger_source, layer_id)
         } else { &[] };
-        let source_layer = ClipControlFrame::source_layer(&p.clip_trigger_source, layer_id);
+        let source_layer = controls.source_layer(&p.clip_trigger_source, layer_id);
         let clip_only = info.has_event_response(m)
             && !m.trigger_mode.unwrap_or(TriggerFireMode::Transient).wants_transient();
         let batch = if clip_only {
@@ -1212,7 +1212,7 @@ fn advance_instance_snapshot_audio(
         let starts = if info.accepts_clip_response(m) {
             controls.starts(&p.clip_trigger_source, layer_id)
         } else { &[] };
-        let source_layer = ClipControlFrame::source_layer(&p.clip_trigger_source, layer_id);
+        let source_layer = controls.source_layer(&p.clip_trigger_source, layer_id);
         let audio_count = usize::from(features.is_some() && !info.is_trigger_gate);
         if !validate_control_interval(m, starts, audio_count, clock) { continue; }
         let mut starts = starts.iter().peekable();
@@ -1317,6 +1317,7 @@ mod tests {
     use manifold_core::layer::Layer;
     use manifold_core::preset_definition_registry::create_default;
     use manifold_core::project::Project;
+    use manifold_core::types::LayerType;
     use manifold_core::PresetTypeId;
 
     fn controls_for_timing(
@@ -1800,6 +1801,8 @@ mod tests {
         };
 
         let mut controls = ClipControlFrame::default();
+        controls.set_layer_scope(owner.clone(), LayerType::Video, None);
+        controls.set_layer_scope(lane.clone(), LayerType::Trigger, Some(owner.clone()));
         controls.record_start(
             owner,
             crate::clip_controls::ClipControlStart {
@@ -2053,6 +2056,8 @@ mod tests {
         param.clip_trigger_source = manifold_core::params::ClipTriggerSource::Lane { layer_id: source.clone() };
         fx.audio_mods_mut()[0].trigger_mode = Some(TriggerFireMode::ClipEdge);
         let mut controls = ClipControlFrame::default();
+        controls.set_layer_scope(destination.clone(), LayerType::Video, None);
+        controls.set_layer_scope(source.clone(), LayerType::Trigger, Some(destination.clone()));
         for (id, beat) in [("first", 0.125), ("second", 0.375)] {
             controls.record_start(source.clone(), crate::clip_controls::ClipControlStart {
                 clip_id: manifold_core::ClipId::new(id), beat: Beats(beat), is_muted: false,

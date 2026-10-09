@@ -4,6 +4,70 @@ use crate::layer::Layer;
 use crate::params::ClipTriggerSource;
 use crate::types::LayerType;
 
+#[derive(Clone, Copy)]
+pub struct ClipTriggerLayer<'a> {
+    pub layer_type: LayerType,
+    pub parent: Option<&'a LayerId>,
+}
+
+impl<'a> From<&'a Layer> for ClipTriggerLayer<'a> {
+    fn from(layer: &'a Layer) -> Self {
+        Self {
+            layer_type: layer.layer_type,
+            parent: layer.parent_layer_id.as_ref(),
+        }
+    }
+}
+
+/// Return whether `source` is a trigger lane owned by `owner` or one of the
+/// consecutive group ancestors above it.
+pub fn clip_trigger_source_is_eligible<'a>(
+    owner: &LayerId,
+    source: &LayerId,
+    layer_count: usize,
+    lookup: impl Fn(&LayerId) -> Option<ClipTriggerLayer<'a>>,
+) -> bool {
+    let Some(owner_layer) = lookup(owner) else {
+        return false;
+    };
+    if owner_layer.layer_type == LayerType::Trigger {
+        return false;
+    }
+    let Some(source_layer) = lookup(source) else {
+        return false;
+    };
+    if source_layer.layer_type != LayerType::Trigger {
+        return false;
+    }
+    let Some(source_parent) = source_layer.parent else {
+        return false;
+    };
+    if source_parent == owner {
+        return true;
+    }
+
+    let mut current = owner;
+    for _ in 0..layer_count {
+        let Some(current_layer) = lookup(current) else {
+            return false;
+        };
+        let Some(parent) = current_layer.parent else {
+            return false;
+        };
+        let Some(parent_layer) = lookup(parent) else {
+            return false;
+        };
+        if parent_layer.layer_type != LayerType::Group {
+            return false;
+        }
+        if parent == source_parent {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
 impl crate::project::Project {
     /// Resolve the non-master, non-trigger layer that owns a graph target.
     pub fn clip_trigger_target_layer(&self, target: &GraphTarget) -> Option<&Layer> {
@@ -32,38 +96,19 @@ impl crate::project::Project {
         let Some(target_layer) = self.clip_trigger_target_layer(target) else {
             return Vec::new();
         };
-        let mut ancestors = ahash::AHashSet::new();
-        let mut current_id = Some(target_layer.layer_id.clone());
-        while let Some(layer_id) = current_id {
-            if !ancestors.insert(layer_id.clone()) {
-                break;
-            }
-            let Some(layer) = self.timeline.layers.iter().find(|layer| layer.layer_id == layer_id) else {
-                break;
-            };
-            if layer.is_trigger() {
-                break;
-            }
-            let Some(parent_id) = layer.parent_layer_id.as_ref() else {
-                break;
-            };
-            let Some(parent) = self.timeline.layers.iter().find(|parent| &parent.layer_id == parent_id) else {
-                break;
-            };
-            if !parent.is_group() {
-                break;
-            }
-            current_id = Some(parent.layer_id.clone());
-        }
+        let owner = &target_layer.layer_id;
+        let layer_count = self.timeline.layers.len();
         self.timeline
             .layers
             .iter()
             .filter(|candidate| {
-                candidate.layer_type == LayerType::Trigger
-                    && candidate
-                        .parent_layer_id
-                        .as_ref()
-                        .is_some_and(|parent| ancestors.contains(parent))
+                let source = &candidate.layer_id;
+                clip_trigger_source_is_eligible(owner, source, layer_count, |id| {
+                    self.timeline
+                        .layer_index_for_id(id)
+                        .and_then(|index| self.timeline.layers.get(index))
+                        .map(ClipTriggerLayer::from)
+                })
             })
             .map(|candidate| candidate.layer_id.clone())
             .collect()
@@ -76,18 +121,31 @@ impl crate::project::Project {
         param_id: &str,
         source: &ClipTriggerSource,
     ) -> bool {
+        let Some(owner_layer) = self.clip_trigger_target_layer(target) else {
+            return false;
+        };
         let Some(owner) = self.graph_target_owner(target) else {
             return false;
         };
-        if self.clip_trigger_target_layer(target).is_none() || owner.params.get(param_id).is_none() {
+        if owner.params.get(param_id).is_none() {
             return false;
         }
         match source {
             ClipTriggerSource::OwnLayer | ClipTriggerSource::Disabled => true,
-            ClipTriggerSource::Lane { layer_id } => self
-                .clip_trigger_source_options(target)
-                .iter()
-                .any(|candidate| candidate == layer_id),
+            ClipTriggerSource::Lane { layer_id } => {
+                let layer_count = self.timeline.layers.len();
+                clip_trigger_source_is_eligible(
+                    &owner_layer.layer_id,
+                    layer_id,
+                    layer_count,
+                    |id| {
+                        self.timeline
+                            .layer_index_for_id(id)
+                            .and_then(|index| self.timeline.layers.get(index))
+                            .map(ClipTriggerLayer::from)
+                    },
+                )
+            }
         }
     }
 }
@@ -138,6 +196,98 @@ mod tests {
         let mut layer = Layer::new_trigger(id.to_owned(), LayerId::new(parent), 0);
         layer.layer_id = LayerId::new(id);
         layer
+    }
+
+    #[test]
+    fn eligibility_is_bounded_and_accepts_only_owner_or_group_ancestors() {
+        let layers = [
+            effect_layer("group", LayerType::Group, None),
+            effect_layer("owner", LayerType::Video, Some("group")),
+            trigger("owner-lane", "owner"),
+            trigger("group-lane", "group"),
+            effect_layer("sibling", LayerType::Video, Some("group")),
+            trigger("sibling-lane", "sibling"),
+            trigger("root-lane", "root"),
+        ];
+        let owner = LayerId::new("owner");
+        let lookup = |id: &LayerId| {
+            layers
+                .iter()
+                .find(|layer| &layer.layer_id == id)
+                .map(ClipTriggerLayer::from)
+        };
+        assert!(clip_trigger_source_is_eligible(
+            &owner,
+            &LayerId::new("owner-lane"),
+            layers.len(),
+            lookup,
+        ));
+        assert!(clip_trigger_source_is_eligible(
+            &owner,
+            &LayerId::new("group-lane"),
+            layers.len(),
+            lookup,
+        ));
+        assert!(!clip_trigger_source_is_eligible(
+            &owner,
+            &LayerId::new("sibling-lane"),
+            layers.len(),
+            lookup,
+        ));
+        assert!(!clip_trigger_source_is_eligible(
+            &owner,
+            &LayerId::new("root-lane"),
+            layers.len(),
+            lookup,
+        ));
+        assert!(!clip_trigger_source_is_eligible(
+            &owner,
+            &LayerId::new("missing"),
+            layers.len(),
+            lookup,
+        ));
+
+        let invalid_layers = [
+            effect_layer("group", LayerType::Group, None),
+            effect_layer("owner", LayerType::Video, Some("sibling")),
+            trigger("group-lane", "group"),
+        ];
+        let invalid_lookup = |id: &LayerId| {
+            invalid_layers
+                .iter()
+                .find(|layer| &layer.layer_id == id)
+                .map(ClipTriggerLayer::from)
+        };
+        assert!(!clip_trigger_source_is_eligible(
+            &LayerId::new("owner"),
+            &LayerId::new("group-lane"),
+            invalid_layers.len(),
+            invalid_lookup,
+        ));
+
+        let cycle_layers = [
+            effect_layer("group-a", LayerType::Group, Some("group-b")),
+            effect_layer("group-b", LayerType::Group, Some("group-a")),
+            trigger("group-b-lane", "group-b"),
+        ];
+        let cycle_lookup = |id: &LayerId| {
+            cycle_layers
+                .iter()
+                .find(|layer| &layer.layer_id == id)
+                .map(ClipTriggerLayer::from)
+        };
+        assert!(clip_trigger_source_is_eligible(
+            &LayerId::new("group-a"),
+            &LayerId::new("group-b-lane"),
+            cycle_layers.len(),
+            cycle_lookup,
+        ));
+        assert!(!clip_trigger_source_is_eligible(
+            &LayerId::new("group-a"),
+            &LayerId::new("group-b-lane"),
+            0,
+            cycle_lookup,
+        ));
     }
 
     #[test]

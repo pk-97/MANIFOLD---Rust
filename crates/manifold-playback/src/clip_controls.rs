@@ -6,6 +6,8 @@
 
 use ahash::AHashMap;
 use manifold_core::params::ClipTriggerSource;
+use manifold_core::project::{ClipTriggerLayer, clip_trigger_source_is_eligible};
+use manifold_core::types::LayerType;
 use manifold_core::{Beats, ClipId, LayerId};
 
 /// A period during which a clip-control source is active.
@@ -33,6 +35,8 @@ pub struct ClipControlStart {
 
 #[derive(Debug, Default)]
 struct ClipControlSource {
+    layer_type: Option<LayerType>,
+    parent: Option<LayerId>,
     spans: Vec<ClipControlSpan>,
     starts: Vec<ClipControlStart>,
 }
@@ -72,6 +76,19 @@ impl ClipControlFrame {
     /// Deleted sources cannot deliver starts queued before the edit.
     pub(crate) fn retain_sources(&mut self, mut exists: impl FnMut(&LayerId) -> bool) {
         self.by_source.retain(|id, _| exists(id));
+    }
+
+    /// Publish the current layer hierarchy alongside its control facts. This
+    /// is derived scope metadata, never a second authored routing table.
+    pub(crate) fn set_layer_scope(
+        &mut self,
+        id: LayerId,
+        layer_type: LayerType,
+        parent: Option<LayerId>,
+    ) {
+        let source = self.by_source.entry(id).or_default();
+        source.layer_type = Some(layer_type);
+        source.parent = parent;
     }
 
     /// Suppress a source without discarding its reusable storage or changing
@@ -138,13 +155,24 @@ impl ClipControlFrame {
     }
 
     pub(crate) fn source_layer<'a>(
+        &self,
         source: &'a ClipTriggerSource,
         owner: Option<&'a LayerId>,
     ) -> Option<&'a LayerId> {
         match source {
             ClipTriggerSource::OwnLayer => owner,
             ClipTriggerSource::Disabled => None,
-            ClipTriggerSource::Lane { layer_id } => Some(layer_id),
+            ClipTriggerSource::Lane { layer_id } => {
+                let owner = owner?;
+                clip_trigger_source_is_eligible(owner, layer_id, self.by_source.len(), |id| {
+                    let source = self.by_source.get(id)?;
+                    Some(ClipTriggerLayer {
+                        layer_type: source.layer_type?,
+                        parent: source.parent.as_ref(),
+                    })
+                })
+                .then_some(layer_id)
+            }
         }
     }
 
@@ -157,7 +185,7 @@ impl ClipControlFrame {
         owner: Option<&LayerId>,
         beat: Beats,
     ) -> Option<Beats> {
-        let source_layer = Self::source_layer(source, owner)?;
+        let source_layer = self.source_layer(source, owner)?;
         let source = self.by_source.get(source_layer)?;
         let span = source.spans.iter().rev().find(|span| {
             if beat < span.start_beat || beat < span.control_from {
@@ -177,7 +205,7 @@ impl ClipControlFrame {
         source: &ClipTriggerSource,
         owner: Option<&LayerId>,
     ) -> &[ClipControlStart] {
-        let Some(source_layer) = Self::source_layer(source, owner) else {
+        let Some(source_layer) = self.source_layer(source, owner) else {
             return &[];
         };
         self.by_source
@@ -212,6 +240,8 @@ mod tests {
         let mut frame = ClipControlFrame::default();
         let own_layer = LayerId::new("own");
         let lane_layer = LayerId::new("lane");
+        frame.set_layer_scope(own_layer.clone(), LayerType::Video, None);
+        frame.set_layer_scope(lane_layer.clone(), LayerType::Trigger, Some(own_layer.clone()));
         frame.record_span(own_layer.clone(), span("own-clip", 1.0, Some(4.0)));
         frame.record_span(lane_layer.clone(), span("lane-clip", 2.0, Some(5.0)));
         frame.finish();
@@ -252,6 +282,33 @@ mod tests {
             frame.elapsed(&ClipTriggerSource::default(), Some(&lane_layer), Beats(2.0)),
             Some(Beats(0.0))
         );
+    }
+
+    #[test]
+    fn scope_changes_disable_both_phase_and_starts() {
+        let mut frame = ClipControlFrame::default();
+        let owner = LayerId::new("owner");
+        let group = LayerId::new("group");
+        let lane = LayerId::new("lane");
+        let selection = ClipTriggerSource::Lane { layer_id: lane.clone() };
+        frame.set_layer_scope(group.clone(), LayerType::Group, None);
+        frame.set_layer_scope(owner.clone(), LayerType::Video, Some(group.clone()));
+        frame.set_layer_scope(lane.clone(), LayerType::Trigger, Some(group.clone()));
+        frame.record_span(lane.clone(), span("clip", 1.0, Some(4.0)));
+        frame.record_start(lane.clone(), start("clip", 1.0));
+        assert_eq!(frame.elapsed(&selection, Some(&owner), Beats(2.0)), Some(Beats(1.0)));
+        assert_eq!(frame.starts(&selection, Some(&owner)).len(), 1);
+
+        frame.set_layer_scope(owner.clone(), LayerType::Video, None);
+        assert_eq!(frame.elapsed(&selection, Some(&owner), Beats(2.0)), None);
+        assert!(frame.starts(&selection, Some(&owner)).is_empty());
+        frame.set_layer_scope(owner.clone(), LayerType::Video, Some(group));
+        frame.set_layer_scope(lane.clone(), LayerType::Video, Some(owner.clone()));
+        assert_eq!(frame.elapsed(&selection, Some(&owner), Beats(2.0)), None);
+        assert!(frame.starts(&selection, Some(&owner)).is_empty());
+        frame.set_layer_scope(lane, LayerType::Trigger, None);
+        assert_eq!(frame.elapsed(&selection, Some(&owner), Beats(2.0)), None);
+        assert!(frame.starts(&selection, Some(&owner)).is_empty());
     }
 
     #[test]

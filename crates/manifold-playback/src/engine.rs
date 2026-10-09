@@ -1680,10 +1680,13 @@ impl PlaybackEngine {
         }
         if let Some(project) = &self.project {
             self.clip_controls.retain_sources(|id| project.timeline.layer_index_for_id(id).is_some());
-            // Trigger output has its own mute policy. Parent visibility and
-            // legacy main-clip edge responses do not participate in it.
-            for layer in project.timeline.layers.iter().filter(|layer| layer.is_trigger()) {
-                if layer.is_muted {
+            for layer in &project.timeline.layers {
+                self.clip_controls.set_layer_scope(
+                    layer.layer_id.clone(), layer.layer_type, layer.parent_layer_id.clone(),
+                );
+                // Trigger output has its own mute policy. Parent visibility
+                // and legacy main-clip edge responses do not participate.
+                if layer.is_trigger() && layer.is_muted {
                     self.clip_controls.suppress_source(&layer.layer_id);
                 }
             }

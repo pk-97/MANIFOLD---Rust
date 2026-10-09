@@ -299,8 +299,13 @@ Trigger live launches use the same `trigger_live_content_clip` path as generator
 launches, with the containing layer deciding the clip constructor. MIDI from-layer
 and audio one-shot classification admit trigger lanes without requiring media.
 
-`Project::clip_trigger_source_options` supplies the authoring eligibility rule:
-local children and children of ancestor groups, in timeline order.
+`clip_trigger_source_is_eligible` supplies the shared authoring and playback rule:
+local children and children of consecutive ancestor groups. The project exposes
+eligible choices in timeline order; the playback control frame publishes the
+current layer hierarchy alongside its source facts and uses the same predicate.
+Missing, unrelated and out-of-scope saved sources produce neither phase nor
+starts, without changing the saved assignment. Hierarchy edits take effect on
+the next synchronization.
 `SetParamClipTriggerSourceCommand::for_assignment` validates it on execution;
 the existing raw constructor still supports restoring unresolved saved references.
 `EditingService::create_trigger_lane` composes insertion and optional assignment
@@ -319,7 +324,7 @@ cannot overwrite earlier session samples or replay a start from before resumptio
 the former error and checks repeated transitions, stopped-session gaps and seeking.
 
 Full acceptance below remains open: external-clock discontinuities, source reassignment,
-runtime routing scope and rendered scene timing must be completed before exposing
+and rendered scene timing must be completed before exposing
 trigger lanes. CPU event-order proofs do not establish rendered scene behaviour.
 
 ### Model, scheduling and delivery
