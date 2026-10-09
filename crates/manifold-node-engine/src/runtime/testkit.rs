@@ -7,10 +7,10 @@ use manifold_core::NodeId;
 pub fn slot_count(runtime: &PresetRuntime) -> usize { runtime.effect_nodes.len() }
 #[cfg(feature = "gpu-proofs")]
 pub fn pending_segments(runtime: &PresetRuntime) -> bool { runtime.pending_segments }
-pub fn sampling_mask(runtime: &PresetRuntime) -> Option<&[bool]> { runtime.physics_sample_steps.as_deref() }
-pub fn last_physics_frame_time(runtime: &PresetRuntime) -> Option<FrameTime> { runtime.last_physics_frame_time }
+pub fn sampling_mask(runtime: &PresetRuntime) -> Option<&[bool]> { runtime.water.sample_steps.as_deref() }
+pub fn last_physics_frame_time(runtime: &PresetRuntime) -> Option<FrameTime> { runtime.water.last_frame_time }
 #[cfg(feature = "gpu-proofs")]
-pub fn set_last_physics_frame_time(runtime: &mut PresetRuntime, value: Option<FrameTime>) { runtime.last_physics_frame_time = value; }
+pub fn set_last_physics_frame_time(runtime: &mut PresetRuntime, value: Option<FrameTime>) { runtime.water.last_frame_time = value; }
 #[cfg(feature = "gpu-proofs")]
 pub fn published_identity(runtime: &PresetRuntime, fluid: NodeInstanceId) -> Option<Result<[u8; 32], String>> {
     runtime.effect_nodes.first().expect("effect slot").physics_sources.published_identity(fluid).map(|result| result.map_err(str::to_owned))
@@ -26,9 +26,7 @@ pub fn has_state<T: crate::state_store::NodeState>(runtime: &mut PresetRuntime, 
     runtime.state_store.get::<T>(node, key).is_some()
 }
 pub fn reset_impulse_routes(runtime: &mut PresetRuntime) {
-    runtime.impulse_identity = std::sync::Arc::new(());
-    runtime.reset_modifier_impulses();
-    runtime.last_physics_frame_time = None;
+    runtime.water.reset();
 }
 pub fn math_view_count(runtime: &PresetRuntime) -> usize { runtime.math_views.len() }
 pub fn math_variant_count(runtime: &PresetRuntime, view: usize) -> usize { runtime.math_views[view].variants.len() }

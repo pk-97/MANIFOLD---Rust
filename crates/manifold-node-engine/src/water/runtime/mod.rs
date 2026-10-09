@@ -15,3 +15,5 @@ mod physics_source_state_tests;
 #[cfg(feature = "gpu-proofs")]
 pub(crate) mod physics_sources;
 pub mod scene_impulses;
+mod state;
+pub(crate) use state::WaterRuntimeState;

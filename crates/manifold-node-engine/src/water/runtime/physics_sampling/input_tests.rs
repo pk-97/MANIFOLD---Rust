@@ -112,7 +112,8 @@ fn frame(runtime: &mut PresetRuntime, seconds: f64, value: f32, triggers: f32) -
     let time = FrameTime {
         seconds: Seconds(seconds),
         beats: runtime
-            .physics_project_tempo
+            .water
+            .project_tempo
             .as_ref()
             .map_or(Beats(seconds * 2.0), |tempo| {
                 TempoMapConverter::seconds_to_beat_immut(
@@ -123,7 +124,8 @@ fn frame(runtime: &mut PresetRuntime, seconds: f64, value: f32, triggers: f32) -
             }),
         delta: Seconds(
             runtime
-                .last_physics_frame_time
+                .water
+                .last_frame_time
                 .map_or(0.0, |previous| seconds - previous.seconds.0),
         ),
         frame_count: 0,
@@ -285,7 +287,7 @@ fn compatible_rebuild_keeps_held_tempo_and_synthetic_context_can_clear_it() {
     assert_tempo_samples(&samples[..samples.len() - 1], &old);
     assert!((samples.last().unwrap().time.beats.0 - 0.15).abs() < 1e-12);
     rebuilt.set_project_tempo(None);
-    assert!(rebuilt.physics_project_tempo.is_none());
+    assert!(rebuilt.water.project_tempo.is_none());
     frame(&mut rebuilt, 0.1, 9.0, 3.0);
     let synthetic = frame(&mut rebuilt, 0.2, 9.0, 3.0);
     for sample in synthetic {

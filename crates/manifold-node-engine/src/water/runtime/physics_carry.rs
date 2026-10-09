@@ -29,7 +29,7 @@ impl PresetRuntime {
             return;
         }
         let (Some(mask), Some(old_mask)) =
-            (&self.physics_sample_steps, &prior.physics_sample_steps)
+            (&self.water.sample_steps, &prior.water.sample_steps)
         else {
             return;
         };
@@ -79,13 +79,13 @@ impl PresetRuntime {
             }
         }
         if let (Some(inputs), Some(old_inputs)) = (
-            &mut self.physics_input_snapshot,
-            &prior.physics_input_snapshot,
+            &mut self.water.input_snapshot,
+            &prior.water.input_snapshot,
         ) {
             inputs.carry_from(old_inputs, &steps);
         }
-        self.last_physics_frame_time = prior.last_physics_frame_time;
-        self.physics_project_tempo.clone_from(&prior.physics_project_tempo);
+        self.water.last_frame_time = prior.water.last_frame_time;
+        self.water.project_tempo.clone_from(&prior.water.project_tempo);
         #[cfg(feature = "gpu-proofs")]
         self.carry_physics_source_controls_from(prior);
         #[cfg(feature = "gpu-proofs")]

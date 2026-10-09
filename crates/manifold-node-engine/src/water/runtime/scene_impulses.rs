@@ -91,7 +91,7 @@ impl PresetRuntime {
                 .plan
                 .steps()
                 .iter()
-                .zip(self.physics_sample_steps.iter().flatten())
+                .zip(self.water.sample_steps.iter().flatten())
                 .filter_map(|(step, &enabled)| enabled.then_some(step.node))
                 .collect();
             let mut ancestry = AHashSet::default();
@@ -121,12 +121,12 @@ impl PresetRuntime {
                 })
                 .collect();
         }
-        self.scene_impulses = state;
+        self.water.scene_impulses = state;
         Ok(())
     }
 
     pub fn is_scene_impulse_param(&self, param: &str) -> bool {
-        self.scene_impulses.aliases.contains_key(param)
+        self.water.scene_impulses.aliases.contains_key(param)
     }
 
     /// Capture one accepted manual event. Host aliases may fan out to multiple
@@ -141,7 +141,7 @@ impl PresetRuntime {
         if !self.is_scene_impulse_param(param) {
             return Ok(false);
         }
-        let mut state = std::mem::take(&mut self.scene_impulses);
+        let mut state = std::mem::take(&mut self.water.scene_impulses);
         let result = (|| {
             let indices = &state.aliases[param];
             if indices.iter().any(|&index| state.routes[index].is_none()) {
@@ -201,11 +201,14 @@ impl PresetRuntime {
             }
             Ok(true)
         })();
-        self.scene_impulses = state;
+        self.water.scene_impulses = state;
         result
     }
 
-    pub(crate) fn observe_impulse_setup(&mut self) {
+}
+
+impl super::WaterRuntimeState {
+    pub(super) fn observe_impulse_setup(&mut self, graph: &crate::graph::Graph) {
         // A native Reset parameter creates a new epoch without rebuilding
         // this graph. That explicit reset cancels any failed retained capture.
         if self
@@ -213,14 +216,14 @@ impl PresetRuntime {
             .routes
             .iter()
             .flatten()
-            .any(|route| route.captured.has_stale_epoch(&self.graph))
+            .any(|route| route.captured.has_stale_epoch(graph))
         {
             for route in self.scene_impulses.routes.iter_mut().flatten() {
                 route.captured.clear();
             }
         }
         for (id, values) in &mut self.scene_impulses.setup {
-            let node = self.graph.get_node(*id).expect("prepared setup ancestor");
+            let node = graph.get_node(*id).expect("prepared setup ancestor");
             for (name, value) in values {
                 value.clone_from(
                     node.params
@@ -232,7 +235,7 @@ impl PresetRuntime {
         self.scene_impulses.setup_observed = true;
     }
 
-    pub(crate) fn reset_modifier_impulses(&mut self) {
+    pub(super) fn reset_modifier_impulses(&mut self) {
         self.scene_impulses.setup_observed = false;
         for route in self.scene_impulses.routes.iter_mut().flatten() {
             route

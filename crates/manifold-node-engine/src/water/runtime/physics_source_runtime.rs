@@ -53,7 +53,7 @@ impl PresetRuntime {
         if let Some(slot) = self.effect_nodes.first_mut() {
             slot.physics_sources.set_instance(&mut self.graph, instance);
         }
-        if let Some(inputs) = self.physics_input_snapshot.as_mut() {
+        if let Some(inputs) = self.water.input_snapshot.as_mut() {
             inputs.set_hops(instance);
         }
         for view in &mut self.math_views {

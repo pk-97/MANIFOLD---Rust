@@ -134,7 +134,7 @@ impl PresetRuntime {
         binding: &PreparedSceneImpulse,
         captured: &CapturedSceneImpulse,
     ) -> Result<(), String> {
-        if !Arc::ptr_eq(&binding.identity, &self.impulse_identity)
+        if !Arc::ptr_eq(&binding.identity, &self.water.impulse_identity)
             || !Arc::ptr_eq(&binding.recipients, &captured.recipients)
         {
             return Err(
@@ -272,7 +272,7 @@ impl PresetRuntime {
             })
             .collect();
         Ok(PreparedSceneImpulse {
-            identity: self.impulse_identity.clone(),
+            identity: self.water.impulse_identity.clone(),
             plan_epoch: self.last_forced_outputs_epoch,
             recipients: recipients.into(),
             field,
@@ -376,7 +376,7 @@ impl PresetRuntime {
         &mut self,
         captured: &mut CapturedSceneImpulse,
     ) -> Result<(), String> {
-        if !Arc::ptr_eq(&captured.identity, &self.impulse_identity) {
+        if !Arc::ptr_eq(&captured.identity, &self.water.impulse_identity) {
             return Err("Impulse: captured graph was reset or rebuilt".into());
         }
         let field = captured

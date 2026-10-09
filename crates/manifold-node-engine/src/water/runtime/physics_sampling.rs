@@ -330,17 +330,17 @@ impl PresetRuntime {
     /// input intervals retain their prior snapshot until the next observation.
     /// Synthetic warmup and standalone graphs explicitly supply `None`.
     pub fn set_project_tempo(&mut self, tempo: Option<&ProjectTempo>) {
-        let unchanged = match (self.physics_project_tempo.as_ref(), tempo) {
+        let unchanged = match (self.water.project_tempo.as_ref(), tempo) {
             (Some(current), Some(next)) => current.shares_mapping(next),
             (None, None) => true,
             _ => false,
         };
         if !unchanged {
-            self.physics_project_tempo = tempo.cloned();
+            self.water.project_tempo = tempo.cloned();
         }
         // Newly rebuilt native nodes need the snapshot even when the host's
         // map did not change. The node dirty-checks its retained source.
-        if self.physics_sample_steps.is_some() {
+        if self.water.sample_steps.is_some() {
             for instance in self.graph.nodes_mut() {
                 if let Some(native) = node::get_mut(instance.node.as_mut()) {
                     native.set_physics_project_tempo(tempo);
@@ -363,7 +363,8 @@ impl PresetRuntime {
             return Err("Impulse: source clock must be finite".into());
         }
         let previous = self
-            .last_physics_frame_time
+            .water
+            .last_frame_time
             .ok_or("Impulse: render the scene before capturing an event")?;
         if source.seconds.0 < previous.seconds.0 {
             return Err("Impulse: source precedes the latest physics observation".into());
@@ -377,10 +378,10 @@ impl PresetRuntime {
         // No ancestry means no solver here replays held-input history, so
         // there is no interval to close.
         let (Some(inputs), Some(steps)) = (
-            self.physics_input_snapshot.as_mut(),
-            self.physics_sample_steps.as_ref(),
+            self.water.input_snapshot.as_mut(),
+            self.water.sample_steps.as_ref(),
         ) else {
-            self.last_physics_frame_time = Some(source);
+            self.water.last_frame_time = Some(source);
             return Ok(());
         };
         inputs.set_sample_time(source);
@@ -392,10 +393,24 @@ impl PresetRuntime {
             steps,
             &inputs.values,
         );
-        self.last_physics_frame_time = Some(source);
+        self.water.last_frame_time = Some(source);
         Ok(())
     }
 
+    pub(crate) fn sample_physics_history(&mut self, current: FrameTime) {
+        #[cfg(feature = "gpu-proofs")]
+        self.observe_physics_source_assets();
+        let bindings = self
+            .effect_nodes
+            .first()
+            .map_or(&[][..], |slot| slot.bound.bindings.as_slice());
+        self.water.sample_physics_history(
+            &mut self.graph, &self.plan, &mut self.executor, bindings, current,
+        );
+    }
+}
+
+impl super::WaterRuntimeState {
     /// Sample stateless authored motion on the existing 240 Hz grid, holding
     /// external parameters at their last observed values. Today's parameters
     /// must not be substituted into an earlier tick. The final left-limit
@@ -403,29 +418,30 @@ impl PresetRuntime {
     /// the same timestamp; InputHistory preserves that discontinuity. Offline
     /// catch-up drains native ticks in bounded input batches without publishing
     /// intermediate graph outputs. Preview continues to retain its time debt.
-    pub(crate) fn sample_physics_history(&mut self, current: FrameTime) {
-        #[cfg(feature = "gpu-proofs")]
-        self.observe_physics_source_assets();
+    pub(super) fn sample_physics_history(
+        &mut self,
+        graph: &mut Graph,
+        plan: &ExecutionPlan,
+        executor: &mut crate::exec::execution::Executor,
+        bindings: &[ResolvedBinding],
+        current: FrameTime,
+    ) {
         let (Some(inputs), Some(steps)) = (
-            self.physics_input_snapshot.as_mut(),
-            self.physics_sample_steps.as_ref(),
+            self.input_snapshot.as_mut(),
+            self.sample_steps.as_ref(),
         ) else {
             return;
         };
-        let Some(previous) = self.last_physics_frame_time else {
-            inputs.capture(&self.graph, &self.plan, &self.physics_project_tempo);
+        let Some(previous) = self.last_frame_time else {
+            inputs.capture(graph, plan, &self.project_tempo);
             return;
         };
         let gap = current.seconds.0 - previous.seconds.0;
         if !gap.is_finite() || gap <= 0.0 {
-            inputs.capture(&self.graph, &self.plan, &self.physics_project_tempo);
+            inputs.capture(graph, plan, &self.project_tempo);
             return;
         }
-        let bindings = self
-            .effect_nodes
-            .first()
-            .map_or(&[][..], |slot| slot.bound.bindings.as_slice());
-        inputs.route_hops(bindings, &self.plan);
+        inputs.route_hops(bindings, plan);
         let drain_offline = offline_simulation();
         if drain_offline {
             // An offline render may inherit a preview backlog. Drain the
@@ -438,9 +454,9 @@ impl PresetRuntime {
             };
             inputs.set_sample_time(sample);
             execute_physics_sample_frame(
-                &mut self.executor,
-                &mut self.graph,
-                &self.plan,
+                executor,
+                graph,
+                plan,
                 sample,
                 steps,
                 &inputs.values,
@@ -491,7 +507,7 @@ impl PresetRuntime {
         // GPU liquids sample exactly at their ticks' starts: each tick's force
         // comes from its own simulated time, whatever the display rate.
         inputs.tick_times.clear();
-        for instance in self.graph.nodes_mut() {
+        for instance in graph.nodes_mut() {
             if let Some(native) = node::get_mut(instance.node.as_mut()) {
                 native.request_physics_samples(
                     previous.seconds.0,
@@ -539,9 +555,9 @@ impl PresetRuntime {
             let drain = drain_offline && samples_since_drain == DRAIN_INTERVAL;
             let _drain = drain.then(PhysicsHistoryDrainScope::new);
             execute_physics_sample_frame(
-                &mut self.executor,
-                &mut self.graph,
-                &self.plan,
+                executor,
+                graph,
+                plan,
                 sample,
                 steps,
                 &inputs.values,
@@ -553,7 +569,7 @@ impl PresetRuntime {
         }
         let closing_beat = if tempo.is_some() {
             let held_beat = beat_at(current.seconds.0);
-            let unchanged_at_boundary = self.physics_project_tempo.as_ref().is_some_and(|tempo| {
+            let unchanged_at_boundary = self.project_tempo.as_ref().is_some_and(|tempo| {
                 TempoMapConverter::seconds_to_beat_immut(
                     tempo.map(),
                     current.seconds,
@@ -581,13 +597,13 @@ impl PresetRuntime {
         inputs.apply_hops(bindings, current.seconds.0);
         let _drain = drain_offline.then(PhysicsHistoryDrainScope::new);
         execute_physics_sample_frame(
-            &mut self.executor,
-            &mut self.graph,
-            &self.plan,
+            executor,
+            graph,
+            plan,
             closing,
             steps,
             &inputs.values,
         );
-        inputs.capture(&self.graph, &self.plan, &self.physics_project_tempo);
+        inputs.capture(graph, plan, &self.project_tempo);
     }
 }

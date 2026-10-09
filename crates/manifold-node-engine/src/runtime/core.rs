@@ -6,8 +6,6 @@ use super::groups::splice_card_with_canonical_fallback;
 use super::*;
 use crate::{exec::backend::Backend, ports::PortType};
 
-pub(super) use crate::water::runtime::physics_sampling::physics_sample_steps;
-
 manifold_core::testkit_visible! {
 pub(crate) const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 }
@@ -76,14 +74,7 @@ fn output_resource(
 pub struct PresetRuntime {
     pub graph: Graph,
     pub plan: ExecutionPlan,
-    /// Captured event routes belong to this installed graph, never a rebuild.
-    pub(crate) impulse_identity: std::sync::Arc<()>,
-    pub(crate) scene_impulses: crate::water::runtime::scene_impulses::SceneImpulses,
-    /// Plan-aligned physics input ancestry, built once with the graph.
-    pub(crate) physics_sample_steps: Option<Vec<bool>>,
-    pub(crate) physics_input_snapshot: Option<crate::water::runtime::physics_sampling::PhysicsInputSnapshot>,
-    pub(crate) last_physics_frame_time: Option<FrameTime>,
-    pub(crate) physics_project_tempo: Option<crate::runtime::preset_context::ProjectTempo>,
+    pub(crate) water: crate::water::runtime::WaterRuntimeState,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
     /// `rt_enabled`/`temporal_upscale`), the compiled plan's
@@ -1354,25 +1345,17 @@ impl PresetRuntime {
         let topology_hash = compute_topology_hash(effects, groups, 0, 0, preview_effect);
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
-        let physics_sample_steps = match physics_sample_steps(&graph, &plan) {
-            Ok(steps) => steps,
+        let water = match crate::water::runtime::WaterRuntimeState::new(&graph, &plan) {
+            Ok(state) => state,
             Err(reason) => {
                 log::error!("[chain-error] {reason}");
                 return None;
             }
         };
-        let physics_input_snapshot = physics_sample_steps.as_ref().map(|steps| {
-            crate::water::runtime::physics_sampling::PhysicsInputSnapshot::prepare(&graph, &plan, steps)
-        });
         let mut runtime = Self {
             graph,
             plan,
-            physics_sample_steps,
-            physics_input_snapshot,
-            last_physics_frame_time: None,
-            physics_project_tempo: None,
-            impulse_identity: std::sync::Arc::new(()),
-            scene_impulses: Default::default(),
+            water,
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::new(Box::new(backend)),
@@ -1725,8 +1708,7 @@ impl PresetRuntime {
             &mut self.state_store,
             ctx.owner_key,
         );
-        self.last_physics_frame_time = Some(frame_time);
-        self.observe_impulse_setup();
+        self.water.after_frame(&self.graph, frame_time);
 
         self.output_texture()
     }
@@ -1914,8 +1896,7 @@ impl PresetRuntime {
         self.sample_physics_history(time);
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
-        self.last_physics_frame_time = Some(time);
-        self.observe_impulse_setup();
+        self.water.after_frame(&self.graph, time);
         self.consume_trigger_markers();
     }
 
@@ -2006,8 +1987,7 @@ impl PresetRuntime {
             // dead — found by the R2 accumulation gate, D-62).
             ctx.owner_key,
         );
-        self.last_physics_frame_time = Some(frame_time);
-        self.observe_impulse_setup();
+        self.water.after_frame(&self.graph, frame_time);
 
         // A held terminal leaves the host's target holding the last frame it
         // wrote, overlays included; drawing them again would stack.
@@ -2024,9 +2004,7 @@ impl PresetRuntime {
     /// Reset all generator state (per-primitive `extra_fields` + the runtime
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
-        self.impulse_identity = std::sync::Arc::new(());
-        self.reset_modifier_impulses();
-        self.last_physics_frame_time = None;
+        self.water.reset();
         for view in &mut self.math_views {
             view.events.clear();
             for variant in &mut view.variants {

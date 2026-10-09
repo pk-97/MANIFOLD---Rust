@@ -646,20 +646,12 @@ manifold_core::testkit_visible! {
         };
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
-        let physics_sample_steps = super::core::physics_sample_steps(&graph, &plan)
+        let water = crate::water::runtime::WaterRuntimeState::new(&graph, &plan)
             .map_err(JsonGeneratorLoadError::PhysicsSamplingUnsupported)?;
-        let physics_input_snapshot = physics_sample_steps.as_ref().map(|steps| {
-            crate::water::runtime::physics_sampling::PhysicsInputSnapshot::prepare(&graph, &plan, steps)
-        });
         let mut g = Self {
             graph,
             plan,
-            physics_sample_steps,
-            physics_input_snapshot,
-            last_physics_frame_time: None,
-            physics_project_tempo: None,
-            impulse_identity: std::sync::Arc::new(()),
-            scene_impulses: Default::default(),
+            water,
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::with_mock(),
