@@ -115,14 +115,13 @@ definition with `/hooks`.
 Supported Cargo build-driving commands and the repository's build gate scripts
 perform an admission check before they execute. The check accepts only the
 `target` directory of a registered Git worktree and keeps a 50 GiB free-space
-reserve. Below the reserve, admission first reclaims stale regenerable caches
-(incremental sessions oldest first, then other recognized cache directories)
-that no running process holds; it never touches fixtures, logs or reports under
+reserve. Below the reserve, admission reclaims stale known incremental sessions
+that no running process holds, oldest first; it never touches fixtures, logs or reports under
 `target/`. Cleanup validates registered worktree targets under the pool reservation
 and holds Cargo's profile `.cargo-lock` from inventory through deletion. Busy
-profiles are skipped. `deps/` and `examples/` artifacts are preserved: direct
-app/test launches do not share an exclusion lock, so an idle process snapshot
-cannot make their deletion safe. If the reserve still cannot be met, the build
+profiles are skipped. Compiled artifacts stay protected because direct app/test
+launches have no exclusion lock. Their Cargo fingerprint/build metadata stays
+with them so Cargo can reuse them. If the reserve still cannot be met, the build
 is refused. Each slot also has a soft cache target
 (`MANIFOLD_SLOT_TARGET_CAP_GIB`, default 160 GiB); reclamation runs only under
 reserve or cap pressure, and protected contents may exceed the cap. Admission
