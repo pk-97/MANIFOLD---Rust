@@ -244,8 +244,6 @@ class Plan:
             owner = GPU_FILTER_TARGETS.get(name)
             if owner is not None and owner not in available:
                 raise ValueError(f'GPU filter {name!r} has no runnable Cargo owner: {owner[0]}/{owner[1]}')
-        if self.glb or self.ui_paint:
-            return runs
         # Unknown filters keep their current coverage. Whole selections and
         # the folded glTF harness retain their independent selection rules.
         return [run for run in runs

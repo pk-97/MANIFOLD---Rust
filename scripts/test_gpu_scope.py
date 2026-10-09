@@ -475,8 +475,12 @@ class ScopeTests(unittest.TestCase):
         result = plan(["crates/manifold-ui-paint/src/native_text.rs"])
         self.assertFalse(result.unmapped)
         renderer = next(run for run in result.runs()
-                        if run.get("package") == "manifold-nodes" and run["target"] == "lib")
+                        if run.get("package") == "manifold-nodes" and run["target"] == "gpu_proofs")
         self.assertEqual(renderer["filters"], sorted(g.SMOKE_FILTERS))
+        self.assertEqual({(run['package'], run['target']) for run in result.runs()}, {
+            ('manifold-nodes', 'gpu_proofs'), ('manifold-nodes-scene', 'gpu_proofs'),
+            ('manifold-ui-paint', 'lib'), ('manifold-ui-paint', 'main'),
+        })
         paint = next(run for run in result.runs()
                      if run.get("package") == "manifold-ui-paint" and run["target"] == "lib")
         self.assertEqual(paint["package"], "manifold-ui-paint")
