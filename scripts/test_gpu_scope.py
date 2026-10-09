@@ -59,6 +59,52 @@ def fixture_workspace(repo):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_ui_projection_keeps_cpu_and_flow_coverage_without_renderer_proofs(self):
+        import cpu_scope
+        import run_ui_flows
+        repo = Path(__file__).resolve().parents[1]
+        workspace = g.Workspace(repo)
+        manifest = json.loads((repo / 'scripts/ui-flows/manifest.json').read_text())
+        sources = [repo / p for p in g.UI_PROJECTION_PATHS if not p.endswith('/')]
+        sources.extend((repo / g.UI_PROJECTION_PATHS[0]).glob('*.rs'))
+        proof_sources = set()
+        for target in workspace.targets('manifold-app', 'test'):
+            if 'gpu-proofs' in target.get('required-features', []) or target['name'] == 'renderer_contracts':
+                proof_sources.update(g.module_mounts(target['src_path']))
+        for source in sources:
+            path = source.relative_to(repo).as_posix()
+            with self.subTest(path=path):
+                self.assertNotIn(source.resolve(), proof_sources)
+                cpu = cpu_scope.plan_for_paths([path], repo, workspace)
+                self.assertIn('manifold-app', cpu.packages)
+                self.assertFalse(g.plan_for_paths([path], repo, workspace=workspace, cpu_plan=cpu).active)
+                if source.name in {'timeline.rs', 'inspector.rs', 'cards.rs', 'scene.rs', 'material.rs'}:
+                    self.assertTrue(run_ui_flows.filters_for_paths([path], manifest)[0])
+
+    def test_ui_projection_does_not_hide_a_rendering_change(self):
+        path = 'crates/manifold-app/src/ui_bridge/projection/timeline.rs'
+        self.assertTrue(g.is_gpu_path(path.replace('.rs', '.wgsl'), fixture_workspace(Path('/nonexistent'))))
+        for rendering in ('crates/manifold-app/src/app_render.rs',
+                          'crates/manifold-app/src/content_commands.rs',
+                          'crates/manifold-ui-paint/src/clip_content_gpu.rs'):
+            with self.subTest(rendering=rendering):
+                result = plan([path, rendering])
+                self.assertEqual(result.paths, [rendering])
+                self.assertTrue(result.active)
+                self.assertTrue(set(g.SMOKE_FILTERS) <= set(result.final_filters()))
+
+    def test_compositor_gpu_helpers_do_not_force_default_suite(self):
+        import cpu_scope
+        repo = Path(__file__).resolve().parents[1]
+        path = 'crates/manifold-compositor/src/layer_compositor.rs'
+        workspace = g.Workspace(repo)
+        cpu = cpu_scope.plan_for_paths([path], repo, workspace)
+        self.assertNotIn('manifold-compositor', cpu.packages)
+        self.assertIn('contracts::node_graph::catalog_tests::layer_compositor::', cpu.filterset)
+        gpu = g.plan_for_paths([path], repo, workspace=workspace, cpu_plan=cpu)
+        self.assertIn('layer_compositor::', gpu.filters)
+        self.assertIn('node_graph::catalog_tests::layer_compositor::', gpu.filters)
+
     def test_audited_catalog_edit_selects_three_owned_harnesses(self):
         repo = Path(__file__).resolve().parents[1]
         result = g.plan_for_paths([
