@@ -605,6 +605,15 @@ fn aligned_direct_scene_at_tilt(material: String, intensity: f32, tilt: f32) -> 
 }
 
 #[test]
+fn minimum_roughness_unit_light_saturates_half_float_storage() {
+    let material = material_params([0.0; 3], 0.0, 0.01, "");
+    let result = render_center(&aligned_direct_scene(material, 1.0));
+    // This physically narrow peak exceeds RGBA16F. The attachment boundary
+    // must saturate without introducing infinity into subsequent effects.
+    assert_eq!(result, [65_504.0; 3], "unit-light GGX peak must remain finite");
+}
+
+#[test]
 fn aligned_minimum_roughness_and_zero_coat_texel_stay_finite() {
     use serde_json::json;
     let intensity = 0.00001_f32;
