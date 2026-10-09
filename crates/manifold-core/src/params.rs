@@ -16,6 +16,7 @@
 //! shared state, no locks (D-invariants).
 
 use crate::effect_graph_def::ParamSpecDef;
+use crate::id::LayerId;
 
 /// Why this param exists on the instance. Behavioral tag only — origin has no
 /// addressing consequence (D3): a `Bundled` param that is unexposed hides its
@@ -29,6 +30,31 @@ pub enum ParamOrigin {
     Bundled,
     /// Added by the user (graph-editor expose). Its `spec` serializes inline.
     UserAdded,
+}
+
+/// Which layer supplies clip-trigger events for this parameter.
+///
+/// `OwnLayer` is the default and means that the parameter follows the layer
+/// containing its effect or generator. The selected lane is kept as a stable
+/// [`LayerId`] even when that layer is currently absent from the project, so
+/// loading and reconciling a project never silently retargets the parameter.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ClipTriggerSource {
+    #[default]
+    OwnLayer,
+    Disabled,
+    Lane {
+        #[serde(rename = "layerId")]
+        layer_id: LayerId,
+    },
+}
+
+impl ClipTriggerSource {
+    #[inline]
+    pub(crate) fn is_own_layer(&self) -> bool {
+        matches!(self, Self::OwnLayer)
+    }
 }
 
 /// One parameter: descriptor + live state, one struct, id as identity (D1).
@@ -52,6 +78,10 @@ pub struct Param {
     /// per-instance `PresetInstance.base_tracked` bit.
     pub base: f32,
     pub exposed: bool,
+    /// Persisted clip-trigger routing for this parameter. The default keeps
+    /// the parameter on its containing layer; it is independent of audio
+    /// modulation source selection.
+    pub clip_trigger_source: ClipTriggerSource,
     /// Runtime-only automation-latch flag (see `AUTOMATION_LANES_DESIGN.md`
     /// section 4). Set by the single `set_base_param` funnel so the automation
     /// evaluator can detect "a hand touched this since I last looked". Never
@@ -80,6 +110,7 @@ impl Param {
             value: default,
             base: default,
             exposed: true,
+            clip_trigger_source: ClipTriggerSource::OwnLayer,
             touched: false,
         }
     }
@@ -300,8 +331,27 @@ mod tests {
         assert!(p.exposed);
         assert!(!p.touched);
         assert!(!p.calibrated);
+        assert_eq!(p.clip_trigger_source, ClipTriggerSource::OwnLayer);
         assert_eq!(p.id(), "amount");
         assert_eq!(p.origin, ParamOrigin::Bundled);
+    }
+
+    #[test]
+    fn trigger_source_defaults_to_own_layer_and_uses_stable_wire_names() {
+        let own = ClipTriggerSource::default();
+        assert_eq!(own, ClipTriggerSource::OwnLayer);
+        assert_eq!(
+            serde_json::to_value(&own).unwrap(),
+            serde_json::json!({"kind": "ownLayer"})
+        );
+
+        let lane = ClipTriggerSource::Lane {
+            layer_id: LayerId::new("missing-layer"),
+        };
+        assert_eq!(
+            serde_json::to_value(&lane).unwrap(),
+            serde_json::json!({"kind": "lane", "layerId": "missing-layer"})
+        );
     }
 
     #[test]
