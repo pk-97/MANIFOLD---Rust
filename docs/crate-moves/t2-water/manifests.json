@@ -1,0 +1,102 @@
+[
+  {
+    "path": "Cargo.toml",
+    "before": "    \"crates/manifold-nodes-image\",\n",
+    "after": "    \"crates/manifold-nodes-image\",\n    \"crates/manifold-nodes-water\",\n"
+  },
+  {
+    "path": "crates/manifold-nodes/Cargo.toml",
+    "before": "manifold-nodes-scene = { path = \"../manifold-nodes-scene\" }\n",
+    "after": "manifold-nodes-scene = { path = \"../manifold-nodes-scene\" }\nmanifold-nodes-water = { path = \"../manifold-nodes-water\" }\n"
+  },
+  {
+    "path": "crates/manifold-nodes/Cargo.toml",
+    "before": "manifold-nodes-scene = { path = \"../manifold-nodes-scene\", features = [\"testkit\"] }\n",
+    "after": "manifold-nodes-scene = { path = \"../manifold-nodes-scene\", features = [\"testkit\"] }\nmanifold-nodes-water = { path = \"../manifold-nodes-water\", features = [\"testkit\"] }\n"
+  },
+  {
+    "path": "crates/manifold-app/Cargo.toml",
+    "before": "manifold-nodes-scene = { path = \"../manifold-nodes-scene\" }\n",
+    "after": "manifold-nodes-scene = { path = \"../manifold-nodes-scene\" }\nmanifold-nodes-water = { path = \"../manifold-nodes-water\" }\n"
+  },
+  {
+    "path": "crates/manifold-app/Cargo.toml",
+    "before": "manifold-nodes-scene = { path = \"../manifold-nodes-scene\", features = [\"testkit\"] }\n",
+    "after": "manifold-nodes-scene = { path = \"../manifold-nodes-scene\", features = [\"testkit\"] }\nmanifold-nodes-water = { path = \"../manifold-nodes-water\", features = [\"testkit\"] }\n"
+  },
+  {
+    "path": "crates/manifold-nodes/Cargo.toml",
+    "before": "testkit = [\"manifold-node-engine/testkit\", \"manifold-nodes-image/testkit\", \"manifold-nodes-scene/testkit\"]\n",
+    "after": "testkit = [\"manifold-node-engine/testkit\", \"manifold-nodes-image/testkit\", \"manifold-nodes-scene/testkit\", \"manifold-nodes-water/testkit\"]\n"
+  },
+  {
+    "path": "crates/manifold-nodes/Cargo.toml",
+    "before": "gpu-proofs = [\"testkit\", \"manifold-node-engine/gpu-proofs\", \"manifold-nodes-image/gpu-proofs\", \"manifold-nodes-scene/gpu-proofs\", \"manifold-gpu/gpu-proofs\"]\n",
+    "after": "gpu-proofs = [\"testkit\", \"manifold-node-engine/gpu-proofs\", \"manifold-nodes-image/gpu-proofs\", \"manifold-nodes-scene/gpu-proofs\", \"manifold-gpu/gpu-proofs\", \"manifold-nodes-water/gpu-proofs\"]\n"
+  },
+  {
+    "path": "crates/manifold-nodes/Cargo.toml",
+    "before": "rt-perf-proofs = [\"manifold-nodes-scene/rt-perf-proofs\", \"manifold-node-engine/rt-perf-proofs\", \"gpu-proofs\"]\n",
+    "after": "rt-perf-proofs = [\"manifold-nodes-scene/rt-perf-proofs\", \"gpu-proofs\"]\n"
+  },
+  {
+    "path": "crates/manifold-nodes/Cargo.toml",
+    "before": "fluid-perf-proofs = [\"manifold-node-engine/fluid-perf-proofs\", \"gpu-proofs\"]\n",
+    "after": "fluid-perf-proofs = [\"manifold-nodes-water/fluid-perf-proofs\", \"gpu-proofs\"]\n"
+  },
+  {
+    "path": "crates/manifold-nodes/Cargo.toml",
+    "before": "matter-perf-proofs = [\"manifold-node-engine/matter-perf-proofs\", \"gpu-proofs\"]\n",
+    "after": "matter-perf-proofs = [\"manifold-nodes-water/matter-perf-proofs\", \"gpu-proofs\"]\n"
+  },
+  {
+    "path": "crates/manifold-nodes/Cargo.toml",
+    "before": "water-race-probes = [\"manifold-node-engine/water-race-probes\", \"gpu-proofs\", \"fluid-perf-proofs\"]\n",
+    "after": "water-race-probes = [\"manifold-nodes-water/water-race-probes\", \"gpu-proofs\", \"fluid-perf-proofs\"]\n"
+  },
+  {
+    "path": "crates/manifold-nodes/Cargo.toml",
+    "before": "whitewater-oracle = [\"manifold-node-engine/whitewater-oracle\", \"gpu-proofs\"]\n",
+    "after": "whitewater-oracle = [\"manifold-nodes-water/whitewater-oracle\", \"gpu-proofs\"]\n"
+  },
+  {
+    "path": "crates/manifold-node-engine/Cargo.toml",
+    "before": "manifold-physics = { path = \"../manifold-physics\" }\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-nodes-image/Cargo.toml",
+    "before": "manifold-physics = { path = \"../manifold-physics\" }\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-node-engine/Cargo.toml",
+    "before": "manifold-fluids = { path = \"../manifold-fluids\" }\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-node-engine/Cargo.toml",
+    "before": "zstd = \"0.13.3\"\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-node-engine/Cargo.toml",
+    "before": "arrayvec = \"0.7\"\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-node-engine/Cargo.toml",
+    "before": "[dependencies.glam]\nversion = \"0.29.3\"\noptional = true\n\n[dev-dependencies]\nglam = \"0.29.3\"\n\n[target.'cfg(target_os = \"macos\")'.dependencies]\nobjc2 = { version = \"0.6\", optional = true }\n\n[target.'cfg(target_os = \"macos\")'.dev-dependencies]\nobjc2 = \"0.6\"\n\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-node-engine/Cargo.toml",
+    "before": "testkit = [\"dep:glam\", \"dep:objc2\"]",
+    "after": "testkit = []"
+  },
+  {
+    "path": "crates/manifold-node-engine/Cargo.toml",
+    "before": "# Bounded dynamic-RT timing is opt-in, separate from correctness gates.\nrt-perf-proofs = [\"gpu-proofs\"]\n# GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.\nfluid-perf-proofs = [\"gpu-proofs\"]\n# GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.\nmatter-perf-proofs = [\"gpu-proofs\"]\n# Water race probes (GPU_FLIP_PRESSURE_SOLVE.md): minutes-long Dam Break\n# runs of GPU FLIP and the FLIP Fluids engine, opt-in. The frame probe reads\n# render_scene::water_perf.\nwater-race-probes = [\"gpu-proofs\", \"fluid-perf-proofs\", \"manifold-fluids/face-oracle\"]\n# The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),\n# opt-in: builds FLIP's oracle entries into manifold-fluids.\nwhitewater-oracle = [\"gpu-proofs\", \"manifold-fluids/whitewater-oracle\"]\n",
+    "after": ""
+  }
+]
