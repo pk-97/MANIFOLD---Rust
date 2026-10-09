@@ -47,13 +47,11 @@ pub(crate) enum PendingSelection {
 }
 
 fn object_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
-    let Some(def) = crate::graph_target::resolve(
-        project,
-        &manifold_core::GraphTarget::Generator(layer.clone()),
-    ) else {
+    let target = manifold_core::GraphTarget::Generator(layer.clone());
+    let Some(def) = crate::graph_target::resolve(project, &target) else {
         return Vec::new();
     };
-    manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def)
+    manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def)
         .map(|vm| {
             vm.objects
                 .into_iter()
@@ -69,11 +67,9 @@ fn object_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
 }
 
 fn light_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
-    crate::graph_target::resolve(
-        project,
-        &manifold_core::GraphTarget::Generator(layer.clone()),
-    )
-    .and_then(manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def)
+    let target = manifold_core::GraphTarget::Generator(layer.clone());
+    crate::graph_target::resolve(project, &target)
+    .and_then(|def| manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(&def))
     .map(|vm| {
         vm.lights
             .into_iter()

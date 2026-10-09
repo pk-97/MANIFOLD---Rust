@@ -116,6 +116,7 @@ use manifold_core::project::Project;
         let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
         let canonical = bundled_preset_def(&PresetTypeId::BLOOM)
             .expect("Bloom preset present")
+            .as_ref()
             .clone();
         let node_count = canonical.nodes.len();
         fx.graph = Some(canonical);

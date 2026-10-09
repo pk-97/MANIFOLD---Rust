@@ -86,29 +86,30 @@ pub(crate) fn build_action(
                     .as_ref()
                     .is_some_and(|recipe| recipe.singleton)
                 && let Some(reason) =
-                    singleton_scene_conflict(graph, &scene, metadata.id.as_str())
+                    singleton_scene_conflict(&graph, &scene, metadata.id.as_str())
             {
                 return Err(reason);
             }
             let targets = if recipe.preset_metadata.as_ref()
                 .and_then(|m| m.scene_modifier.as_ref()).is_some_and(|r| r.shatter.is_some()) {
-                shatter_targets(graph, &scene)?
+                shatter_targets(&graph, &scene)?
             } else {
                 SceneTargetSelection::AllObjects
             };
             let instance = prepare_new_scene_modifier(
-                graph,
-                recipe,
+                &graph,
+                recipe.as_ref(),
                 NodeId::new(manifold_core::short_id()),
                 scene,
                 targets,
             )
             .map_err(|e| e.to_string())?;
+            let index = graph.scene_modifiers.len();
             InsertSceneModifierCommand::new(
                 project,
                 target,
                 &default,
-                graph.scene_modifiers.len(),
+                index,
                 instance,
             )
             .map(|command| Box::new(command) as Box<dyn Command>)
@@ -179,12 +180,13 @@ pub(crate) fn build_action(
                     .ok_or("Modifier prepared enabled parameter is missing")?
                     .default_value;
                 let next = if value > 0.5 { 0.0 } else { 1.0 };
+                let enabled = enabled.clone();
                 return SetSceneModifierPreparationParamCommand::new(
                     project,
                     target,
                     &default,
                     id,
-                    enabled.clone(),
+                    enabled,
                     next,
                 )
                 .map(|command| Box::new(command) as Box<dyn Command>)
@@ -248,11 +250,13 @@ pub(crate) fn build_action(
             {
                 return Err("Modifier enabled target is outside its mapped range".into());
             }
+            let binding_id = binding.id.clone();
+            let previous_base = param.base;
             Ok(Box::new(
                 manifold_editing::commands::effects::ChangeGraphParamCommand::new(
                     target,
-                    binding.id.clone(),
-                    param.base,
+                    binding_id,
+                    previous_base,
                     next_base,
                 ),
             ))
@@ -267,7 +271,7 @@ pub(crate) fn build_action(
             instance.targets = targets.clone();
             let frames =
                 manifold_node_engine::load::expand::resolve_modifier_mesh_frames(
-                    graph, &instance,
+                    &graph, &instance,
                 )
                 .map_err(|error| error.to_string())?;
             manifold_editing::commands::graph::RetargetSceneModifierCommand::new(
@@ -320,7 +324,7 @@ pub(crate) fn math_view_connect_mesh_enable_lock_reason(
     if !manifold_core::scene_modifier_math_view::is_math_view_recipe(&instance.graph) {
         return None;
     }
-    manifold_core::scene_modifier_math_view::math_view_connect_support(graph, modifier_id).err()
+    manifold_core::scene_modifier_math_view::math_view_connect_support(&graph, modifier_id).err()
 }
 
 /// Source selectors and render mode cannot change under captured geometry.
@@ -341,7 +345,7 @@ pub(crate) fn node_parameter_lock_reason(
         .iter()
         .find(|node| node.id == doc_id)?;
     manifold_core::scene_modifier_preset::scene_modifier_parameter_lock_reason(
-        graph,
+        &graph,
         &node.node_id,
         param,
     )
@@ -356,7 +360,7 @@ pub(crate) fn macro_parameter_lock_reason(
         return None;
     }
     let graph = crate::graph_target::resolve(project, target)?;
-    manifold_core::scene_modifier_preset::scene_modifier_macro_lock_reason(graph, param)
+    manifold_core::scene_modifier_preset::scene_modifier_macro_lock_reason(&graph, param)
 }
 
 /// The local node-face address for a preparation-only modifier control.
@@ -779,7 +783,7 @@ fn capture_frame_changes(
             let before = instance.mesh_frames.clone();
             let after =
                 manifold_node_engine::load::expand::resolve_modifier_mesh_frames(
-                    owner_graph,
+                    &owner_graph,
                     instance,
                 )
                 .map_err(|error| format!("Scene modifier frame admission rejected: {error}"))?;
@@ -865,7 +869,7 @@ fn validate_owner(
         .graph_target_owner(target)
         .ok_or("Generator owner is no longer present")?;
     let mut runtime = manifold_node_engine::runtime::PresetRuntime::from_def(
-        graph.clone(),
+        (*graph).clone(),
         registry,
         Some(&host.params),
     )

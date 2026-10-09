@@ -94,7 +94,7 @@ impl SceneItemClipboard {
         }
         let fluid_role_assignments = fluid_role_group
             .map(|group| {
-                manifold_editing::commands::graph::scene_fluid_role_assignments(source, group)
+                manifold_editing::commands::graph::scene_fluid_role_assignments(&source, group)
             })
             .transpose()?
             .unwrap_or_default();
@@ -149,7 +149,7 @@ impl SceneItemClipboard {
                 pending.push((wire.from_node, wire.from_port.clone()));
             }
         }
-        let mut graph = source.clone();
+        let mut graph = (*source).clone();
         graph.nodes.retain(|node| ids.contains(&node.id));
         graph.wires = captured_wires;
         graph.scene_modifiers.clear();
@@ -358,8 +358,8 @@ fn paste(
         .ok_or("Destination scene is unavailable")?
         .clone();
     let mut graph = crate::graph_target::resolve(project, &target)
-        .ok_or("Destination scene graph is unavailable")?
-        .clone();
+        .map(|graph| (*graph).clone())
+        .ok_or("Destination scene graph is unavailable")?;
     if !graph
         .nodes
         .iter()
@@ -609,8 +609,8 @@ pub(crate) fn build_action(
                 .ok_or("Scene is unavailable")?
                 .clone();
             let mut graph = crate::graph_target::resolve(project, &target)
-                .ok_or("Scene graph is unavailable")?
-                .clone();
+                .map(|graph| (*graph).clone())
+                .ok_or("Scene graph is unavailable")?;
             let adjacent = i64::from(index) + i64::from(delta);
             if adjacent < 0 {
                 return Err("Scene item is already first".into());

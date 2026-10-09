@@ -2,6 +2,8 @@
 //! prewarm shared between the chain build and load-time warmup. Extracted
 //! from preset_runtime.rs (Wave 3 P3-R, design D3).
 
+use std::sync::Arc;
+
 use super::*;
 
 /// Build the `(def, view)` slice for a fused segment, augmenting relight-on
@@ -11,19 +13,22 @@ pub(super) fn build_segment_cards(
     fuse_idxs: &[usize],
     active_effects: &[(usize, &PresetInstance)],
     primitives: &PrimitiveRegistry,
-) -> Vec<(EffectGraphDef, &'static LoadedPresetView)> {
+) -> Vec<(EffectGraphDef, Arc<LoadedPresetView>)> {
     let mut cards = Vec::with_capacity(fuse_idxs.len());
     for &k in fuse_idxs {
         let fx = active_effects[k].1;
         let view = loaded_preset_view_by_id(fx.effect_type()).expect("eligibility implies view");
         let def = if fx.relight_active() {
             crate::load::augmentation::relight_augment(
-                fx.graph.as_ref().unwrap_or(&view.canonical_def),
+                fx.graph.as_ref().unwrap_or(view.canonical_def.as_ref()),
                 primitives,
                 &RelightParams::default(),
             )
         } else {
-            fx.graph.as_ref().unwrap_or(&view.canonical_def).clone()
+            fx.graph
+                .as_ref()
+                .unwrap_or(view.canonical_def.as_ref())
+                .clone()
         };
         cards.push((def, view));
     }
@@ -66,7 +71,7 @@ pub(crate) fn classify_segment_member(
     {
         return SegmentMember::Boundary;
     }
-    let effective = fx.graph.as_ref().unwrap_or(&view.canonical_def);
+    let effective = fx.graph.as_ref().unwrap_or(view.canonical_def.as_ref());
     if crate::freeze::segment::def_is_segment_stateless(effective, primitives) {
         SegmentMember::Fuse
     } else {

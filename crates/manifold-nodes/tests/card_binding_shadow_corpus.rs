@@ -64,7 +64,7 @@ fn generator_findings(type_id: &manifold_core::PresetTypeId) -> Vec<ShadowedDefP
     };
     let primitives = PrimitiveRegistry::with_builtin();
     let Ok(runtime) =
-        manifold_node_engine::runtime::PresetRuntime::from_def(def.clone(), &primitives, None)
+        manifold_node_engine::runtime::PresetRuntime::from_def(def.as_ref().clone(), &primitives, None)
     else {
         // Load failures are another test's business.
         return Vec::new();
@@ -145,7 +145,7 @@ fn fused_effect_shadow_findings_map_back_to_the_baseline() {
         };
         let Some(fused) = manifold_node_engine::freeze::install::fused_view_for(
             &base.canonical_def,
-            base,
+            &base,
         ) else {
             continue; // doesn't fuse — the unfused sweep above covers it
         };

@@ -50,7 +50,7 @@ impl ObjectModifierClipboard {
             .ok_or("Generator is no longer available")?;
         let graph = crate::graph_target::resolve(project, &target)
             .ok_or("Generator graph is unavailable")?;
-        let (scope_path, nodes, wires) = owner_level(graph, owner_id)?;
+        let (scope_path, nodes, wires) = owner_level(&graph, owner_id)?;
         let node = nodes
             .iter()
             .find(|node| node.id == node_doc_id)
@@ -59,7 +59,7 @@ impl ObjectModifierClipboard {
         if !MESH_MODIFIER_TYPES.contains(&node.type_id.as_str()) {
             return Err("Selected node is not an object modifier".into());
         }
-        if !modifier_chain(graph, owner_id)?.contains(&node_doc_id) {
+        if !modifier_chain(&graph, owner_id)?.contains(&node_doc_id) {
             return Err("Selected node is not in the object's modifier chain".into());
         }
         if node.node_id.is_empty() {
@@ -85,7 +85,7 @@ impl ObjectModifierClipboard {
             .collect();
         Ok(Self {
             host: Box::new(host.clone()),
-            graph: Box::new(graph.clone()),
+            graph: Box::new((*graph).clone()),
             owner_id,
             node_doc_id,
             node,
@@ -149,9 +149,10 @@ pub(crate) fn modifier_node_ids(
     layer_id: &LayerId,
     owner_id: u32,
 ) -> Result<Vec<u32>, String> {
-    let graph = crate::graph_target::resolve(project, &GraphTarget::Generator(layer_id.clone()))
+    let target = GraphTarget::Generator(layer_id.clone());
+    let graph = crate::graph_target::resolve(project, &target)
         .ok_or("Generator graph is unavailable")?;
-    let (_, nodes, _) = owner_level(graph, owner_id)?;
+    let (_, nodes, _) = owner_level(&graph, owner_id)?;
     Ok(nodes
         .iter()
         .filter(|node| MESH_MODIFIER_TYPES.contains(&node.type_id.as_str()))
@@ -479,8 +480,8 @@ fn build_transfer(
         .clone();
     let destination_graph =
         crate::graph_target::resolve(project, &target).ok_or("Generator graph is unavailable")?;
-    let position = insertion_position(destination_graph, owner_id, after)?;
-    let (destination_scope, destination_nodes, _) = owner_level(destination_graph, owner_id)?;
+    let position = insertion_position(&destination_graph, owner_id, after)?;
+    let (destination_scope, destination_nodes, _) = owner_level(&destination_graph, owner_id)?;
     let destination_before_ids: HashSet<u32> =
         destination_nodes.iter().map(|node| node.id).collect();
     let (_, layer) = project
@@ -677,7 +678,7 @@ pub(crate) fn build_action(
                 .clone();
             let source_graph = crate::graph_target::resolve(project, &target)
                 .ok_or("Generator graph is unavailable")?;
-            let position = insertion_position(source_graph, owner_id, after)?;
+            let position = insertion_position(&source_graph, owner_id, after)?;
             let (_, layer) = project
                 .timeline
                 .find_layer_by_id(&layer_id)
@@ -734,15 +735,13 @@ mod tests {
         let mut project = Project::default();
         let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
-            .expect("Scene resolves")
-            .clone();
+            .expect("Scene resolves").as_ref().clone();
         let layer_id = layer.layer_id.clone();
         layer.gen_params_or_init().graph = Some(graph);
         layer.gen_params_or_init().refresh_manifest_from_graph();
         project.timeline.layers.push(layer);
-        let graph =
-            crate::graph_target::resolve(&project, &GraphTarget::Generator(layer_id.clone()))
-                .expect("fixture graph");
+        let target = GraphTarget::Generator(layer_id.clone());
+        let graph = crate::graph_target::resolve(&project, &target).expect("fixture graph");
         let owners = graph
             .nodes
             .iter()
@@ -756,7 +755,7 @@ mod tests {
         let target = GraphTarget::Generator(layer_id.clone());
         let default = crate::graph_target::owner_default(project, &target).unwrap();
         let mut command = manifold_editing::commands::graph::InsertMeshModifierCommand::new(
-            target,
+            target.clone(),
             Vec::new(),
             owner_id,
             "node.twist_mesh".into(),
@@ -768,9 +767,7 @@ mod tests {
         );
         command.execute(project);
         assert!(command.was_applied(), "fixture insertion should apply");
-        let graph =
-            crate::graph_target::resolve(project, &GraphTarget::Generator(layer_id.clone()))
-                .unwrap();
+        let graph = crate::graph_target::resolve(project, &target).unwrap();
         graph
             .nodes
             .iter()
@@ -787,9 +784,8 @@ mod tests {
     }
 
     fn binding_for(project: &Project, layer_id: &LayerId, node_id: &NodeId) -> (String, String) {
-        let graph =
-            crate::graph_target::resolve(project, &GraphTarget::Generator(layer_id.clone()))
-                .unwrap();
+        let target = GraphTarget::Generator(layer_id.clone());
+        let graph = crate::graph_target::resolve(project, &target).unwrap();
         graph
             .preset_metadata
             .as_ref()
@@ -811,10 +807,9 @@ mod tests {
         let (mut project, layer_id, owners) = fixture();
         let owner_id = owners[0];
         let node_doc_id = insert_modifier(&mut project, &layer_id, owner_id);
-        let graph =
-            crate::graph_target::resolve(&project, &GraphTarget::Generator(layer_id.clone()))
-                .unwrap();
-        let source_node_id = owner_level(graph, owner_id)
+        let target = GraphTarget::Generator(layer_id.clone());
+        let graph = crate::graph_target::resolve(&project, &target).unwrap();
+        let source_node_id = owner_level(&graph, owner_id)
             .unwrap()
             .1
             .iter()
@@ -921,19 +916,15 @@ mod tests {
             Layer::new_generator("Other layer".into(), PresetTypeId::new("Scene"), 1);
         destination.gen_params_or_init().graph = Some(
             manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
-                .unwrap()
-                .clone(),
+                .unwrap().as_ref().clone(),
         );
         destination
             .gen_params_or_init()
             .refresh_manifest_from_graph();
         let destination_layer = destination.layer_id.clone();
         project.timeline.layers.push(destination);
-        let destination_graph = crate::graph_target::resolve(
-            &project,
-            &GraphTarget::Generator(destination_layer.clone()),
-        )
-        .unwrap();
+        let destination_target = GraphTarget::Generator(destination_layer.clone());
+        let destination_graph = crate::graph_target::resolve(&project, &destination_target).unwrap();
         let scene = destination_graph
             .nodes
             .iter()
@@ -952,11 +943,7 @@ mod tests {
         .unwrap();
         add.execute(&mut project);
         assert!(add.was_applied());
-        let destination_graph = crate::graph_target::resolve(
-            &project,
-            &GraphTarget::Generator(destination_layer.clone()),
-        )
-        .unwrap();
+        let destination_graph = crate::graph_target::resolve(&project, &destination_target).unwrap();
         let destination_owner = destination_graph
             .nodes
             .iter()
@@ -999,12 +986,8 @@ mod tests {
             &mut project,
         );
         assert!(editing.take_rejection().is_none());
-        let destination_graph = crate::graph_target::resolve(
-            &project,
-            &GraphTarget::Generator(destination_layer.clone()),
-        )
-        .unwrap();
-        let (_, nodes, _) = owner_level(destination_graph, destination_owner).unwrap();
+        let destination_graph = crate::graph_target::resolve(&project, &destination_target).unwrap();
+        let (_, nodes, _) = owner_level(&destination_graph, destination_owner).unwrap();
         let copied = nodes
             .iter()
             .find(|node| node.type_id == "node.twist_mesh")

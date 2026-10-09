@@ -1428,7 +1428,7 @@ pub(crate) fn generator_catalog_default(
     }
     // Use the same migrated definition as the visible parameter manifest.
     // Re-parsing raw catalog JSON drops scene exposures on the first edit.
-    manifold_nodes::bundled_presets::bundled_preset_def(&gt).cloned()
+    manifold_nodes::bundled_presets::bundled_preset_def(&gt).map(|def| (*def).clone())
 }
 
 /// P4b: translate the UI's SkinTargetMap into the editing command's enum.
@@ -1666,8 +1666,7 @@ mod tests {
     ) -> manifold_core::effect_graph_def::EffectGraphDef {
         let (_, layer) = project.timeline.find_layer_by_id(layer_id).unwrap();
         layer.generator_graph().cloned().unwrap_or_else(|| {
-            manifold_nodes::bundled_presets::bundled_preset_def(&layer.generator_type().clone())
-                .cloned()
+            manifold_nodes::bundled_presets::bundled_preset_def(&layer.generator_type().clone()).map(|def| (*def).clone())
                 .expect("Scene is a bundled preset")
         })
     }

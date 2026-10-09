@@ -3717,7 +3717,7 @@ impl Compositor for LayerCompositor {
         type_id: &manifold_core::PresetTypeId,
     ) -> Option<manifold_node_engine::snapshot::GraphSnapshot> {
         let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(type_id)?;
-        manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view)
+        manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view)
     }
 
     fn outer_routings_for(
@@ -3727,7 +3727,7 @@ impl Compositor for LayerCompositor {
         let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(type_id) else {
             return Vec::new();
         };
-        manifold_node_engine::load::loaded_preset_view::outer_routings_from_view(view)
+        manifold_node_engine::load::loaded_preset_view::outer_routings_from_view(&view)
     }
 
     fn layer_skin_registry(&self) -> Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry> {
