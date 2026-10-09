@@ -93,6 +93,28 @@ def warp_seconds(markers, clip_beat):
     return s0 + (clip_beat - b0) * (s1 - s0) / (b1 - b0)
 
 
+def warp_beats(markers, sec):
+    """Clip beat at a file second; the inverse of warp_seconds."""
+    if len(markers) == 1:
+        return markers[0][1]
+    for (s0, b0), (s1, b1) in zip(markers, markers[1:]):
+        if sec <= s1:
+            break
+    return b0 + (sec - s0) * (b1 - b0) / (s1 - s0)
+
+
+def clip_seconds(clip, arr_beat):
+    """File second a clip plays at an arrangement beat (unlooped clips)."""
+    if not clip['warped']:
+        raise ValueError('unwarped clip: needs the tempo map, not markers')
+    return warp_seconds(clip['markers'], clip['clip_start_beat'] + arr_beat - clip['start_beat'])
+
+
+def clip_arr_beat(clip, sec):
+    """Arrangement beat at which a clip plays a file second (unlooped clips)."""
+    return clip['start_beat'] + warp_beats(clip['markers'], sec) - clip['clip_start_beat']
+
+
 def group_chain(tracks_by_id, group_id):
     names = []
     while group_id not in (None, -1) and group_id in tracks_by_id:
