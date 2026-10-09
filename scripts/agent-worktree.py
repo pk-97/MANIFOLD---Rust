@@ -80,6 +80,8 @@ MAX_SLOTS = 10         # hard structural cap — there is no override flag
 SCRUB_TO_GB = 40      # scrub trims the pool under this — below the sentinel's
                        # 200 GB alarm so a scrubbed pool never alarms
 SLOT_PREFIX = "slot-"
+RELEASE_POOL_LOCK_TIMEOUT_SECONDS = 5.0
+POOL_LOCK_POLL_SECONDS = 0.05
 
 
 def git(cwd, *args, check=True):
@@ -133,17 +135,23 @@ def pid_alive(pid):
 
 
 @contextmanager
-def pool_lock():
+def pool_lock(wait_seconds=0.0):
     """Serialize all commands that inspect or mutate the shared slot ring.
 
     The lock file is persistent so its inode remains stable across commands;
     flock releases the reservation automatically if a process exits.
     """
-    with admission_pool_lock(POOL, create=True) as locked:
-        if not locked:
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        with admission_pool_lock(POOL, create=True) as locked:
+            if locked:
+                yield
+                return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             sys.exit("REFUSED: worktree pool is busy; another command holds "
                      "the reservation lock")
-        yield
+        time.sleep(min(POOL_LOCK_POLL_SECONDS, remaining))
 
 
 def lease_blocks(wt):
@@ -672,7 +680,9 @@ def main():
     rec.add_argument("--free-bytes", type=int, default=MAINTENANCE_GOAL_BYTES,
                      dest="free_bytes")
     args = parser.parse_args()
-    with pool_lock():
+    wait_seconds = (RELEASE_POOL_LOCK_TIMEOUT_SECONDS
+                    if args.cmd == "release" else 0.0)
+    with pool_lock(wait_seconds):
         {"list": cmd_list, "acquire": cmd_acquire, "release": cmd_release,
          "retire": cmd_retire, "remove": cmd_remove, "scrub": cmd_scrub,
          "reclaim": cmd_reclaim}[args.cmd](args)

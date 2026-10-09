@@ -18,7 +18,7 @@ import tempfile
 import time
 import textwrap
 import threading
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -114,8 +114,9 @@ def run_module_subprocess(repo, argv, body="aw.main()", **kwargs):
         cwd=str(repo), capture_output=True, text=True, **kwargs)
 
 
-def start_lock_holder(repo):
-    body = 'with aw.pool_lock():\n    print("LOCKED", flush=True)\n    time.sleep(30)'
+def start_lock_holder(repo, hold_seconds=30):
+    body = (f'with aw.pool_lock():\n    print("LOCKED", flush=True)\n'
+            f'    time.sleep({hold_seconds!r})')
     process = subprocess.Popen(
         [sys.executable, "-B", "-c", subprocess_module_code(repo, [], body)],
         cwd=str(repo), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -125,6 +126,11 @@ def start_lock_holder(repo):
         process.wait()
         raise RuntimeError(f"lock holder failed to start: {stderr}")
     return process
+
+
+@contextmanager
+def fake_admission_lock(locked):
+    yield locked
 
 
 # ---------------------------------------------------------------- categories
@@ -427,7 +433,6 @@ def test_pool_lock_excludes_all_lifecycle_commands(repo):
             (["acquire", "blocked", "lane/blocked"], "acquire"),
             (["list"], "list"),
             (["scrub"], "scrub"),
-            (["release", "slot-0"], "release"),
             (["retire", "slot-0"], "retire"),
             (["remove", "slot-0"], "remove"),
         ]
@@ -440,6 +445,59 @@ def test_pool_lock_excludes_all_lifecycle_commands(repo):
     finally:
         holder.terminate()
         holder.wait(timeout=5)
+
+
+def test_release_waits_for_transient_pool_contention(repo):
+    add_slot(repo, "slot-0", "lane/release-waits")
+    attempts = []
+
+    def reserve(*_args, **_kwargs):
+        attempts.append(True)
+        return fake_admission_lock(len(attempts) >= 3)
+
+    clock = iter((100.0, 100.0, 100.0))
+    with patch.object(aw, "admission_pool_lock", side_effect=reserve), \
+            patch.object(aw.time, "monotonic", side_effect=lambda: next(clock)), \
+            patch.object(aw.time, "sleep") as sleep:
+        with aw.pool_lock(wait_seconds=0.5):
+            pass
+    check("release contention retries until acquired", len(attempts) == 3, attempts)
+    check("release contention polls between retries", sleep.call_count == 2 and
+          all(call.args[0] == aw.POOL_LOCK_POLL_SECONDS
+              for call in sleep.call_args_list), sleep.call_args_list)
+
+    holder = start_lock_holder(repo, hold_seconds=1.0)
+    try:
+        result = run_module_subprocess(repo, ["release", "slot-0"])
+        check("release waits for transient pool contention", result.returncode == 0,
+              result.stderr + result.stdout)
+    finally:
+        if holder.poll() is None:
+            holder.terminate()
+        holder.wait(timeout=5)
+
+
+def test_release_pool_contention_has_a_bound(repo):
+    attempts = []
+
+    def reserve(*_args, **_kwargs):
+        attempts.append(True)
+        return fake_admission_lock(False)
+
+    clock = iter((100.0, 100.0, 101.0))
+    with patch.object(aw, "admission_pool_lock", side_effect=reserve), \
+            patch.object(aw.time, "monotonic", side_effect=lambda: next(clock)), \
+            patch.object(aw.time, "sleep") as sleep:
+        try:
+            with aw.pool_lock(wait_seconds=0.5):
+                check("release contention unexpectedly acquired", False)
+        except SystemExit as error:
+            check("release pool contention stops at its bound", "worktree pool is busy" in str(error))
+
+    check("release contention retries before stopping", len(attempts) == 2, attempts)
+    check("release contention uses short polling", sleep.call_count == 1 and
+          sleep.call_args[0][0] == aw.POOL_LOCK_POLL_SECONDS,
+          sleep.call_args_list)
 
 
 def test_pool_lock_releases_after_failure_and_process_exit(repo):
@@ -517,6 +575,8 @@ TESTS = [
     test_acquire_refuses_a_branch_held_elsewhere,
     test_acquire_allows_the_slot_that_already_holds_it,
     test_pool_lock_excludes_all_lifecycle_commands,
+    test_release_waits_for_transient_pool_contention,
+    test_release_pool_contention_has_a_bound,
     test_pool_lock_releases_after_failure_and_process_exit,
 ]
 
