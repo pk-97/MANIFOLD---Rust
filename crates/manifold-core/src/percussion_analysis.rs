@@ -551,21 +551,23 @@ impl PercussionClipBinding {
 /// where the clip sits (`start_beat`), how much of the file it skips (`in_point`),
 /// and warp. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md` section 4.
 ///
-/// `seconds_per_beat` is precomputed at build time from both the clip and the
-/// project, so the mapping needs no tempo-map access:
+/// Warped clips map linearly at their source BPM. Native-speed clips retain
+/// the tempo map so detection uses the same clock as playback:
 /// - **warp on** (`recorded_bpm > 0`): `60 / recorded_bpm`. Warp locks the
 ///   source's musical tempo to the project, so one source-beat is one
 ///   timeline-beat and a trigger lands on what is heard.
-/// - **warp off** (`recorded_bpm == 0`): `60 / project_bpm`. The source plays at
-///   native speed; source-seconds become timeline-seconds, mapped at the project
-///   tempo (exact for a flat tempo map).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// - **warp off**: source seconds are integrated through the project tempo map.
+///   The flat constructor remains available for legacy serialized options.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipDetectionAnchor {
     pub start_beat: Beats,
     pub end_beat: Beats,
     pub in_point: Seconds,
     pub seconds_per_beat: f32,
+    /// Native-speed clips need the whole map, not the BPM at the playhead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo_map: Option<crate::tempo::TempoMap>,
 }
 
 impl ClipDetectionAnchor {
@@ -587,7 +589,19 @@ impl ClipDetectionAnchor {
             end_beat: start_beat + duration_beats,
             in_point: in_point.max(Seconds::ZERO),
             seconds_per_beat: 60.0 / effective_bpm,
+            tempo_map: None,
         }
+    }
+
+    pub fn from_clip(clip: &crate::clip::TimelineClip, project: &crate::project::Project) -> Self {
+        let mut anchor = Self::new(
+            clip.start_beat, clip.duration_beats, clip.in_point,
+            clip.recorded_bpm_resolved(), project.settings.bpm,
+        );
+        if clip.recorded_bpm_resolved() <= 0.0 {
+            anchor.tempo_map = Some(project.tempo_map.clone());
+        }
+        anchor
     }
 
     /// Map a source-file time to a timeline beat, or `None` if the event falls
@@ -599,8 +613,14 @@ impl ClipDetectionAnchor {
         {
             return None;
         }
-        let delta_secs = (source_seconds - self.in_point).as_f32();
-        let beat = self.start_beat + Beats::from_f32(delta_secs / self.seconds_per_beat);
+        let delta = source_seconds - self.in_point;
+        let beats = if let Some(map) = &self.tempo_map {
+            crate::tempo::SourceClock::new(map, Bpm(60.0 / self.seconds_per_beat), None)
+                .beats_for_unwarped_source(self.start_beat, delta)
+        } else {
+            Beats(delta.0 / f64::from(self.seconds_per_beat))
+        };
+        let beat = self.start_beat + beats;
         if !beat.0.is_finite() || beat >= self.end_beat {
             return None;
         }
@@ -965,5 +985,23 @@ mod tests {
         assert!(anchor.map_source_seconds(Seconds(0.5)).is_some()); // beat 1, inside
         assert!(anchor.map_source_seconds(Seconds(1.0)).is_none()); // beat 2 == end, trimmed
         assert!(anchor.map_source_seconds(Seconds(5.0)).is_none()); // well past
+    }
+}
+
+#[cfg(test)]
+mod audio_anchor_tempo_tests {
+    use super::*;
+    #[test]
+    fn native_detection_uses_the_same_tempo_map_as_playback() {
+        let mut project = crate::project::Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), crate::types::TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(Beats(4.0), Bpm(60.0), crate::types::TempoPointSource::Manual, 0.001);
+        let clip = crate::clip::TimelineClip::new_audio("a.wav".into(), Beats(2.0), Beats(8.0), Seconds(1.0), Seconds(10.0));
+        let anchor = ClipDetectionAnchor::from_clip(&clip, &project);
+        // Start at t=1, source t=1; two source seconds later is timeline t=3 / beat 5.
+        assert!((anchor.map_source_seconds(Seconds(3.0)).unwrap().0 - 5.0).abs() < 1e-6);
+        let roundtrip: ClipDetectionAnchor = serde_json::from_str(&serde_json::to_string(&anchor).unwrap()).unwrap();
+        assert_eq!(roundtrip.map_source_seconds(Seconds(3.0)), anchor.map_source_seconds(Seconds(3.0)));
     }
 }

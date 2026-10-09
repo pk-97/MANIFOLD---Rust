@@ -1180,11 +1180,9 @@ impl ProjectIOService {
             // Decode once: the full file length bounds trimming (source_duration)
             // and, at the project tempo, sets the initial clip length.
             let source_duration = audio_source_duration(&path_str);
-            let duration_beats = if seconds_per_beat > 0.0 {
-                manifold_core::Beats::from_f32(source_duration.as_f32() / seconds_per_beat)
-            } else {
-                manifold_core::Beats::ZERO
-            };
+            let duration_beats = project.source_clock().beats_for_unwarped_source(
+                manifold_core::Beats::from_f32(drop_beat), source_duration,
+            );
 
             // Join the targeted audio lane, or append a new one for this file.
             let (layer_id, add_layer_cmd) = if let Some(ref target) = join_target {

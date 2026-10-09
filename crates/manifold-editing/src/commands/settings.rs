@@ -1,14 +1,21 @@
 use crate::command::Command;
+use crate::commands::clip::{
+    build_audio_dependent_edits, TrimClipCommand,
+};
+use crate::service::EditingService;
 use manifold_core::Beats;
 use manifold_core::PresetTypeId;
 use manifold_core::LayerId;
+use manifold_core::ClipId;
 use manifold_core::effects::ParameterDriver;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
 use manifold_core::settings::RtQualitySettings;
 use manifold_core::tempo::TempoPoint;
+use manifold_core::tempo::SourceClock;
 use manifold_core::types::{BlendMode, MidiTriggerMode, QuantizeMode, TempoPointSource};
-use manifold_core::units::Bpm;
+use manifold_core::units::{Bpm, Seconds};
+use std::collections::HashSet;
 
 /// Change project BPM with full tempo map support.
 /// Matches Unity's ChangeBpmCommand exactly:
@@ -17,6 +24,7 @@ use manifold_core::units::Bpm;
 /// - `tempo_point_source` propagates to AddOrReplacePoint
 /// - ApplyBpm: sets BPM, adds/replaces tempo point, optionally flattens map
 /// - Undo: restores the old tempo map points completely
+/// - `master` proportionally scales existing tempo-map point BPMs while retaining beats
 #[derive(Debug)]
 pub struct ChangeBpmCommand {
     old_bpm: Bpm,
@@ -28,6 +36,21 @@ pub struct ChangeBpmCommand {
     old_tempo_points: Option<Vec<TempoPoint>>,
     /// Whether this command has access to the project's tempo map.
     has_project: bool,
+    /// Scale the captured tempo map proportionally to the new master BPM.
+    master_tempo_map: bool,
+    /// Cached result of the master tempo-map scaling, captured on first execute.
+    scaled_tempo_points: Option<Vec<TempoPoint>>,
+    /// Exact replacement map used by recorded-lane restore and clear commands.
+    replacement_tempo_points: Option<Vec<TempoPoint>>,
+    /// Native-speed audio duration corrections captured on first execute.
+    trim_commands: Vec<TrimClipCommand>,
+    changed_clip_ids: Vec<ClipId>,
+    /// Existing overlap fixes caused by those duration corrections.
+    overlap_commands: Vec<Box<dyn Command>>,
+    dependent_commands: Vec<Box<dyn Command>>,
+    prepared: bool,
+    applied: bool,
+    rejection: Option<String>,
 }
 
 impl ChangeBpmCommand {
@@ -41,6 +64,16 @@ impl ChangeBpmCommand {
             flatten_tempo_map: false,
             old_tempo_points: None,
             has_project: false,
+            master_tempo_map: false,
+            scaled_tempo_points: None,
+            replacement_tempo_points: None,
+            trim_commands: Vec::new(),
+            changed_clip_ids: Vec::new(),
+            overlap_commands: Vec::new(),
+            dependent_commands: Vec::new(),
+            prepared: false,
+            applied: false,
+            rejection: None,
         }
     }
 
@@ -61,6 +94,65 @@ impl ChangeBpmCommand {
             flatten_tempo_map,
             old_tempo_points: Some(old_tempo_points),
             has_project: true,
+            master_tempo_map: false,
+            scaled_tempo_points: None,
+            replacement_tempo_points: None,
+            trim_commands: Vec::new(),
+            changed_clip_ids: Vec::new(),
+            overlap_commands: Vec::new(),
+            dependent_commands: Vec::new(),
+            prepared: false,
+            applied: false,
+            rejection: None,
+        }
+    }
+
+    /// Construct a project-wide master tempo edit. Existing tempo points retain
+    /// their beats while their BPMs scale with the project's current BPM.
+    pub fn master(project: &Project, new_bpm: Bpm) -> Self {
+        Self {
+            old_bpm: project.settings.bpm,
+            new_bpm,
+            tempo_point_source: TempoPointSource::Manual,
+            flatten_tempo_map: false,
+            old_tempo_points: Some(project.tempo_map.clone_points()),
+            has_project: true,
+            master_tempo_map: true,
+            scaled_tempo_points: None,
+            replacement_tempo_points: None,
+            trim_commands: Vec::new(),
+            changed_clip_ids: Vec::new(),
+            overlap_commands: Vec::new(),
+            dependent_commands: Vec::new(),
+            prepared: false,
+            applied: false,
+            rejection: None,
+        }
+    }
+
+    fn with_replacement_tempo_map(
+        old_bpm: Bpm,
+        new_bpm: Bpm,
+        old_tempo_points: Vec<TempoPoint>,
+        replacement_tempo_points: Vec<TempoPoint>,
+    ) -> Self {
+        Self {
+            old_bpm,
+            new_bpm,
+            tempo_point_source: TempoPointSource::Manual,
+            flatten_tempo_map: false,
+            old_tempo_points: Some(old_tempo_points),
+            has_project: true,
+            master_tempo_map: false,
+            scaled_tempo_points: None,
+            replacement_tempo_points: Some(replacement_tempo_points),
+            trim_commands: Vec::new(),
+            changed_clip_ids: Vec::new(),
+            overlap_commands: Vec::new(),
+            dependent_commands: Vec::new(),
+            prepared: false,
+            applied: false,
+            rejection: None,
         }
     }
 
@@ -74,6 +166,39 @@ impl ChangeBpmCommand {
 
         if is_undo {
             self.restore_old_tempo_map(project);
+            return;
+        }
+
+        if self.master_tempo_map {
+            project.tempo_map.clear();
+            if let Some(points) = &self.scaled_tempo_points {
+                for p in points {
+                    project.tempo_map.add_or_replace_point_with_time(
+                        p.beat,
+                        p.bpm,
+                        p.source,
+                        0.001,
+                        p.recorded_at_seconds,
+                    );
+                }
+            }
+            return;
+        }
+
+        if let Some(points) = &self.replacement_tempo_points {
+            project.tempo_map.clear();
+            for point in points {
+                project.tempo_map.add_or_replace_point_with_time(
+                    point.beat,
+                    point.bpm,
+                    point.source,
+                    0.001,
+                    point.recorded_at_seconds,
+                );
+            }
+            project
+                .tempo_map
+                .ensure_default_at_beat_zero(applied_bpm, self.tempo_point_source);
             return;
         }
 
@@ -106,7 +231,7 @@ impl ChangeBpmCommand {
         project.tempo_map.clear();
 
         match &self.old_tempo_points {
-            Some(points) if !points.is_empty() => {
+            Some(points) => {
                 for p in points {
                     project.tempo_map.add_or_replace_point_with_time(
                         p.beat,
@@ -116,9 +241,6 @@ impl ChangeBpmCommand {
                         p.recorded_at_seconds,
                     );
                 }
-                project
-                    .tempo_map
-                    .ensure_default_at_beat_zero(project.settings.bpm, self.tempo_point_source);
             }
             _ => {
                 project.tempo_map.add_or_replace_point(
@@ -133,19 +255,199 @@ impl ChangeBpmCommand {
             }
         }
     }
+
+    fn validate_master(&self, project: &Project) -> Result<Vec<TempoPoint>, String> {
+        if !self.new_bpm.0.is_finite() || !(20.0..=300.0).contains(&self.new_bpm.0) {
+            return Err("master BPM must be finite and within 20..300".to_string());
+        }
+        if !self.old_bpm.0.is_finite() || self.old_bpm.0 <= 0.0 {
+            return Err("current project BPM must be finite and positive".to_string());
+        }
+
+        let target_bpm = BeatQuantizer::quantize_bpm(self.new_bpm.0);
+        let ratio = target_bpm / self.old_bpm.0;
+        let mut scaled = Vec::with_capacity(project.tempo_map.point_count());
+        for point in project.tempo_map.points() {
+            let bpm = point.bpm.0 * ratio;
+            if !bpm.is_finite() || !(20.0..=300.0).contains(&bpm) {
+                return Err("master tempo-map scaling would produce BPM outside 20..300".to_string());
+            }
+            scaled.push(TempoPoint {
+                beat: point.beat,
+                bpm: Bpm(BeatQuantizer::quantize_bpm(bpm)),
+                source: point.source,
+                recorded_at_seconds: point.recorded_at_seconds,
+            });
+        }
+        Ok(scaled)
+    }
+
+    fn execute_first(&mut self, project: &mut Project) {
+        if self.master_tempo_map {
+            match self.validate_master(project) {
+                Ok(points) => self.scaled_tempo_points = Some(points),
+                Err(reason) => {
+                    self.rejection = Some(reason);
+                    return;
+                }
+            }
+        }
+
+        let old_tempo_map = project.tempo_map.clone();
+        let old_clock = SourceClock::new(
+            &old_tempo_map,
+            project.settings.bpm,
+            project.recording_provenance.project_bpm(),
+        );
+        let native_sources = project
+            .timeline
+            .layers
+            .iter()
+            .flat_map(|layer| layer.clips.iter())
+            .filter(|clip| {
+                clip.is_audio()
+                    && clip.recorded_bpm_resolved() <= 0.0
+                    && !clip.detection_source.as_ref().is_some_and(|source_id| {
+                        project.timeline.layers.iter().any(|source_layer| {
+                            source_layer.clips.iter().any(|source| &source.id == source_id)
+                        })
+                    })
+            })
+            .map(|clip| {
+                (
+                    clip.clone(),
+                    old_clock.source_seconds(clip, clip.start_beat, clip.end_beat()),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        self.apply_bpm(project, self.new_bpm, false);
+        let mut changed_clip_ids = Vec::new();
+        self.trim_commands = {
+            let new_clock = project.source_clock();
+            native_sources
+                .iter()
+                .filter_map(|(old_source, source_seconds)| {
+                    let new_source = project.timeline.layers.iter().flat_map(|layer| &layer.clips).find(|clip| clip.id == old_source.id).cloned()?;
+                    let new_duration = new_clock
+                        .beats_for_unwarped_source(old_source.start_beat, *source_seconds);
+                    if (new_duration - old_source.duration_beats).0.abs() < 0.0001 {
+                        return None;
+                    }
+                    changed_clip_ids.push(old_source.id.clone());
+                    Some(TrimClipCommand::new_geometry_only(
+                        old_source.id.clone(),
+                        old_source.start_beat,
+                        new_source.start_beat,
+                        old_source.duration_beats,
+                        new_duration,
+                        old_source.in_point,
+                        new_source.in_point,
+                    ))
+                })
+                .collect()
+        };
+        self.changed_clip_ids = changed_clip_ids;
+
+        for command in &mut self.trim_commands {
+            command.execute(project);
+        }
+
+        let new_clock = project.source_clock();
+        for (old_source, _) in &native_sources {
+            if let Some(new_source) = project.timeline.layers.iter().flat_map(|layer| &layer.clips).find(|clip| clip.id == old_source.id).cloned() {
+                self.dependent_commands.extend(build_audio_dependent_edits(
+                    project,
+                    old_source,
+                    &new_source,
+                    &old_clock,
+                    &new_clock,
+                ));
+            }
+        }
+        for command in &mut self.dependent_commands {
+            command.execute(project);
+        }
+
+        for clip_id in self.changed_clip_ids.clone() {
+            let Some(placed_clip) = project.timeline.find_clip_by_id(&clip_id).cloned() else {
+                continue;
+            };
+            let Some(layer_index) = project
+                .timeline
+                .layers
+                .iter()
+                .position(|layer| layer.clips.iter().any(|clip| clip.id == clip_id))
+            else {
+                continue;
+            };
+            let commands = EditingService::enforce_non_overlap(
+                project,
+                &placed_clip,
+                layer_index,
+                &HashSet::new(),
+            );
+            for mut command in commands {
+                command.execute(project);
+                self.overlap_commands.push(command);
+            }
+        }
+
+        self.prepared = true;
+        self.applied = true;
+    }
 }
 
 impl Command for ChangeBpmCommand {
     fn execute(&mut self, project: &mut Project) {
+        if self.rejection.is_some() {
+            return;
+        }
+        if !self.prepared {
+            self.execute_first(project);
+            return;
+        }
+
         self.apply_bpm(project, self.new_bpm, false);
+        for command in &mut self.trim_commands {
+            command.execute(project);
+        }
+        for command in &mut self.dependent_commands {
+            command.execute(project);
+        }
+        for command in &mut self.overlap_commands {
+            command.execute(project);
+        }
+        self.applied = true;
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if !self.applied {
+            return;
+        }
+        for command in self.overlap_commands.iter_mut().rev() {
+            command.undo(project);
+        }
+        for command in self.dependent_commands.iter_mut().rev() {
+            command.undo(project);
+        }
+        for command in self.trim_commands.iter_mut().rev() {
+            command.undo(project);
+        }
         self.apply_bpm(project, self.old_bpm, true);
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
         "Change BPM"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection.as_deref()
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied && self.rejection.is_none()
     }
 }
 
@@ -858,49 +1160,33 @@ impl Command for ChangeTonemapCurveCommand {
 /// Matches Unity's RestoreRecordedTempoLaneCommand exactly.
 #[derive(Debug)]
 pub struct RestoreRecordedTempoLaneCommand {
-    old_bpm: Bpm,
-    old_points: Vec<TempoPoint>,
-    new_points: Vec<TempoPoint>,
+    transaction: ChangeBpmCommand,
 }
 
 impl RestoreRecordedTempoLaneCommand {
     pub fn new(old_bpm: Bpm, old_points: Vec<TempoPoint>, new_points: Vec<TempoPoint>) -> Self {
         Self {
-            old_bpm,
-            old_points,
-            new_points,
+            transaction: ChangeBpmCommand::with_replacement_tempo_map(
+                old_bpm,
+                new_points
+                    .iter()
+                    .find(|point| point.beat == Beats::ZERO)
+                    .map(|point| point.bpm)
+                    .unwrap_or(old_bpm),
+                old_points,
+                new_points,
+            ),
         }
-    }
-
-    fn apply_lane(project: &mut Project, lane: &[TempoPoint], fallback_bpm: Bpm) {
-        project.tempo_map.clear();
-
-        for point in lane {
-            project.tempo_map.add_or_replace_point_with_time(
-                point.beat,
-                point.bpm,
-                point.source,
-                0.001,
-                point.recorded_at_seconds,
-            );
-        }
-
-        project
-            .tempo_map
-            .ensure_default_at_beat_zero(fallback_bpm, TempoPointSource::Manual);
-
-        let bpm_at_zero = project.tempo_map.get_bpm_at_beat(Beats::ZERO, fallback_bpm);
-        project.settings.bpm = bpm_at_zero;
     }
 }
 
 impl Command for RestoreRecordedTempoLaneCommand {
     fn execute(&mut self, project: &mut Project) {
-        Self::apply_lane(project, &self.new_points.clone(), self.old_bpm);
+        self.transaction.execute(project);
     }
 
     fn undo(&mut self, project: &mut Project) {
-        Self::apply_lane(project, &self.old_points.clone(), self.old_bpm);
+        self.transaction.undo(project);
     }
 
     fn description(&self) -> &str {
@@ -912,51 +1198,34 @@ impl Command for RestoreRecordedTempoLaneCommand {
 /// Matches Unity's ClearTempoMapCommand exactly.
 #[derive(Debug)]
 pub struct ClearTempoMapCommand {
-    old_points: Vec<TempoPoint>,
-    current_bpm: Bpm,
+    transaction: ChangeBpmCommand,
 }
 
 impl ClearTempoMapCommand {
     pub fn new(old_points: Vec<TempoPoint>, current_bpm: Bpm) -> Self {
         Self {
-            old_points,
-            current_bpm,
+            transaction: ChangeBpmCommand::with_replacement_tempo_map(
+                current_bpm,
+                current_bpm,
+                old_points,
+                vec![TempoPoint {
+                    beat: Beats::ZERO,
+                    bpm: current_bpm,
+                    source: TempoPointSource::Manual,
+                    recorded_at_seconds: Seconds::ZERO,
+                }],
+            ),
         }
     }
 }
 
 impl Command for ClearTempoMapCommand {
     fn execute(&mut self, project: &mut Project) {
-        project.tempo_map.clear();
-        project.tempo_map.add_or_replace_point(
-            Beats::ZERO,
-            self.current_bpm,
-            TempoPointSource::Manual,
-            0.001,
-        );
-        project
-            .tempo_map
-            .ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
+        self.transaction.execute(project);
     }
 
     fn undo(&mut self, project: &mut Project) {
-        project.tempo_map.clear();
-
-        if !self.old_points.is_empty() {
-            for p in &self.old_points {
-                project.tempo_map.add_or_replace_point_with_time(
-                    p.beat,
-                    p.bpm,
-                    p.source,
-                    0.001,
-                    p.recorded_at_seconds,
-                );
-            }
-        }
-
-        project
-            .tempo_map
-            .ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
+        self.transaction.undo(project);
     }
 
     fn description(&self) -> &str {
@@ -1157,7 +1426,91 @@ impl Command for ChangeSimRateCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
     use manifold_core::settings::{RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution, RtSpatialDenoise};
+    use manifold_core::types::LayerType;
+    use manifold_core::units::Seconds;
+
+    fn native_audio_project(bpm: f32, duration_beats: f64) -> Project {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(bpm);
+        let mut layer = Layer::new_audio("Audio".to_string(), 0);
+        layer.add_clip(
+            TimelineClip::new_audio(
+                "native.wav".to_string(),
+                Beats::ZERO,
+                Beats(duration_beats),
+                Seconds::ZERO,
+                Seconds(10.0),
+            ),
+            &HashSet::new(),
+            &project.source_clock(),
+        );
+        project.timeline.layers.push(layer);
+        project
+    }
+
+    #[test]
+    fn change_bpm_preserves_native_audio_source_span() {
+        for old_bpm in [120.0, 180.0] {
+            let mut project = native_audio_project(old_bpm, f64::from(old_bpm) / 30.0);
+            let old_span = project.source_clock().source_seconds(
+                &project.timeline.layers[0].clips[0],
+                Beats::ZERO,
+                project.timeline.layers[0].clips[0].end_beat(),
+            );
+            let mut command = ChangeBpmCommand::new(Bpm(old_bpm), Bpm(60.0));
+            command.execute(&mut project);
+            let clip = &project.timeline.layers[0].clips[0];
+            let new_span = project
+                .source_clock()
+                .source_seconds(clip, clip.start_beat, clip.end_beat());
+            assert!((new_span.0 - old_span.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn change_bpm_keeps_warped_audio_geometry() {
+        let mut project = native_audio_project(120.0, 4.0);
+        project.timeline.layers[0].clips[0].recorded_bpm = 120.0;
+        let old_duration = project.timeline.layers[0].clips[0].duration_beats;
+        let mut command = ChangeBpmCommand::new(Bpm(120.0), Bpm(60.0));
+        command.execute(&mut project);
+        assert_eq!(project.timeline.layers[0].clips[0].duration_beats, old_duration);
+    }
+
+    #[test]
+    fn master_scales_tempo_points_and_rejects_invalid_range_atomically() {
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
+        project.tempo_map.add_or_replace_point(
+            Beats(8.0),
+            Bpm(180.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
+        let mut command = ChangeBpmCommand::master(&project, Bpm(60.0));
+        command.execute(&mut project);
+        assert_eq!(project.settings.bpm, Bpm(60.0));
+        assert_eq!(project.tempo_map.points()[1].bpm, Bpm(90.0));
+        command.undo(&mut project);
+        assert_eq!(project.settings.bpm, Bpm(120.0));
+        assert_eq!(project.tempo_map.points()[1].bpm, Bpm(180.0));
+
+        let original = serde_json::to_value(&project).unwrap();
+        let mut invalid = ChangeBpmCommand::master(&project, Bpm(300.0));
+        invalid.execute(&mut project);
+        assert!(!invalid.was_applied());
+        assert!(invalid.rejection_reason().is_some());
+        assert_eq!(serde_json::to_value(&project).unwrap(), original);
+    }
 
     #[test]
     fn change_bpm_undo_restores_recorded_tempo_map() {
@@ -1197,6 +1550,80 @@ mod tests {
                 assert_eq!(serde_json::to_value(&project.tempo_map).unwrap(), edited);
             }
         }
+    }
+
+    #[test]
+    fn master_bpm_retimes_linked_stem_and_trigger_on_project_copy() {
+        let mut base = Project::default();
+        base.settings.bpm = Bpm(120.0);
+        base.tempo_map.add_or_replace_point(
+            Beats::ZERO,
+            Bpm(120.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
+        base.tempo_map.add_or_replace_point(
+            Beats(4.0),
+            Bpm(60.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
+        base.tempo_map.ensure_sorted();
+
+        let mut source_layer = Layer::new_audio("Source".into(), 0);
+        let source = TimelineClip::new_audio(
+            "source.wav".into(),
+            Beats::ZERO,
+            Beats(8.0),
+            Seconds::ZERO,
+            Seconds(20.0),
+        );
+        let source_id = source.id.clone();
+        source_layer.restore_clip(source);
+        base.timeline.layers.push(source_layer);
+
+        let mut stem_layer = Layer::new_audio("Stem".into(), 1);
+        let mut stem = TimelineClip::new_audio(
+            "stem.wav".into(),
+            Beats(3.0),
+            Beats(4.0),
+            Seconds(1.0),
+            Seconds(10.0),
+        );
+        stem.detection_source = Some(source_id.clone());
+        stem_layer.restore_clip(stem);
+        base.timeline.layers.push(stem_layer);
+
+        let mut trigger_layer = Layer::new("Triggers".into(), LayerType::Generator, 2);
+        let mut trigger = TimelineClip::new_generator(Beats(3.0), Beats(4.0));
+        trigger.detection_source = Some(source_id);
+        trigger_layer.restore_clip(trigger);
+        base.timeline.layers.push(trigger_layer);
+        base.timeline.rebuild_clip_lookup();
+
+        let mut first = base.clone();
+        let mut second = base.clone();
+        let mut command = ChangeBpmCommand::master(&base, Bpm(60.0));
+        command.execute(&mut first);
+        assert!((first.timeline.layers[0].clips[0].duration_beats.0 - 5.0).abs() < 1e-6);
+        for layer in &first.timeline.layers[1..] {
+            assert!((layer.clips[0].start_beat.0 - 1.5).abs() < 1e-6);
+            assert!((layer.clips[0].duration_beats.0 - 3.0).abs() < 1e-6);
+        }
+        assert_eq!(first.timeline.layers[1].clips[0].in_point, Seconds(1.0));
+        command.execute(&mut second);
+        assert_eq!(
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&second).unwrap()
+        );
+
+        command.undo(&mut second);
+        assert_eq!(serde_json::to_value(&second).unwrap(), serde_json::to_value(&base).unwrap());
+        command.execute(&mut second);
+        assert_eq!(
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&second).unwrap()
+        );
     }
 
     #[test]
@@ -1290,8 +1717,6 @@ mod tests {
 
     use manifold_core::effects::PresetInstance;
     use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
-    use manifold_core::layer::Layer;
-    use manifold_core::types::LayerType;
 
     const TEST_PASTE_GEN_A: PresetTypeId = PresetTypeId::new("TestPasteGenA");
     const TEST_PASTE_GEN_B: PresetTypeId = PresetTypeId::new("TestPasteGenB");

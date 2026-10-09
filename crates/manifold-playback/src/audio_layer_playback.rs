@@ -32,7 +32,7 @@ use kira::modulator::value_provider::ModulatorValueProvider;
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{
     Frame,
-    manager::{AudioManager, AudioManagerSettings, backend::DefaultBackend},
+    manager::{AudioManager, AudioManagerSettings, backend::{Backend, DefaultBackend}},
     sound::PlaybackState as KiraPlaybackState,
     sound::static_sound::{StaticSoundData, StaticSoundHandle},
     tween::Tween,
@@ -42,7 +42,6 @@ use manifold_core::audio_stream::{
 };
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
-use manifold_core::tempo::TempoMapConverter;
 use manifold_core::types::PlaybackState;
 use manifold_core::{Beats, Seconds};
 
@@ -98,25 +97,7 @@ fn warped_source_position_at_beat(
     clip: &manifold_core::clip::TimelineClip,
     project: &Project,
 ) -> f64 {
-    let clip_bpm = clip.recorded_bpm_resolved();
-    let in_point = clip.in_point.0;
-    let start_beat = clip.start_beat;
-
-    if clip_bpm <= 0.0 {
-        // Unwarped: seconds-based via tempo map
-        let start_secs = TempoMapConverter::beat_to_seconds_immut(
-            &project.tempo_map, start_beat, project.settings.bpm,
-        ).0;
-        let beat_secs = TempoMapConverter::beat_to_seconds_immut(
-            &project.tempo_map, beat, project.settings.bpm,
-        ).0;
-        in_point + (beat_secs - start_secs)
-    } else {
-        // Warped: beat-linear, source advances at 60/recorded_bpm seconds per beat
-        let beats_since_start = (beat - start_beat).0;
-        let source_secs_per_beat = 60.0 / clip_bpm as f64;
-        in_point + beats_since_start * source_secs_per_beat
-    }
+    project.source_clock().source_position(clip, beat).0
 }
 
 /// Compute the local BPM at a given beat for voice playback rate.
@@ -245,22 +226,48 @@ struct LayerTrack {
 /// One playing (or paused) clip voice.
 struct Voice {
     handle: StaticSoundHandle,
-    /// Kept so a voice that kira auto-stops at the natural end can be replayed.
-    /// Carries the layer's track as its output destination, so a replay re-routes
-    /// through the same tap.
+    /// Retained decoded samples. Kira sound data is cheap to clone, so a voice
+    /// can be routed to a new layer without decoding the source again.
     data: StaticSoundData,
     /// The clip's file path the voice was built from — a change rebuilds it.
     path: String,
+    /// The layer track currently receiving this voice.
+    destination: LayerId,
     duration: Seconds,
     encoder_delay: Seconds,
+}
+
+/// Play retained sound data on a layer track with the requested initial state.
+/// The zero initial volume prevents a newly created voice from rendering before
+/// its transport sync applies the clip's gain.
+fn play_routed_data<B: Backend>(
+    manager: &mut AudioManager<B>,
+    data: &StaticSoundData,
+    track: &TrackHandle,
+    position: f64,
+    volume: f64,
+    ratio: f32,
+    paused: bool,
+) -> Result<StaticSoundHandle, ()> {
+    let mut handle = manager
+        .play(data.output_destination(track).volume(0.0_f64))
+        .map_err(|_| ())?;
+    handle.seek_to(position);
+    handle.set_volume(volume, Tween::default());
+    handle.set_playback_rate(ratio as f64, Tween::default());
+    if paused {
+        handle.pause(Tween::default());
+    }
+    Ok(handle)
 }
 
 /// Build a fresh voice for `path` routed to `track` (decode + start paused at 0).
 /// `None` on a decode/play failure (logged) — a genuine "no audio," not a silent
 /// stand-in.
-fn make_voice(
-    manager: &mut AudioManager<DefaultBackend>,
+fn make_voice<B: Backend>(
+    manager: &mut AudioManager<B>,
     track: &TrackHandle,
+    destination: &LayerId,
     path: &str,
 ) -> Option<Voice> {
     let pre = match preload_audio(path, Beats::ZERO) {
@@ -273,20 +280,19 @@ fn make_voice(
     // Route to the layer's sub-track so the tap sees this voice's output. Built silent
     // (rather than played-then-paused) so kira's default 10ms pause fade-out never renders
     // the file's first samples audibly — see BUG-081.
-    let data = pre.sound_data.output_destination(track).volume(0.0_f64);
-    let mut handle = match manager.play(data.clone()) {
+    let data = pre.sound_data;
+    let handle = match play_routed_data(manager, &data, track, 0.0, 0.0, 1.0, true) {
         Ok(h) => h,
-        Err(e) => {
-            log::warn!("[AudioLayerPlayback] play failed for '{path}': {e}");
+        Err(()) => {
+            log::warn!("[AudioLayerPlayback] play failed for '{path}'");
             return None;
         }
     };
-    handle.pause(Tween::default());
-    handle.seek_to(0.0);
     Some(Voice {
         handle,
         data,
         path: path.to_string(),
+        destination: destination.clone(),
         duration: pre.clip_duration,
         encoder_delay: pre.encoder_delay,
     })
@@ -346,9 +352,13 @@ impl AudioLayerPlayback {
 
             // Tap gate: per-voice volume. The tap sits in the sub-track chain after
             // the voices, so zeroing the voice silences the tap (full mute).
-            let volume = if tap_hot { layer.audio_gain_linear() as f64 } else { 0.0 };
             let Some(clip) = layer.active_audio_clip_at(beat) else {
                 continue;
+            };
+            let volume = if tap_hot && !clip.is_muted {
+                layer.audio_gain_linear() as f64
+            } else {
+                0.0
             };
             active.insert(clip.id.clone());
             // Source position the playhead is over: beat-anchored warp.
@@ -374,6 +384,7 @@ impl AudioLayerPlayback {
                 &mut self.manager,
                 &mut self.voices,
                 track,
+                &layer.layer_id,
                 &clip.id,
                 &clip.audio_file_path,
                 expected,
@@ -422,10 +433,11 @@ impl AudioLayerPlayback {
     /// reinserted. Associated (not `&mut self`) so the caller can hold a borrow of
     /// the layer track concurrently with the manager + voice map.
     #[allow(clippy::too_many_arguments)]
-    fn sync_clip(
-        manager: &mut AudioManager<DefaultBackend>,
+    fn sync_clip<B: Backend>(
+        manager: &mut AudioManager<B>,
         voices: &mut AHashMap<ClipId, Voice>,
         track: &TrackHandle,
+        destination: &LayerId,
         id: &ClipId,
         path: &str,
         expected: Seconds,
@@ -434,8 +446,35 @@ impl AudioLayerPlayback {
         ratio: f32,
     ) {
         // Take the existing voice if its file still matches; otherwise (re)build.
+        // Moving a clip between layers replaces only the Kira handle: the retained
+        // decoded samples are cloned with the new output destination.
         let mut voice = match voices.remove(id) {
-            Some(v) if v.path == path => v,
+            Some(mut v) if v.path == path => {
+                if v.destination != *destination {
+                    let position = v.handle.position();
+                    let was_playing = v.handle.state() == KiraPlaybackState::Playing;
+                    v.handle.stop(Tween::default());
+                    v.handle = match play_routed_data(
+                        manager,
+                        &v.data,
+                        track,
+                        position,
+                        volume,
+                        ratio,
+                        !was_playing,
+                    ) {
+                        Ok(handle) => handle,
+                        Err(()) => {
+                            log::warn!(
+                                "[AudioLayerPlayback] reroute failed for '{path}'"
+                            );
+                            return;
+                        }
+                    };
+                    v.destination = destination.clone();
+                }
+                v
+            }
             stale => {
                 if let Some(mut old) = stale {
                     old.handle.stop(Tween::default());
@@ -443,7 +482,7 @@ impl AudioLayerPlayback {
                 if path.is_empty() {
                     return;
                 }
-                match make_voice(manager, track, path) {
+                match make_voice(manager, track, destination, path) {
                     Some(v) => v,
                     None => return,
                 }
@@ -471,17 +510,18 @@ impl AudioLayerPlayback {
                 } else if !playing {
                     if voice.handle.state() == KiraPlaybackState::Stopped {
                         // Kira stops a handle at the natural end; replay for a
-                        // fresh one seeked to the expected position. `data` carries
-                        // the layer track as its destination, so the replay still
-                        // routes through the tap.
-                        match manager.play(voice.data.clone()) {
-                            Ok(mut h) => {
-                                h.seek_to(target.0);
-                                h.set_volume(volume, Tween::default());
-                                h.set_playback_rate(ratio as f64, Tween::default());
-                                voice.handle = h;
-                            }
-                            Err(e) => log::warn!("[AudioLayerPlayback] replay failed: {e}"),
+                        // fresh one seeked to the expected position.
+                        match play_routed_data(
+                            manager,
+                            &voice.data,
+                            track,
+                            target.0,
+                            volume,
+                            ratio,
+                            false,
+                        ) {
+                            Ok(h) => voice.handle = h,
+                            Err(()) => log::warn!("[AudioLayerPlayback] replay failed"),
                         }
                     } else {
                         voice.handle.seek_to(target.0);
@@ -736,6 +776,132 @@ mod layer_tap_tests {
             peak > 0.05,
             "tap went silent (peak {peak:.4}) when sub-track muted to master — \
              output volume is applied before the tap; analysis-only needs a different tap point"
+        );
+    }
+}
+
+#[cfg(test)]
+mod routed_voice_tests {
+    use kira::manager::backend::mock::{MockBackend, MockBackendSettings};
+
+    use super::*;
+
+    fn mock_track(
+        manager: &mut AudioManager<MockBackend>,
+    ) -> (TrackHandle, AudioStreamConsumer) {
+        let (prod, cons) = audio_stream(1, 512, 32, 48_000);
+        let sample_rate = Arc::new(AtomicU32::new(0));
+        let mut builder = TrackBuilder::new();
+        builder.add_effect(LayerTapBuilder { prod, sample_rate });
+        (manager.add_sub_track(builder).expect("mock sub-track"), cons)
+    }
+
+    fn tap_peak(consumer: &mut AudioStreamConsumer) -> f32 {
+        let mut samples = [0.0; 128];
+        let mut peak: f32 = 0.0;
+        while let Some(read) = consumer.read(&mut samples) {
+            if let AudioStreamRead::Samples { samples: count, .. } = read {
+                peak = peak.max(
+                    samples[..count]
+                        .iter()
+                        .map(|sample| sample.abs())
+                        .fold(0.0, f32::max),
+                );
+            }
+        }
+        peak
+    }
+
+    #[test]
+    fn reroute_reuses_samples_and_moves_signal_to_new_track() {
+        let mut manager = AudioManager::<MockBackend>::new(AudioManagerSettings {
+            backend_settings: MockBackendSettings { sample_rate: 48_000 },
+            ..Default::default()
+        })
+        .expect("mock audio manager");
+        let (track_a, mut tap_a) = mock_track(&mut manager);
+        let (track_b, mut tap_b) = mock_track(&mut manager);
+        let layer_a = LayerId::new("layer-a");
+        let layer_b = LayerId::new("layer-b");
+        let clip_id = ClipId::new("clip");
+        let frames: Arc<[Frame]> = (0..4_800)
+            .map(|i| {
+                let sample = if i < 64 { 0.1 } else { 0.4 };
+                Frame::new(sample, sample)
+            })
+            .collect();
+        let data = StaticSoundData {
+            sample_rate: 48_000,
+            frames,
+            settings: Default::default(),
+            slice: None,
+        };
+
+        let source_position = 64.0 / 48_000.0;
+        let old_handle = play_routed_data(
+            &mut manager,
+            &data,
+            &track_a,
+            source_position,
+            1.0,
+            1.0,
+            false,
+        )
+        .expect("initial routed voice");
+        for i in 0..512 {
+            if i % 64 == 0 { manager.backend_mut().on_start_processing(); }
+            let _ = manager.backend_mut().process();
+        }
+        assert!(
+            tap_peak(&mut tap_a) > 0.09,
+            "initial track should receive signal"
+        );
+
+        let mut voices = AHashMap::new();
+        voices.insert(
+            clip_id.clone(),
+            Voice {
+                handle: old_handle,
+                data: data.clone(),
+                path: "retained.wav".to_string(),
+                destination: layer_a,
+                duration: Seconds(1.0),
+                encoder_delay: Seconds::ZERO,
+            },
+        );
+        AudioLayerPlayback::sync_clip(
+            &mut manager,
+            &mut voices,
+            &track_b,
+            &layer_b,
+            &clip_id,
+            "retained.wav",
+            Seconds(source_position),
+            PlaybackState::Playing,
+            1.0,
+            1.0,
+        );
+        // Let the existing declick envelopes settle, then measure fresh blocks.
+        for i in 0..512 {
+            if i % 64 == 0 { manager.backend_mut().on_start_processing(); }
+            let _ = manager.backend_mut().process();
+        }
+        tap_peak(&mut tap_a);
+        tap_peak(&mut tap_b);
+        for i in 0..128 {
+            if i % 64 == 0 { manager.backend_mut().on_start_processing(); }
+            let _ = manager.backend_mut().process();
+        }
+
+        assert_eq!(voices[&clip_id].destination, layer_b);
+        assert_eq!(
+            tap_peak(&mut tap_a),
+            0.0,
+            "old track must stay silent after reroute"
+        );
+        assert!(
+            tap_peak(&mut tap_b) > 0.39,
+            "new track should receive retained signal"
         );
     }
 }

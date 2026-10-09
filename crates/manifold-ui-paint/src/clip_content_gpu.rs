@@ -331,10 +331,11 @@ impl ClipContentGpu {
                     continue; // segment fully outside the visible texture
                 }
                 let (src_start, src_end) = if file_secs > 0.0 {
-                    (
-                        (secs0 / file_secs).clamp(0.0, 1.0),
-                        (secs1 / file_secs).clamp(0.0, 1.0),
-                    )
+                    // Keep the source window unbounded here. The painter clips
+                    // each pixel's interval to the file, preserving the
+                    // timeline position of valid audio when a clip reaches
+                    // past EOF.
+                    (secs0 / file_secs, secs1 / file_secs)
                 } else {
                     (0.0, 1.0)
                 };

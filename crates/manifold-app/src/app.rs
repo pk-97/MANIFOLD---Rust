@@ -963,23 +963,10 @@ impl Application {
                         let old_bpm = project.settings.bpm;
                         // Unity: skip if approximately equal
                         if (old_bpm.0 - new_bpm.0).abs() >= 0.01 {
-                            // Must use with_tempo_map so the tempo map point at
-                            // beat 0 is updated — sync_project_bpm_from_current_beat
-                            // reads from the tempo map every tick and would revert
-                            // settings.bpm back to the old map value otherwise.
-                            let old_points = project.tempo_map.clone_points();
-                            let cmd = manifold_editing::commands::settings::ChangeBpmCommand::with_tempo_map(
-                                old_bpm, new_bpm,
-                                manifold_core::types::TempoPointSource::Manual,
-                                false,
-                                old_points,
+                            let cmd = manifold_editing::commands::settings::ChangeBpmCommand::master(
+                                project, new_bpm,
                             );
-                            {
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(project);
-                                self.send_content_cmd(ContentCommand::Execute(boxed));
-                            }
+                            self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
                         }
                     }
                     self.needs_rebuild = true;
@@ -1232,17 +1219,14 @@ impl Application {
                             .find_clip_by_id(&clip_id)
                             .map(|c| c.recorded_bpm)
                             .unwrap_or(0.0);
-                        if (old_bpm - new_bpm).abs() >= 0.01 {
+                        let enabling = new_bpm > 0.0 && project.timeline.find_clip_by_id(&clip_id)
+                            .is_some_and(|clip| clip.is_audio() && (!clip.is_audio_warp_enabled() || clip.audio_bpm_automatic));
+                        if (old_bpm - new_bpm).abs() >= 0.01 || enabling {
                             let cmd =
                                 manifold_editing::commands::clip::ChangeClipRecordedBpmCommand::new(
                                     clip_id, old_bpm, new_bpm,
                                 );
-                            {
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(project);
-                                self.send_content_cmd(ContentCommand::Execute(boxed));
-                            }
+                            self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
                         }
                     }
                 }

@@ -1602,7 +1602,7 @@ impl Application {
                                 if c.recorded_bpm > 0.0 {
                                     format!("{:.1}", c.recorded_bpm)
                                 } else {
-                                    "Auto".to_string()
+                                    if c.is_audio() { "Unknown" } else { "Auto" }.to_string()
                                 }
                             })
                             .unwrap_or_else(|| "Auto".to_string());
