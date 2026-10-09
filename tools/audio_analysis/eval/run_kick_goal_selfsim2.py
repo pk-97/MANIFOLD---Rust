@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """H-R2: widen the song-relative stage. Strict v2, same stacked nested protocol as H-R.
 
-Usage: run_kick_goal_selfsim2.py BASE
+Usage: run_kick_goal_selfsim2.py BASE [CONFIG ...]   (default Q1 Q2 Q3)
 
 Writes nested_{BASE}_{config}.npz in the nested_{BASE}.npz layout, so a
 config can be stacked again by passing BASE_config.
@@ -12,6 +12,9 @@ no history early in a clip. Predeclared configs (columns of one matrix):
 - Q1: R2 + all 15 base features relative to the song's recent likely kicks (20 s).
 - Q2: Q1 + the 4 s window's sim, lp_rel, lvl_rel, evidence (faster warm-up).
 - Q3: Q2 + the 15 raw base features (fallback without history).
+Second batch, declared after Q1 (all .713/.718) and R3 (self 8 s, all .784/.738):
+- R3_self8: R3 rerun to save its predictions for a second stacked pass.
+- Q4: the 8 s self features + the 20 s sim, lp_rel, lvl_rel, evidence. Pass vs R3: F1 >= .780.
 Expected failure: more inputs overfit the 12 training songs; relative levels
 repeat what lp_rel already says.
 Pass vs R2 (all R .771 P .728, F1 .749): pooled F1 >= .779, and no song below
@@ -34,12 +37,15 @@ from tools.audio_analysis.eval.kick_goal_selfsim import relative_levels, self_fe
 from tools.audio_analysis.eval.run_kick_goal_data import ALL, line  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_selfsim import fit2  # noqa: E402
 
-SELF20, REL20, SELF4, RAW = list(range(0, 5)), list(range(5, 20)), list(range(20, 24)), list(range(24, 39))
-CONFIGS = (('Q1_rel15', SELF20 + REL20), ('Q2_fast4', SELF20 + REL20 + SELF4), ('Q3_raw', SELF20 + REL20 + SELF4 + RAW))
+SELF20, REL20, SELF4, RAW, SELF8 = (list(range(0, 5)), list(range(5, 20)), list(range(20, 24)), list(range(24, 39)),
+                                   list(range(39, 44)))
+CONFIGS = (('Q1_rel15', SELF20 + REL20), ('Q2_fast4', SELF20 + REL20 + SELF4), ('Q3_raw', SELF20 + REL20 + SELF4 + RAW),
+           ('R3_self8', SELF8), ('Q4_8and20', SELF8 + SELF20[1:]))
 
 
 def main():
     base = sys.argv[1]
+    configs = [c for c in CONFIGS if c[0] in sys.argv[2:]] or CONFIGS[:3]
     g = Goal(mode='strict')
     add_whole_song_truth(g)
     nested = np.load(GOAL / f'nested_{base}.npz')
@@ -51,10 +57,11 @@ def main():
             r = g.records[t]
             p, f, em = nested[key], r['features'], r['emit_s']
             cache[key] = np.hstack([self_features(p, shape[t], f[:, 0], em, 20.0), relative_levels(p, f, em, 20.0),
-                                    self_features(p, shape[t], f[:, 0], em, 4.0)[:, 1:], f])
+                                    self_features(p, shape[t], f[:, 0], em, 4.0)[:, 1:], f,
+                                    self_features(p, shape[t], f[:, 0], em, 8.0)])
         return cache[key]
     out, saved = {}, {}
-    for name, cols in CONFIGS:
+    for name, cols in configs:
         outcome, cuts = {}, {}
         for o in ALL:
             train = {u: matrix(u, f'{o}|{u}') for u in ALL if u != o}
@@ -76,8 +83,9 @@ def main():
         for k in ('all', 'dev', 'new'):
             print(line(f'{name} {k}', out[name][k]), flush=True)
         print('   per track', [f"{k[:8]} {v['matched']}/{v['labels']}+{v['extra']}" for k, v in s['per_track'].items()], flush=True)
-    (GOAL / f'results_selfsim2_{base}.json').write_text(json.dumps(out, indent=1, default=float))
-    for name, _ in CONFIGS:
+    tag = '_'.join(c[0] for c in configs)
+    (GOAL / f'results_selfsim2_{base}_{tag}.json').write_text(json.dumps(out, indent=1, default=float))
+    for name, _ in configs:
         np.savez(GOAL / f'nested_{base}_{name}.npz', **{k[len(name) + 1:]: v for k, v in saved.items() if k.startswith(name + '|')})
 
 
