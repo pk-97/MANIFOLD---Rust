@@ -1058,8 +1058,10 @@ tail and kick-free fires, delay ≤ 70 ms, kick-only and causal. Truth v2
 (`kick_goal_labels.py`, `labels_v2.json`, audited visually with
 `kick_goal_view.py` and a Fable pass): fresh attacks in isolated kick stems on an
 exact 1 ms analytic envelope; drum-bus kick-shaped onsets are uncertain regions;
-strict mode counts kick rolls over a ringing tail as non-kicks (BUG-gh7sj
-(rolls over a ringing tail) is Peter's call; loose mode restores them). Thirteen
+strict mode counts kick rolls over a ringing tail as non-kicks. Ruling after
+this campaign (BUG-gh7sj (rolls over a ringing tail), Peter): every new kick
+note triggers, rolls included, so loose truth is primary; the numbers below are
+strict and need re-reporting on loose truth with loose training labels. Thirteen
 songs: the nine development tracks plus four stemmed songs labelled from their
 kick stems (Pattern, Back to You, Burn, Cold remix; Cold holds 642 of 1313 labels).
 Harness: `kick_goal_eval.py` (whole-song nested cutoffs, tail and kick-free fire
