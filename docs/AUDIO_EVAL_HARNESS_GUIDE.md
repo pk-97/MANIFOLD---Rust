@@ -512,6 +512,28 @@ untouched. Labels and per-track results:
 `tests/fixtures/audio_labels/expanded_passages_2026-10-09.json` and
 `tools/audio_analysis/eval/scoreboard/kick_shape_2026-10-09.json`.
 
+**Bounded hard-negative weighting, 2026-10-09 — retain the unweighted scorer:**
+source-assisted review accepted 114 of 126 potential hard negatives; eight kick
+tails and four ambiguous candidates were excluded from emphasis. The fixed rule
+selects reviewed negatives scoring at least 0.90 under each training fold's own
+unweighted model. Exactly 1×, 2× and 4× were compared, preserving song/class mass,
+positive-event weights, baseline fold normalisation and the calibration protocol.
+At 70 ms they give respectively 223/381 plus 89 extras, 226 plus 93, and 222 plus
+86. Neither meets the 223-hit/70-extra milestone. All nine kick-free cores stay
+clear; the original 174-label pack gives 121+76, 123+77 and 121+69.
+
+Stronger weighting reduces mean positive/negative score margins on every held-out
+song and worsens candidate ranking on six of nine. Lower calibrated cutoffs
+recover some hits, while 4× loses three Apricots, two Inhale and four Heavy matches
+net. This does not establish a missing DSP measurement or a physical limit; stop
+this weighting route. Eight focused tests, all 81 saved event replays and 243
+nested-model checks pass. No live changes or reserved material were used. Review
+truth remains provisional; Inhale's pitched drum near 9.735 s is still ambiguous.
+Reproduction and per-track precision, recall, timing, duplicates and coefficients:
+`tools/audio_analysis/eval/run_kick_hard_negative_trial.py`,
+`tests/fixtures/audio_labels/hard_negative_review_2026-10-09.json`, and
+`tools/audio_analysis/eval/scoreboard/kick_hard_negative_2026-10-09.json`.
+
 ```
 # All nine synthetic scenarios, one PNG each + numeric gate lines on stdout:
 cargo run -p manifold-audio --example mod_harness -- --selftest --out /tmp/st.png
