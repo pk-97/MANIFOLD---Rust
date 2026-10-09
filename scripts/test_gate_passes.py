@@ -94,6 +94,9 @@ class CacheTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name).resolve()
+        # This disposable workspace tests cache behavior, with its own smoke
+        # selection; real repository proof ownership is covered by gpu_scope.
+        self.enterContext(patch.object(gpu_scope, 'SMOKE_FILTERS', ['fixture_smoke::']))
         self.enterContext(patch.object(gpu_scope, 'learned_times_path',
                                        return_value=self.repo / '.git/gpu-test-times.json'))
         self.git('init', '-b', 'main')
@@ -101,7 +104,7 @@ class CacheTests(unittest.TestCase):
         self.git('config', 'user.name', 'Cache test')
         self.write('Cargo.toml', '[workspace]\nmembers = ["crates/*"]\n')
         self.write('Cargo.lock', 'version = 4\n')
-        self.write('.gitignore', 'target/\n.claude/orchestration/\ntests/fixtures/ignored.bin\n')
+        self.write('.gitignore', 'target/\n__pycache__/\n.claude/orchestration/\ntests/fixtures/ignored.bin\n')
         self.write('scripts/ui-flows/manifest.json', '{"flows": {}, "path_triggers": {}}')
         self.write('scripts/codex_regressions.json', '{}\n')
         packages = [('base', ''), ('a', '[dependencies]\nbase = {path="../base"}\n'),
@@ -292,6 +295,67 @@ class CacheTests(unittest.TestCase):
         self.assertIsNot(passed.save(0), False)
         self.assertTrue(cache.command_pass(self.repo, 'flow-gate', cmd).reused())
 
+    def test_flow_receipt_reuses_across_metadata_only_main_merge(self):
+        self.write('scripts/ui-flows/manifest.json',
+                   '{"flows":{"a-flow":"scene"},'
+                   '"path_triggers":{"crates/a/":["a-flow"]}}')
+        self.write('scripts/ui-flows/a-flow.json', '[]')
+        self.commit('flow fixture')
+        base = self.git('merge-base', 'origin/main', 'HEAD')
+        cmd = ['python3', 'scripts/run_ui_flows.py', '--touched', f'{base}...HEAD']
+        passed = cache.command_pass(self.repo, 'flow-gate', cmd)
+        passed.save(0)
+
+        self.git('checkout', 'main')
+        self.write('.beads/metadata.json', '{"updated":true}\n')
+        self.commit('metadata only main merge')
+        self.git('branch', '-f', 'origin/main', 'main')
+        self.git('checkout', 'work')
+        self.git('merge', 'origin/main', '--no-edit')
+
+        merged_base = self.git('merge-base', 'origin/main', 'HEAD')
+        merged = ['python3', 'scripts/run_ui_flows.py', '--touched',
+                  f'{merged_base}...HEAD']
+        self.assertTrue(cache.command_pass(self.repo, 'flow-gate', merged).reused())
+
+    def test_flow_receipt_invalidates_selected_content_and_filter_selection(self):
+        self.write('scripts/ui-flows/manifest.json',
+                   '{"flows":{"a-flow":"scene"},'
+                   '"path_triggers":{"crates/a/":["a-flow"]}}')
+        self.write('scripts/ui-flows/a-flow.json', '[]')
+        self.commit('flow fixture')
+        base = self.git('merge-base', 'origin/main', 'HEAD')
+        cmd = ['python3', 'scripts/run_ui_flows.py', '--touched', f'{base}...HEAD']
+
+        cache.command_pass(self.repo, 'flow-gate', cmd).save(0)
+        self.write('scripts/ui-flows/a-flow.json', '[{"action":"changed"}]')
+        self.assertIsNone(cache.command_pass(self.repo, 'flow-gate', cmd).record)
+
+        cache.command_pass(self.repo, 'flow-gate', cmd).save(0)
+        self.write('crates/a/src/lib.rs', 'pub fn flow_source_changed() {}\n')
+        self.assertIsNone(cache.command_pass(self.repo, 'flow-gate', cmd).record)
+
+        cache.command_pass(self.repo, 'flow-gate', cmd).save(0)
+        self.write('tests/fixtures/ignored.bin', 'flow fixture changed')
+        self.assertIsNone(cache.command_pass(self.repo, 'flow-gate', cmd).record)
+
+        cache.command_pass(self.repo, 'flow-gate', cmd).save(0)
+        original_filters_key = cache.command_pass(self.repo, 'flow-gate', cmd).key
+        # Same source and manifest, different selection: the empty range must
+        # not reuse the a-flow receipt simply because file contents match.
+        changed_filters = cache.command_pass(
+            self.repo, 'flow-gate', [*cmd[:-1], 'HEAD...HEAD'])
+        self.assertNotEqual(changed_filters.key, original_filters_key)
+        self.assertIsNone(changed_filters.record)
+
+    def test_malformed_flow_scope_disables_reuse(self):
+        for scope in ('', 'origin/main..HEAD', 'origin/main...'):
+            with self.subTest(scope=scope):
+                passed = cache.command_pass(
+                    self.repo, 'flow-gate',
+                    ['python3', 'scripts/run_ui_flows.py', '--touched', scope])
+                self.assertIsNone(passed.key)
+
     def test_policy_red_retains_timings_and_rechecks_without_execution(self):
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
                 '--package', 'manifold-nodes', '--test', 'gpu_proofs', '--budget', '1']
@@ -349,6 +413,19 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(proofs.main(), 0)
             self.assertEqual(run.call_count, 1)
             self.assertEqual(run.call_args.args[-4], runs[1]['package'])
+
+    def test_owned_filter_receipts_require_passing_test_evidence(self):
+        name = 'alpha_contract::effects_preserve_transparency'
+        run = dict(self.run_spec(), package='manifold-nodes', target='gpu_proofs',
+                   targets=['gpu_proofs'], lib=False, filters=[name])
+        passed = cache.proof_pass(self.repo, run)
+        for timings in (None, [], [proofs.timing_entry(
+                'manifold-nodes', 'gpu_proofs', 'unrelated', 0, 'ok', True)]):
+            passed.save(0, timings=timings)
+            self.assertIsNone(cache.proof_pass(self.repo, run).record)
+        passed.save(0, timings=[proofs.timing_entry(
+            'manifold-nodes', 'gpu_proofs', name, 0, 'ok', True)])
+        self.assertIsNotNone(cache.proof_pass(self.repo, run).record)
 
     def test_landing_reused_proofs_still_enforce_timing_policy(self):
         self.assertEqual(self.run_landing()[0], 0)
