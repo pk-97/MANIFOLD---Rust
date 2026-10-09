@@ -676,7 +676,7 @@ class LandingTests(unittest.TestCase):
         for path in (
             "crates/manifold-nodes-image/src/node_graph/primitives/invert.rs",
             "crates/manifold-nodes-image/src/node_graph/primitives/mod.rs",
-            "crates/manifold-node-engine/src/water/primitives/gpu_flip_scene_tests.rs",
+            "crates/manifold-nodes-water/src/primitives/gpu_flip_scene_tests.rs",
             "crates/manifold-nodes/src/bundled_presets.rs",
             "crates/manifold-nodes/tests/gpu_proofs/main.rs",
             "crates/manifold-nodes/tests/gpu_proofs/glb_conformance.rs",
@@ -1336,16 +1336,16 @@ class DiffScopeTests(unittest.TestCase):
 
     def test_sibling_alias_and_integration_mapping(self):
         with tempfile.TemporaryDirectory() as d:
-            crate = Path(d) / "crates/manifold-node-engine"
-            src = crate / "src/water"
+            crate = Path(d) / "crates/manifold-nodes-water"
+            src = crate / "src"
             src.mkdir(parents=True)
-            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-node-engine"\n')
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-nodes-water"\n')
             (src / "fluid.rs").write_text('#[path = "fluid_tests.rs"]\nmod checks;\n')
             (src / "fluid_tests.rs").write_text("")
-            workspace = synthetic_workspace(d, ["crates/manifold-node-engine/src/water/fluid.rs"])
-            plan = cpu_scope.plan_for_paths(["crates/manifold-node-engine/src/water/fluid.rs"], d,
+            workspace = synthetic_workspace(d, ["crates/manifold-nodes-water/src/fluid.rs"])
+            plan = cpu_scope.plan_for_paths(["crates/manifold-nodes-water/src/fluid.rs"], d,
                                             workspace=workspace)
-            self.assertIn("test(/^water::fluid::checks::/)", plan.filterset)
+            self.assertIn("test(/^fluid::checks::/)", plan.filterset)
             self.assertIn("binary(=gpu_proofs)", plan.filterset)
 
     def test_private_folded_test_selects_every_actual_mount(self):
@@ -1564,9 +1564,9 @@ class DiffScopeTests(unittest.TestCase):
 
     def test_primitive_source_selects_the_uniform_layout_proofs(self):
         with tempfile.TemporaryDirectory() as d:
-            workspace = synthetic_workspace(d, ["crates/manifold-node-engine/src/water/primitives/blob_bounds.rs"])
+            workspace = synthetic_workspace(d, ["crates/manifold-nodes-water/src/primitives/blob_bounds.rs"])
             plan = cpu_scope.plan_for_paths(
-                ["crates/manifold-node-engine/src/water/primitives/blob_bounds.rs"], d,
+                ["crates/manifold-nodes-water/src/primitives/blob_bounds.rs"], d,
                 workspace=workspace)
             self.assertIn("(package(=manifold-nodes) & test(/^uniform_layout_proof::/))", plan.filters)
             self.assertIn("(package(=manifold-nodes) & test(/^uniform_layout_extended::/))", plan.filters)
@@ -1574,9 +1574,9 @@ class DiffScopeTests(unittest.TestCase):
 
     def test_shader_selects_wgsl_validation_and_hand_abi_proof(self):
         with tempfile.TemporaryDirectory() as d:
-            workspace = synthetic_workspace(d, ["crates/manifold-node-engine/src/water/primitives/shaders/blob_bounds.wgsl"])
+            workspace = synthetic_workspace(d, ["crates/manifold-nodes-water/src/primitives/shaders/blob_bounds.wgsl"])
             plan = cpu_scope.plan_for_paths(
-                ["crates/manifold-node-engine/src/water/primitives/shaders/blob_bounds.wgsl"], d,
+                ["crates/manifold-nodes-water/src/primitives/shaders/blob_bounds.wgsl"], d,
                 workspace=workspace)
             self.assertEqual(plan.filters, {
                 "(package(=manifold-nodes) & test(/^uniform_layout_proof::/))",

@@ -338,7 +338,11 @@ class P1PlannerTests(unittest.TestCase):
             self.assertEqual(gate_readiness.flow_problems(repo, ['src/main.rs']), [])
 
     def test_crate_move_plans_are_inert_for_all_scope_planners(self):
-        root = ".claude/orchestration/crate-split/"
+        for root in (".claude/orchestration/crate-split/", "docs/crate-moves/"):
+            with self.subTest(root=root):
+                self.assert_crate_move_plans_are_inert(root)
+
+    def assert_crate_move_plans_are_inert(self, root):
         paths = [root + relative for relative in (
             "p2a/templates/crates/manifold-nodes-image/tests/gpu_proofs/main.rs",
             "p2b/templates/crates/manifold-nodes-scene/src/primitives/shaders/example.wgsl",
@@ -373,6 +377,8 @@ class P1PlannerTests(unittest.TestCase):
             "crates/manifold-nodes-scene/tests/gpu_proofs/main.rs", self.workspace))
         self.assertTrue(gpu_scope.is_gpu_path(
             ".claude/orchestration/crate-split-other/shaders/example.wgsl", self.workspace))
+        self.assertTrue(gpu_scope.is_gpu_path(
+            "docs/crate-moves-other/shaders/example.wgsl", self.workspace))
 
     def test_new_gpu_package_needs_explicit_default_test_group_ownership(self):
         workspace = Workspace(ROOT)

@@ -549,7 +549,7 @@ class GpuProofsGateTests(unittest.TestCase):
             code, calls, _ = self.run_main(["--filter", "m::slow"])
             self.assertEqual(calls[0]["skips"], [])
             code, calls, _ = self.run_main(
-                [], repo_changed=["crates/manifold-node-engine/src/water/primitives/matter_fill.rs"])
+                [], repo_changed=["crates/manifold-nodes-water/src/primitives/matter_fill.rs"])
             self.assertNotIn("m::slow", calls[0]["skips"])
             self.assertNotIn("m::fast", calls[0]["skips"])
 

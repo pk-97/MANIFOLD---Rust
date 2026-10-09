@@ -2,13 +2,13 @@
 
 Authoring guide for the `primitive!` macro. Companion to [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) (design rationale + decomposition recipes) and [NODE_CATALOG.md](NODE_CATALOG.md) (the catalog of what's shipping today).
 
-Primitives auto-register via `inventory::submit!` from inside the macro — add the file and its module declaration in the owning primitive family (image or scene). Water remains under `crates/manifold-node-engine/src/water/primitives/`; engine built-ins stay under `crates/manifold-node-engine/src/primitives/` (the fixed list in RENDERER_CRATE_SPLIT_DESIGN.md D11). No central registry edit is needed; `cargo build` picks it up and the palette + bundled-preset loader see it on next startup.
+Primitives auto-register via `inventory::submit!` from inside the macro — add the file and its module declaration in the owning primitive family (image, scene, or water). Water lives under `crates/manifold-nodes-water/src/primitives/`; engine built-ins stay under `crates/manifold-node-engine/src/primitives/` (the fixed list in RENDERER_CRATE_SPLIT_DESIGN.md D11). No central registry edit is needed; `cargo build` picks it up and the palette + bundled-preset loader see it on next startup.
 
 ## Audit precondition (mandatory)
 
 Before authoring any new primitive, complete the read-only audit per [DECOMPOSING_GENERATORS.md section 2.5 (Precondition: audit by analogy before workflow step 1)](DECOMPOSING_GENERATORS.md):
 
-1. **Survey existing primitives** — `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ -g '*.rs'`. One line per node telling you what it does.
+1. **Survey existing primitives** — `rg 'purpose: "' crates/manifold-node-engine/src/primitives/ crates/manifold-nodes-water/src/primitives/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ -g '*.rs'`. One line per node telling you what it does.
 2. **Check the registered-but-unused atoms** — `mip_chain`, `uv_displace_by_flow`, `centered_uv`, `polar_field`, `distance_to_point`, `noise`, `depth_estimate_midas`, `blob_detect_ffi`, `blob_overlay_render`, `optical_flow_estimate`, `envelope_follower_ar`, `peak`, `render_3d_mesh`, `render_instanced_3d_mesh`, `generate_cube_mesh`, `generate_platonic_solid`, `generate_instance_transforms`, `integrate_particles`, and the unused noise/coordinate atoms. Many of these *exactly* cover what a new primitive proposal is reaching for; activate them by wiring them into your graph rather than building a new one. (Photoreal PBR is *not* an atom to wire up — it lives inside `node.render_3d_mesh`'s `node.pbr_material`; the standalone `cook_torrance_specular` / `equirect_envmap_sample` were removed 2026-05-30.)
 3. **Read the nearest reference preset end-to-end** ([NODE_CATALOG.md section 5 (Effect presets) / section 6.1 (JSON-defined)](NODE_CATALOG.md), [DECOMPOSING_GENERATORS.md section 2.5](DECOMPOSING_GENERATORS.md)).
 4. **Reconcile your sketch** — state explicitly which existing primitives you'll reuse, which you'll extend, and which are genuinely new. State the audit findings in the PR description before any new-primitive code.
@@ -44,7 +44,7 @@ What's **fine** when it's the right granularity:
 
 ## Files you touch per primitive
 
-`<family-root>` is `crates/manifold-nodes-image/src/node_graph/primitives/` for image atoms or `crates/manifold-nodes-scene/src/node_graph/primitives/` for scene nodes. The engine water and built-in roots above are reserved for those owners. The renderer holds the catalog and cross-family tests.
+`<family-root>` is `crates/manifold-nodes-image/src/node_graph/primitives/` for image atoms or `crates/manifold-nodes-scene/src/node_graph/primitives/` for scene nodes. Water primitives use `crates/manifold-nodes-water/src/primitives/`. The water and built-in roots above are reserved for those owners. `manifold-nodes` holds the catalog and cross-family tests.
 
 | File | Why |
 |---|---|
