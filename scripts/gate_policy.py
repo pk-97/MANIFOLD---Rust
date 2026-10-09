@@ -20,7 +20,7 @@ GPU_DEFAULT_CPU_ONLY = {
 NEXTTEST_GPU_FILTER = '''
     package(manifold-gpu)
   | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
-  | (binary_id(manifold-nodes::main) & test(/^contracts::node_graph::(catalog_tests::gltf_import::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
+  | (binary_id(manifold-nodes::main) & test(/^contracts::node_graph::(catalog_tests::gltf_import::corrupted_assembler_output_fails_validation_naming_the_node|catalog_tests::validate::every_bundled_preset_validates_clean)$/))
   | (binary_id(manifold-node-engine) & test(/^(exec::execution::tests::aliased_output_assertion_fires_on_silent_primitive|load::graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan))$/))
   | (binary_id(manifold-ui-paint::main) & test(/^contracts::(ableton_picker_scroll_proof|dropdown_clip_proof|text_clip_to_node_bounds|ui_cell_arc_repro)::/))
   | (binary_id(manifold-nodes::main) & test(/^scene_loop_probe::/))

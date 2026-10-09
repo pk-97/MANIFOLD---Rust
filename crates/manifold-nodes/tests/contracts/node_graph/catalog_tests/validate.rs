@@ -39,6 +39,16 @@ const ASSET_SUBDIRS: &[(&str, ValidateKind)] = &[("assets/effect-presets", Valid
                 let def: EffectGraphDef = serde_json::from_str(&bytes)
                     .unwrap_or_else(|e| panic!("{}: parse failed: {e}", path.display()));
                 let report = validate_def(&def, &registry, *kind, &device);
+                if !report.warnings.is_empty() {
+                    eprintln!(
+                        "WARN-REPORT {}: {} warning(s)",
+                        path.display(),
+                        report.warnings.len()
+                    );
+                    for w in &report.warnings {
+                        eprintln!("  - {}", w.message);
+                    }
+                }
                 if !report.is_valid() {
                     failures.push((path, report));
                 }
@@ -64,49 +74,4 @@ const ASSET_SUBDIRS: &[(&str, ValidateKind)] = &[("assets/effect-presets", Valid
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
-    }
-
-    /// Every bundled preset's card-lint WARNING count, printed for
-    /// Peter's triage per the P4 gate (D8: warnings are reported
-    /// verbatim, never auto-fixed or suppressed in this phase). Run
-    /// with `--nocapture` to see the counts; never fails on its own —
-    /// `every_bundled_preset_validates_clean` above is the pass/fail
-    /// gate for errors.
-    #[test]
-    fn bundled_preset_card_warning_counts() {
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let registry = PrimitiveRegistry::with_builtin();
-        #[cfg(feature = "gpu-proofs")]
-        let serial = manifold_gpu::testkit::test_device();
-        #[cfg(feature = "gpu-proofs")]
-        let device = serial.arc();
-        #[cfg(not(feature = "gpu-proofs"))]
-        let device = manifold_node_engine::gpu::context::test_gpu_device("validate tests");
-        manifold_gpu::testkit::load_disk_shader_caches(&device);
-
-        for (subdir, kind) in ASSET_SUBDIRS {
-            let dir = manifest_dir.join(subdir);
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-                let bytes = std::fs::read_to_string(&path).unwrap();
-                let def: EffectGraphDef = serde_json::from_str(&bytes).unwrap();
-                let report = validate_def(&def, &registry, *kind, &device);
-                if !report.warnings.is_empty() {
-                    eprintln!(
-                        "WARN-REPORT {}: {} warning(s)",
-                        path.display(),
-                        report.warnings.len()
-                    );
-                    for w in &report.warnings {
-                        eprintln!("  - {}", w.message);
-                    }
-                }
-            }
-        }
     }
