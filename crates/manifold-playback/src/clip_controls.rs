@@ -42,6 +42,7 @@ pub struct ClipControlStart {
 struct ClipControlSource {
     layer_type: Option<LayerType>,
     parent: Option<LayerId>,
+    pattern_digest: Option<[u8; 32]>,
     spans: Vec<ClipControlSpan>,
     starts: Vec<ClipControlStart>,
 }

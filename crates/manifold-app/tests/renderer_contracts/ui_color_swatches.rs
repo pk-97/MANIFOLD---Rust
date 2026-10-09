@@ -166,7 +166,7 @@ fn font_list_picker_paints() {
             screen_anchor: Vec2::new(30.0, 40.0),
         },
         actions,
-        ActionListOptions { empty_label: "No fonts match", label_in_own_font: true, current },
+        ActionListOptions { empty_label: "No fonts match", label_in_own_font: true, current, ..Default::default() },
     );
 
     let mut tree = UITree::new();

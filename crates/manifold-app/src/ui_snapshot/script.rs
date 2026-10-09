@@ -50,7 +50,6 @@
 //! bitmap invalidation is a live-app-only Pass-4c mechanism this headless
 //! harness never renders, so it's a dead sink, same as it always was.
 
-use manifold_ui::{LayerAction};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -490,7 +489,7 @@ impl Runner {
                     self.clock += DT;
                     std::thread::sleep(Duration::from_secs_f32(DT));
                     ui.update();
-                    if ui.inspector.drawer_anim_active() {
+                    if ui.inspector.drawer_anim_active() || ui.scene_setup_panel.object_cards_animating() {
                         self.needs_structural_sync = true;
                     }
                     // Editing owns the fixture between steps. Temporarily lend
@@ -709,9 +708,8 @@ impl Runner {
         // act on. Every step drains unconditionally (most steps sent
         // nothing, so this is a no-op `try_recv` miss).
         if self.record_executed_commands(data) {
-            let mut active_layer = data.active.and_then(|index| data.project.timeline.layers.get(index)).map(|layer| layer.layer_id.clone());
-            crate::edit_selection::apply_update(ui, &data.project, data.content.edit_selection_update.as_deref(), &mut data.selection, &mut active_layer);
-            data.active = active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
+            crate::edit_selection::apply_update(ui, &data.project, data.content.edit_selection_update.as_deref(), &mut data.selection, &mut self.active_layer);
+            data.active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
             self.needs_structural_sync = true;
             self.advance_frame(ui, data, zoom_ppb, render, false);
         }
@@ -1370,12 +1368,8 @@ impl Runner {
             // The fixture's active-layer INDEX feeds `sync_build`'s inspector
             // sync; derive it from the id the real bridge maintains (the old
             // mirrored arm set it directly).
-            if let PanelAction::Layer(LayerAction::LayerClicked(..)) = action {
-                data.active = self
-                    .active_layer
-                    .as_ref()
-                    .and_then(|lid| data.project.timeline.find_layer_by_id(lid).map(|(i, _)| i));
-            }
+            data.active = self.active_layer.as_ref()
+                .and_then(|lid| data.project.timeline.find_layer_index_by_id(lid));
         }
     }
 
@@ -1467,7 +1461,8 @@ impl Runner {
         // decision below. Only forces a rebuild when something was actually
         // mid-flight, so a script with nothing armed keeps the same
         // cache-hit behavior it had before this fix.
-        let settled = ui.inspector.skip_to_settled(&mut ui.tree);
+        let settled = ui.inspector.skip_to_settled(&mut ui.tree)
+            | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree);
         // Mirror app_render.rs's per-frame overlay translation: opening an
         // overlay (browser popup, dropdown) via `try_open_dropdown` consumes
         // the action and only sets `overlay_dirty` — no dispatched action

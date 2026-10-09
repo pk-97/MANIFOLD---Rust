@@ -285,6 +285,13 @@ pub struct ModifierPickerEntry {
     pub disabled: Option<String>,
 }
 
+/// Stable parameter owner and current clip source label for the shared drawer.
+#[derive(Debug, Clone)]
+pub struct ClipTriggerRow {
+    pub target: crate::view::UiGraphTarget,
+    pub source_label: String,
+}
+
 /// One card row: identity + descriptor + state. THE unit of the layer —
 /// `id` is the WidgetId salt (P2), the wire identity
 /// (`PanelAction`s carry it), and the test address.
@@ -295,6 +302,8 @@ pub struct ParamRow {
     pub value: RowValue,
     /// Audio modulation facts owned by this row.
     pub audio: AudioRowState,
+    /// Clip timing selector for compatible layer-owned parameters.
+    pub clip_trigger: Option<ClipTriggerRow>,
     /// Driver/envelope/automation facts.
     pub modulation: RowMod,
     pub mapping: RowMapping,

@@ -44,6 +44,78 @@ fn digest_of(instance: &PresetInstance) -> [u8; 32] {
     digest(&ids(), instance).expect("valid physics control identity")
 }
 
+#[test]
+fn selected_clip_pattern_tracks_project_edits_and_rebuilds_after_reload() {
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::layer::Layer;
+    use manifold_core::params::ClipTriggerSource;
+    use manifold_core::project::Project;
+    use manifold_core::session::{ClipSequence, SessionSlot};
+    use manifold_core::{LayerId, SceneId};
+    use manifold_playback::engine::PlaybackEngine;
+
+    let mut owner = Layer::new_generator("Owner".into(), PresetTypeId::new("TestPhysicsControls"), 0);
+    *owner.gen_params_or_init() = instance();
+    let mut source = Layer::new_trigger("Hits".into(), owner.layer_id.clone(), 1);
+    source.clips.push(TimelineClip::new_trigger(Beats::ZERO, Beats(0.5)));
+    owner.gen_params_mut().unwrap().params.get_mut("amount").unwrap().clip_trigger_source =
+        ClipTriggerSource::Lane { layer_id: source.layer_id.clone() };
+    let other = Layer::new_trigger("Other".into(), owner.layer_id.clone(), 2);
+    let mut project = Project::default();
+    project.session.slots.push(SessionSlot {
+        layer_id: source.layer_id.clone(),
+        scene_id: SceneId::new("scene"),
+        sequence: ClipSequence { length_beats: Beats(4.0), clips: source.clips.clone() },
+        name: "Session hits".into(),
+        color: None,
+    });
+    project.timeline.layers = vec![owner, source, other];
+    let mut engine = PlaybackEngine::new(Vec::new());
+    engine.initialize(project);
+    let controls = |engine: &PlaybackEngine| {
+        digest_of(engine.project().unwrap().timeline.layers[0].gen_params().unwrap())
+    };
+    let original = controls(&engine);
+
+    // These are runtime/display changes, not authored source timing.
+    let project = engine.project_mut().unwrap();
+    project.timeline.layers[0].is_muted = true;
+    project.timeline.layers[1].name = "Renamed".into();
+    project.timeline.layers[2].clips.push(TimelineClip::new_trigger(Beats(2.0), Beats(1.0)));
+    project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut("amount").unwrap().value = 0.9;
+    engine.reconcile_clip_control_bindings();
+    assert_eq!(controls(&engine), original);
+
+    engine.project_mut().unwrap().timeline.layers[1].clips[0].start_beat = Beats(1.0);
+    engine.reconcile_clip_control_bindings();
+    let moved = controls(&engine);
+    assert_ne!(moved, original);
+    engine.project_mut().unwrap().session.slots[0].sequence.length_beats = Beats(8.0);
+    engine.reconcile_clip_control_bindings();
+    let session_edited = controls(&engine);
+    assert_ne!(session_edited, moved);
+
+    let json = serde_json::to_string(engine.project().unwrap()).unwrap();
+    assert!(!json.contains("clipControlDigest"));
+    let restored: Project = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.timeline.layers[0].gen_params().unwrap().params.get("amount").unwrap().clip_control_digest, None);
+    let mut reloaded = PlaybackEngine::new(Vec::new());
+    reloaded.initialize(restored);
+    assert_eq!(controls(&reloaded), session_edited);
+
+    reloaded.project_mut().unwrap().timeline.layers[1].is_muted = true;
+    reloaded.reconcile_clip_control_bindings();
+    let muted = controls(&reloaded);
+    assert_ne!(muted, session_edited);
+    reloaded.project_mut().unwrap().timeline.layers[0].gen_params_mut().unwrap()
+        .params.get_mut("amount").unwrap().clip_trigger_source =
+        ClipTriggerSource::Lane { layer_id: LayerId::new("missing") };
+    reloaded.reconcile_clip_control_bindings();
+    assert_ne!(controls(&reloaded), muted);
+    assert_eq!(reloaded.project().unwrap().timeline.layers[0].gen_params().unwrap()
+        .params.get("amount").unwrap().clip_control_digest, None);
+}
+
 fn mapping(param_id: &'static str) -> AbletonParamMapping {
     AbletonParamMapping {
         param_id: param_id.into(),

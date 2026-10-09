@@ -36,6 +36,7 @@ impl ScenePanel {
             cards.push(card);
         }
         self.force_cards = cards;
+        self.clear_stale_parameter_reveal();
         self.force_pressed_card = pressed_identity.and_then(|(old_layer, old_id)| {
             let current_layer = layer_id.as_ref()?;
             (old_layer == *current_layer)
@@ -52,6 +53,7 @@ impl ScenePanel {
     pub fn clear_force_cards(&mut self) {
         self.force_cards.clear();
         self.force_pressed_card = None;
+        self.clear_stale_parameter_reveal();
     }
 
     pub fn force_picker(&self) -> &[ModifierPickerEntry] {
@@ -216,7 +218,7 @@ mod tests {
     use super::*;
     use crate::Modifiers;
     use crate::panels::param_card::ParamCardKind;
-    use crate::param_surface::{ParamRow, RowMapping, RowSpec, RowValue};
+    use crate::param_surface::{ClipTriggerRow, ParamRow, RowMapping, RowSpec, RowValue};
 
     fn force_surface(layer: &str, id: &str) -> ParamSurface {
         ParamSurface {
@@ -265,6 +267,7 @@ mod tests {
                     driven: false,
                 },
                 audio: Default::default(),
+                clip_trigger: None,
                 modulation: Default::default(),
                 mapping: RowMapping {
                     osc_address: None,
@@ -297,6 +300,71 @@ mod tests {
 
         panel.configure_force_cards(&[force_surface("layer-b", "force")]);
         assert!(panel.force_pressed_card.is_none());
+    }
+
+    #[test]
+    fn reveal_clip_response_selects_reordered_force_and_preserves_authored_state() {
+        let target = crate::view::UiGraphTarget::Generator(LayerId::new("layer-a"));
+        let mut first = force_surface("layer-a", "first");
+        first.rows[0].modulation.envelope_active = true;
+        first.rows[0].clip_trigger = Some(ClipTriggerRow {
+            target: target.clone(),
+            source_label: "Main lane".into(),
+        });
+        let mut second = force_surface("layer-a", "second");
+        second.rows[0].clip_trigger = Some(ClipTriggerRow {
+            target: target.clone(),
+            source_label: "Main lane".into(),
+        });
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(force_vm(first.clone()))));
+        panel.configure_params(Some(first.clone()));
+        panel.configure_force_cards(&[first.clone(), second.clone()]);
+        panel.configure_force_cards(&[second, first]);
+        panel.force_cards[1].set_collapsed(true);
+
+        let param: manifold_foundation::ParamId = "first_strength".into();
+        assert!(panel.reveal_clip_response(&target, &param));
+        assert_eq!(
+            panel.selection.get(&LayerId::new("layer-a")),
+            Some(&SceneSelection::Force(manifold_foundation::NodeId::new("first")))
+        );
+        assert!(!panel.force_cards[1].is_collapsed());
+        assert_eq!(panel.force_cards[1].rows[0].value.base, 0.25);
+        assert_eq!(panel.force_cards[1].rows[0].value.effective, 0.25);
+
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 240.0));
+        let row = panel.force_cards[1]
+            .param_row_rect(&tree, param.as_ref())
+            .expect("revealed force row");
+        let response = panel.force_cards[1]
+            .clip_response_rect(&tree, param.as_ref())
+            .expect("revealed force response");
+        assert!(response.height > row.height, "response bounds include the active envelope drawer");
+        assert!(panel.pending_parameter_reveal.is_none());
+    }
+
+    #[test]
+    fn reveal_clip_response_rejects_missing_target_without_selection_change() {
+        let target = crate::view::UiGraphTarget::Generator(LayerId::new("layer-a"));
+        let mut surface = force_surface("layer-a", "force");
+        surface.rows[0].clip_trigger = Some(ClipTriggerRow {
+            target: target.clone(),
+            source_label: "Main lane".into(),
+        });
+        let mut panel = ScenePanel::new();
+        panel.configure_force_cards(&[surface]);
+        panel.set_selection(LayerId::new("layer-a"), SceneSelection::World);
+
+        let wrong_target = crate::view::UiGraphTarget::Generator(LayerId::new("other"));
+        let param: manifold_foundation::ParamId = "force_strength".into();
+        assert!(!panel.reveal_clip_response(&wrong_target, &param));
+        assert_eq!(
+            panel.selection.get(&LayerId::new("layer-a")),
+            Some(&SceneSelection::World)
+        );
     }
 
     #[test]

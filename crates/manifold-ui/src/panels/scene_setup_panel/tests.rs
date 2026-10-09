@@ -884,6 +884,7 @@
                     driven: false,
                 },
                 audio: AudioRowState::default(),
+                clip_trigger: None,
                 modulation: RowMod::default(),
                 mapping: RowMapping {
                     osc_address: None,

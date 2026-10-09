@@ -257,6 +257,7 @@ fn standard_row(
             driven: false,
         },
         audio: Default::default(),
+        clip_trigger: None,
         modulation: Default::default(),
         mapping: RowMapping {
             osc_address: None,
@@ -563,6 +564,7 @@ mod tests {
                 driven: false,
             },
             audio: Default::default(),
+            clip_trigger: None,
             modulation: Default::default(),
             mapping: RowMapping {
                 osc_address: None,

@@ -85,6 +85,79 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
     }
 
     match action {
+        ParamsAction::ShowClipTriggerResponse(target, param_id) => {
+            let address = crate::editing_host::to_graph_target(target);
+            let Some(owner) = ctx.project.clip_trigger_target_layer(&address) else {
+                return DispatchResult::handled();
+            };
+            if !ctx.project.can_assign_clip_trigger_source(&address, param_id.as_ref(),
+                &manifold_core::params::ClipTriggerSource::Disabled)
+            {
+                return DispatchResult::handled();
+            }
+            let owner_id = owner.layer_id.clone();
+            expand_layer_ancestors(&owner_id, ctx);
+            ctx.selection.select_layer(owner_id.clone());
+            *ctx.active_layer = Some(owner_id);
+            if crate::ui_bridge::projection::trigger_routing::response_uses_scene_panel(ctx.project, &address, param_id.as_ref())
+                && !ctx.ui.scene_setup_panel.is_open()
+            {
+                ctx.ui.toggle_scene_dock();
+            }
+            ctx.ui.pending_trigger_response_reveal = Some((target.clone(), param_id.clone()));
+            // Card/rack folding is presentation state, using the existing
+            // content-thread mutation path; the source and response stay intact.
+            ContentCommand::send(ctx.content_tx, ContentCommand::MutateProject(Box::new(move |project| {
+                let group = project.graph_target_owner_mut(&address).and_then(|instance| {
+                    instance.collapsed = false;
+                    instance.group_id.clone()
+                });
+                if let Some(group) = group {
+                    for layer in &mut project.timeline.layers {
+                        for rack in layer.effect_groups.iter_mut().flatten() {
+                            if rack.id == group { rack.collapsed = false; }
+                        }
+                    }
+                }
+            })));
+            DispatchResult::structural()
+        }
+        ParamsAction::OpenClipTriggerSource(..) | ParamsAction::OpenTriggerTargets(_) => {
+            DispatchResult::handled()
+        }
+        ParamsAction::AssignClipTriggerSource(target, param_id, source) => {
+            let target = crate::editing_host::to_graph_target(target);
+            if let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(
+                ctx.project, &target, param_id.as_ref(),
+            ) {
+                ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(reason.into()));
+                return DispatchResult::handled();
+            }
+            let command = manifold_editing::commands::trigger_source::SetParamClipTriggerSourceCommand::for_assignment(
+                target, param_id.clone(),
+                super::super::projection::trigger_routing::to_core_source(source),
+            );
+            if let manifold_ui::view::UiClipTriggerSource::Lane(id) = source {
+                expand_layer_ancestors(id, ctx);
+                ctx.ui.pending_layer_reveal = Some(id.clone());
+            }
+            ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
+            DispatchResult::handled()
+        }
+        ParamsAction::CreateTriggerLane { owner, assignment } => {
+            let assignment = assignment.as_ref().map(|(target, param)| {
+                (crate::editing_host::to_graph_target(target), param.clone())
+            });
+            if let Some(command) = manifold_editing::service::EditingService::create_trigger_lane(
+                ctx.project, owner, assignment,
+            ) {
+                expand_layer_ancestors(owner, ctx);
+                ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteSelecting(
+                    command, crate::edit_selection::SelectAfterEdit::NewLayer,
+                ));
+            }
+            DispatchResult::handled()
+        }
         ParamsAction::ClearAutomation(gpt, param_id) => {
             if let Some(target) = resolve_graph_target(
                 gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,
@@ -1018,13 +1091,7 @@ fn show_automation_target(
         return DispatchResult::handled();
     };
     let owner_id = owner.layer_id.clone();
-    let mut expand = Vec::new();
-    let mut next = Some(owner_id.clone());
-    while let Some(id) = next {
-        let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(&id) else { break; };
-        if layer.is_collapsed { expand.push(id); }
-        next = layer.parent_layer_id.clone();
-    }
+    expand_layer_ancestors(&owner_id, ctx);
     let ui_target = crate::editing_host::to_ui_graph_target(target);
     ctx.selection
         .hidden_automation_lanes
@@ -1039,6 +1106,20 @@ fn show_automation_target(
     ctx.selection.set_chosen_automation_param(owner_id, ui_target, param_id.clone());
     ctx.selection.automation_mode_visible = true;
     ctx.selection.clear_automation_selection();
+    DispatchResult::structural()
+}
+
+/// Revealing a control lane expands its owner chain through the content thread,
+/// using the same presentation state as manual layer expansion.
+fn expand_layer_ancestors(id: &manifold_core::LayerId, ctx: &mut super::super::DispatchCtx) {
+    let mut expand = Vec::new();
+    let mut next = Some(id.clone());
+    for _ in 0..ctx.project.timeline.layers.len() {
+        let Some(id) = next.take() else { break; };
+        let Some((_, layer)) = ctx.project.timeline.find_layer_by_id(&id) else { break; };
+        if layer.is_collapsed { expand.push(id); }
+        next = layer.parent_layer_id.clone();
+    }
     if !expand.is_empty() {
         ContentCommand::send(ctx.content_tx, ContentCommand::MutateProject(Box::new(move |project| {
             for id in expand {
@@ -1048,7 +1129,6 @@ fn show_automation_target(
             }
         })));
     }
-    DispatchResult::structural()
 }
 
 #[cfg(test)]
@@ -1129,5 +1209,203 @@ mod audio_send_dispatch_tests {
         assert_eq!(waveform_send(&project, &target), None);
         assert!(service.redo(&mut project));
         assert_eq!(waveform_send(&project, &target).as_deref(), Some("send-2"));
+    }
+}
+
+#[cfg(test)]
+mod trigger_dispatch_tests {
+    use super::*;
+    use manifold_editing::service::EditingService;
+    use manifold_ui::view::{UiClipTriggerSource, UiGraphTarget};
+    use manifold_ui::{PanelAction, ParamsAction};
+
+    fn assignment_project() -> (manifold_core::project::Project, manifold_core::GraphTarget, manifold_core::LayerId, manifold_core::LayerId) {
+        let mut project = manifold_core::project::Project::default();
+        let mut owner = manifold_core::layer::Layer::new_video("Owner".into(), 0);
+        let owner_id = owner.layer_id.clone();
+        let mut effect = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::BLOOM);
+        effect.id = manifold_core::EffectId::new("owner-effect");
+        effect.params = manifold_core::params::ParamManifest::from_params(vec![
+            manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+                id: "amount".into(),
+                name: "Amount".into(),
+                ..Default::default()
+            }),
+        ]);
+        owner.effects = Some(vec![effect]);
+        let lane = manifold_core::layer::Layer::new_trigger("Owner lane".into(), owner_id.clone(), 1);
+        let lane_id = lane.layer_id.clone();
+        let mut other = manifold_core::layer::Layer::new_video("Other".into(), 2);
+        let other_id = other.layer_id.clone();
+        other.effects = Some(Vec::new());
+        project.timeline.layers.extend([owner, lane, other]);
+        (project, manifold_core::GraphTarget::Effect(manifold_core::EffectId::new("owner-effect")), lane_id, other_id)
+    }
+
+    #[test]
+    fn clip_source_assignment_queues_stable_target_without_mutating_snapshot() {
+        let (mut project, target, lane_id, other_id) = assignment_project();
+        let before = serde_json::to_value(&project).unwrap();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = manifold_ui::UIState::default();
+        selection.select_layer(other_id.clone());
+        let mut active_layer = Some(other_id);
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = crate::ui_bridge::ScrubState::default();
+        let action = PanelAction::Params(ParamsAction::AssignClipTriggerSource(
+            UiGraphTarget::Effect(manifold_core::EffectId::new("owner-effect")),
+            "amount".into(),
+            UiClipTriggerSource::Lane(lane_id.clone()),
+        ));
+
+        let result = crate::ui_bridge::dispatch(
+            &action,
+            &mut crate::ui_bridge::DispatchCtx {
+                project: &mut project,
+                content_tx: &content_tx,
+                content_state: &content_state,
+                ui: &mut ui,
+                selection: &mut selection,
+                active_layer: &mut active_layer,
+                user_prefs: &mut user_prefs,
+                editor_target: None,
+                scrub: &mut scrub,
+            },
+        );
+        assert!(!result.structural_change, "snapshot projection waits for the content receipt");
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+        assert_eq!(ui.pending_layer_reveal.as_ref(), Some(&lane_id));
+        assert_eq!(active_layer, Some(project.timeline.layers[2].layer_id.clone()));
+
+        let ContentCommand::ExecuteOnContent(command) = content_rx.try_recv().unwrap() else {
+            panic!("expected content-owned trigger assignment")
+        };
+        let mut editing = EditingService::new();
+        editing.execute(command, &mut project);
+        assert!(editing.take_rejection().is_none());
+        let owner = project.graph_target_owner(&target).unwrap();
+        assert_eq!(owner.params.get("amount").unwrap().clip_trigger_source,
+            manifold_core::params::ClipTriggerSource::Lane { layer_id: lane_id });
+        assert_eq!(owner.envelopes.as_ref().unwrap().len(), 1);
+
+        assert!(editing.undo(&mut project));
+        let owner = project.graph_target_owner(&target).unwrap();
+        assert_eq!(owner.params.get("amount").unwrap().clip_trigger_source,
+            manifold_core::params::ClipTriggerSource::OwnLayer);
+        assert!(owner.envelopes.as_ref().is_none_or(Vec::is_empty));
+        assert!(editing.redo(&mut project));
+        assert!(project.graph_target_owner(&target).unwrap().envelopes.is_some());
+    }
+
+    #[test]
+    fn response_navigation_selects_owner_and_only_queues_presentation_changes() {
+        let (mut project, target, lane_id, _) = assignment_project();
+        let owner_id = project.timeline.layers[0].layer_id.clone();
+        project.graph_target_owner_mut(&target).unwrap().collapsed = true;
+        let before = serde_json::to_value(&project).unwrap();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = manifold_ui::UIState::default();
+        selection.select_layer(lane_id.clone());
+        let mut active_layer = Some(lane_id);
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = crate::ui_bridge::ScrubState::default();
+        let ui_target = crate::editing_host::to_ui_graph_target(&target);
+        let result = crate::ui_bridge::dispatch(
+            &PanelAction::Params(ParamsAction::ShowClipTriggerResponse(ui_target.clone(), "amount".into())),
+            &mut crate::ui_bridge::DispatchCtx {
+                project: &mut project, content_tx: &content_tx, content_state: &content_state,
+                ui: &mut ui, selection: &mut selection, active_layer: &mut active_layer,
+                user_prefs: &mut user_prefs, editor_target: None, scrub: &mut scrub,
+            },
+        );
+        assert!(result.structural_change);
+        assert_eq!(active_layer, Some(owner_id.clone()));
+        assert_eq!(selection.primary_selected_layer_id, Some(owner_id));
+        assert_eq!(ui.pending_trigger_response_reveal, Some((ui_target, "amount".into())));
+        assert_eq!(serde_json::to_value(&project).unwrap(), before, "UI snapshot is read-only");
+        for command in content_rx.try_iter() {
+            let ContentCommand::MutateProject(presentation) = command else {
+                panic!("navigation must not author an assignment or response");
+            };
+            presentation(&mut project);
+        }
+        assert!(!project.graph_target_owner(&target).unwrap().collapsed);
+        project.graph_target_owner_mut(&target).unwrap().collapsed = true;
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+    }
+
+    #[test]
+    fn create_trigger_lane_dispatch_is_one_selected_undoable_edit() {
+        let (mut project, target, _lane_id, other_id) = assignment_project();
+        project.timeline.layers[0].is_collapsed = true;
+        let owner_id = project.timeline.layers[0].layer_id.clone();
+        let before = serde_json::to_value(&project).unwrap();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = manifold_ui::UIState::default();
+        selection.select_layer(other_id.clone());
+        let mut active_layer = Some(other_id);
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = crate::ui_bridge::ScrubState::default();
+        let action = PanelAction::Params(ParamsAction::CreateTriggerLane {
+            owner: owner_id.clone(),
+            assignment: Some((
+                UiGraphTarget::Effect(manifold_core::EffectId::new("owner-effect")),
+                "amount".into(),
+            )),
+        });
+
+        let result = crate::ui_bridge::dispatch(
+            &action,
+            &mut crate::ui_bridge::DispatchCtx {
+                project: &mut project,
+                content_tx: &content_tx,
+                content_state: &content_state,
+                ui: &mut ui,
+                selection: &mut selection,
+                active_layer: &mut active_layer,
+                user_prefs: &mut user_prefs,
+                editor_target: None,
+                scrub: &mut scrub,
+            },
+        );
+        assert!(!result.structural_change, "snapshot projection waits for the content receipt");
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+
+        let ContentCommand::MutateProject(expand) = content_rx.try_recv().unwrap() else {
+            panic!("expected content-owned parent expansion")
+        };
+        expand(&mut project);
+        assert!(!project.timeline.layers[0].is_collapsed);
+        let ContentCommand::ExecuteSelecting(command, request) = content_rx.try_recv().unwrap() else {
+            panic!("expected selected trigger-lane insertion")
+        };
+        assert!(matches!(request, crate::edit_selection::SelectAfterEdit::NewLayer));
+        let mut editing = EditingService::new();
+        editing.execute(command, &mut project);
+        assert!(editing.take_rejection().is_none());
+        assert_eq!(project.timeline.layers.len(), 4);
+        let lane = project.timeline.layers.iter().find(|layer| layer.is_trigger()).unwrap();
+        let lane_id = lane.layer_id.clone();
+        assert_eq!(lane.parent_layer_id.as_ref(), Some(&owner_id));
+        assert_eq!(project.graph_target_owner(&target).unwrap().params.get("amount").unwrap().clip_trigger_source,
+            manifold_core::params::ClipTriggerSource::Lane { layer_id: lane_id.clone() });
+
+        assert!(editing.undo(&mut project));
+        assert_eq!(project.timeline.layers.len(), 3);
+        assert!(project.timeline.find_layer_by_id(&lane_id).is_none());
+        let owner = project.graph_target_owner(&target).unwrap();
+        assert_eq!(owner.params.get("amount").unwrap().clip_trigger_source,
+            manifold_core::params::ClipTriggerSource::OwnLayer);
+        assert!(owner.envelopes.as_ref().is_none_or(Vec::is_empty));
+        assert!(editing.redo(&mut project));
+        assert_eq!(project.timeline.layers.len(), 4);
+        assert_ne!(project.graph_target_owner(&target).unwrap().params.get("amount").unwrap().clip_trigger_source,
+            manifold_core::params::ClipTriggerSource::OwnLayer);
     }
 }

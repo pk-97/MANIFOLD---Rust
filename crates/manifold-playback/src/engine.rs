@@ -495,7 +495,7 @@ impl PlaybackEngine {
         if !self.clip_bindings_dirty {
             return;
         }
-        if let Some(project) = &self.project {
+        if let Some(project) = &mut self.project {
             let delivery = &mut self.trigger_delivery;
             self.clip_controls.reconcile_bindings(project, Beats(self.current_beat), |owner, param| {
                 delivery.cancel_clip_parameter(owner,
@@ -1630,6 +1630,16 @@ impl PlaybackEngine {
         self.reconcile_clip_control_bindings();
 
         let current_beat = Beats(self.current_beat);
+        if self
+            .clip_control_cursor
+            .is_some_and(|previous| current_beat < previous)
+        {
+            // External clocks can move backwards without going through the
+            // explicit seek path. Treat that correction as a control-history
+            // boundary so starts, pulses, and source cutoffs from the later
+            // position cannot leak into the earlier interval.
+            self.reset_trigger_delivery();
+        }
         let from = self.clip_control_cursor.filter(|previous| {
             self.is_playing() && *previous <= current_beat
         });

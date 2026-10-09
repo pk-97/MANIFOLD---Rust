@@ -2,7 +2,7 @@
 //! Split out of `param_slider_shared` (P-S1, UI funnel decomposition).
 
 use super::*;
-use crate::{MappingAction, ModulationAction};
+use crate::{MappingAction, ModulationAction, ParamsAction};
 use crate::panels::{AudioDrawerClick, ClipTriggerDrawerClick};
 use manifold_foundation::ParamId;
 
@@ -54,6 +54,20 @@ pub(crate) fn driver_config_height() -> f32 {
     crate::panels::drawer::uniform_rows_height(4)
 }
 
+/// Whether this response exposes the layer-owned clip timing source selector.
+/// Gate rows are projected without a clip source; keep this guard here as well
+/// so a stale or hand-built row cannot render an invalid assignment control.
+fn has_clip_trigger_source(info: &ParamRow) -> bool {
+    info.clip_trigger.is_some() && !info.spec.is_trigger_gate
+}
+
+/// Audio responses show the clip source only for modes that consume clip edges.
+fn audio_uses_clip_trigger_source(info: &ParamRow, audio: &AudioRowState) -> bool {
+    has_clip_trigger_source(info)
+        && (info.spec.is_trigger || matches!(audio.action_idx, 1 | 2))
+        && matches!(audio.trigger_mode_idx, 0 | 2)
+}
+
 
 /// Height of the per-param audio-modulation drawer for param `i`. Rows: send
 /// selector, the Feature row, the Band row, the Invert toggle, and the three
@@ -82,6 +96,9 @@ pub(crate) fn driver_config_height() -> f32 {
 pub(crate) fn audio_config_height(info: &ParamRow, mod_state: &ParamModState, i: usize) -> f32 {
     let audio = &mod_state.audio_rows[i];
     let mut n = 3; // Source, Listen (chips + Custom), Sensitivity
+    if audio_uses_clip_trigger_source(info, audio) {
+        n += 1; // Clip source selector
+    }
     if !info.spec.is_trigger_gate {
         n += 3; // Invert, Attack, Release
     }
@@ -110,6 +127,9 @@ pub(crate) fn envelope_config_height(info: &ParamRow, mod_state: &ParamModState,
     let show_action = !info.spec.is_toggle && !info.spec.is_trigger;
     let action_idx = mod_state.envelope_action_idx.get(i).copied().unwrap_or(0);
     let mut n = 0;
+    if has_clip_trigger_source(info) {
+        n += 1; // Clip source selector
+    }
     if !show_action || action_idx == 0 {
         n += 1; // Decay (Continuous only — Step/Random has no decay to tune)
     }
@@ -500,6 +520,20 @@ pub(crate) fn build_envelope_config(
     );
 
     let mut rows: Vec<DrawerRow> = Vec::new();
+    if has_clip_trigger_source(info) && let Some(clip_trigger) = info.clip_trigger.as_ref() {
+        rows.push(DrawerRow::Buttons {
+            buttons: vec![DrawerButton::new(
+                clip_trigger.source_label.clone(),
+                false,
+                PanelAction::Params(ParamsAction::OpenClipTriggerSource(
+                    clip_trigger.target.clone(),
+                    info.id.clone(),
+                )),
+            )],
+            width: ButtonWidth::Proportional,
+            label: Some("Source".into()),
+        });
+    }
     if show_decay {
         rows.push(DrawerRow::Slider {
             label: "Decay".into(),
@@ -816,6 +850,32 @@ pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamRow, i: usi
     // strip, same as `is_trigger`'s `Audio` tab), but height computation now
     // shares the identical `ModTab::Audio` path every other Audio config uses.
     v
+}
+
+/// Height reserved below one parameter row for its active response drawer.
+/// Shared by card and scene-property navigation so reveal bounds follow the
+/// same active-tab and compact rules as the renderer.
+pub(crate) fn row_drawer_height(
+    compact: bool,
+    mod_state: &ParamModState,
+    mod_active_tab: &[ModTab],
+    info: &ParamRow,
+    i: usize,
+) -> f32 {
+    if compact {
+        return 0.0;
+    }
+    let active = active_mod_tabs(mod_state, info, i);
+    let h = match active.len() {
+        0 => return 0.0,
+        1 => mod_config_height(active[0], info, mod_state, i),
+        _ => {
+            let stored = mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver);
+            let shown = resolve_active_tab(&active, stored).unwrap_or(active[0]);
+            MOD_TAB_STRIP_H + mod_config_height(shown, info, mod_state, i)
+        }
+    };
+    h + DRAWER_BOTTOM_GAP
 }
 
 
@@ -1390,6 +1450,25 @@ pub(crate) fn build_audio_mod_drawer(
             label: Some("Listen".into()),
         },
     ];
+    if audio_uses_clip_trigger_source(info, audio)
+        && let Some(clip_trigger) = info.clip_trigger.as_ref()
+    {
+        rows.insert(
+            1,
+            DrawerRow::Buttons {
+                buttons: vec![DrawerButton::new(
+                    clip_trigger.source_label.clone(),
+                    false,
+                    PanelAction::Params(ParamsAction::OpenClipTriggerSource(
+                        clip_trigger.target.clone(),
+                        info.id.clone(),
+                    )),
+                )],
+                width: ButtonWidth::Proportional,
+                label: Some("Clip source".into()),
+            },
+        );
+    }
     if matrix_open {
         rows.push(DrawerRow::Buttons {
             buttons: kind_buttons,

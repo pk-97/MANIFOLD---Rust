@@ -186,7 +186,7 @@ enum CardDragStack {
 /// Scrolling: the app layer calls `handle_scroll(delta)` on mouse wheel
 /// events within the inspector viewport, then triggers a rebuild.
 pub struct InspectorCompositePanel {
-    pending_reveal: Option<EffectId>,
+    pending_reveal: Option<(EffectId, Option<manifold_foundation::ParamId>)>,
     // Sub-panels
     macros_panel: MacrosPanel,
     /// P3b: layer-owned clip-trigger authoring (AUDIO_SETUP_DOCK_AND_TRIGGER_
@@ -1575,6 +1575,7 @@ mod tests {
             },
             value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
             audio: crate::panels::param_slider_shared::AudioRowState::default(),
+            clip_trigger: None,
             modulation: RowMod::default(),
             mapping: RowMapping {
                 osc_address: None,
