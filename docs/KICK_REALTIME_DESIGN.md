@@ -1,6 +1,6 @@
 # Realtime Kick Detector — the trained kick model as the app's only kick detector
 
-**Status:** APPROVED design, not built · 2026-10-10 · Opus 5.5 lead, Fable review
+**Status:** IN PROGRESS — wired, awaiting Peter's live test · Opus 5.5 lead, Fable review
 **Prerequisites:** the research recipe on `feat/kick-realtime` (`tools/audio_analysis/eval/`, `docs/AUDIO_EVAL_HARNESS_GUIDE.md`).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) before starting a phase.
 
@@ -87,4 +87,4 @@ net and stage on every song, export the model and goldens, run
 P1 container + exporter + final model (Python, lead). P2 four parallel Rust lanes
 against the goldens: base features + candidates; the 54 extra features; the net;
 trees + stage + fires. P3 wire-in on a worker thread, delete the old detector,
-archive `KICK_SWEEP_EVENT_DESIGN.md`. P4 parity, CPU measurement, Peter's live test, land.
+archive KICK_SWEEP_EVENT_DESIGN.md (now in `docs/archive/`). P4 parity, CPU measurement, Peter's live test, land.

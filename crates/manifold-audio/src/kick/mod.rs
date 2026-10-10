@@ -3,10 +3,13 @@
 
 pub mod base;
 pub mod container;
+pub mod detector;
 pub mod extra;
 pub mod net;
 pub mod stage;
 pub mod trees;
+
+pub use detector::{KickDetector, KickError, KickFire};
 
 #[cfg(test)]
 pub(crate) mod golden {

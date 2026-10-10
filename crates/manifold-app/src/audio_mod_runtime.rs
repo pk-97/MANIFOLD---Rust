@@ -33,6 +33,7 @@ use manifold_audio::analysis::{
     AudioFeatureWorker, GainBank, LinearResampler, MonoReader, StreamingSendAnalyzer,
 };
 use manifold_audio::capture::{self, CaptureBackend, CaptureSource};
+use manifold_audio::detectors::{DetectorEvent, DetectorWorker, EventKind, kick_detector};
 use manifold_core::{AudioSend, LayerId, Seconds, SendFeatures};
 use manifold_core::audio_features::{AudioFeatureHop, AudioHopBatch, AudioHopError, AudioHopStamp,
     AudioInputDiscontinuity, AudioInputProblem, AudioInputSource, new_audio_analysis_epoch};
@@ -41,6 +42,10 @@ use manifold_core::id::AudioSendId;
 use manifold_core::project::Project;
 use manifold_playback::audio_layer_playback::AudioLayerPlayback;
 use manifold_playback::engine::PlaybackEngine;
+
+/// Longest an update waits for the detector workers, across all sends (docs/KICK_REALTIME_DESIGN.md
+/// section 1b). A worker that misses it delivers its fires one update late.
+const DETECTOR_WAIT: std::time::Duration = std::time::Duration::from_millis(2);
 
 /// The capture-relevant fingerprint of an [`AudioSetup`]. Changes here force a
 /// device/worker rebuild; label-only or capture-flag-only edits compare equal and
@@ -100,6 +105,12 @@ struct SendAnalyzer {
     capture_generation: Option<u64>,
     channels: Vec<u16>,
     layers: Vec<LayerId>,
+    /// The send's trained event detectors (kick) on their own thread, fed the same mono
+    /// from the same origin as `analyzer`. `None` when the model was refused or the thread
+    /// could not start: kick then stays 0.
+    detectors: Option<DetectorWorker>,
+    /// This update's mixed mono, held between [`Self::stage`] and analysis.
+    staged: Vec<f32>,
 }
 
 impl SendAnalyzer {
@@ -113,7 +124,34 @@ impl SendAnalyzer {
             capture_generation,
             channels: send.channels.clone(),
             layers: send.layers().to_vec(),
+            detectors: kick_detector(rate).and_then(|kick| {
+                DetectorWorker::spawn(vec![Box::new(kick)])
+                    .inspect_err(|e| log::error!("[AudioMod] detector worker did not start: {e}"))
+                    .ok()
+            }),
+            staged: Vec::new(),
         }
+    }
+
+    /// Holds this update's mixed mono for analysis and hands it to the detector worker, so
+    /// the worker runs while the other sends are mixed.
+    fn stage(&mut self, mono: &[f32]) {
+        self.staged.clear();
+        self.staged.extend_from_slice(mono);
+        if let Some(worker) = self.detectors.as_mut() {
+            worker.submit(mono);
+        }
+    }
+
+    /// Queues the worker's kick fires into the analyzer, waiting at most until `deadline`.
+    /// Fires that miss it are queued on a later update and land on the first hop analysed
+    /// after their sample (one frame late).
+    fn collect_events(&mut self, deadline: std::time::Instant, scratch: &mut Vec<DetectorEvent>) {
+        let Some(worker) = self.detectors.as_mut() else { return };
+        scratch.clear();
+        worker.collect(deadline, scratch);
+        self.analyzer
+            .queue_kick_fires(scratch.iter().filter(|e| e.kind == EventKind::Kick).map(|e| e.sample));
     }
 
     fn analyze_hops(
@@ -228,6 +266,10 @@ pub struct AudioModRuntime {
     mono_mix: Vec<f32>,
     /// Resampled layer mono (layer rate → analyzer rate) for one send.
     resampled: Vec<f32>,
+    /// Send indices staged this update, analysed after their detectors are collected.
+    staged_sends: Vec<usize>,
+    /// Detector events collected for one send.
+    detector_events: Vec<DetectorEvent>,
     /// Cached at construction from `MANIFOLD_AUDIO_TRACE` — the P1 gate
     /// instrument (`docs/AUDIO_SENDS_UX_DESIGN.md` section 4 Phase 1). Checked once,
     /// not per tick, so the trace stays zero-cost when unset.
@@ -272,6 +314,8 @@ impl Default for AudioModRuntime {
             layer_mix: Vec::new(),
             mono_mix: Vec::new(),
             resampled: Vec::new(),
+            staged_sends: Vec::new(),
+            detector_events: Vec::with_capacity(256),
             trace: std::env::var_os("MANIFOLD_AUDIO_TRACE").is_some(),
         }
     }
@@ -459,6 +503,9 @@ impl AudioModRuntime {
         let mut mono_mix = std::mem::take(&mut self.mono_mix);
         let mut layer_mix = std::mem::take(&mut self.layer_mix);
         let mut resampled = std::mem::take(&mut self.resampled);
+        let mut staged_sends = std::mem::take(&mut self.staged_sends);
+        staged_sends.clear();
+        let mut detector_events = std::mem::take(&mut self.detector_events);
         let mut features = std::mem::take(&mut engine.audio_snapshot_mut().sends);
         features.clear();
         features.resize(send_count, SendFeatures::default());
@@ -604,16 +651,31 @@ impl AudioModRuntime {
                 } else if visualized {
                     self.visuals.feed_waveform(&send.id, &mono_mix);
                 }
+                entry.stage(&mono_mix);
+                staged_sends.push(i);
+            }
+
+            // The detector workers ran while the sends were mixed. Collect them under one
+            // shared deadline, queue their fires, then analyse each staged send.
+            let deadline = std::time::Instant::now() + DETECTOR_WAIT;
+            for &i in &staged_sends {
+                let send = &project.audio_setup.sends[i];
+                let Some(entry) = analyzers.get_mut(&send.id) else { continue };
+                entry.collect_events(deadline, &mut detector_events);
+                let visualized = self.visual_consumed.contains(&send.id);
                 let visuals = &mut self.visuals;
                 let capture_batch = &self.capture_batch;
                 // The existing mixed-source drain is not time aligned. Only
                 // capture-only sends have a single truthful clock today.
-                let capture_only = has_cap && send.layers().is_empty();
-                if let Err(error) = entry.analyze_hops(&mono_mix, &mut hop_batches[i], |offset| {
+                let capture_only = entry.capture_generation.is_some() && send.layers().is_empty();
+                let mono = std::mem::take(&mut entry.staged);
+                let result = entry.analyze_hops(&mono, &mut hop_batches[i], |offset| {
                     if capture_only { capture_batch.source_time_at(offset) } else { None }
                 }, |column| {
                     if visualized { visuals.feed_spectrum(&send.id, column); }
-                }) {
+                });
+                entry.staged = mono;
+                if let Err(error) = result {
                     discontinuities.push(AudioInputDiscontinuity {
                         source: AudioInputSource::Send(send.id.clone()),
                         problem: match error {
@@ -623,7 +685,7 @@ impl AudioModRuntime {
                     });
                     // Publish the failed interval, then start a fresh analyzer
                     // epoch next update. Never join its prefix/tail or replay it.
-                    *entry = SendAnalyzer::new(canonical, low_hz, mid_hz, send, capture_generation);
+                    *entry = SendAnalyzer::new(entry.rate, low_hz, mid_hz, send, entry.capture_generation);
                     if let Some(history) = visuals.get_mut(Some(&send.id)) { history.clear(); }
                     continue;
                 }
@@ -647,6 +709,8 @@ impl AudioModRuntime {
         self.mono_mix = mono_mix;
         self.layer_mix = layer_mix;
         self.resampled = resampled;
+        self.staged_sends = staged_sends;
+        self.detector_events = detector_events;
         self.tapped_index = tapped_index;
 
         // Feed the engine. Reuse the snapshot's Vec capacity → no per-frame
@@ -1032,6 +1096,40 @@ mod hop_tests {
             for fps in [24, 30, 60] { assert_eq!(run(&[rate as usize / fps]), expected); }
             assert_eq!(run(&[1, 17, 4096, 1003]), expected);
         }
+    }
+
+    /// The live path end to end: staged mono → detector worker → queued fires → the Low band's
+    /// kick at 1.0 on the hop covering each fire the inline detector stamps.
+    #[test]
+    fn worker_kick_fires_land_on_their_hops() {
+        use manifold_audio::kick::{KickDetector, container::Container};
+        use std::time::{Duration, Instant};
+
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-audio/tests/fixtures/kick/clip_dense.mkick");
+        let golden = Container::parse(&std::fs::read(path).unwrap()).unwrap();
+        let n = golden.shape("audio_i16").unwrap()[0];
+        let input: Vec<f32> = golden.i16s("audio_i16", &[n]).unwrap().iter().map(|&v| v as f32 / 32768.0).collect();
+        let mut inline = Vec::new();
+        KickDetector::new(48_000).unwrap().push(&input, &mut inline);
+        assert!(inline.len() > 10);
+
+        let send = AudioSend::new("Kick");
+        let mut analyzer = SendAnalyzer::new(48_000, 250.0, 2500.0, &send, None);
+        assert!(analyzer.detectors.is_some());
+        let hop = analyzer.analyzer.hop() as u64;
+        let mut batch = AudioHopBatch::default();
+        let mut events = Vec::with_capacity(256);
+        let mut fired = Vec::new();
+        for frame in input.chunks(800) {
+            analyzer.stage(frame);
+            analyzer.collect_events(Instant::now() + Duration::from_secs(5), &mut events);
+            let mono = std::mem::take(&mut analyzer.staged);
+            analyzer.analyze_hops(&mono, &mut batch, |_| None, |_| {}).unwrap();
+            analyzer.staged = mono;
+            fired.extend(batch.hops().iter().filter(|h| h.features.bands[1].kick == 1.0).map(|h| h.stamp.end_sample));
+        }
+        let want: Vec<u64> = inline.iter().map(|f| f.sample.div_ceil(hop) * hop).collect();
+        assert_eq!(fired, want);
     }
 
     #[test]
