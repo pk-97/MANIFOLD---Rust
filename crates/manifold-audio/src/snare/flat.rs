@@ -134,3 +134,9 @@ impl Flatness {
         self.frames += 1;
     }
 }
+
+impl crate::kick::net::FrameSource for Flatness {
+    fn frame(&self, f: u64) -> Option<&[f32]> {
+        Flatness::frame(self, f)
+    }
+}

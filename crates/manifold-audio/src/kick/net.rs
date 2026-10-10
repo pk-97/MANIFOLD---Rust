@@ -2,11 +2,23 @@
 //! run with `KICK_GOAL_NN_AHEAD_MS=40`, 64 bands, 150 ms, no extra channels).
 
 mod cnn;
-mod spectrum;
+pub(crate) mod spectrum;
 
 use crate::kick::container::{Container, ContainerError};
 use cnn::Cnn;
-use spectrum::{BANDS, HISTORY, Spectrum};
+pub(crate) use spectrum::{BANDS, HISTORY, Spectrum};
+
+/// A per-frame source of one input channel on the net's 2 ms grid (BANDS values per frame), fed to the
+/// net raw and divided by 20 like `Song.slices` extra channels. `None` when frame `f` is not held.
+pub trait FrameSource {
+    fn frame(&self, f: u64) -> Option<&[f32]>;
+}
+
+impl FrameSource for Spectrum {
+    fn frame(&self, f: u64) -> Option<&[f32]> {
+        Spectrum::frame(self, f)
+    }
+}
 
 /// Baseline frames per candidate are sorted on the stack.
 const MAX_SPAN: usize = 128;
@@ -93,13 +105,42 @@ impl KickNet {
     /// The net's kick probability (`predict()`: sigmoid of the logit, f32, widened). NaN when the
     /// stream has not reached `ready_sample` or the candidate's baseline frames left the history.
     pub fn probability(&mut self, cand_hop: u64, emit_hop: u64) -> f64 {
+        self.probability_with(cand_hop, emit_hop, &[])
+    }
+
+    /// `probability` for a net with extra input channels, one source per channel after shape and new.
+    pub fn probability_with(&mut self, cand_hop: u64, emit_hop: u64, extra: &[&dyn FrameSource]) -> f64 {
+        let z = self.logit_with(cand_hop, emit_hop, extra);
+        (1.0 / (1.0 + (-z).exp())) as f64
+    }
+
+    #[cfg(test)]
+    /// The net's own band envelopes.
+    pub(crate) fn spectrum(&self) -> &Spectrum {
+        &self.spec
+    }
+
+    /// Input channels the model expects: shape, new, then `channels() - 2` extra sources.
+    pub fn channels(&self) -> usize {
+        self.cnn.channels()
+    }
+
+    /// The net's logit. NaN when a spectrum or extra frame the slice reads is not held, or when
+    /// `extra` does not supply exactly the model's extra channels.
+    pub fn logit_with(&mut self, cand_hop: u64, emit_hop: u64, extra: &[&dyn FrameSource]) -> f32 {
+        if extra.len() + 2 != self.cnn.channels() {
+            return f32::NAN;
+        }
         let Anchors { end, on } = self.anchors(cand_hop, emit_hop);
         let first = end + 1 - self.slice as u64;
         let oldest = on.saturating_sub(self.span as u64 - 1).min(first);
         if [end, on, oldest].iter().any(|&f| self.spec.frame(f).is_none()) {
-            return f64::NAN;
+            return f32::NAN;
         }
-        // `slices()`: shape = x - the slice's max; new = x - each band's pre-onset median; both / 20.
+        if extra.iter().any(|e| e.frame(first).is_none() || e.frame(end).is_none()) {
+            return f32::NAN;
+        }
+        // `slices()`: shape = x - the slice's max; new = x - each band's pre-onset median; extras raw; all / 20.
         let mut peak = f32::NEG_INFINITY;
         for t in 0..self.slice {
             let row = self.spec.frame(first + t as u64).expect("held: checked above");
@@ -127,8 +168,16 @@ impl KickNet {
                 self.cnn.input[i1] = (x - b) / 20.0;
             }
         }
-        let z = self.cnn.logit();
-        (1.0 / (1.0 + (-z).exp())) as f64
+        for (ch, src) in extra.iter().enumerate() {
+            for t in 0..self.slice {
+                let Some(row) = src.frame(first + t as u64) else { return f32::NAN };
+                for (band, &v) in row[..BANDS].iter().enumerate() {
+                    let i = self.cnn.input_at(ch + 2, band, t);
+                    self.cnn.input[i] = v / 20.0;
+                }
+            }
+        }
+        self.cnn.logit()
     }
 }
 

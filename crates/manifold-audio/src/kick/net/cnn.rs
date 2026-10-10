@@ -7,12 +7,14 @@
 use super::spectrum::BANDS;
 use crate::kick::container::{Container, ContainerError};
 
-const IN_CH: usize = 2;
 const C1: usize = 16;
 const C2: usize = 32;
 const C3: usize = 32;
 const HIDDEN: usize = 32;
-const POOLED: usize = C3 * (BANDS / 4);
+/// Rows the adaptive pool keeps: bands are already BANDS / 4 after two pools.
+const ROWS: usize = BANDS / 4;
+/// Input channels the loader accepts: shape, new, and up to two extra channels.
+const MAX_IN_CH: usize = 4;
 
 struct Conv {
     cin: usize,
@@ -94,8 +96,16 @@ fn pool_into(src: &[f32], c: usize, h: usize, w: usize, dst: &mut [f32]) {
     }
 }
 
+/// `AdaptiveMaxPool2d` time bin `i` of `bins` over width `w`: PyTorch's [floor(i w / bins), ceil((i + 1) w / bins)).
+fn adaptive_bin(i: usize, bins: usize, w: usize) -> (usize, usize) {
+    (i * w / bins, ((i + 1) * w).div_ceil(bins))
+}
+
 pub struct Cnn {
     frames: usize,
+    channels: usize,
+    tbins: usize,
+    pooled_len: usize,
     conv1: Conv,
     conv2: Conv,
     conv3: Conv,
@@ -103,7 +113,7 @@ pub struct Cnn {
     fc1_b: Vec<f32>,
     fc2_w: Vec<f32>,
     fc2_b: f32,
-    /// The zero-bordered (IN_CH, BANDS + 2, frames + 2) input; callers fill the interior.
+    /// The zero-bordered (channels, BANDS + 2, frames + 2) input; callers fill the interior.
     pub input: Vec<f32>,
     out1: Vec<f32>,
     in2: Vec<f32>,
@@ -115,27 +125,53 @@ pub struct Cnn {
 }
 
 impl Cnn {
-    /// `frames` is the slice length; the head's width (one time bin) is checked by its weight shape.
+    /// `frames` is the slice length. Input channels come from `conv.0`'s weight shape and time bins
+    /// from `head.0`'s width; `net.channels` / `net.tbins` must agree when the container has them.
     pub fn new(c: &Container, frames: usize) -> Result<Self, ContainerError> {
+        let w0 = c.shape("net.conv.0.weight")?;
+        let channels = if w0.len() == 4 { w0[1] } else { 0 };
+        if !(2..=MAX_IN_CH).contains(&channels) {
+            return Err(ContainerError::WrongShape { name: "net.conv.0.weight".into(), want: vec![C1, 2, 3, 3], got: w0.to_vec() });
+        }
+        let h0 = c.shape("net.head.0.weight")?;
+        let width = if h0.len() == 2 { h0[1] } else { 0 };
+        let tbins = width / (C3 * ROWS);
         let (w1, w2) = (frames / 2, frames / 4);
+        if tbins == 0 || tbins * C3 * ROWS != width || tbins > w2 {
+            return Err(ContainerError::WrongShape { name: "net.head.0.weight".into(), want: vec![HIDDEN, C3 * ROWS], got: h0.to_vec() });
+        }
+        for (name, v) in [("net.channels", channels), ("net.tbins", tbins)] {
+            if c.names().any(|n| n == name) && c.i64s(name, &[])?[0] != v as i64 {
+                return Err(ContainerError::WrongShape { name: name.into(), want: vec![v], got: vec![c.i64s(name, &[])?[0] as usize] });
+            }
+        }
+        let pooled_len = C3 * ROWS * tbins;
         Ok(Self {
             frames,
-            conv1: Conv::new(c, "conv.0", IN_CH, C1)?,
+            channels,
+            tbins,
+            pooled_len,
+            conv1: Conv::new(c, "conv.0", channels, C1)?,
             conv2: Conv::new(c, "conv.3", C1, C2)?,
             conv3: Conv::new(c, "conv.6", C2, C3)?,
-            fc1_w: c.f32s("net.head.0.weight", &[HIDDEN, POOLED])?.to_vec(),
+            fc1_w: c.f32s("net.head.0.weight", &[HIDDEN, pooled_len])?.to_vec(),
             fc1_b: c.f32s("net.head.0.bias", &[HIDDEN])?.to_vec(),
             fc2_w: c.f32s("net.head.2.weight", &[1, HIDDEN])?.to_vec(),
             fc2_b: c.f32s("net.head.2.bias", &[1])?[0],
-            input: vec![0.0; IN_CH * (BANDS + 2) * (frames + 2)],
+            input: vec![0.0; channels * (BANDS + 2) * (frames + 2)],
             out1: vec![0.0; C1 * BANDS * frames],
             in2: vec![0.0; C1 * (BANDS / 2 + 2) * (w1 + 2)],
             out2: vec![0.0; C2 * (BANDS / 2) * w1],
             in3: vec![0.0; C2 * (BANDS / 4 + 2) * (w2 + 2)],
             out3: vec![0.0; C3 * (BANDS / 4) * w2],
-            pooled: vec![0.0; POOLED],
+            pooled: vec![0.0; pooled_len],
             hidden: vec![0.0; HIDDEN],
         })
+    }
+
+    /// Input channels: shape and new, then the caller's extra channels.
+    pub fn channels(&self) -> usize {
+        self.channels
     }
 
     /// Index of input cell (channel, band, frame) inside `input`.
@@ -154,16 +190,33 @@ impl Cnn {
         pool_into(&self.out2, C2, h1, w1, &mut self.in3);
         let (h2, w2) = (h1 / 2, w1 / 2);
         self.conv3.forward(&self.in3, h2, w2, &mut self.out3);
-        // AdaptiveMaxPool2d((BANDS / 4, 1)): bands are already BANDS / 4, so each row's max over time.
-        for (p, row) in self.pooled.iter_mut().zip(self.out3.chunks_exact(w2)) {
-            *p = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        // AdaptiveMaxPool2d((BANDS / 4, tbins)): each row's max over each (possibly overlapping) time bin;
+        // the flatten order is (channel, band, tbin).
+        for (bins, row) in self.pooled.chunks_exact_mut(self.tbins).zip(self.out3.chunks_exact(w2)) {
+            for (i, p) in bins.iter_mut().enumerate() {
+                let (s, e) = adaptive_bin(i, self.tbins, w2);
+                *p = row[s..e].iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            }
         }
+        let n = self.pooled_len;
         for (j, hid) in self.hidden.iter_mut().enumerate() {
-            let w = &self.fc1_w[j * POOLED..][..POOLED];
+            let w = &self.fc1_w[j * n..][..n];
             let s: f32 = w.iter().zip(&self.pooled).map(|(a, b)| a * b).sum();
             *hid = (s + self.fc1_b[j]).max(0.0);
         }
         let s: f32 = self.fc2_w.iter().zip(&self.hidden).map(|(a, b)| a * b).sum();
         s + self.fc2_b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::adaptive_bin;
+
+    #[test]
+    fn adaptive_bins_match_pytorch() {
+        let bins: Vec<_> = (0..4).map(|i| adaptive_bin(i, 4, 23)).collect();
+        assert_eq!(bins, [(0, 6), (5, 12), (11, 18), (17, 23)]);
+        assert_eq!(adaptive_bin(0, 1, 18), (0, 18));
     }
 }
