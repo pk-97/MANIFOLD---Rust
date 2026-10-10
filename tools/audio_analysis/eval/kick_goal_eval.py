@@ -87,6 +87,17 @@ def stem_derived(fn, path, sr):
     return np.load(f)
 
 
+def one_per_refractory(times):
+    """A kick within the 60 ms refractory of the previous one is the same hit: the
+    detector can never fire on both. Eat Sleep's two kick layers sit 51 ms apart,
+    which labelled every flam twice (58 impossible labels)."""
+    out = []
+    for t in sorted(times):
+        if not out or t - out[-1] >= REFRACTORY:
+            out.append(float(t))
+    return out
+
+
 def stem_notes(track, kick_path, sr):
     """Kick notes (stem time, s) of a kick stem, rolls included; cached per track."""
     path = GOAL / f'notes_{track}.npy'
@@ -207,6 +218,7 @@ class Goal:
         else:
             stem_kicks = fresh_onsets(stem_derived(kick_env_db, STEM_CFG[name]['kick'], sr)) + shift
             labels = info['labels']
+        labels = one_per_refractory(labels)
         regions = [(0.0, 1.2), (dur - 1.0, dur + 1.0)] + [(u - .07, u + .2) for u in info.get('uncertain', [])]
         if sections:
             # Only the proven sections are scored: everything between them is unscored.
