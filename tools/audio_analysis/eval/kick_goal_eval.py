@@ -20,20 +20,70 @@ Protocol, fixed before any scoring:
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 import json
+import sys
+import types
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import get_context
 from pathlib import Path
 
 import numpy as np
+import scipy
 from scipy.special import expit, logit
 
 from tools.audio_analysis.eval.kick_attack_rejection import read_audio
 from tools.audio_analysis.eval.kick_fusion_bandwise import fusion_features
-from tools.audio_analysis.eval.kick_goal_labels import DEV_STEMS, GOAL, MORE, NEW, fresh_onsets, kick_env_db, load
+from tools.audio_analysis.eval.kick_goal_labels import DEV_STEMS, GOAL, MORE, NEW, drum_kicks, fresh_onsets, kick_env_db, load
 from tools.audio_analysis.eval.kick_goal_rolls import kick_notes
 from tools.audio_analysis.eval.kick_night_common import NIGHT, TRACKS, Data
+from tools.audio_analysis.eval.live_kick_baseline import match_events, score_events
+from tools.audio_analysis.eval.master_kick_comparison import score_passage
 from tools.audio_analysis.eval.run_kick_dsp_experiments import evaluate
 from tools.audio_analysis.eval.run_kick_fusion_trial import training_labels
+
+# Runner outputs; inputs are always read from GOAL.
+OUT = Path(os.environ.get('KICK_GOAL_OUT', GOAL))
+KEYED = GOAL / 'keyed_cache'
+PKG = 'tools.audio_analysis.eval'
+
+
+def code_hash(*fns):
+    """sha256 of the source files of every eval module reachable from fns' modules
+    through module globals: an edit anywhere in that closure changes the key."""
+    seen, todo = set(), [f.__module__ for f in fns]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for v in vars(sys.modules[name]).values():
+            dep = v.__name__ if isinstance(v, types.ModuleType) else getattr(v, '__module__', None)
+            if isinstance(dep, str) and dep.startswith(PKG + '.') and dep in sys.modules:
+                todo.append(dep)
+    h = hashlib.sha256()
+    for name in sorted(seen):
+        h.update(name.encode() + Path(sys.modules[name].__file__).read_bytes())
+    return h.hexdigest()
+
+
+def stem_derived(fn, path, sr):
+    """fn(load(path, sr), sr), cached on the audio bytes, sr, the code closure and
+    the numpy/scipy versions, so a hit is never stale. Writes are atomic."""
+    paths = path if isinstance(path, (list, tuple)) else [path]
+    h = hashlib.sha256(repr((fn.__name__, sr, np.__version__, scipy.__version__, code_hash(fn, load))).encode())
+    for p in paths:
+        h.update(hashlib.sha256(Path(p).read_bytes()).digest())
+    f = KEYED / f'{fn.__name__}_{h.hexdigest()[:32]}.npy'
+    if not f.exists():
+        KEYED.mkdir(exist_ok=True)
+        tmp = f.with_name(f'{f.name}.{os.getpid()}.tmp')
+        with open(tmp, 'wb') as fh:
+            np.save(fh, fn(load(path, sr), sr))
+        os.replace(tmp, f)
+    return np.load(f)
+
 
 def stem_notes(track, kick_path, sr):
     """Kick notes (stem time, s) of a kick stem, rolls included; cached per track."""
@@ -136,7 +186,7 @@ class Goal:
             labels = sorted([float(x) for x in stem_kicks if 1.0 <= x <= dur - 1.0] +
                             [x for x in info['labels'] if not np.any(np.abs(stem_kicks - x) <= .07)])
         else:
-            stem_kicks = fresh_onsets(kick_env_db(load(STEM_CFG[name]['kick'], sr), sr)) + shift
+            stem_kicks = fresh_onsets(stem_derived(kick_env_db, STEM_CFG[name]['kick'], sr)) + shift
             labels = info['labels']
         regions = [(0.0, 1.2), (dur - 1.0, dur + 1.0)]
         for t in labels:
@@ -165,7 +215,7 @@ class Goal:
         rec['onset_s'] = (rec['candidates'] + 1) * hop / sr
         rec['emit_s'] = (rec['available'] + 1) * hop / sr
         if kick_path is not None:
-            e = kick_env_db(load(kick_path, sr), sr)
+            e = stem_derived(kick_env_db, kick_path, sr)
             rec['stem_kicks'] = (stem_notes(rec['track'], kick_path, sr) if self.mode == 'v3' else fresh_onsets(e)) + rec['lag']
             peak = np.percentile(e, 99.9)
             idx = np.clip(((rec['onset_s'] - rec['lag']) / .001).astype(int), 0, len(e) - 1)
@@ -207,14 +257,13 @@ def add_whole_song_truth(g):
     """Training-only truth over whole dev own-stem songs, by the new-song rule:
     fresh kick-stem attacks (with the level floor), drum-bus kicks without one
     are uncertain, first and last 1.2 s excluded. Scoring still uses v2."""
-    from tools.audio_analysis.eval.kick_goal_labels import drum_kicks
     for t in TRACKS:
         if t not in DEV_STEMS:
             continue
         r = g.records[t]
         sr, hop = r['sample_rate'], r['hop']
         dur = len(read_audio(r['source']['audio_path'])[1]) / sr
-        bus = drum_kicks(load(DEV_STEMS[t]['drums'][0], sr), sr) + r['lag']
+        bus = stem_derived(drum_kicks, DEV_STEMS[t]['drums'][0], sr) + r['lag']
         kicks = r['stem_kicks']
         regions = [(0.0, 1.2), (dur - 1.2, dur + 1.0)] + [(u - .07, u + .2) for u in bus if not np.any(np.abs(kicks - u) <= .07)]
         regions.sort()
@@ -245,6 +294,112 @@ def counts(passages, ms='70'):
             sum(p['labels'] for p in passages))
 
 
+def _outside(x, spans):
+    keep = np.ones(len(x), bool)
+    for a, b in spans:
+        keep &= ~((a <= x) & (x <= b))
+    return keep
+
+
+def count_prep(g, t):
+    """Threshold-free scoring state of song t for fast_counts, built once per Goal
+    (records are read-only after construction)."""
+    prep = g.__dict__.setdefault('count_prep', {})
+    if t not in prep:
+        r = g.records[t]
+        av, em, src, sr, hop = r['available'], r['emit_s'], r['source'], r['sample_rate'], r['hop']
+        # fires() then reduces to a jump: after a fire at i, the next is the first pass at or after nxt[i].
+        assert av.dtype.kind in 'iu' and np.all(np.diff(av) >= 0), f'{t}: availability must be sorted integers'
+        d = np.arange(1, int(np.ceil(REFRACTORY * sr / hop)) + 3)
+        ok = d * hop / sr >= REFRACTORY - 1e-12
+        assert ok.any()
+        nxt = np.searchsorted(av, av + d[np.argmax(ok)], 'left')
+        if src['group'] == 'original_five':
+            score_events([], src['truth'], src['regions'])
+            parts = [(_outside(em, [(x['start_s'], x['end_s']) for x in src['regions']]), sorted(src['truth']), None)]
+        else:
+            parts = []
+            for p in src['passages']:
+                score_passage([], p)
+                ex = [(x['start_s'] - .07, x['end_s'] + .2) for x in p.get('uncertain_regions', [])]
+                truth = [x for x in p['kick_times_s'] if not any(a <= x <= b for a, b in ex)]
+                keep = _outside(em, ex) & (p['review_start_s'] <= em) & (em <= p['review_end_s'])
+                core = (p['start_s'], p['end_s'], {i for i, x in enumerate(truth) if p['start_s'] <= x < p['end_s']})
+                parts.append((keep, truth, core))
+        prep[t] = nxt, parts
+    return prep[t]
+
+
+def greedy_matches(pred, truth, lo, hi):
+    """Size of the maximum one-to-one matching with lo <= pred - truth <= hi on sorted
+    lists. The pairable truths of each prediction form a window that moves forward with
+    it, so matching the earliest pairable pair first is optimal: it equals the count of
+    live_kick_baseline.match_events, which also maximises count first."""
+    i = j = m = 0
+    while i < len(pred) and j < len(truth):
+        e = pred[i] - truth[j]
+        if e < lo:
+            i += 1
+        elif e > hi:
+            j += 1
+        else:
+            m, i, j = m + 1, i + 1, j + 1
+    return m
+
+
+def fast_fires(g, t, p, th):
+    """fires() on song t, stepping from fire to fire instead of over every pass."""
+    nxt = count_prep(g, t)[0]
+    ps = np.flatnonzero(p >= th)
+    idx, k = [], 0
+    while k < len(ps):
+        idx.append(ps[k])
+        k = ps.searchsorted(nxt[ps[k]])
+    return np.asarray(idx, dtype=int)
+
+
+def fast_counts(g, t, p, th, ms='70'):
+    """counts(score(g, t, p, th)[1], ms), exactly, without the full report: the same
+    fires, the greedy count on whole songs and the exact matcher on passages (their
+    core counts depend on which pairs it picks)."""
+    parts = count_prep(g, t)[1]
+    idx = fast_fires(g, t, p, th)
+    em = g.records[t]['emit_s'][idx]
+    tol = int(ms) / 1000
+    m = e = n = 0
+    for keep, truth, core in parts:
+        pred = em[keep[idx]].tolist()
+        if core is None:
+            a = greedy_matches(pred, truth, -tol - 1e-9, tol + 1e-9)
+            m, e, n = m + a, e + len(pred) - a, n + len(truth)
+            continue
+        start, end, scored = core
+        pairs = match_events(pred, truth, tol, tol)
+        used = {i for _, i in pairs}
+        m += sum(j in scored for j, _ in pairs)
+        e += sum(start <= x < end and i not in used for i, x in enumerate(pred))
+        n += len(scored)
+    return m, e, n
+
+
+def jobs():
+    """Worker processes for the nested runners: KICK_GOAL_JOBS, default 1 (serial)."""
+    return int(os.environ.get('KICK_GOAL_JOBS', '1'))
+
+
+def run_tasks(work, tasks, init, initargs=()):
+    """Iterator of work(task) in task order. The caller has already run init(*initargs)
+    here; with KICK_GOAL_JOBS = n > 1, n single-threaded spawned workers each run it
+    and share the tasks. Results do not depend on n (fixed seeds, ordered merge)."""
+    n = jobs()
+    if n <= 1:
+        yield from map(work, tasks)
+        return
+    os.environ.update(OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', VECLIB_MAXIMUM_THREADS='1', MKL_NUM_THREADS='1')
+    with ProcessPoolExecutor(n, mp_context=get_context('spawn'), initializer=init, initargs=initargs) as ex:
+        yield from ex.map(work, tasks)
+
+
 def choose(g, preds, grid=None):
     """Threshold maximising pooled F1 at 70 ms over {track: probabilities}."""
     allp = np.concatenate(list(preds.values()))
@@ -254,7 +409,7 @@ def choose(g, preds, grid=None):
     for th in grid:
         m = e = n = 0
         for t, p in preds.items():
-            a, b, c = counts(score(g, t, p, th)[1])
+            a, b, c = fast_counts(g, t, p, th)
             m, e, n = m + a, e + b, n + c
         f1 = 2 * m / max(1, 2 * m + e + (n - m))
         if best is None or f1 > best[1] + 1e-12:
