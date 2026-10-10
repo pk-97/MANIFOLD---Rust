@@ -1244,7 +1244,7 @@ fn fluid_mesh_grid_native_plane_crossing_matches_engine() {
 
 #[test]
 fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
-    use super::liquid_solid_distance::LiquidSolidDistance;
+    use manifold_water_gpu_flip::primitives::liquid_solid_distance::LiquidSolidDistance;
     use manifold_water_liquid::bodies::{LiquidBody, LiquidShape};
     let mut harness = Harness::new();
     for resolution in [8, 16] {
@@ -1691,7 +1691,7 @@ fn fluid_smooth_lattice_matches_binomial_reference_and_passes_through() {
 
 // --- BUG-koy0 (solid clamp before smoothing): the clamp after smoothing ---
 
-use super::clamp_liquid_to_solids::ClampLiquidToSolids;
+use manifold_water_gpu_flip::primitives::clamp_liquid_to_solids::ClampLiquidToSolids;
 
 
 

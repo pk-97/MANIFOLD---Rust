@@ -45,7 +45,7 @@ manifold_core::testkit_visible! {
 /// Iterations one solve may run, FLIP Fluids' cap: the scalars buffer holds
 /// two per iteration. Rounds past the stop cost nothing: the template executes
 /// only the chunks the GPU-written ranges name.
-pub(crate) const MAX_ITERATIONS: u32 = 900;
+pub const MAX_ITERATIONS: u32 = 900;
 }
 /// The stop's relative tolerance on |r|∞ / |f|∞, FLIP Fluids'
 /// `_pressureSolveTolerance` unchanged: f32 carries the recursive residual

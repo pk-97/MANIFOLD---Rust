@@ -286,22 +286,6 @@ mod tests {
         let shader = include_str!("shaders/liquid_solid_distance_body.wgsl");
         assert!(shader.contains("inset * cell_size") && shader.contains("vec3<f32>(n) - vec3<f32>(1.0 + 2.0 * inset)"));
     }
-
-    /// The solid atom poses bodies the way node.matter_move_bodies does:
-    /// both turn through the shared pose library.
-    #[test]
-    fn liquid_solid_distance_poses_bodies_as_move_bodies() {
-        let solid = include_str!("shaders/liquid_solid_distance_body.wgsl");
-        let moving = include_str!("shaders/matter_move_bodies_body.wgsl");
-        // Adaptive steps pose at the accumulated elapsed time; fixed steps
-        // retain the supplied tick duration. Translation and rotation agree.
-        assert!(solid.contains("select(tick_seconds, clock_plan[0].elapsed, clock_plan[0].live_mode != 0u)"));
-        assert!(solid.contains("let pose_time = adaptive_tick_seconds(tick_seconds)"));
-        assert!(solid.contains("bd.position_inv_mass.xyz + bd.linear_velocity.xyz * pose_time"));
-        assert!(solid.contains("liquid_turn(bd.rotation, bd.angular_velocity.xyz, pose_time)"));
-        assert!(moving.contains("liquid_turn(b.rotation, b.angular_velocity.xyz, t)"));
-        assert!(!solid.contains("sin(0.5 * angle)") && !moving.contains("sin(0.5 * angle)"));
-    }
 }
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]

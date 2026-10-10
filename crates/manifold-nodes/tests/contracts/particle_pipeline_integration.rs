@@ -24,7 +24,7 @@
 //! authorise — if anything in the macro / port-type / validation
 //! chain regresses, this test catches it.
 
-use {manifold_nodes_image::node_graph::primitives::array_feedback::ArrayFeedback, manifold_nodes_water::primitives::euler_step_particles::EulerStepParticles, manifold_nodes_image::node_graph::primitives::resolve_accumulator::ResolveAccumulator, manifold_nodes_image::node_graph::primitives::sample_texture_at_particles::SampleTextureAtParticles, manifold_nodes_image::node_graph::primitives::scatter_particles::ScatterParticles, manifold_nodes_image::node_graph::primitives::seed_particles::SeedParticles, manifold_nodes_image::node_graph::primitives::wrap_particles_torus::WrapParticlesTorus};
+use {manifold_nodes_image::node_graph::primitives::array_feedback::ArrayFeedback, manifold_water_gpu_flip::primitives::euler_step_particles::EulerStepParticles, manifold_nodes_image::node_graph::primitives::resolve_accumulator::ResolveAccumulator, manifold_nodes_image::node_graph::primitives::sample_texture_at_particles::SampleTextureAtParticles, manifold_nodes_image::node_graph::primitives::scatter_particles::ScatterParticles, manifold_nodes_image::node_graph::primitives::seed_particles::SeedParticles, manifold_nodes_image::node_graph::primitives::wrap_particles_torus::WrapParticlesTorus};
 use manifold_node_engine::{graph::Graph, scene::boundary_nodes::Source};
 
 #[test]

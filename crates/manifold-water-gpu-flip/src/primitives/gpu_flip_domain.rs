@@ -48,10 +48,10 @@ use manifold_node_engine::scene::transform::Transform;
 manifold_core::testkit_visible! {
 /// Everything whose change restarts the liquid.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct GpuFlipSetup {
-    pub(crate) lattice: LiquidLattice,
-    pub(crate) pool_sites: u32,
-    pub(crate) box_sites: [[u32; 2]; 3],
+pub struct GpuFlipSetup {
+    pub lattice: LiquidLattice,
+    pub pool_sites: u32,
+    pub box_sites: [[u32; 2]; 3],
     /// Particle slots the pool holds; 0 means the fill's count. Sources
     /// emit into the slots past the live particles.
     pub(crate) particle_capacity: u32,
@@ -62,10 +62,10 @@ manifold_core::testkit_visible! {
 /// The domain's setup and the layout it came from, computed from params and
 /// wires alone: the node and the extent checker both call [`gpu_flip_geometry`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct GpuFlipGeometry {
+pub struct GpuFlipGeometry {
     pub(crate) layout: FluidDomainLayout,
-    pub(crate) setup: GpuFlipSetup,
-    pub(crate) particles: u64,
+    pub setup: GpuFlipSetup,
+    pub particles: u64,
     /// The V-cycle level the pressure solves run on; live, so not in the
     /// setup.
     pub(crate) solve_level: usize,
@@ -156,7 +156,7 @@ manifold_core::testkit_visible! {
 /// the pressure solve cannot take, a solve level the lattice lacks, a fill
 /// that does not fit the domain, and a fill past the count a wire carries
 /// exactly.
-pub(crate) fn gpu_flip_geometry(
+pub fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
     domain: Option<Transform>,
     initial_volume: Option<Transform>,

@@ -5,6 +5,8 @@ use manifold_water_liquid::testkit::codegen::run;
 use super::advect_whitewater::AdvectWhitewater;
 use manifold_water_liquid::primitives::{offset_lattice::OffsetLattice, upwind_distance::UpwindDistance};
 use {manifold_node_engine::exec::effect_node::NodeInstanceId, manifold_node_engine::freeze::codegen::InputSource, manifold_water_liquid::whitewater::WhitewaterParticle};
+#[cfg(feature = "whitewater-oracle")]
+use manifold_water_liquid::testkit::marker_phi::marker_phi;
 
 #[test]
 fn whitewater_engine_distance_values_and_fusion() {
@@ -511,29 +513,6 @@ fn whitewater_surface_distance_clock_gate() {
     for (g, c) in next.iter().zip(&want) {
         assert!((g - c).abs() < 2e-6, "stage {g} CPU {c}");
     }
-}
-
-/// Union of spheres of the engine's liquid SDF radius (0.5·√3·dx) around
-/// each marker, capped at ±3 dx: the shape of ParticleLevelSet's input, not
-/// its exact construction.
-pub(super) fn marker_phi(markers: &[[f32; 3]], cells: [u32; 3], dx: f32) -> Vec<f32> {
-    let n = cells.map(|c| c as usize);
-    let radius = 0.5 * 3f32.sqrt() * dx;
-    let mut phi = vec![3.0 * dx; n[0] * n[1] * n[2]];
-    for m in markers {
-        let lo = m.map(|c| ((c / dx).floor() as isize - 3).max(0) as usize);
-        for k in lo[2]..(lo[2] + 7).min(n[2]) {
-            for j in lo[1]..(lo[1] + 7).min(n[1]) {
-                for i in lo[0]..(lo[0] + 7).min(n[0]) {
-                    let c = [i, j, k].map(|v| (v as f32 + 0.5) * dx);
-                    let d = ((c[0] - m[0]).powi(2) + (c[1] - m[1]).powi(2) + (c[2] - m[2]).powi(2)).sqrt() - radius;
-                    let slot = &mut phi[i + n[0] * (j + n[1] * k)];
-                    *slot = slot.min(d.max(-3.0 * dx));
-                }
-            }
-        }
-    }
-    phi
 }
 
 /// SurfaceDistance against FLIP's own reinitialised surface on the same

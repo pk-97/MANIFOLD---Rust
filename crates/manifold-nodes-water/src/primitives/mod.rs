@@ -1,6 +1,5 @@
 mod advect_whitewater;
 mod age_whitewater;
-mod clamp_liquid_to_solids;
 mod count_surface_edges;
 pub mod count_surface_triangles;
 mod crossing_distance;
@@ -8,36 +7,6 @@ mod dust_potential;
 manifold_core::testkit_visible! { pub(crate) mod emission_count; }
 manifold_core::testkit_visible! { pub(crate) mod energy_potential; }
 mod extend_lattice;
-#[cfg(feature = "gpu-proofs")]
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_atom_tests;
-manifold_core::testkit_visible! { pub(crate) mod gpu_flip_bodies; }
-pub(crate) mod gpu_flip_clock;
-manifold_core::testkit_visible! { pub(crate) mod gpu_flip_domain; }
-#[cfg(test)]
-mod gpu_flip_extension_tests;
-pub mod gpu_flip_lentine;
-pub(crate) mod gpu_flip_narrow_band;
-#[cfg(test)]
-mod gpu_flip_narrow_band_tests;
-manifold_core::testkit_visible! { pub(crate) mod gpu_flip_pressure; }
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_pressure_tests;
-
-
-pub(crate) mod gpu_flip_sheeting;
-#[cfg(test)]
-mod gpu_flip_sheeting_cpu_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_sheeting_step_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_sheeting_tests;
-manifold_core::testkit_visible! { pub(crate) mod gpu_flip_step; }
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_step_tests;
-
-#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-pub mod gpu_flip_volume;
 mod inside_turbulence_potential;
 manifold_core::testkit_visible! { pub(crate) mod jitter_particles; }
 mod keep_whitewater;
@@ -45,10 +14,7 @@ manifold_core::testkit_visible! { pub(crate) mod lattice_bricks; }
 #[cfg(test)]
 mod lattice_closing_tests;
 mod lattice_curvature;
-pub(crate) mod liquid_fill;
 manifold_core::testkit_visible! { pub(crate) mod liquid_frame; }
-mod liquid_solid_distance;
-pub(crate) mod liquid_state;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod liquid_surface_tests;
 mod matter_body_reaction;
@@ -66,7 +32,6 @@ mod nearest_crossing;
 mod pad_distance_lattice;
 manifold_core::testkit_visible! { pub(crate) mod particle_volume; }
 mod preserve_foam;
-manifold_core::testkit_visible! { pub(crate) mod push_out_of_solid; }
 pub mod relax_surface_mesh;
 mod retype_whitewater;
 manifold_core::testkit_visible! { pub(crate) mod sample_faces_at_particles; }
@@ -125,15 +90,6 @@ mod face_grid_extent_tests;
 mod face_grid_tests;
 mod grid_to_matter;
 
-#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-mod gpu_flip_tile_tests;
-mod apply_radial_burst_3d_to_particles;
-mod apply_radial_burst_to_particles;
-#[cfg(any(test, feature = "testkit"))]
-pub mod euler_step_particles;
-#[cfg(not(any(test, feature = "testkit")))]
-mod euler_step_particles;
-mod euler_step_particles_3d;
 #[cfg(any(test, feature = "testkit"))]
 pub mod smooth_surface_mesh;
 #[cfg(not(any(test, feature = "testkit")))]
@@ -148,4 +104,9 @@ mod liquid_bricks_consumer_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod sort_particles_into_cells {
     mod gpu_tests;
+}
+// The pose agreement proof names FLIP and Matter, so it links from here (D8).
+#[cfg(test)]
+mod liquid_solid_distance {
+    mod tests;
 }

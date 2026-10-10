@@ -602,7 +602,7 @@ fn live_sim_clock_cfl_reference_rule() {
 
 #[test]
 fn live_sim_clock_gpu_shader_parses_and_validates() {
-    let source = include_str!("primitives/shaders/gpu_flip_clock.wgsl");
+    let source = manifold_water_gpu_flip::primitives::gpu_flip_clock::SHADER;
     let module = naga::front::wgsl::parse_str(source).expect("live clock WGSL must parse");
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),

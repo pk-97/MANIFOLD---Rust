@@ -16,6 +16,13 @@ use manifold_node_engine::freeze::classify::FusedOutputCapacity;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
+/// The FLIP solid clip every liquid surface shares; the mesher includes it too.
+pub const ELEMENT: &str = include_str!("shaders/clamp_liquid_to_solids_element.wgsl");
+
+/// The dense gather the brick-fused clamp is proven against.
+#[cfg(any(test, feature = "testkit"))]
+pub const DENSE_REFERENCE: &str = include_str!("shaders/clamp_liquid_to_solids_dense_reference.wgsl");
+
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -84,11 +91,11 @@ manifold_node_engine::primitive! {
     // The solid lattice is coarser than the level set: the count is the level set's alone.
     output_capacity: FusedOutputCapacity::FromInput { input: "levelset" },
     derived_uniforms: ["brick_pass:u32"],
-    wgsl_includes: [liquid_bricks::COMMON, include_str!("shaders/clamp_liquid_to_solids_element.wgsl")],
+    wgsl_includes: [liquid_bricks::COMMON, ELEMENT],
     buffer_index: "liquid_brick_index",
     dense_buffer_fusion: manifold_node_engine::exec::effect_node::DenseBufferFusion {
         body_fragments: &[
-            include_str!("shaders/clamp_liquid_to_solids_element.wgsl"),
+            ELEMENT,
             include_str!("shaders/clamp_liquid_to_solids_dense_body.wgsl"),
         ],
         schedule_inputs: &["bricks"],

@@ -11,3 +11,6 @@ pub mod fluid_role_source;
 #[cfg(feature = "gpu-proofs")]
 #[cfg(any(test, feature = "testkit"))]
 pub mod codegen;
+
+#[cfg(any(test, feature = "testkit"))]
+pub mod marker_phi;

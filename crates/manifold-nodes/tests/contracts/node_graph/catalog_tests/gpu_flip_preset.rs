@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
     #[test]
     fn gpu_flip_defaults_disable_optional_corrections_and_preserve_opt_ins() {
-        use manifold_nodes_water::primitives::gpu_flip_step::GpuFlipStep;
+        use manifold_water_gpu_flip::primitives::gpu_flip_step::GpuFlipStep;
         use manifold_node_engine::parameters::ParamValue;
         use manifold_node_engine::primitive::PrimitiveSpec;
 
@@ -302,7 +302,7 @@ use serde_json::{Value, json};
     /// face grid's published valid layers.
     #[test]
     fn gpu_flip_band_uses_engine_cfl() {
-        use manifold_nodes_water::primitives::gpu_flip_step::{ENGINE_CFL, band_layers};
+        use manifold_water_gpu_flip::primitives::gpu_flip_step::{ENGINE_CFL, band_layers};
         use manifold_nodes_water::testkit::conformance::FACE_GRID_GPU_FLIP_LAYERS;
         assert_eq!(FACE_GRID_GPU_FLIP_LAYERS, FACE_VALID_LAYERS);
         assert_eq!(band_layers(ENGINE_CFL), 12);
@@ -788,7 +788,7 @@ use serde_json::{Value, json};
         }
     }
 
-use manifold_nodes_water::primitives::{gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS};
+use manifold_water_gpu_flip::primitives::{gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS};
 use manifold_nodes::bundled_presets::bundled_preset_json;
 use manifold_water_liquid::clock::INTERVAL_DURATION_INPUTS;
 

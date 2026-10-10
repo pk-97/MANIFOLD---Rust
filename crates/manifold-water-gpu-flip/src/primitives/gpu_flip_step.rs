@@ -62,14 +62,14 @@ use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
-const STEP_SHADER: &str = include_str!("shaders/gpu_flip_step.wgsl");
+pub const STEP_SHADER: &str = include_str!("shaders/gpu_flip_step.wgsl");
 const MASK_SHADER: &str = include_str!("shaders/gpu_flip_commit_mask.wgsl");
 const NAME: &str = "GPU FLIP Step";
 
 manifold_core::testkit_visible! {
 /// Layers of valid faces the step's face grid holds around the water at
 /// least: both extensions run `band_layers` ≥ 5.
-pub(crate) const FACE_VALID_LAYERS: u32 = 2;
+pub const FACE_VALID_LAYERS: u32 = 2;
 }
 manifold_core::testkit_visible! {
 /// Configured engine CFL, shared with the clock.

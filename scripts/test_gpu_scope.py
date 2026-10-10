@@ -18,6 +18,8 @@ T = "crates/manifold-nodes-water/src/"
 W = T + "primitives/"
 LT = "crates/manifold-water-liquid/src/"
 LW = LT + "primitives/"
+FT = "crates/manifold-water-gpu-flip/src/"
+FW = FT + "primitives/"
 P = E + "primitives/"
 
 
@@ -41,6 +43,7 @@ def fixture_workspace(repo):
         "manifold-nodes-water": ("crates/manifold-nodes-water", True, []),
         "manifold-water-rigid": ("crates/manifold-water-rigid", True, []),
         "manifold-water-liquid": ("crates/manifold-water-liquid", True, []),
+        "manifold-water-gpu-flip": ("crates/manifold-water-gpu-flip", True, []),
         "manifold-ui-paint": ("crates/manifold-ui-paint", True, ["main"]),
         "manifold-gpu": ("crates/manifold-gpu", False, []),
     }
@@ -130,7 +133,7 @@ class ScopeTests(unittest.TestCase):
         result = g.Plan(paths=["synthetic"], workspace=workspace,
                         filters=set(g.SMOKE_FILTERS) | {"future::filter"})
         runs = result.runs()
-        self.assertEqual(len(runs), 16)
+        self.assertEqual(len(runs), 17)
         self.assertTrue(all(run["filters"] == result.final_filters() for run in runs))
 
     def test_whole_package_override_survives_filter_pruning(self):
@@ -508,7 +511,7 @@ class ScopeTests(unittest.TestCase):
         repo = Path(__file__).resolve().parent.parent
         # Reviewed allowances are a timing sample, not a complete test inventory.
         names = set()
-        for source in (repo / W).rglob("*.rs"):
+        for source in [*(repo / W).rglob("*.rs"), *(repo / FW).rglob("*.rs")]:
             lines = len(source.read_text().splitlines())
             names.update(g.changed_test_filters(source.relative_to(repo).as_posix(), repo,
                          "HEAD", patch=f"@@ -0,0 +1,{lines} @@"))
@@ -526,7 +529,8 @@ class ScopeTests(unittest.TestCase):
         }
         for prefix, owning in cases.items():
             paths = [*(repo / W / "shaders").glob(prefix + "*.wgsl"),
-                     *(repo / LW / "shaders").glob(prefix + "*.wgsl")]
+                     *(repo / LW / "shaders").glob(prefix + "*.wgsl"),
+                     *(repo / FW / "shaders").glob(prefix + "*.wgsl")]
             self.assertTrue(paths, prefix)
             relevant = [name for name in names if owning in name]
             self.assertTrue(relevant, f"{prefix}: owning proof inventory is empty")
@@ -540,7 +544,7 @@ class ScopeTests(unittest.TestCase):
     def test_water_pressure_fixtures_select_their_consuming_proofs(self):
         for name in ("dambreak_pressure_problems.bin.zst", "deep_pool_pressure_problems.bin.zst",
                      "deep_pool_density_problems.bin.zst", "gpu_flip_pressure_golden.txt"):
-            path = "crates/manifold-nodes-water/tests/fixtures/" + name
+            path = "crates/manifold-water-gpu-flip/tests/fixtures/" + name
             result = plan([path])
             self.assertEqual(result.paths, [path])
             self.assertEqual(result.filters, {"primitives::gpu_flip_pressure_tests::"})
@@ -593,15 +597,15 @@ class ScopeTests(unittest.TestCase):
         self.enterContext(mock.patch.object(g, "learned_times_path", return_value=None))
 
     def test_step_order_cpu_reference_selects_gpu_value_proofs(self):
-        path = W + 'gpu_flip_extension_tests.rs'
+        path = FW + 'gpu_flip_extension_tests.rs'
         result = plan([path], repo=self._repo_with(path))
         self.assertIn("gpu_flip_step_order_", result.filters)
         self.assertIn("gpu_flip_extend_faces_", result.filters)
         self.assertFalse(result.unmapped)
     def test_mesh_grid_sources_select_native_value_proofs(self):
         for path in (LT + 'lattice.rs', W + 'liquid_frame.rs',
-                     W + 'liquid_solid_distance.rs', W + 'shaders/liquid_solid_distance_body.wgsl'):
-            result = plan([path], users=lambda _: [W + 'liquid_solid_distance.rs'],
+                     FW + 'liquid_solid_distance.rs', FW + 'shaders/liquid_solid_distance_body.wgsl'):
+            result = plan([path], users=lambda _: [FW + 'liquid_solid_distance.rs'],
                           repo=self._repo_with(path))
             self.assertIn("fluid_mesh_grid_native_", result.filters)
             self.assertIn("mesh_contact_oblique_wall_and_thin_plate_match_cpu_reference", result.filters)
@@ -627,8 +631,8 @@ class ScopeTests(unittest.TestCase):
 
     def test_live_clock_and_duration_atoms_select_value_proofs(self):
         for name in ("gpu_flip_clock.rs", "shaders/gpu_flip_clock.wgsl"):
-            result = plan([W + name], users=lambda _: [W + 'gpu_flip_clock.rs'],
-                          repo=self._repo_with(W + name))
+            result = plan([FW + name], users=lambda _: [FW + 'gpu_flip_clock.rs'],
+                          repo=self._repo_with(FW + name))
             self.assertIn("gpu_flip_clock::gpu_tests::", result.filters)
             self.assertNotIn("gpu_flip_", result.filters)
             self.assertFalse(result.unmapped)
@@ -649,10 +653,10 @@ class ScopeTests(unittest.TestCase):
             self.assertFalse(result.unmapped)
 
     def test_narrow_band_isolated_passes_select_their_value_proofs(self):
-        for path in (W + 'gpu_flip_narrow_band_tests.rs',
-                     W + 'gpu_flip_narrow_band.rs',
-                     W + 'shaders/gpu_flip_narrow_band.wgsl'):
-            result = plan([path], users=lambda _: [W + 'gpu_flip_narrow_band_tests.rs'],
+        for path in (FW + 'gpu_flip_narrow_band_tests.rs',
+                     FW + 'gpu_flip_narrow_band.rs',
+                     FW + 'shaders/gpu_flip_narrow_band.wgsl'):
+            result = plan([path], users=lambda _: [FW + 'gpu_flip_narrow_band_tests.rs'],
                           repo=self._repo_with(path))
             self.assertTrue(set(g.SMOKE_FILTERS + ["narrow_band"]) <= set(result.final_filters()))
             self.assertNotIn("gpu_flip_", result.filters)
@@ -705,7 +709,8 @@ class ScopeTests(unittest.TestCase):
     def test_rigid_sources_run_their_module_and_the_cs_rigid_suite(self):
         result = plan(["crates/manifold-water-rigid/src/physics.rs"])
         self.assertEqual(result.filters, {"physics::", "liquid_conformance::liquid_coupled_",
-                                          "physics_boxes::", "physics_solids::"})
+                                          "physics_boxes::", "physics_solids::",
+                                          "catalog_tests::physics_impulses::"})
         self.assertFalse(result.whole_packages)
         self.assertFalse(result.unmapped)
 
@@ -796,10 +801,10 @@ class ScopeTests(unittest.TestCase):
         self.assertTrue({"matter_", "substeps_"} <= p.filters)
 
     def test_gpu_flip_row_reaches_the_scene_proofs(self):
-        for path in (W + 'gpu_flip_step.rs', W + 'liquid_state.rs', LT + 'extent.rs'):
+        for path in (FW + 'gpu_flip_step.rs', FW + 'liquid_state.rs', LT + 'extent.rs'):
             self.assertTrue({"gpu_flip_", "face_grid_tests::"} <= plan([path]).filters, path)
-        shader = W + 'shaders/gpu_flip_step.wgsl'
-        p = plan([shader], users=lambda s: [W + 'gpu_flip_step.rs'], repo=self._repo_with(shader))
+        shader = FW + 'shaders/gpu_flip_step.wgsl'
+        p = plan([shader], users=lambda s: [FW + 'gpu_flip_step.rs'], repo=self._repo_with(shader))
         self.assertIn("gpu_flip_", p.filters)
 
     def test_clock_and_fields_get_force_proofs_not_body_or_step(self):
@@ -811,15 +816,15 @@ class ScopeTests(unittest.TestCase):
             self.assertFalse(any(f.startswith("gpu_flip_body") for f in p.filters), path)
 
     def test_domain_nodes_are_narrow(self):
-        p = plan([W + 'gpu_flip_domain.rs', W + 'matter_domain.rs'])
+        p = plan([FW + 'gpu_flip_domain.rs', W + 'matter_domain.rs'])
         self.assertIn("gpu_flip_domain_", p.filters)
         self.assertIn("matter_scene::", p.filters)
         self.assertNotIn("gpu_flip_", p.filters)
         self.assertNotIn("matter_", p.filters)
 
     def test_body_step_and_pressure_paths_still_pull_the_body_proofs(self):
-        for path in (W + 'gpu_flip_bodies.rs', W + 'gpu_flip_body_tests.rs',
-                     W + 'gpu_flip_step.rs', W + 'gpu_flip_pressure.rs',
+        for path in (FW + 'gpu_flip_bodies.rs', FW + 'gpu_flip_body_tests.rs',
+                     FW + 'gpu_flip_step.rs', FW + 'gpu_flip_pressure.rs',
                      LT + 'bodies.rs', LT + 'coupling.rs'):
             self.assertIn("gpu_flip_", plan([path]).filters, path)
 
@@ -831,7 +836,7 @@ class ScopeTests(unittest.TestCase):
             self.assertNotIn("gpu_flip_", p.filters, path)
         for path, user in ((LW + 'shaders/prefix_scan.wgsl', LW + 'prefix_scan.rs'),
                            (LW + 'shaders/sort_particles_into_cells.wgsl', LW + 'sort_particles_into_cells.rs'),
-                           (W + 'shaders/coarse_inverse.wgsl', W + 'gpu_flip_pressure.rs')):
+                           (FW + 'shaders/coarse_inverse.wgsl', FW + 'gpu_flip_pressure.rs')):
             p = plan([path], users=lambda _, u=user: [u], repo=self._repo_with(path))
             self.assertIn(name, p.filters, path)
 
@@ -847,12 +852,12 @@ class ScopeTests(unittest.TestCase):
             self.assertTrue(wanted <= p.filters, path)
 
     def test_mixed_diff_keeps_the_broad_row_whole(self):
-        p = plan([LT + 'clock.rs', W + 'gpu_flip_step.rs'])
+        p = plan([LT + 'clock.rs', FW + 'gpu_flip_step.rs'])
         self.assertIn("gpu_flip_", p.filters)
 
     def test_long_proofs_skip_unless_their_own_test_is_named(self):
         for name in g.REPORTER_SKIPS:
-            self.assertIn(name, plan([W + 'gpu_flip_step.rs']).final_skips() +
+            self.assertIn(name, plan([FW + 'gpu_flip_step.rs']).final_skips() +
                           plan([W + 'matter_fill.rs']).final_skips())
         own = plan([W + 'matter_fill.rs'])
         own.filters.add("matter_look::matter_look_volume_drift")

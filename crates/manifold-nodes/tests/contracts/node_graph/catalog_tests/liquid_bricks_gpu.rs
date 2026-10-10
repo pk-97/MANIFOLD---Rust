@@ -1,6 +1,6 @@
 //! Sparse field proofs against independent dense gathers. The field oracle
 //! follows native ParticleMesher support and production solid/border semantics.
-use manifold_nodes_water::primitives::testkit::gpu_flip as gpu_flip_nodes;
+use manifold_water_gpu_flip::primitives::testkit::gpu_flip as gpu_flip_nodes;
 use manifold_water_liquid::primitives::testkit::liquid as liquid_nodes;
 use manifold_nodes_water::primitives::testkit::surface as surface_nodes;
 use manifold_node_engine::testkit::shader_source::dense_source;
@@ -123,7 +123,7 @@ fn fixture(resolution: u32) {
     let smooth_slots: [[(Slot, GpuBuffer); 3]; 2] =
         std::array::from_fn(|_| std::array::from_fn(|_| h.array::<f32>(&[], total)));
     let mut clamp = [gpu_flip_nodes::clamp_liquid_to_solids(None), gpu_flip_nodes::clamp_liquid_to_solids(Some(gpu_flip_nodes::dense_pipeline("clamp_liquid_to_solids", &h.device,
-        include_str!("../../../../../manifold-nodes-water/src/primitives/shaders/clamp_liquid_to_solids_dense_reference.wgsl"))))];
+        manifold_water_gpu_flip::primitives::clamp_liquid_to_solids::DENSE_REFERENCE)))];
     let clamp_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<f32>(&[], total));
     let mut counters = [surface_nodes::count_surface_triangles(None), surface_nodes::count_surface_triangles(Some(surface_nodes::dense_pipeline("count_surface_triangles", &h.device,
         include_str!("../../../../../manifold-nodes-water/src/primitives/shaders/count_surface_triangles_dense_reference.wgsl"))))];

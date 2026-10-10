@@ -88,7 +88,7 @@ fn face_grid_extents_at_64() {
 #[test]
 fn whitewater_refuses_unextended_faces() {
     use manifold_water_liquid::whitewater::require_extended_faces;
-    assert!(require_extended_faces(crate::primitives::gpu_flip_step::FACE_VALID_LAYERS as f32).is_ok());
+    assert!(require_extended_faces(manifold_water_gpu_flip::primitives::gpu_flip_step::FACE_VALID_LAYERS as f32).is_ok());
     assert!(require_extended_faces(1.0).is_ok());
     let layers = crate::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS as f32;
     assert!(require_extended_faces(layers).expect_err("MPM refused").contains("needs at least 1"));

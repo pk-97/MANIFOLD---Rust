@@ -11,7 +11,7 @@ use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::primitives::particle_identity::{BirthReservation, ParticleIdentity};
 use manifold_water_liquid::primitives::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels};
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
-use super::whitewater_engine_gpu_tests::marker_phi;
+use manifold_water_liquid::testkit::marker_phi::marker_phi;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, pack_distance_atlas};
