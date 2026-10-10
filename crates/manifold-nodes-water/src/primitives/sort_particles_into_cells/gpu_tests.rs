@@ -4,7 +4,11 @@
 //! the live total cleared, nothing past the slots the outputs hold, and
 //! nothing at all through a shut clock gate.
 
-use super::*;
+use manifold_water_liquid::primitives::sort_particles_into_cells::*;
+use manifold_gpu::{GpuBuffer, GpuDevice};
+use manifold_node_engine::ports::ArrayType;
+use manifold_water_liquid::fluid_particles::{CellRange, bin_total};
+use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use crate::matter::MatterPoint;
 
 const LABELS: SortLabels = SortLabels {

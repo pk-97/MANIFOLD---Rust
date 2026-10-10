@@ -12,15 +12,15 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
-use crate::float_param;
-use super::sort_particles_into_cells::{int_param};
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::primitives::sort_particles_into_cells::{int_param};
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
-use crate::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use crate::liquid::lattice::LiquidLattice;
+use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 

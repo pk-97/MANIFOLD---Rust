@@ -1,12 +1,12 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
-use crate::fluid_particles::bin_counts;
-use crate::fluid_particles::searched_bins;
-use crate::liquid::bodies::LiquidBody;
-use crate::liquid::bodies::LiquidShape;
-use crate::whitewater::cell_total;
+use manifold_water_liquid::fluid_particles::bin_counts;
+use manifold_water_liquid::fluid_particles::searched_bins;
+use manifold_water_liquid::bodies::LiquidBody;
+use manifold_water_liquid::bodies::LiquidShape;
+use manifold_water_liquid::whitewater::cell_total;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{searched, whitewater_lattice, whole};
+use manifold_water_liquid::extent::{searched, whitewater_lattice, whole};
 
 fn keep_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let regions = u64::from(whole(x, "region_count", 0.0));

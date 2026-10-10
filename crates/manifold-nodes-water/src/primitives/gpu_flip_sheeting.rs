@@ -101,7 +101,7 @@ fn bucket_bytes(cells: [u32; 3]) -> u64 {
 /// the rank scan included.
 pub(crate) fn scratch_bytes(cells: [u32; 3], capacity: u32) -> u64 {
     let n = cells.into_iter().map(u64::from).product::<u64>();
-    let scan = 4 * super::prefix_scan::storage_words(ranks(cells) as usize) as u64;
+    let scan = 4 * manifold_water_liquid::primitives::prefix_scan::storage_words(ranks(cells) as usize) as u64;
     BYTES_PER_CELL * n + bucket_bytes(cells) + 16 * u64::from(capacity.max(1)) + 16 + PLAN_BYTES + scan + 16
 }
 
@@ -157,7 +157,7 @@ pub(crate) struct GpuSheeting {
     /// flags, births, birth count, zero plan, birth stats.
     buffers: Option<[GpuBuffer; 11]>,
     /// Per rank: the winners, scanned in place into birth indices.
-    scan: super::prefix_scan::PrefixScan,
+    scan: manifold_water_liquid::primitives::prefix_scan::PrefixScan,
     cells: [u32; 3],
     capacity: u32,
 }
@@ -400,7 +400,7 @@ impl GpuSheeting {
                 self.scan.encode_labelled_gated(
                     enc,
                     ranks as usize,
-                    super::prefix_scan::ScanLabels { blocks: "gpu_flip.sheeting.scan.blocks", add: "gpu_flip.sheeting.scan.add" },
+                    manifold_water_liquid::primitives::prefix_scan::ScanLabels { blocks: "gpu_flip.sheeting.scan.blocks", add: "gpu_flip.sheeting.scan.add" },
                     plan,
                 );
                 enc.compute_memory_barrier_buffers();

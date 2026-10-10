@@ -9,9 +9,9 @@ use std::mem::size_of;
 use manifold_gpu::{GpuBuffer, GpuComputePipeline, GpuDevice};
 
 use manifold_node_engine::particles::FluidParticle;
-use crate::fluid_particles::FaceSample;
+use manifold_water_liquid::fluid_particles::FaceSample;
 
-use super::prefix_scan::PrefixScan;
+use manifold_water_liquid::primitives::prefix_scan::PrefixScan;
 
 const SHADER: &str = include_str!("shaders/gpu_flip_narrow_band.wgsl");
 const PIPELINE_LABEL: &str = "node.gpu_flip_narrow_band";

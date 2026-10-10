@@ -1,6 +1,6 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{brick_schedule, nodes_total};
+use manifold_water_liquid::extent::{brick_schedule, nodes_total};
 
 fn count_surface_triangles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);

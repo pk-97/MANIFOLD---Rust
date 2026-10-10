@@ -1,10 +1,10 @@
 //! Buffer extent rule owned by this node.
-use crate::liquid::grid::face_len;
+use manifold_water_liquid::grid::face_len;
 use crate::matter::grid_bytes;
-use crate::primitives::face_sample_component::axis_param;
+use manifold_water_liquid::primitives::face_sample_component::axis_param;
 use crate::primitives::matter_face_component::matter_cells;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::whole;
+use manifold_water_liquid::extent::whole;
 
 fn matter_face_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| whole(x, name, 71.0));

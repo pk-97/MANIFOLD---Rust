@@ -17,6 +17,7 @@ members = [
     "crates/manifold-nodes-image",
     "crates/manifold-nodes-water",
     "crates/manifold-water-rigid",
+    "crates/manifold-water-liquid",
     "crates/manifold-native",
     "crates/manifold-profiler",
     "crates/manifold-media",

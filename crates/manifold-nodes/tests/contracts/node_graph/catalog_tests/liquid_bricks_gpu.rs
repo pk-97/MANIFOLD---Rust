@@ -1,12 +1,12 @@
 //! Sparse field proofs against independent dense gathers. The field oracle
 //! follows native ParticleMesher support and production solid/border semantics.
 use manifold_nodes_water::primitives::testkit::gpu_flip as gpu_flip_nodes;
-use manifold_nodes_water::primitives::testkit::liquid as liquid_nodes;
+use manifold_water_liquid::primitives::testkit::liquid as liquid_nodes;
 use manifold_nodes_water::primitives::testkit::surface as surface_nodes;
 use manifold_node_engine::testkit::shader_source::dense_source;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::bindings::Slot;
-use manifold_nodes_water::fluid_particles::{CellRange, FluidBlob, bin_counts};
+use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob, bin_counts};
 use manifold_node_engine::freeze::codegen::ENTRY;
 use manifold_node_engine::primitive::PrimitiveSpec;
 use manifold_nodes_water::primitives::{lattice_bricks::LatticeBricks, lattice_bricks::brick_layout, lattice_bricks::compact_brick_words, lattice_bricks::conservative_brick_mask, particle_volume::ParticleVolume};
@@ -118,7 +118,7 @@ fn fixture(resolution: u32) {
     ));
     let mut smoothing: [[_; 3]; 2] = std::array::from_fn(|lane| std::array::from_fn(|_| {
         liquid_nodes::smooth_lattice((lane == 1).then(|| liquid_nodes::dense_pipeline("smooth_lattice", &h.device,
-            include_str!("../../../../../manifold-nodes-water/src/primitives/shaders/smooth_lattice_dense_reference.wgsl"))))
+            manifold_water_liquid::primitives::smooth_lattice::DENSE_REFERENCE)))
     }));
     let smooth_slots: [[(Slot, GpuBuffer); 3]; 2] =
         std::array::from_fn(|_| std::array::from_fn(|_| h.array::<f32>(&[], total)));

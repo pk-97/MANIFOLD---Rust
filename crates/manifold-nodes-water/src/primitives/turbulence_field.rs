@@ -5,12 +5,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::float_param;
+use manifold_water_liquid::float_param;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use crate::whitewater::{WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
+use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -61,7 +61,7 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/turbulence_field_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
     output_capacity: manifold_node_engine::freeze::classify::FusedOutputCapacity::FromInput { input: "distance" },
-    wgsl_includes: [WHITEWATER_COMMON, crate::liquid::grid::LIQUID_FACES],
+    wgsl_includes: [WHITEWATER_COMMON, manifold_water_liquid::grid::LIQUID_FACES],
 }
 
 impl Primitive for TurbulenceField {
@@ -111,7 +111,7 @@ impl Primitive for TurbulenceField {
         }
         let face_cells = ["face_cells_x", "face_cells_y", "face_cells_z"]
             .map(|name| ctx.scalar_or_param(name, 64.0).round().max(0.0) as u32);
-        if let Err(error) = crate::whitewater::face_offset(nodes, face_cells) {
+        if let Err(error) = manifold_water_liquid::whitewater::face_offset(nodes, face_cells) {
             ctx.error(format!("Turbulence Field: {error}"));
             return;
         }
@@ -121,7 +121,7 @@ impl Primitive for TurbulenceField {
             return;
         };
         for (axis, face) in [u, v, w].into_iter().enumerate() {
-            if face.size < crate::liquid::grid::face_len(face_cells, axis) * 4 {
+            if face.size < manifold_water_liquid::grid::face_len(face_cells, axis) * 4 {
                 ctx.error("Turbulence Field: face array is shorter than its grid".to_owned());
                 return;
             }

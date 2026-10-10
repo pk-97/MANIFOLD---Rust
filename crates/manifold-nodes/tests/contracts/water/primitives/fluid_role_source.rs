@@ -4,8 +4,8 @@ mod tests {
     use crate::contracts::water::primitives::fluid_role_source::geometry;
     use std::borrow::Cow;
     use std::sync::Arc;
-    use manifold_nodes_water::primitives::fluid_role_source::FluidRoleSource;
-    use manifold_nodes_water::testkit::fluid_role_source::{test_slots, settle_inputs};
+    use manifold_water_liquid::primitives::fluid_role_source::FluidRoleSource;
+    use manifold_water_liquid::testkit::fluid_role_source::{test_slots, settle_inputs};
     use manifold_node_engine::exec::backend::{Backend, MockBackend};
     use manifold_node_engine::exec::effect_node::ParamValues;
     use manifold_node_engine::exec::execution_plan::ResourceId;

@@ -8,14 +8,14 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::float_param;
+use manifold_water_liquid::float_param;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use crate::whitewater::{KnownValue, WHITEWATER_COMMON, cell_total, grid_cells, particle_grid};
+use manifold_water_liquid::whitewater::{KnownValue, WHITEWATER_COMMON, cell_total, grid_cells, particle_grid};
 
 /// FLIP's defaults: curvature × cell size from which a crest starts to
 /// emit, where it emits fully, and the least cosine between the particle's

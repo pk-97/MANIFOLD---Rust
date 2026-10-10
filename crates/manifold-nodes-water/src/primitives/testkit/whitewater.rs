@@ -7,14 +7,14 @@ pub fn turbulence_field() -> impl Primitive { crate::primitives::turbulence_fiel
 pub fn whitewater_influence() -> impl Primitive { crate::primitives::whitewater_influence::WhitewaterInfluence::new() }
 pub fn member(kind: &str, id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
     match kind {
-        "energy_potential" => crate::testkit::water_codegen::member::<crate::primitives::energy_potential::EnergyPotential>(id, inputs),
-        "turbulence_field" => crate::testkit::water_codegen::member::<crate::primitives::turbulence_field::TurbulenceField>(id, inputs),
-        "whitewater_obstacle_source" => crate::testkit::water_codegen::member::<crate::primitives::whitewater_obstacle_source::WhitewaterObstacleSource>(id, inputs),
-        "whitewater_influence" => crate::testkit::water_codegen::member::<crate::primitives::whitewater_influence::WhitewaterInfluence>(id, inputs),
-        "dust_potential" => crate::testkit::water_codegen::member::<crate::primitives::dust_potential::DustPotential>(id, inputs),
-        "whitewater_emitter_velocity" => crate::testkit::water_codegen::member::<crate::primitives::whitewater_emitter_velocity::WhitewaterEmitterVelocity>(id, inputs),
-        "inside_turbulence_potential" => crate::testkit::water_codegen::member::<crate::primitives::inside_turbulence_potential::InsideTurbulencePotential>(id, inputs),
-        "turbulence_emission_count" => crate::testkit::water_codegen::member::<crate::primitives::turbulence_emission_count::TurbulenceEmissionCount>(id, inputs),
+        "energy_potential" => manifold_water_liquid::testkit::codegen::member::<crate::primitives::energy_potential::EnergyPotential>(id, inputs),
+        "turbulence_field" => manifold_water_liquid::testkit::codegen::member::<crate::primitives::turbulence_field::TurbulenceField>(id, inputs),
+        "whitewater_obstacle_source" => manifold_water_liquid::testkit::codegen::member::<crate::primitives::whitewater_obstacle_source::WhitewaterObstacleSource>(id, inputs),
+        "whitewater_influence" => manifold_water_liquid::testkit::codegen::member::<crate::primitives::whitewater_influence::WhitewaterInfluence>(id, inputs),
+        "dust_potential" => manifold_water_liquid::testkit::codegen::member::<crate::primitives::dust_potential::DustPotential>(id, inputs),
+        "whitewater_emitter_velocity" => manifold_water_liquid::testkit::codegen::member::<crate::primitives::whitewater_emitter_velocity::WhitewaterEmitterVelocity>(id, inputs),
+        "inside_turbulence_potential" => manifold_water_liquid::testkit::codegen::member::<crate::primitives::inside_turbulence_potential::InsideTurbulencePotential>(id, inputs),
+        "turbulence_emission_count" => manifold_water_liquid::testkit::codegen::member::<crate::primitives::turbulence_emission_count::TurbulenceEmissionCount>(id, inputs),
         _ => panic!("no water spec fixture for {kind}"),
     }
 }

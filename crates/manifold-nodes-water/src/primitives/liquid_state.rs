@@ -12,20 +12,20 @@
 
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
-use crate::liquid::grid::face_bytes;
-use super::particle_identity::{ParticleIdentity, IDENTITY_BYTES};
-use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
-use crate::whitewater::{DEFAULT_CAPACITY as WHITEWATER_DEFAULT_CAPACITY, MAX_CAPACITY as WHITEWATER_MAX_CAPACITY};
+use manifold_water_liquid::grid::face_bytes;
+use manifold_water_liquid::primitives::particle_identity::{ParticleIdentity, IDENTITY_BYTES};
+use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
+use manifold_water_liquid::whitewater::{DEFAULT_CAPACITY as WHITEWATER_DEFAULT_CAPACITY, MAX_CAPACITY as WHITEWATER_MAX_CAPACITY};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::particles::FluidParticle;
-use crate::fluid_particles::FaceSample;
-use crate::liquid::grid::{interior_bytes, InteriorOps};
-use crate::liquid::lattice::{FlipSolverGrid, LiquidLattice};
+use manifold_water_liquid::fluid_particles::FaceSample;
+use manifold_water_liquid::grid::{interior_bytes, InteriorOps};
+use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_node_engine::parameters::ParamValue;
 use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::exec::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
-use crate::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
+use manifold_water_liquid::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
 
 const RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts {

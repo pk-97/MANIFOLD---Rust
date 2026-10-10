@@ -157,10 +157,10 @@ fn whitewater_engine_shaders_are_valid() {
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(shader)));
     }
-    check::<super::upwind_distance::UpwindDistance>();
+    check::<manifold_water_liquid::primitives::upwind_distance::UpwindDistance>();
     check::<super::advect_whitewater::AdvectWhitewater>();
     check::<super::keep_whitewater::KeepWhitewater>();
-    validate(include_str!("shaders/whitewater_distance.wgsl"));
+    validate(manifold_water_liquid::primitives::whitewater_distance::WHITEWATER_DISTANCE_SHADER);
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn whitewater_distance_extent_covers_small_and_shipped_lattices() {
             .map(|n| u64::from(n.div_ceil(6)))
             .product::<u64>();
         assert_eq!(
-            super::whitewater_distance::scratch_bytes(cells),
+            manifold_water_liquid::primitives::whitewater_distance::scratch_bytes(cells),
             // Plus the sweep grid (16) and the zero clock plan (48).
             12 * count + 4 * blocks + 16 + 16 + 48
         );

@@ -1,5 +1,5 @@
 //! Buffer extent rule owned by this node.
-use crate::liquid::extent::liquid_lattice;
+use manifold_water_liquid::extent::liquid_lattice;
 use std::mem::size_of;
 use crate::matter::MatterGridNode;
 use crate::matter::STATS_WORDS;

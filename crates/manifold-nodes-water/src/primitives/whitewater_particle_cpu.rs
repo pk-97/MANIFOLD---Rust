@@ -11,11 +11,11 @@
 
 #[cfg(test)]
 use manifold_node_engine::particles::FluidParticle;
-use crate::liquid::grid::face_dims;
+use manifold_water_liquid::grid::face_dims;
 #[cfg(test)]
-use crate::fluid_particles::WhitewaterSpawn;
+use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 #[cfg(test)]
-use crate::whitewater::{CELL_AIR, KnownValue};
+use manifold_water_liquid::whitewater::{CELL_AIR, KnownValue};
 
 /// A whitewater grid as the particle atoms read it.
 #[derive(Clone, Copy, Debug)]

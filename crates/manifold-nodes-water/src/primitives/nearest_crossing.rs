@@ -6,12 +6,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::float_param;
+use manifold_water_liquid::float_param;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use crate::whitewater::{SURFACE_CROSSING_BYTES, SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
+use manifold_water_liquid::whitewater::{SURFACE_CROSSING_BYTES, SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]

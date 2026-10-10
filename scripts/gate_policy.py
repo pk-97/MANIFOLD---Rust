@@ -13,6 +13,7 @@ SHARED_ASSETS = ['crates/manifold-foundation/assets/fonts']
 GPU_DEFAULT_CPU_ONLY = {
     "manifold-nodes-water": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
     "manifold-water-rigid": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
+    "manifold-water-liquid": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
     "manifold-nodes-scene": "Device proofs require gpu-proofs; ungated imported-graph validation lives in the catalog",
     "manifold-compositor": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     "manifold-nodes-image": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
@@ -38,7 +39,8 @@ PRIMITIVE_PATHS = ('crates/manifold-nodes-scene/src/node_graph/primitives/',
                    'crates/manifold-nodes-image/src/node_graph/primitives/',
                    'crates/manifold-node-engine/src/primitives/',
                    'crates/manifold-nodes-water/src/primitives/',
-                   'crates/manifold-water-rigid/src/primitives/')
+                   'crates/manifold-water-rigid/src/primitives/',
+                   'crates/manifold-water-liquid/src/primitives/')
 CATALOG_PATHS = (*PRIMITIVE_PATHS,
                  'crates/manifold-nodes/src/catalog_gen.rs',
                  'crates/manifold-node-engine/src/descriptor.rs',
@@ -48,8 +50,13 @@ CATALOG_PATHS = (*PRIMITIVE_PATHS,
 RENDERER_SRC = "crates/manifold-nodes/src/"
 ENGINE_SRC = "crates/manifold-node-engine/src/"
 RIGID_SRC = "crates/manifold-water-rigid/src/"
+LIQUID_SRC = "crates/manifold-water-liquid/src/"
 WATER_SRC = "crates/manifold-nodes-water/src/"
-WATER_SRCS = (RIGID_SRC, WATER_SRC)
+WATER_SRCS = (RIGID_SRC, LIQUID_SRC, WATER_SRC)
+# The seam files that lived under nodes-water liquid/ before the carve.
+LIQUID_SEAM_FILES = ("bodies.rs", "body_buffers.rs", "clock.rs", "coupling.rs", "display_cursor.rs",
+                     "extent.rs", "fields.rs", "fields/", "frame_history.rs", "frame_ring.rs",
+                     "grid.rs", "lattice.rs", "substep_history.rs", "tick_samples.rs")
 CONTRACT_TESTS_DIR = ("crates/manifold-nodes/tests/contracts/",
                       "crates/manifold-app/tests/contracts/")
 GPU_CONTRACT_TARGETS = {"manifold-nodes": "main", "manifold-app": "renderer_contracts"}
@@ -107,6 +114,14 @@ RUNTIME_FILTERS = [
 # plus the generated water mesher, whose Metal compile is the shader compiler's
 # known hard case (constant struct arrays, BUG-jro0j).
 BROAD_FILTERS = RUNTIME_FILTERS + ["render_scene_lights", "volume_surface_mesh::gpu_tests::mesh_contact_"]
+# CS-rigid and CS-liquid GPU suites (WATER_CRATES_DESIGN.md section 6.3). Every
+# solver implements the liquid seam, so a liquid edit is the broad water run.
+CS_RIGID_GPU_FILTERS = ["liquid_conformance::liquid_coupled_", "physics_boxes::", "physics_solids::"]
+WATER_BROAD_FILTERS = [
+    "liquid_conformance::", "contracts::water::", "face_grid_tests::", "matter_scene::",
+    "matter_coupling::", "whitewater_golden_tests::", "liquid_surface_tests::", "fluid_indexed_",
+    "liquid_indexed::", *CS_RIGID_GPU_FILTERS,
+]
 
 # Proofs over this duration require a reviewed measurement before landing.
 # The measurements live in scripts/gpu_test_times.json, written by
@@ -165,7 +180,7 @@ MATTER_DOMAIN_FILTERS = ["matter_scene::", "matter_coupling::", "matter_look::",
 NARROW_ROWS = [
     ((WATER_SRC + "primitives/gpu_flip_extension_tests.rs",),
      (["gpu_flip_step_order_", "gpu_flip_extend_faces_"], [])),
-    ((WATER_SRC + "liquid/lattice.rs",
+    ((LIQUID_SRC + "lattice.rs",
       WATER_SRC + "primitives/liquid_frame.rs",
       WATER_SRC + "primitives/liquid_solid_distance.rs",
       WATER_SRC + "primitives/particle_volume.rs",
@@ -175,21 +190,21 @@ NARROW_ROWS = [
        "gpu_flip_narrow_band_mesher_values",
        "mesh_contact_oblique_wall_and_thin_plate_match_cpu_reference",
        "fluid_clamp_scheduled_boundary_renders_like_unfrozen"], [])),
-    ((WATER_SRC + "primitives/particle_identity",
-      WATER_SRC + "primitives/particle_publication",
+    ((LIQUID_SRC + "primitives/particle_identity",
+      LIQUID_SRC + "primitives/particle_publication",
       RENDERER_SRC + "node_graph/primitives/particle_frame_blend_tests",
       "crates/manifold-nodes-image/src/node_graph/primitives/interpolate_particle_frames",
       WATER_SRC + "primitives/push_out_of_solid",
       "crates/manifold-nodes-image/src/node_graph/primitives/mix_arrays",
       WATER_SRC + "primitives/liquid_frame",
-      WATER_SRC + "liquid/frame_ring",
-      WATER_SRC + "liquid/frame_history",
-      WATER_SRC + "primitives/shaders/particle_identity",
-      WATER_SRC + "primitives/shaders/particle_publication",
+      LIQUID_SRC + "frame_ring",
+      LIQUID_SRC + "frame_history",
+      LIQUID_SRC + "primitives/shaders/particle_identity",
+      LIQUID_SRC + "primitives/shaders/particle_publication",
       "crates/manifold-nodes-image/src/node_graph/primitives/shaders/interpolate_particle_frames",
       WATER_SRC + "primitives/shaders/push_out_of_solid",
       "crates/manifold-nodes-image/src/node_graph/primitives/shaders/mix_arrays",
-      WATER_SRC + "primitives/shaders/liquid_frame_faces.wgsl"),
+      LIQUID_SRC + "primitives/shaders/liquid_frame_faces.wgsl"),
      (["particle_publication_gpu_tests::", "particle_frame_blend_tests::gpu_tests::",
        "interpolate_particle_frames::gpu_tests::", "push_out_of_solid::gpu_tests::",
        "mix_arrays::gpu_tests::", "gpu_flip_inflow_emits_at_empty_sites_into_free_slots",
@@ -211,9 +226,9 @@ NARROW_ROWS = [
       WATER_SRC + "primitives/gpu_flip_narrow_band.rs",
       WATER_SRC + "primitives/shaders/gpu_flip_narrow_band.wgsl"),
      (["narrow_band"], [])),
-    ((WATER_SRC + "liquid/clock.rs",
-      WATER_SRC + "liquid/fields.rs",
-      WATER_SRC + "liquid/fields/"),
+    ((LIQUID_SRC + "clock.rs",
+      LIQUID_SRC + "fields.rs",
+      LIQUID_SRC + "fields/"),
      (LIQUID_FORCE_FILTERS, REPORTER_SKIPS)),
     ((WATER_SRC + "primitives/gpu_flip_domain.rs",),
      (LIQUID_DOMAIN_FILTERS + ["fluid_mesh_grid_native_"], REPORTER_SKIPS)),
@@ -241,11 +256,11 @@ EXPLICIT_ROWS = [
       WATER_SRC + "primitives/shaders/blob_bounds.wgsl"),
      (["primitives::blob_bounds::",
        "liquid_surface_tests::", "liquid_bricks::tests::gpu_tests::"], [])),
-    ((WATER_SRC + "primitives/offset_lattice",
-      WATER_SRC + "primitives/redistance_lattice",
+    ((LIQUID_SRC + "primitives/offset_lattice",
+      LIQUID_SRC + "primitives/redistance_lattice",
       WATER_SRC + "primitives/lattice_closing",
-      WATER_SRC + "primitives/shaders/offset_lattice",
-      WATER_SRC + "primitives/shaders/redistance_lattice"),
+      LIQUID_SRC + "primitives/shaders/offset_lattice",
+      LIQUID_SRC + "primitives/shaders/redistance_lattice"),
      (["fluid_fill_pits"], [])),
     (("crates/manifold-gpu/src/metal/raytrace.rs",
       "crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs",
@@ -270,29 +285,29 @@ EXPLICIT_ROWS = [
     # GPU FLIP water (GPU_FLIP_PRESSURE_SOLVE.md): the step's proofs are scene
     # proofs in other files (still pool, free fall, whitewater, resize), so a
     # module filter alone would miss them.
-    ((WATER_SRC + "liquid/",
+    ((WATER_SRC + "liquid/", *(LIQUID_SRC + seam for seam in LIQUID_SEAM_FILES),
       WATER_SRC + "primitives/gpu_flip_",
       WATER_SRC + "primitives/liquid_state",
       WATER_SRC + "primitives/liquid_fill",
-      WATER_SRC + "primitives/face_sample_component",
+      LIQUID_SRC + "primitives/face_sample_component",
       WATER_SRC + "primitives/shaders/gpu_flip_",
       WATER_SRC + "primitives/shaders/liquid_fill",
-      WATER_SRC + "primitives/shaders/face_sample_component"),
+      LIQUID_SRC + "primitives/shaders/face_sample_component"),
      (["gpu_flip_", "face_grid_tests::"], REPORTER_SKIPS)),
     # The GPU FLIP step runs its sort, scans and coarse inverse gated on the
     # clock's slot plan; only the inactive-slot proof runs them gated.
-    ((WATER_SRC + "primitives/sort_particles_into_cells",
-      WATER_SRC + "primitives/prefix_scan",
-      WATER_SRC + "primitives/shaders/sort_particles_into_cells",
-      WATER_SRC + "primitives/shaders/prefix_scan",
+    ((WATER_SRC + "primitives/sort_particles_into_cells", LIQUID_SRC + "primitives/sort_particles_into_cells",
+      LIQUID_SRC + "primitives/prefix_scan",
+      LIQUID_SRC + "primitives/shaders/sort_particles_into_cells",
+      LIQUID_SRC + "primitives/shaders/prefix_scan",
       WATER_SRC + "primitives/shaders/coarse_inverse"),
      (["gpu_flip_inactive_slots_match_the_ungated_step"], [])),
     # The counting sort word for word against its CPU oracle, and the proofs
     # that drive the sorter directly: the node, and the step's crowding cap.
-    ((WATER_SRC + "primitives/sort_particles_into_cells",
-      WATER_SRC + "primitives/prefix_scan",
-      WATER_SRC + "primitives/shaders/sort_particles_into_cells",
-      WATER_SRC + "primitives/shaders/prefix_scan"),
+    ((WATER_SRC + "primitives/sort_particles_into_cells", LIQUID_SRC + "primitives/sort_particles_into_cells",
+      LIQUID_SRC + "primitives/prefix_scan",
+      LIQUID_SRC + "primitives/shaders/sort_particles_into_cells",
+      LIQUID_SRC + "primitives/shaders/prefix_scan"),
      (["sort_particles_into_cells::gpu_tests::", "fluid_sort_particles_into_cells_",
        "gpu_flip_step_order_cell_cap_compacts_preserving_ids"], [])),
     # Shared marching-cubes topology: ownership, solid-contact CPU value parity
@@ -326,8 +341,13 @@ EXPLICIT_ROWS = [
      (RUNTIME_FILTERS, [])),
     # CS-rigid (WATER_CRATES_DESIGN.md section 6.3): the rigid adapter and the
     # pair contract are driven by the coupled liquid and the physics proofs.
-    ((RIGID_SRC,),
-     (["liquid_conformance::liquid_coupled_", "physics_boxes::", "physics_solids::"], [])),
+]
+
+# Contract suites keyed by crate root (section 6.3): they run whenever any file
+# under the root changes, alongside narrow and explicit rows, never instead.
+CONTRACT_ROOT_ROWS = [
+    (RIGID_SRC, CS_RIGID_GPU_FILTERS),
+    (LIQUID_SRC, WATER_BROAD_FILTERS),
 ]
 
 # Paths whose change affects every proof: BROAD.
@@ -377,6 +397,10 @@ LIB_PROOF_ROWS = {
 
 # The solver adapter publishes the accepted schedule and MAC history.
 # The broad gpu_flip_ row above still supplies its existing solver proofs.
+# A crate root is never "everything": the seam roots run the water suites only.
+LIB_PROOF_ROWS[LIQUID_SRC + "lib.rs"] = WATER_BROAD_FILTERS
+LIB_PROOF_ROWS[RIGID_SRC + "lib.rs"] = WATER_BROAD_FILTERS
+
 LIB_PROOF_ROWS[WATER_SRC + "primitives/gpu_flip_step.rs"] = [
     "primitives::gpu_flip_step::",
     "primitives::whitewater_engine_gpu_tests::",
@@ -481,13 +505,22 @@ PREFIX_ROWS += [(root, ".wgsl", "manifold-nodes", ["uniform_layout_extended", "w
 
 # CS-rigid CPU suite: every consumer of the rigid adapter runs when it changes.
 PREFIX_ROWS += [
+    (RIGID_SRC, ".rs", "manifold-water-liquid", ["coupling::"], []),
     (RIGID_SRC, ".rs", "manifold-nodes-water",
-     ["liquid::coupling", "runtime::physics_carry", "runtime::physics_impulses",
+     ["runtime::physics_carry", "runtime::physics_impulses",
       "runtime::physics_sampling", "runtime::physics_source_runtime"], []),
     (RIGID_SRC, ".rs", CATALOG_PACKAGE,
      ["contracts::node_graph::catalog_tests::physics_sampling",
       "contracts::node_graph::catalog_tests::physics_host_modulation", "physics_scene"], []),
     (RIGID_SRC, ".rs", "manifold-app", ["contracts::node_graph::catalog_tests::physics_impulses"], []),
+]
+
+# CS-liquid CPU suite: the seam contract plus CS-rigid, whenever liquid changes.
+PREFIX_ROWS += [(LIQUID_SRC, ext, package, modules, skips)
+                for (root, ext, package, modules, skips) in PREFIX_ROWS if root == RIGID_SRC and ext == ".rs"]
+PREFIX_ROWS += [
+    (LIQUID_SRC, ".rs", "manifold-nodes-water", ["liquid::scene_contract"], []),
+    (LIQUID_SRC, ".rs", CATALOG_PACKAGE, ["contracts::water::"], []),
 ]
 
 PREFIX_ROWS += [('crates/manifold-compositor/src/', ".wgsl", "manifold-nodes", ["wgsl_validation"], [])]
@@ -524,7 +557,7 @@ CATALOG_TEST_ROWS = [
     ("crates/manifold-nodes-image/src/node_graph/primitives/interpolate_particle_frames", "particle_frame_blend_tests", True),
     ("crates/manifold-nodes-scene/src/node_graph/primitives/particles_to_copies", "particle_frame_blend_tests", True),
     ("crates/manifold-nodes-water/src/primitives/push_out_of_solid", "particle_frame_blend_tests", True),
-    ("crates/manifold-nodes-water/src/primitives/particle_publication", "particle_publication_gpu_tests", False),
+    (LIQUID_SRC + "primitives/particle_publication", "particle_publication_gpu_tests", False),
 ]
 APP_CATALOG_MODULES = {"layer_compositor", "preset_thumbnail", "generator_renderer_tests",
                        "generator_renderer_warmup_tests", "fluid_objects", "bokeh_gather"}

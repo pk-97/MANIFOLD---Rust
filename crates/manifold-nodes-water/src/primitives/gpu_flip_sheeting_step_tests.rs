@@ -8,14 +8,14 @@ use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs, StepBir
 use super::gpu_flip_step::GpuFlipStep;
 use super::gpu_flip_step_tests::cpu_sample_on;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use super::particle_identity::{BirthReservation, ParticleIdentity};
-use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels};
-use super::prefix_scan::ScanLabels;
+use manifold_water_liquid::primitives::particle_identity::{BirthReservation, ParticleIdentity};
+use manifold_water_liquid::primitives::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels};
+use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use super::whitewater_engine_gpu_tests::marker_phi;
 use manifold_node_engine::particles::FluidParticle;
-use crate::fluid_particles::FaceSample;
-use crate::liquid::bodies::{LiquidBody, LiquidShape, pack_distance_atlas};
-use crate::liquid::lattice::PADDING_NODES;
+use manifold_water_liquid::fluid_particles::FaceSample;
+use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, pack_distance_atlas};
+use manifold_water_liquid::lattice::PADDING_NODES;
 use manifold_node_engine::primitive::Primitive;
 use manifold_fluids::sheeter;
 use manifold_gpu::{GpuBuffer, GpuDevice};
@@ -89,7 +89,7 @@ impl Splash {
         let particles = h.array(&records, capacity);
         let identity = h.array::<u32>(&[next_id, 1, 0, 0], 4);
         let faces = h.array::<FaceSample>(&[], SOLVER.map(|n| n + 1).iter().product()).0;
-        let capped = h.array::<u32>(&[], 2 * capacity + super::liquid_stats::SOLVER_WORDS as usize).0;
+        let capped = h.array::<u32>(&[], 2 * capacity + manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS as usize).0;
         let region_count = regions.len();
         let region_slots = (!regions.is_empty()).then(|| {
             let dims = [5u32; 3];

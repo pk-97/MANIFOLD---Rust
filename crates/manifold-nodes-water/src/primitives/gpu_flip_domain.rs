@@ -22,21 +22,21 @@ use manifold_physics::FieldValue;
 use super::gpu_flip_pressure::{MAX_ITERATIONS, lattice_refusal};
 use super::gpu_flip_step::{read_max_iterations, read_sheet_fill_rate, read_solve_level};
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
-use crate::liquid::lattice::closed_faces;
+use manifold_water_liquid::lattice::closed_faces;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
-use crate::fluid_role::FluidRole;
-use crate::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
-use crate::liquid::body_buffers::LiquidBodyBuffers;
-use crate::liquid::clock::LiquidClock;
-use crate::liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, decode_reaction, takes_reaction};
-use {crate::liquid::fields, crate::liquid::fields::FieldLattice, crate::liquid::fields::LiquidFields, crate::liquid::fields::LiquidImpulses};
-use crate::liquid::lattice::{FlipSolverGrid, LiquidLattice};
-use crate::liquid::tick_samples::TickSamples;
+use manifold_water_liquid::fluid_role::FluidRole;
+use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
+use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
+use manifold_water_liquid::clock::LiquidClock;
+use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, decode_reaction, takes_reaction};
+use {manifold_water_liquid::fields, manifold_water_liquid::fields::FieldLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
+use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
+use manifold_water_liquid::tick_samples::TickSamples;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
-use crate::liquid::{ROLE_PORTS, WATER_DENSITY};
+use manifold_water_liquid::{ROLE_PORTS, WATER_DENSITY};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
@@ -559,7 +559,7 @@ impl Primitive for GpuFlipDomain {
             owner.set_step(ctx.sim_step);
         }
         let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
-        let role_pending = crate::liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
+        let role_pending = manifold_water_liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {

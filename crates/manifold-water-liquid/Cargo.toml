@@ -1,0 +1,34 @@
+[package]
+name = "manifold-water-liquid"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+manifold-core = { path = "../manifold-core" }
+manifold-gpu = { path = "../manifold-gpu" }
+manifold-node-engine = { path = "../manifold-node-engine" }
+manifold-physics = { path = "../manifold-physics" }
+manifold-water-rigid = { path = "../manifold-water-rigid" }
+# Closed-mesh validation for fluid role geometry (primitives/fluid_role_source/geometry.rs).
+manifold-fluids = { path = "../manifold-fluids" }
+ahash = { workspace = true }
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+half = "2"
+inventory = "0.3"
+log = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+manifold-water-liquid = { path = ".", features = ["testkit"] }
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
+manifold-water-rigid = { path = "../manifold-water-rigid", features = ["testkit"] }
+naga = { version = "28", features = ["wgsl-in", "msl-out"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[features]
+testkit = ["manifold-node-engine/testkit", "manifold-water-rigid/testkit"]
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-water-rigid/gpu-proofs"]
+
+[lints]
+workspace = true

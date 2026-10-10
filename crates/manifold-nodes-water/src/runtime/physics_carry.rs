@@ -3,7 +3,7 @@
 use manifold_node_engine::runtime::*;
 use manifold_node_engine::ports::PortType;
 use manifold_water_rigid::physics::RigidBody;
-use crate::fluid_role::FluidRole;
+use manifold_water_liquid::fluid_role::FluidRole;
 use manifold_physics::FieldValue;
 
 #[cfg(test)]

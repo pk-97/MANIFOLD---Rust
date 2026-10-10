@@ -19,7 +19,7 @@ use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
-use manifold_nodes_water::liquid::bodies::LiquidBody;
+use manifold_water_liquid::bodies::LiquidBody;
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use manifold_node_engine::{ports::ArrayType, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef, persistence::PrimitiveRegistry, scene::transform::Transform};
 use manifold_node_engine::runtime::preset_context::PresetContext;
@@ -32,8 +32,7 @@ const PRESET: &str = include_str!("../../assets/generator-presets/WaterFloatingB
 const PROBE_TYPE: &str = "test.matter_coupling_probe";
 const SIZE: u32 = 64;
 const G: f32 = 9.81;
-/// rigid_body's cube edge per unit transform scale.
-const CUBE_EDGE_PER_SCALE: f32 = 1.154_700_5;
+use manifold_water_liquid::testkit::CUBE_EDGE_PER_SCALE;
 
 #[derive(Clone, Copy, Debug)]
 struct Probe {

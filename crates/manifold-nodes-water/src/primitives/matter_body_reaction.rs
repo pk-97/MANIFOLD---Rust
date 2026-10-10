@@ -8,9 +8,9 @@ use manifold_gpu::GpuBinding;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
-use crate::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use crate::liquid::fields::{FieldBinding, LIQUID_FIELD};
-use crate::liquid::lattice::LiquidLattice;
+use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::fields::{FieldBinding, LIQUID_FIELD};
+use manifold_water_liquid::lattice::LiquidLattice;
 use crate::matter::{MatterGridNode, REACTION_WORDS, momentum_unit_fits};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;

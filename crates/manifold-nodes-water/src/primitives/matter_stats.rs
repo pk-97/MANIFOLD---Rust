@@ -12,7 +12,7 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use crate::liquid::lattice::LiquidLattice;
+use manifold_water_liquid::lattice::LiquidLattice;
 use crate::matter::{MatterGridNode, MatterPoint, STATS_WORDS};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;

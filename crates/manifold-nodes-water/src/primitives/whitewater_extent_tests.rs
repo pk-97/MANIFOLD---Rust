@@ -9,17 +9,17 @@ use serde_json::{Value, json};
 use super::crossing_distance::CrossingDistance;
 use super::extend_lattice::ExtendLattice;
 use super::lattice_curvature::LatticeCurvature;
-use super::liquid_cells::LiquidCells;
+use manifold_water_liquid::primitives::liquid_cells::LiquidCells;
 use super::nearest_crossing::NearestCrossing;
 use super::particle_volume::{ParticleVolume, refined_nodes};
 use super::surface_crossings::SurfaceCrossings;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_core::fluid_domain::domain_layout;
-use crate::liquid::lattice::LiquidLattice;
+use manifold_water_liquid::lattice::LiquidLattice;
 use crate::matter::lattice_nodes;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
-use crate::whitewater::{KnownValue, MAX_REFINEMENT, SurfaceCrossing, cell_total, face_offset, grid_box, grid_cells, refinement};
+use manifold_water_liquid::whitewater::{KnownValue, MAX_REFINEMENT, SurfaceCrossing, cell_total, face_offset, grid_box, grid_cells, refinement};
 
 /// The solid lattice both hosts publish at 64: the matter layout's.
 fn lattice_at_64() -> LiquidLattice {
@@ -101,7 +101,7 @@ fn whitewater_extents_at_64() {
     // The tick solver at res 64 uses 67 cells / 68 nodes (the legacy
     // matter lattice above has 70 / 71). Only its pad-zero mode aliases.
     use super::whitewater_step::StepShape;
-    use crate::whitewater::DEFAULT_CAPACITY;
+    use manifold_water_liquid::whitewater::DEFAULT_CAPACITY;
     let tick = StepShape::new([68; 3], [68; 3], [67; 3], 1.0,
         Some(manifold_node_engine::scene::transform::Transform { scale: [4.1875; 3], ..Default::default() }),
         DEFAULT_CAPACITY).expect("tick grid");
@@ -196,7 +196,7 @@ fn whitewater_particle_extents_at_64() {
     use super::sample_faces_at_particles::SampleFacesAtParticles;
     use super::wavecrest_potential::WavecrestPotential;
     use super::whitewater_particle_cpu::face_index;
-    use crate::liquid::grid::face_len;
+    use manifold_water_liquid::grid::face_len;
 
     let nodes = lattice_at_64().nodes();
     let cells = grid_cells(nodes).expect("cells");
@@ -230,7 +230,7 @@ fn whitewater_particle_extents_at_64() {
     assert_eq!(SpawnWhitewater::new().array_output_capacity("out", &largest, &spawn_inputs), Some(MAX_CAPACITY));
     let typed = WhitewaterType::new().array_output_capacity("out", &params, &[("spawns", slots), ("distance", 343_000), ("cells", 343_000)]);
     assert_eq!(typed, Some(slots), "types hold exactly the spawn slots");
-    assert_eq!(u64::from(MAX_CAPACITY) * std::mem::size_of::<crate::fluid_particles::WhitewaterSpawn>() as u64, 8_000_000);
+    assert_eq!(u64::from(MAX_CAPACITY) * std::mem::size_of::<manifold_water_liquid::fluid_particles::WhitewaterSpawn>() as u64, 8_000_000);
     const { assert!(PARTICLE_SLOTS < 16_777_216, "the emitter count is exact in an f32 scalar") };
 
     // A stencil's lower corner runs from −1 (half a cell below the grid's
@@ -553,9 +553,9 @@ fn whitewater_grid_chain_fuses_only_the_distance_pair() {
 /// the res-64 particle slots.
 #[test]
 fn whitewater_step_extents_at_64() {
-    use crate::whitewater::{DEFAULT_CAPACITY, MAX_CAPACITY};
+    use manifold_water_liquid::whitewater::{DEFAULT_CAPACITY, MAX_CAPACITY};
     use super::whitewater_step::{StepShape};
-    use crate::fluid_particles::{MAX_BINS, bin_total};
+    use manifold_water_liquid::fluid_particles::{MAX_BINS, bin_total};
     let lattice = lattice_at_64();
     let nodes = lattice.nodes();
     let level = refined_nodes(nodes.map(|n| n as f32), 3);

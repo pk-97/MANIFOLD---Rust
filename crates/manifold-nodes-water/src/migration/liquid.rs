@@ -30,7 +30,7 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
             "node.matter_state" => &[("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit"), ("dropped_seconds", "dropped_seconds")],
             _ => &[],
         };
-        let intervals = crate::liquid::clock::INTERVAL_DURATION_INPUTS.iter()
+        let intervals = manifold_water_liquid::clock::INTERVAL_DURATION_INPUTS.iter()
             .filter(|(type_id, _)| *type_id == node.type_id.as_str())
             .map(|&(_, input)| ("interval_duration", input));
         let source = def.wires.iter().filter(|wire| wire.to_node == node.id)
@@ -193,11 +193,11 @@ pub(crate) fn wire_gpu_flip_grid(def: &mut EffectGraphDef) -> bool {
                 let inset = match node.params.get("wall_inset") {
                     Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => *value,
                     Some(manifold_core::effect_graph_def::SerializedParamValue::Int { value }) => *value as f32,
-                    None => crate::liquid::lattice::PADDING_NODES as f32,
+                    None => manifold_water_liquid::lattice::PADDING_NODES as f32,
                     _ => return false,
                 };
-                inset == if native { crate::liquid::lattice::SURFACE_PADDING_CELLS }
-                    else { crate::liquid::lattice::PADDING_NODES as f32 }
+                inset == if native { manifold_water_liquid::lattice::SURFACE_PADDING_CELLS }
+                    else { manifold_water_liquid::lattice::PADDING_NODES as f32 }
             }).map(|n| (n.id, n.type_id.clone())).collect::<Vec<_>>();
         (frame, domain, matches)
     }).collect();

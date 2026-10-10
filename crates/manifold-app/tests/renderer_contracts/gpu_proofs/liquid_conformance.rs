@@ -22,9 +22,9 @@ use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRende
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
-use manifold_nodes_water::liquid::bodies::LiquidBody;
-use manifold_nodes_water::liquid::coupling::HANDOVER_BOUND;
-use manifold_nodes_water::liquid::grid::{FACE_GRID_PORTS, face_len};
+use manifold_water_liquid::bodies::LiquidBody;
+use manifold_water_liquid::coupling::HANDOVER_BOUND;
+use manifold_water_liquid::grid::{FACE_GRID_PORTS, face_len};
 use manifold_nodes_water::testkit::conformance::{BoxScene, Check, FIXTURE_DENSITY, Fixture, LiquidSolverRow, LiquidTotals, STACK_HEIGHT, set_type_param};
 use manifold_water_rigid::physics::{SimStep, native_ticks_on_this_thread};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};

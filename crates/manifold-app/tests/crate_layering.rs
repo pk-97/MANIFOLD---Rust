@@ -23,13 +23,13 @@ const LAYERS: &[Layer] = &[
     },
     Layer {
         package: "manifold-nodes",
-        normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water"],
-        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback", "manifold-water-rigid"],
+        normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-water-liquid"],
+        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback", "manifold-water-liquid", "manifold-water-rigid"],
     },
     Layer {
         package: "manifold-app",
         normal_and_build: &["manifold-audio", "manifold-compositor", "manifold-core", "manifold-editing", "manifold-gpu", "manifold-io", "manifold-led", "manifold-media", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-playback", "manifold-profiler", "manifold-recording", "manifold-nodes", "manifold-spectral", "manifold-ui", "manifold-ui-paint"],
-        dev: &["manifold-foundation", "manifold-physics", "manifold-fluids", "manifold-nodes", "manifold-compositor", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-water-rigid"],
+        dev: &["manifold-foundation", "manifold-physics", "manifold-fluids", "manifold-nodes", "manifold-compositor", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-water-liquid", "manifold-water-rigid"],
     },
 
     Layer {
@@ -54,8 +54,16 @@ const LAYERS: &[Layer] = &[
         package: "manifold-nodes-water",
         normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu",
                             "manifold-node-engine", "manifold-physics", "manifold-fluids",
-                            "manifold-water-rigid"],
-        dev: &["manifold-node-engine", "manifold-playback", "manifold-water-rigid"],
+                            "manifold-water-liquid", "manifold-water-rigid"],
+        dev: &["manifold-node-engine", "manifold-playback", "manifold-water-liquid", "manifold-water-rigid"],
+    },
+    // D1: the liquid seam sits on rigid and under every solver. manifold-fluids is a
+    // normal edge: fluid role geometry validates closed meshes through it (D1 amended).
+    Layer {
+        package: "manifold-water-liquid",
+        normal_and_build: &["manifold-core", "manifold-fluids", "manifold-foundation", "manifold-gpu",
+                            "manifold-node-engine", "manifold-physics", "manifold-water-rigid"],
+        dev: &["manifold-node-engine", "manifold-water-liquid", "manifold-water-rigid"],
     },
     // WATER_CRATES_DESIGN.md D1: rigid sits below every liquid and names none of them.
     Layer {
@@ -253,4 +261,49 @@ fn water_crates_declare_exactly_testkit_and_gpu_proofs() {
         assert_eq!(features, expected, "{name} features drifted from testkit + gpu-proofs");
     }
     assert!(water >= 2, "water crates missing from cargo metadata");
+}
+
+/// INV-W2 liquid companion (WATER_CRATES_DESIGN.md section 4.2): the seam's
+/// code names no solver. Comments and node descriptor prose are skipped;
+/// `whitewater.rs` owns the grid vocabulary by name, and `clock.rs` keeps the
+/// table of each solver's interval-duration input by type id.
+const LIQUID_SOLVER_WORD_EXEMPT: &[&str] = &["whitewater.rs", "clock.rs"];
+
+fn names_a_solver(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if ["purpose:", "composition_notes:", "summary:"].iter().any(|field| trimmed.starts_with(field)) {
+        return false;
+    }
+    let code = line.split("//").next().unwrap_or("");
+    ["gpu_flip", "matter_", "whitewater_step"].iter().any(|word| code.contains(word))
+}
+
+fn liquid_solver_word_files(dir: &Path, root: &Path, hits: &mut Vec<String>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            liquid_solver_word_files(&path, root, hits);
+            continue;
+        }
+        let relative = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+        if LIQUID_SOLVER_WORD_EXEMPT.contains(&relative.as_str()) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (index, line) in text.lines().enumerate() {
+            if names_a_solver(line) {
+                hits.push(format!("{relative}:{}: {}", index + 1, line.trim()));
+            }
+        }
+    }
+}
+
+#[test]
+fn liquid_names_no_solver() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-water-liquid/src");
+    let mut hits = Vec::new();
+    liquid_solver_word_files(&src, &src, &mut hits);
+    hits.sort();
+    assert!(hits.is_empty(), "manifold-water-liquid names a solver; the solvers depend on the seam, never the reverse:\n{}",
+        hits.join("\n"));
 }

@@ -36,7 +36,7 @@ from gate_policy import (
     PROOFS_DIR, LANDING_BUDGET_S,
     SMOKE_FILTERS, RUNTIME_FILTERS, BROAD_FILTERS, SLOW_THRESHOLD_S, TIMES_PATH,
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
-    LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
+    LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS, CONTRACT_ROOT_ROWS,
     BROAD_PATHS, GLTF_PATHS, DOC_SUFFIXES, PRESET_RUNTIME_DIR, LIB_PROOF_ROWS,
     GPU_BACKEND_ROOT, OTHER_SHADER_ROOTS, CATALOG_TEST_ROWS, CATALOG_PACKAGE, GPU_CONTRACT_TARGETS,
     GPU_FILTER_TARGETS, UI_PROJECTION_PATHS, is_inert_plan_path,
@@ -529,6 +529,9 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
         plan.filters.update(changed_test_filters(path, repo, base, patches.get(path, '')))
         if is_gltf_path(path):
             plan.glb = True
+        for root, filters in CONTRACT_ROOT_ROWS:
+            if path.startswith(root):
+                plan.filters.update(filters)
         # A path that several features own maps to every one of their rows.
         narrow = [(("",), row) for pats, row in NARROW_ROWS
                   if any(pat in path for pat in pats)]

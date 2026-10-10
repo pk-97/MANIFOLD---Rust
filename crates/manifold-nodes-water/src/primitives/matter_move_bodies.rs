@@ -10,7 +10,7 @@ use manifold_gpu::GpuBinding;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
-use crate::liquid::bodies::{LIQUID_POSE, LiquidBody};
+use manifold_water_liquid::bodies::{LIQUID_POSE, LiquidBody};
 use crate::matter::REACTION_WORDS;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;

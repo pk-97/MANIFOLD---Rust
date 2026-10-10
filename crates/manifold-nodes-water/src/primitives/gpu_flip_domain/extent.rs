@@ -2,12 +2,12 @@
 use std::mem::size_of;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
-use crate::liquid::bodies::LiquidBody;
-use crate::liquid::bodies::LiquidShape;
-use crate::liquid::clock::FIELD_RESERVE_INTERVALS;
-use crate::liquid::fields::FieldFrame;
-use crate::liquid::fields::STAGING_SLOTS as FIELD_STAGING_SLOTS;
-use crate::liquid::coupling::REACTION_FLOATS;
+use manifold_water_liquid::bodies::LiquidBody;
+use manifold_water_liquid::bodies::LiquidShape;
+use manifold_water_liquid::clock::FIELD_RESERVE_INTERVALS;
+use manifold_water_liquid::fields::FieldFrame;
+use manifold_water_liquid::fields::STAGING_SLOTS as FIELD_STAGING_SLOTS;
+use manifold_water_liquid::coupling::REACTION_FLOATS;
 use crate::primitives::gpu_flip_domain::gpu_flip_geometry;
 use manifold_physics::clock::TICK;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
@@ -42,7 +42,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     for (port, bytes) in [
         ("bodies", size_of::<LiquidBody>() as u64),
-        ("contacts", size_of::<crate::liquid::bodies::BodySupports>() as u64),
+        ("contacts", size_of::<manifold_water_liquid::bodies::BodySupports>() as u64),
         ("regions", size_of::<LiquidBody>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),

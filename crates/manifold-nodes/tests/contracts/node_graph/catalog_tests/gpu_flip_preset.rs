@@ -790,7 +790,7 @@ use serde_json::{Value, json};
 
 use manifold_nodes_water::primitives::{gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS};
 use manifold_nodes::bundled_presets::bundled_preset_json;
-use manifold_nodes_water::liquid::clock::INTERVAL_DURATION_INPUTS;
+use manifold_water_liquid::clock::INTERVAL_DURATION_INPUTS;
 
 fn shipped_preset() -> Value {
     let json = manifold_nodes::bundled_presets::bundled_preset_json(&PresetTypeId::new("WaterDamBreakGpuFlip")).expect("the GPU FLIP preset is bundled");

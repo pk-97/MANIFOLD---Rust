@@ -5,8 +5,8 @@
 use manifold_physics::BodyImpulse;
 
 use super::{MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, substeps_per_tick};
-use crate::liquid::bodies::LiquidBody;
-use crate::liquid::coupling::{LiquidRigidOwner, takes_reaction};
+use manifold_water_liquid::bodies::LiquidBody;
+use manifold_water_liquid::coupling::{LiquidRigidOwner, takes_reaction};
 
 /// How a pending tick's reaction words decode.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -94,7 +94,7 @@ pub fn body_substep(cell_size: f32, wave: f32, mass: f32, area: f32) -> f32 {
 mod tests {
     use super::*;
     use manifold_physics::clock::TICK;
-    use crate::liquid::coupling::PendingTick;
+    use manifold_water_liquid::coupling::PendingTick;
     use manifold_core::scene_impulse::RigidImpulseTargets;
     use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs};
     use manifold_node_engine::scene::transform::Transform;
@@ -111,7 +111,7 @@ mod tests {
             ..RigidBody::default()
         });
         let colliders = RigidImpulseTargets { bodies: 1, copies: false };
-        let open = crate::liquid::coupling::DomainWalls::default();
+        let open = manifold_water_liquid::coupling::DomainWalls::default();
         let mut owner = LiquidRigidOwner::new(&scene, open, colliders, 3, None).expect("owner");
         let scale = ReactionScale { unit: 128.0, cell_size: 0.0625, offset: 0 };
         let mut words = [0i32; 16];

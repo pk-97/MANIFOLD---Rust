@@ -18,9 +18,9 @@ use manifold_nodes_water::primitives::whitewater_step::{Step, StepFrame, StepInp
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
-use manifold_nodes_water::liquid::grid::face_len;
+use manifold_water_liquid::grid::face_len;
 use manifold_node_engine::scene::transform::Transform;
-use manifold_nodes_water::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
+use manifold_water_liquid::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
 
 const GOLDEN: &str = "whitewater_tick_golden.txt";
 

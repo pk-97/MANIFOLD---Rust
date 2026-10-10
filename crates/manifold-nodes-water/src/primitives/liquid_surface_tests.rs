@@ -8,13 +8,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBuffer;
 
-use super::running_total::RunningTotal;
-use super::sort_particles_into_cells::SortParticlesIntoCells;
+use manifold_water_liquid::primitives::running_total::RunningTotal;
+use manifold_water_liquid::primitives::sort_particles_into_cells::SortParticlesIntoCells;
 use manifold_node_engine::exec::backend::Backend;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::particles::FluidParticle;
-use crate::fluid_particles::{CellRange, bin_counts};
+use manifold_water_liquid::fluid_particles::{CellRange, bin_counts};
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 
@@ -1181,7 +1181,7 @@ fn fluid_mesh_grid_native_plane_crossing_matches_engine() {
     let mut harness = Harness::new();
     for resolution in [8, 16] {
         let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, resolution).unwrap();
-        let mesh = crate::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+        let mesh = manifold_water_liquid::lattice::LiquidLattice::from_layout(&layout).surface();
         // Translate Y/Z to X's origin so the existing cubic MC harness can
         // exercise the native grid against the authored low wall at x=-1.
         let n = mesh.nodes()[0];
@@ -1195,7 +1195,7 @@ fn fluid_mesh_grid_native_plane_crossing_matches_engine() {
         let (field, _) = harness.array(&plane.values, count);
         let (grown, grown_buffer) = harness.array::<f32>(&[], count);
         let offset = -0.25 * mesh.cell_size();
-        let (_, errors) = harness.run(&mut super::offset_lattice::OffsetLattice::new(),
+        let (_, errors) = harness.run(&mut manifold_water_liquid::primitives::offset_lattice::OffsetLattice::new(),
             &[("levelset", field)], &[("out", grown)], &params(&[("offset", offset)]));
         assert!(errors.is_empty(), "{errors:?}");
         let grown_values = read::<f32>(&grown_buffer, count);
@@ -1204,7 +1204,7 @@ fn fluid_mesh_grid_native_plane_crossing_matches_engine() {
         }
         let (distance, distance_buffer) = harness.array::<f32>(&[], count);
         let band = 2.0 * mesh.cell_size();
-        let (_, errors) = harness.run(&mut super::redistance_lattice::RedistanceLattice::new(),
+        let (_, errors) = harness.run(&mut manifold_water_liquid::primitives::redistance_lattice::RedistanceLattice::new(),
             &[("levelset", grown)], &[("out", distance)], &params(&[
                 ("nodes_x", n as f32), ("nodes_y", n as f32), ("nodes_z", n as f32),
                 ("size_x", plane.size), ("size_y", plane.size), ("size_z", plane.size),
@@ -1245,11 +1245,11 @@ fn fluid_mesh_grid_native_plane_crossing_matches_engine() {
 #[test]
 fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
     use super::liquid_solid_distance::LiquidSolidDistance;
-    use crate::liquid::bodies::{LiquidBody, LiquidShape};
+    use manifold_water_liquid::bodies::{LiquidBody, LiquidShape};
     let mut harness = Harness::new();
     for resolution in [8, 16] {
         let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, resolution).unwrap();
-        let mesh = crate::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+        let mesh = manifold_water_liquid::lattice::LiquidLattice::from_layout(&layout).surface();
         let n = mesh.nodes();
         let count = mesh.node_count() as usize;
         let (bodies, _) = harness.array::<LiquidBody>(&[], 1);
@@ -1260,8 +1260,8 @@ fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
             ("lattice_min_x", mesh.min()[0]), ("lattice_min_y", mesh.min()[1]), ("lattice_min_z", mesh.min()[2]),
             ("nodes_x", n[0] as f32), ("nodes_y", n[1] as f32), ("nodes_z", n[2] as f32),
             ("cell_size", mesh.cell_size()),
-            ("wall_inset", crate::liquid::lattice::FlipSolverGrid::from_lattice(
-                crate::liquid::lattice::LiquidLattice::from_layout(&layout)).wall_inset()),
+            ("wall_inset", manifold_water_liquid::lattice::FlipSolverGrid::from_lattice(
+                manifold_water_liquid::lattice::LiquidLattice::from_layout(&layout)).wall_inset()),
             ("closed_faces", 63.0),
         ]);
         let (_, errors) = harness.run(&mut LiquidSolidDistance::new(),
@@ -1279,9 +1279,9 @@ fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
             let expected = if outside > 0.0 { -outside } else { distances.into_iter().fold(f64::INFINITY, f64::min) };
             assert!((f64::from(value) - expected).abs() < 1e-6);
         }
-        let simulation = crate::liquid::lattice::LiquidLattice::from_layout(&layout);
+        let simulation = manifold_water_liquid::lattice::LiquidLattice::from_layout(&layout);
         let (particles, _) = harness.array(&[particle([0.0, 1.0, 0.0], 0.1, 1)], 1);
-        let (stats, _) = harness.array(&[0u32; super::liquid_stats::LIQUID_STATS_WORDS as usize], super::liquid_stats::LIQUID_STATS_WORDS as usize);
+        let (stats, _) = harness.array(&[0u32; manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS as usize], manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS as usize);
         // A frame publishes only beside a birth identity: liquid_state's seed
         // for this one particle is next id 2, epoch 0, no reservation, no reset.
         let (identity, _) = harness.array::<u32>(&[2, 0, 0, 0], 4);
@@ -1612,7 +1612,7 @@ fn fluid_volume_surface_mesh_writes_only_live_and_last_frame_vertices() {
 
 // --- P6c: level-set smoothing ---------------------------------------------
 
-use super::smooth_lattice::SmoothLattice;
+use manifold_water_liquid::primitives::smooth_lattice::SmoothLattice;
 
 /// f64 reference: the (2p + 1)³ binomial gather with edge-clamped indices.
 fn reference_smooth(values: &[f32], nodes: [usize; 3], passes: usize) -> Vec<f64> {

@@ -9,12 +9,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::liquid_bricks;
-use crate::float_param;
-use super::sort_particles_into_cells::{bin_param, read_searched_bins};
+use manifold_water_liquid::primitives::liquid_bricks;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::primitives::sort_particles_into_cells::{bin_param, read_searched_bins};
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::fluid_particles::{CellRange, FluidBlob};
+use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -228,7 +228,7 @@ impl Primitive for ParticleVolume {
         let interior_wired = interior_input;
         let (interior, interior_len) = if let Some(buffer) = interior_wired {
             let actual = buffer.size / 4;
-            if !buffer.size.is_multiple_of(4) || crate::liquid::lattice::interior_cells(nodes.map(|n| n as u32), actual).is_none() {
+            if !buffer.size.is_multiple_of(4) || manifold_water_liquid::lattice::interior_cells(nodes.map(|n| n as u32), actual).is_none() {
                 ctx.error(format!(
                     "Particle Volume: interior has {actual} f32 values; expected the exact physical cell count for native (nodes minus 4) or solver (nodes minus 7) padding at {}×{}×{} nodes.",
                     nodes[0], nodes[1], nodes[2]
@@ -328,7 +328,7 @@ impl Primitive for ParticleVolume {
 
 #[cfg(test)]
 mod cpu_tests {
-    use crate::testkit::particle_volume::*;
+    use manifold_water_liquid::testkit::particle_volume::*;
 
 
 
@@ -345,7 +345,7 @@ mod cpu_tests {
     #[test]
     fn native_mesh_interior_samples_simulation_cell_centres() {
         let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
-        let mesh = crate::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+        let mesh = manifold_water_liquid::lattice::LiquidLattice::from_layout(&layout).surface();
         let field: Vec<f32> = (0..8u32.pow(3)).map(|i| (i % 8) as f32 + 0.5).collect();
         for i in 0..8 {
             let p = [layout.min[0] + (i as f32 + 0.5) * 0.25, 1.0, 0.0];

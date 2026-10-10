@@ -4,13 +4,13 @@
 //! positions, comes out of its component atom as that field at the seam's
 //! face positions (`liquid::grid::face_position`).
 
-use crate::primitives::face_sample_component::FaceSampleComponent;
+use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use crate::primitives::matter_face_component::MatterFaceComponent;
 use manifold_node_engine::exec::effect_node::ParamValues;
-use crate::fluid_particles::FaceSample;
-use crate::liquid::grid::{face_coords, face_len, face_position};
-use crate::liquid::lattice::PADDING_NODES;
+use manifold_water_liquid::fluid_particles::FaceSample;
+use manifold_water_liquid::grid::{face_coords, face_len, face_position};
+use manifold_water_liquid::lattice::PADDING_NODES;
 use crate::matter::MatterGridNode;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;

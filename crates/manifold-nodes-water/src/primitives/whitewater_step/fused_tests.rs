@@ -96,7 +96,7 @@ fn whitewater_fused_and_unpack_validate_on_cpu() {
     assert_eq!(std::mem::size_of::<UnpackParams>(), 16);
     assert_eq!(module.entry_points.len(), 6);
     for entry in &module.entry_points { assert_eq!(entry.workgroup_size, [256, 1, 1]); }
-    let adapter = include_str!("../shaders/face_sample_component_body.wgsl");
+    let adapter = manifold_water_liquid::primitives::face_sample_component::FACE_SAMPLE_COMPONENT_BODY;
     let expected = function(adapter, "body").replace("fn body(", "fn ww_unpack_face(");
     assert_eq!(function(WHITEWATER_FUSED_SHADER, "ww_unpack_face"), expected, "adapter indexing, select and zero tail");
     assert!(random_calls(function(WHITEWATER_FUSED_SHADER, "ww_unpack_faces")).is_empty());
@@ -326,7 +326,7 @@ pub mod gpu {
     // Compile the actual adapter primitive, with its own generated uniform
     // layout/body. Dispatch its whole output extent, including the zero tail.
     pub fn adapter_outputs(device: &GpuDevice, packed: &GpuBuffer, cells: [u32; 3]) -> [GpuBuffer; 3] {
-        use super::super::super::face_sample_component::FaceSampleComponent;
+        use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
         let mut pipeline = None;
         standalone_pipeline::<FaceSampleComponent>(&mut pipeline, device);
         let count = cell_total(cells.map(|n| n + 1)) as u32;
