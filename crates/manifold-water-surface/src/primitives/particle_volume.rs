@@ -46,7 +46,7 @@ struct VolumeUniforms {
 }
 
 /// Level-set nodes per axis: `(n − 1)·m + 1` over the solid lattice's box.
-pub(crate) fn refined_nodes(solid_nodes: [f32; 3], scale: u32) -> [u32; 3] {
+pub fn refined_nodes(solid_nodes: [f32; 3], scale: u32) -> [u32; 3] {
     solid_nodes.map(|n| (n.max(2.0) as u32 - 1) * scale + 1)
 }
 
@@ -466,3 +466,7 @@ mod cpu_tests {
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+
+/// The dense kernel the brick-fused form is proven against.
+#[cfg(any(test, feature = "testkit"))]
+pub const DENSE_REFERENCE: &str = include_str!("shaders/particle_volume_dense_reference.wgsl");

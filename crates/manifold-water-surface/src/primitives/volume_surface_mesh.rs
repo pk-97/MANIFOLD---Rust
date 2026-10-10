@@ -173,7 +173,7 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/volume_surface_mesh_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     derived_uniforms: ["brick_pass:u32", "indexed:u32"],
-    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl"), manifold_water_gpu_flip::primitives::clamp_liquid_to_solids::ELEMENT],
+    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl"), liquid_bricks::CLAMP_TO_SOLIDS_ELEMENT],
     owned_outputs: ["vertices", "indices"],
     buffer_index: "liquid_cell_brick_index",
     extra_fields: {
@@ -988,3 +988,7 @@ mod gpu_tests {
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+
+/// The dense kernel the brick-fused form is proven against.
+#[cfg(any(test, feature = "testkit"))]
+pub const DENSE_REFERENCE: &str = include_str!("shaders/volume_surface_mesh_dense_reference.wgsl");

@@ -1277,12 +1277,12 @@ fn liquid_frame_encode_failure_publishes_the_selected_outputs() {
         // Armed from frame 5 until a publication consumes it.
         let armed = frame >= 5;
         clean.frame(false);
-        manifold_nodes_water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(armed);
+        manifold_water_surface::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(armed);
         failing.expect_node_error(armed);
         failing.frame(false);
         failing.expect_node_error(false);
-        let inject = armed && !manifold_nodes_water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.get();
-        manifold_nodes_water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(false);
+        let inject = armed && !manifold_water_surface::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.get();
+        manifold_water_surface::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(false);
         if inject {
             assert!(failing.last_status().starts_with("Failed"), "frame {frame}: the failure is reported: {}", failing.last_status());
             assert_eq!(failing.probes(HISTORY_PROBES)[PAIR], clean.probes(HISTORY_PROBES)[PAIR], "frame {frame}: scalars follow the selection");

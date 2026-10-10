@@ -371,3 +371,7 @@ mod shared_shader_tests {
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+
+/// The dense kernel the brick-fused form is proven against.
+#[cfg(any(test, feature = "testkit"))]
+pub const DENSE_REFERENCE: &str = include_str!("shaders/relax_surface_mesh_dense_reference.wgsl");

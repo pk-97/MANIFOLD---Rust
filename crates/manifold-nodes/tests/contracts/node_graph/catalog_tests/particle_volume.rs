@@ -1,7 +1,7 @@
 use manifold_node_engine::testkit::array_harness::{Harness, read};
-use manifold_nodes_water::testkit::liquid_surface::Lattice;
+use manifold_water_surface::testkit::liquid_surface::Lattice;
 use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
-    use manifold_nodes_water::primitives::particle_volume::*;
+    use manifold_water_surface::primitives::particle_volume::*;
     use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob, bin_counts};
 
     fn expected(

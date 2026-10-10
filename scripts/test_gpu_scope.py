@@ -24,6 +24,8 @@ MT = "crates/manifold-water-gpu-mpm/src/"
 MW = MT + "primitives/"
 WWT = "crates/manifold-water-whitewater/src/"
 WWW = WWT + "primitives/"
+ST = "crates/manifold-water-surface/src/"
+SW = ST + "primitives/"
 P = E + "primitives/"
 
 
@@ -50,6 +52,7 @@ def fixture_workspace(repo):
         "manifold-water-gpu-flip": ("crates/manifold-water-gpu-flip", True, []),
         "manifold-water-gpu-mpm": ("crates/manifold-water-gpu-mpm", True, []),
         "manifold-water-whitewater": ("crates/manifold-water-whitewater", True, []),
+        "manifold-water-surface": ("crates/manifold-water-surface", True, []),
         "manifold-ui-paint": ("crates/manifold-ui-paint", True, ["main"]),
         "manifold-gpu": ("crates/manifold-gpu", False, []),
     }
@@ -139,7 +142,7 @@ class ScopeTests(unittest.TestCase):
         result = g.Plan(paths=["synthetic"], workspace=workspace,
                         filters=set(g.SMOKE_FILTERS) | {"future::filter"})
         runs = result.runs()
-        self.assertEqual(len(runs), 19)
+        self.assertEqual(len(runs), 20)
         self.assertTrue(all(run["filters"] == result.final_filters() for run in runs))
 
     def test_whole_package_override_survives_filter_pruning(self):
@@ -517,7 +520,7 @@ class ScopeTests(unittest.TestCase):
         repo = Path(__file__).resolve().parent.parent
         # Reviewed allowances are a timing sample, not a complete test inventory.
         names = set()
-        for source in [*(repo / W).rglob("*.rs"), *(repo / FW).rglob("*.rs"), *(repo / MW).rglob("*.rs"), *(repo / WWW).rglob("*.rs")]:
+        for source in [*(repo / W).rglob("*.rs"), *(repo / FW).rglob("*.rs"), *(repo / MW).rglob("*.rs"), *(repo / WWW).rglob("*.rs"), *(repo / SW).rglob("*.rs")]:
             lines = len(source.read_text().splitlines())
             names.update(g.changed_test_filters(source.relative_to(repo).as_posix(), repo,
                          "HEAD", patch=f"@@ -0,0 +1,{lines} @@"))
@@ -537,7 +540,8 @@ class ScopeTests(unittest.TestCase):
             paths = [*(repo / W / "shaders").glob(prefix + "*.wgsl"),
                      *(repo / LW / "shaders").glob(prefix + "*.wgsl"),
                      *(repo / FW / "shaders").glob(prefix + "*.wgsl"),
-                     *(repo / MW / "shaders").glob(prefix + "*.wgsl")]
+                     *(repo / MW / "shaders").glob(prefix + "*.wgsl"),
+                     *(repo / SW / "shaders").glob(prefix + "*.wgsl")]
             self.assertTrue(paths, prefix)
             relevant = [name for name in names if owning in name]
             self.assertTrue(relevant, f"{prefix}: owning proof inventory is empty")
@@ -610,7 +614,7 @@ class ScopeTests(unittest.TestCase):
         self.assertIn("gpu_flip_extend_faces_", result.filters)
         self.assertFalse(result.unmapped)
     def test_mesh_grid_sources_select_native_value_proofs(self):
-        for path in (LT + 'lattice.rs', W + 'liquid_frame.rs',
+        for path in (LT + 'lattice.rs', SW + 'liquid_frame.rs',
                      FW + 'liquid_solid_distance.rs', FW + 'shaders/liquid_solid_distance_body.wgsl'):
             result = plan([path], users=lambda _: [FW + 'liquid_solid_distance.rs'],
                           repo=self._repo_with(path))
@@ -628,7 +632,7 @@ class ScopeTests(unittest.TestCase):
                      "particle_publication_gpu_tests.rs", "liquid_frame.rs",
                      "shaders/particle_identity.wgsl", "shaders/particle_publication.wgsl"):
             with self.subTest(path=name):
-                base = LW if name.rsplit("/", 1)[-1].startswith(("particle_identity", "particle_publication")) else W
+                base = LW if name.rsplit("/", 1)[-1].startswith(("particle_identity", "particle_publication")) else SW
                 source = base + name.rsplit("/", 1)[-1].replace(".wgsl", ".rs")
                 result = plan([base + name], users=lambda _: [source],
                               repo=self._repo_with(base + name))
@@ -651,8 +655,8 @@ class ScopeTests(unittest.TestCase):
             self.assertFalse(result.unmapped)
 
     def test_blob_bounds_selects_dense_and_sparse_consumers(self):
-        for path in (W + "blob_bounds.rs", W + "shaders/blob_bounds.wgsl"):
-            result = plan([path], users=lambda _: [W + "blob_bounds.rs"],
+        for path in (SW + "blob_bounds.rs", SW + "shaders/blob_bounds.wgsl"):
+            result = plan([path], users=lambda _: [SW + "blob_bounds.rs"],
                           repo=self._repo_with(path))
             self.assertTrue({"primitives::blob_bounds::",
                              "liquid_surface_tests::",
