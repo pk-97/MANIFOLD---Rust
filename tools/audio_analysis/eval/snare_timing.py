@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import numpy as np
-from tools.audio_analysis.eval.snare_labels import env_db
+from tools.audio_analysis.eval.detector_labels import env_db
 from tools.audio_analysis.eval.detector_songs import audio, rate
 from tools.audio_analysis.eval.kick_goal_eval import GOAL, Goal
 

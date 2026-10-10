@@ -34,6 +34,8 @@ BANDS = int(os.environ.get('KICK_GOAL_NN_BANDS', '64'))
 PAST_MS = int(os.environ.get('KICK_GOAL_NN_PAST_MS', '150'))
 PERC_ON = os.environ.get('KICK_GOAL_NN_PERC') == '1'
 STEREO_ON = os.environ.get('KICK_GOAL_NN_STEREO') == '1'
+# KICK_GOAL_NN_FLAT=1: per-band noisiness (detector_channels.flatness) as an extra channel, after perc and side.
+FLAT_ON = os.environ.get('KICK_GOAL_NN_FLAT') == '1'
 # The net's slice ends this much after the emission; the fire keeps the emission's time stamp, so the wait is
 # accepted output latency (Peter, Oct 2026: 20-40 ms is fine), not timing error eaten from the 70 ms tolerance.
 AHEAD_MS = int(os.environ.get('KICK_GOAL_NN_AHEAD_MS', '0'))
@@ -42,10 +44,10 @@ HALF_BW = .1 * 64 / BANDS  # about one band spacing either side
 FRAME_S = .002
 SLICE = PAST_MS // 2  # frames ending at emission
 TBINS = 1 if SLICE <= 75 else 4
-CHANNELS = 2 + PERC_ON + STEREO_ON
-DEFAULT_INPUT = BANDS == 64 and PAST_MS == 150 and not PERC_ON and not STEREO_ON and not AHEAD_MS
+CHANNELS = 2 + PERC_ON + STEREO_ON + FLAT_ON
+DEFAULT_INPUT = BANDS == 64 and PAST_MS == 150 and not PERC_ON and not STEREO_ON and not FLAT_ON and not AHEAD_MS
 INPUT_TAG = '' if DEFAULT_INPUT else (f'_b{BANDS}' + (f'_h{PAST_MS}' if PAST_MS != 150 else '') + ('_perc' if PERC_ON else '')
-                                     + ('_st' if STEREO_ON else '') + (f'_a{AHEAD_MS}' if AHEAD_MS else ''))
+                                     + ('_st' if STEREO_ON else '') + ('_flat' if FLAT_ON else '') + (f'_a{AHEAD_MS}' if AHEAD_MS else ''))
 SUSTAIN = 25  # frames: 50 ms
 NEIGHBOURS = 9
 PRE_S = .1
@@ -106,6 +108,13 @@ def extra_caches(g, t, spec):
         rel = np.full_like(spec, -40.0)
         rel[:n] = np.clip(side[:n] - spec[:n], -40.0, 10.0)
         out.append(rel)
+    if FLAT_ON:
+        from tools.audio_analysis.eval.detector_channels import flat_cache
+        flat = flat_cache(g, t)
+        full = np.zeros_like(spec)
+        n = min(len(flat), len(spec))
+        full[:n] = flat[:n]
+        out.append(full)
     return out
 
 

@@ -23,7 +23,8 @@ def main():
     from torch import nn
     from tools.audio_analysis.eval.snare_cands import candidates
     from tools.audio_analysis.eval.snare_stack import measures
-    from tools.audio_analysis.eval.snare_net import AHEAD, choose, rows, score
+    from tools.audio_analysis.eval.detector_eval import choose, rows, score
+    from tools.audio_analysis.eval.snare_net import AHEAD
     from tools.audio_analysis.eval import kick_goal_nn as K
     from tools.audio_analysis.eval.kick_goal_eval import GOAL, Goal
     from tools.audio_analysis.eval.kick_goal_melodic import HARD_W

@@ -128,6 +128,9 @@ VERBS = [
      "kick-release", ["tools/audio_analysis/kick_release.py"],
      "kick model release: train [--provisional] the final model; export --hooks DIR --out DIR writes the model file and parity goldens"),
     ("Render and measure",
+     "snare-release", ["tools/audio_analysis/snare_release.py"],
+     "snare model release: train the final net (cutoff from the held-out run); export --out DIR writes the model file and parity goldens"),
+    ("Render and measure",
      "repair-audio-fixture", "repair_audio_fixture.py", "rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply"),
 
     ("CPU reference oracles (f64, seconds, no GPU)",
@@ -223,6 +226,7 @@ COST_CLASSES = {
     "install-abletonosc-patch.sh": "unit",
     "kick_label_extract.py": "focused",
     "kick_release.py": "broad",
+    "snare_release.py": "broad",
     "land_branch.py": "focused",
     "land_wave.py": "focused",
     "landing_gate.py": "focused",

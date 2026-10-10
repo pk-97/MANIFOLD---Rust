@@ -18,8 +18,8 @@ RISE_DB = 6.0
 
 
 def main():
-    from tools.audio_analysis.eval.snare_labels import env_db
-    from tools.audio_analysis.eval.snare_net import nearest
+    from tools.audio_analysis.eval.detector_labels import env_db
+    from tools.audio_analysis.eval.detector_eval import nearest
     from tools.audio_analysis.eval.detector_songs import audio, rate, wip
     from tools.audio_analysis.eval.detector_wip import kick_beats
     from tools.audio_analysis.eval.als_extract import extract
