@@ -2,6 +2,7 @@
 """Kick model release: fit the final model, then export the model file and the Rust parity goldens.
 
 Usage:
+  kick_release.py train                  the final model: grouped run (held-out score), then fits on every song
   kick_release.py train --provisional    quick, structurally complete final.pkl (numbers are throwaway)
   kick_release.py export --hooks DIR --out DIR
 
@@ -111,9 +112,33 @@ def setup_goal():
     return g
 
 
-def train(provisional):
-    if not provisional:
-        sys.exit('train without --provisional (the real final model) is not built yet')
+def final_dict(train_id, trees, net, stage, templates, cutoff):
+    return dict(
+        train_id=train_id,
+        trees=trees,
+        net=dict(state_dict={k: v.detach().cpu().numpy().astype(np.float32) for k, v in net.state_dict().items()},
+                 bands=nnm.BANDS, past_ms=nnm.PAST_MS, ahead_ms=nnm.AHEAD_MS),
+        stage=stage,
+        templates=np.asarray(templates, np.float64),
+        cutoff=float(cutoff),
+        refractory_s=REFRACTORY,
+        window_s=WINDOW_S,
+    )
+
+
+def write_final(final, t0):
+    FINAL.parent.mkdir(parents=True, exist_ok=True)
+    tmp = FINAL.with_name(f'{FINAL.name}.{os.getpid()}.tmp')
+    with open(tmp, 'wb') as fh:
+        pickle.dump(final, fh)
+    os.replace(tmp, FINAL)
+    print(f'wrote {FINAL}\ntrain_id {final["train_id"]} | trees n_iter_ {final["trees"].n_iter_} | '
+          f'stage n_iter_ {final["stage"].n_iter_} | cutoff {final["cutoff"]:.6f} | templates {final["templates"].shape} | '
+          f'total {time.time() - t0:.0f} s', flush=True)
+
+
+def train_provisional():
+    """Structurally complete and quick: in-sample stage inputs, a 2-epoch net, cutoff 0.5. Numbers are throwaway."""
     from tools.audio_analysis.eval.kick_goal_featsets import lowbank_cache, profile_cache
     from tools.audio_analysis.eval.run_kick_goal_data import ALL, gbt
     from tools.audio_analysis.eval.run_kick_goal_selfsim import fit2
@@ -128,30 +153,145 @@ def train(provisional):
     data = {t: nnm.Song.real(g, t).to(dev) for t in ALL}
     net = nnm.train([data[t] for t in ALL], 7)
     print(f'net fitted ({nnm.EPOCHS} epochs, {dev}) at {time.time() - t0:.0f} s', flush=True)
-    # Provisional: in-sample stage inputs (the real model takes them from the grouped run).
     blend = {t: expit((lg(pred(trees, t)) + lg(nnm.predict(net, data[t]))) / 2) for t in ALL}
     shape = {t: np.hstack([profile_cache(g, t), lowbank_cache(g, t)]) for t in ALL}
     inputs = {t: self_features(blend[t], shape[t], g.records[t]['features'][:, 0], g.records[t]['emit_s'], WINDOW_S)
               for t in ALL}
     stage = fit2(g, inputs, list(ALL), slice(None))
     print(f'stage fitted at {time.time() - t0:.0f} s', flush=True)
-    final = dict(
-        train_id=f'provisional-{datetime.date.today().isoformat()}-{datetime.datetime.now().strftime("%H%M%S")}',
-        trees=trees,
-        net=dict(state_dict={k: v.detach().cpu().numpy().astype(np.float32) for k, v in net.state_dict().items()},
-                 bands=nnm.BANDS, past_ms=nnm.PAST_MS, ahead_ms=nnm.AHEAD_MS),
-        stage=stage,
-        templates=np.load(GOAL / 'templates_from_dev.npy'),
-        cutoff=0.5,
-        refractory_s=REFRACTORY,
-        window_s=WINDOW_S,
-    )
-    FINAL.parent.mkdir(parents=True, exist_ok=True)
-    tmp = FINAL.with_name(f'{FINAL.name}.{os.getpid()}.tmp')
-    with open(tmp, 'wb') as fh:
-        pickle.dump(final, fh)
-    os.replace(tmp, FINAL)
-    print(f'wrote {FINAL} train_id {final["train_id"]} total {time.time() - t0:.0f} s', flush=True)
+    train_id = f'provisional-{datetime.date.today().isoformat()}-{datetime.datetime.now().strftime("%H%M%S")}'
+    write_final(final_dict(train_id, trees, net, stage, np.load(GOAL / 'templates_from_dev.npy'), 0.5), t0)
+
+
+def all_song_templates(g):
+    """K-means templates over every isolated kick source the recipe's template features were built from
+    (run_kick_goal_templates.template_sets): the four new songs' kick stems at their fresh attacks, the dev songs'
+    kick stems at their fresh attacks, and the original five's drum stems at their truth. The research fitted
+    two cross sets from these; the release fits one set on their union, fit_templates seed 0. Refitting the two
+    cross sets must reproduce the cached ones, which proves the patch sources are the recipe's."""
+    import types
+    from tools.audio_analysis.eval import run_kick_goal_templates as rt
+    from tools.audio_analysis.eval.kick_goal_eval import NEW_SONGS
+    from tools.audio_analysis.eval.kick_goal_templates import fit_templates
+    lists = []
+    real_fit = rt.fit_templates
+    rt.fit_templates = lambda patch_list, seed=0: lists.append(patch_list)
+    try:
+        rt.template_sets(types.SimpleNamespace(records={t: g.records[t] for t in tuple(TRACKS) + tuple(NEW_SONGS)}))
+    finally:
+        rt.fit_templates = real_fit
+    new_p, dev_p = lists
+    for name, p in (('templates_from_new', new_p), ('templates_from_dev', dev_p)):
+        d = float(np.max(np.abs(fit_templates(p) - np.load(GOAL / f'{name}.npy'))))
+        print(f'templates: refit {name} vs its cache, max diff {d:.3g}', flush=True)
+        if d > 1e-9:
+            raise SystemExit(f'template sources differ from the recipe ({name})')
+    n = sum(len(x) for x in new_p + dev_p)
+    print(f'templates: {len(new_p) + len(dev_p)} sources, {n} patches', flush=True)
+    return fit_templates(new_p + dev_p)
+
+
+def git_id():
+    import subprocess
+    sha = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True,
+                         check=True).stdout.strip()
+    dirty = subprocess.run(['git', '-C', str(ROOT), 'status', '--porcelain', '--', 'tools/audio_analysis'],
+                           capture_output=True, text=True, check=True).stdout.strip()
+    return sha + ('-dirty' if dirty else '')
+
+
+def train_final():
+    """The tested recipe with one net. A grouped run (run_kick_goal_fast's machinery, unchanged) gives every song
+    out-of-group tree, net and blend probabilities and the held-out score; the final stage is fitted on stage
+    inputs built from those blends and the cutoff is chosen on the out-of-group staged predictions; trees,
+    templates and the net are then fitted on every song."""
+    from concurrent.futures import ProcessPoolExecutor
+    from multiprocessing import get_context
+    from tools.audio_analysis.eval import run_kick_goal_fast as fast
+    from tools.audio_analysis.eval.kick_goal_eval import RECALL_SONGS, SUFFIX, choose
+    from tools.audio_analysis.eval.kick_goal_featsets import lowbank_cache, profile_cache
+    from tools.audio_analysis.eval.run_kick_goal_data import ALL
+    from tools.audio_analysis.eval.run_kick_goal_selfsim import fit2
+    assert (fast.NETS, fast.SEED, fast.SYNTH_ON, fast.MELODIC_ON, fast.WINDOWS, fast.FEATS) == (1, 0, False, True, [WINDOW_S], 'f69')
+    assert nnm.EPOCHS == 12 and nnm.AHEAD_MS == 40
+    t0 = time.time()
+    train_id = f'kick-{datetime.date.today().isoformat()}-{git_id()}'
+    folds = fast.groups()
+    fast.setup()
+    g = fast.STATE['g']
+    group_of = {t: k for k, f in enumerate(folds) for t in f}
+    print(f'{train_id}: {len(ALL)} songs in {len(folds)} groups, records ready at {time.time() - t0:.0f} s', flush=True)
+
+    # Grouped run: run_kick_goal_fast.main's steps, kept in step with it.
+    tasks = [((f,), f) for f in folds]
+    keys = [(k, None) for k in range(len(folds))]
+    for i in range(len(folds)):
+        for j in range(i + 1, len(folds)):
+            tasks.append(((folds[i], folds[j]), folds[i] + folds[j]))
+            keys.append((i, j))
+    tree_out, tree_in = {}, {}
+    tree_path = fast.OUT / f'fast_treecache{SUFFIX}{"_mel" if fast.MELODIC_ON else ""}.npz'
+    with ProcessPoolExecutor(fast.WORKERS, mp_context=get_context('spawn'), initializer=fast.setup) as ex:
+        cached = tree_path.exists()
+        futures = [] if cached else [ex.submit(fast.tree_task, (tuple(u for f in out for u in f), scored)) for out, scored in tasks]
+        net_p = fast.nets(g, folds)
+        print(f'grouped nets done at {time.time() - t0:.0f} s', flush=True)
+        if cached:
+            with np.load(tree_path) as z:
+                for key in z.files:
+                    i, j, u = key.split('|')
+                    (tree_out.setdefault(int(i), {}) if j == '' else tree_in.setdefault((int(i), int(j)), {}))[u] = z[key]
+        else:
+            for (i, j), fut in zip(keys, futures):
+                p = fut.result()
+                if j is None:
+                    tree_out[i] = p
+                else:
+                    tree_in[(i, j)] = {u: p[u] for u in folds[j]}
+                    tree_in[(j, i)] = {u: p[u] for u in folds[i]}
+            np.savez(tree_path, **{f'{i}||{u}': v for i, d in tree_out.items() for u, v in d.items()},
+                     **{f'{i}|{j}|{u}': v for (i, j), d in tree_in.items() for u, v in d.items()})
+        print(f'grouped trees {"loaded from " + tree_path.name if cached else "done"} at {time.time() - t0:.0f} s', flush=True)
+        net_of = {t: net_p[k][t] for k, f in enumerate(folds) for t in f}
+
+        def blend(k, j, t):
+            return expit((fast.lg(tree_in[(k, j)][t] if j is not None else tree_out[k][t]) + fast.lg(net_of[t])) / 2)
+        raw = {t: blend(k, None, t) for k, f in enumerate(folds) for t in f}
+        raw_cut = {}
+        for k, f in enumerate(folds):
+            th, _ = choose(g, {t: blend(k, j, t) for j, h in enumerate(folds) if j != k for t in h if t not in RECALL_SONGS})
+            raw_cut.update({t: th for t in f})
+        fast.report(g, 'blend', raw, raw_cut)
+        stage_tasks = [(k, folds, {t: blend(k, j, t) for j, h in enumerate(folds) if j != k for t in h},
+                        {t: blend(k, None, t) for t in f}) for k, f in enumerate(folds)]
+        staged, cuts = {}, {}
+        for k, (p, th) in enumerate(ex.map(fast.stage_task, stage_tasks)):
+            staged.update(p)
+            cuts.update({t: th for t in folds[k]})
+        fast.report(g, 'blend+stage', staged, cuts)
+    print(f'grouped run done at {time.time() - t0:.0f} s (held-out score above)', flush=True)
+
+    # Final stage: every song's stage inputs from its out-of-group blend; cutoff on the out-of-group staged scores.
+    shape = {t: np.hstack([profile_cache(g, t), lowbank_cache(g, t)]) for t in ALL}
+    inputs = {t: fast.stage_matrix(g, shape, t, blend(group_of[t], None, t)) for t in ALL}
+    stage = fit2(g, inputs, list(ALL), slice(None))
+    cutoff, f1 = choose(g, {t: staged[t] for t in ALL if t not in RECALL_SONGS})
+    print(f'final stage fitted; cutoff {cutoff:.6f} (pooled F1 {f1:.4f} on out-of-group staged scores, '
+          f'recall-only songs left out) at {time.time() - t0:.0f} s', flush=True)
+
+    trees = fast.STATE['fit'](list(ALL))
+    print(f'final trees fitted at {time.time() - t0:.0f} s', flush=True)
+    templates = all_song_templates(g)
+    print(f'final templates {templates.shape} at {time.time() - t0:.0f} s', flush=True)
+    dev = nnm.device()
+    data = {t: nnm.Song.real(g, t).to(dev) for t in ALL}
+    net = nnm.train([data[t] for t in ALL], 0)
+    print(f'final net fitted ({nnm.EPOCHS} epochs, seed 0, {dev}) at {time.time() - t0:.0f} s', flush=True)
+    write_final(final_dict(train_id, trees, net, stage, templates, cutoff), t0)
+
+
+def train(provisional):
+    train_provisional() if provisional else train_final()
 
 
 # ---------------------------------------------------------------- reference pipeline

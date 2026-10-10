@@ -128,6 +128,9 @@ VERBS = [
     ("Render and measure",
      "kick-labels", "kick_label_extract.py", "ground-truth kick times from drum stems"),
     ("Render and measure",
+     "kick-release", ["tools/audio_analysis/kick_release.py"],
+     "kick model release: train [--provisional] the final model; export --hooks DIR --out DIR writes the model file and parity goldens"),
+    ("Render and measure",
      "repair-audio-fixture", "repair_audio_fixture.py", "rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply"),
 
     ("CPU reference oracles (f64, seconds, no GPU)",
@@ -223,6 +226,7 @@ COST_CLASSES = {
     "hook_census.py": "unit",
     "install-abletonosc-patch.sh": "unit",
     "kick_label_extract.py": "focused",
+    "kick_release.py": "broad",
     "land_branch.py": "focused",
     "land_wave.py": "focused",
     "landing_gate.py": "focused",
@@ -285,11 +289,18 @@ def script_cost(path, args=()):
 
 
 def target_name(command):
-    """Compiled target of a cargo verb (possibly behind gpu_queue)."""
+    """Compiled target of a cargo verb (possibly behind gpu_queue), or the file
+    name of a repo script that lives outside scripts/ (e.g. tools/)."""
     for flag in ("--bin", "--example"):
         if flag in command:
             return command[command.index(flag) + 1]
+    if repo_script(command):
+        return Path(command[0]).name
     raise ValueError("cargo verb needs an explicit --bin or --example")
+
+
+def repo_script(command):
+    return command[0].endswith((".py", ".sh")) and not command[0].startswith("scripts/")
 
 
 def verb_cost(target):
@@ -326,7 +337,7 @@ def command_for(verb, args):
         if name == verb:
             if isinstance(target, str):
                 return [str(SCRIPTS / target), *args]
-            return [str(ROOT / target[0]) if target[0].startswith("scripts/") else target[0],
+            return [str(ROOT / target[0]) if target[0].startswith("scripts/") or repo_script(target) else target[0],
                     *target[1:], *args]
     return None
 
