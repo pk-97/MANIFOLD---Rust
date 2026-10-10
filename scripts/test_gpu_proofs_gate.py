@@ -490,6 +490,26 @@ class GpuProofsGateTests(unittest.TestCase):
                 if arg == '--test':
                     self.assertIn(run[i + 1], build)
 
+    def test_reused_pass_with_saved_timing_red_reruns_only_that_test(self):
+        saved = []
+        passed = object.__new__(gate.gate_passes.Pass)
+        passed.key, passed.label = 'k', 'gpu-proofs'
+        passed.record = {'pass': True, 'seconds': 66.0, 'commit': 'c', 'time': 't',
+                         'timings': [gate.timing_entry('manifold-nodes', 'gpu_proofs',
+                                                       'cold_heavy', 66.0, 'ok', True)]}
+        passed.reused = lambda: True
+        passed.inputs_changed = False
+        passed.unchanged = lambda: True
+        passed.save = lambda code, secs=0, **kw: saved.append(kw['timings'])
+        argv = ['--package', 'manifold-nodes', '--test', 'gpu_proofs', '--filter', 'cold_heavy']
+        with patch.object(gate.gpu_scope, 'read_times', return_value={}):
+            code, calls, text = self.run_main(
+                argv, passed=passed, measured=[('cold_heavy', 1.7, 'gpu_proofs', 'ok')])
+        self.assertEqual(code, 0)
+        self.assertEqual([c['filters'] for c in calls], [['cold_heavy']])
+        self.assertIn('rerunning only the flagged tests', text)
+        self.assertEqual(gate.timing_fields(saved[0][0])[3], 1.7)
+
     def test_missing_owned_proof_fails_without_a_green_receipt(self):
         passed = object.__new__(gate.gate_passes.Pass)
         passed.key, passed.label, passed.record = 'earlier', 'gpu-proofs', None
@@ -842,6 +862,60 @@ class WatchdogTests(unittest.TestCase):
         self.assertIn("--package pkg", text)
         self.assertIn("--test proofs", text)
         self.assertIn("--hang-allowance 300", text)
+
+
+class TimingRerunTests(unittest.TestCase):
+    RUN = dict(package="pkg", target="proofs", targets=["proofs"], lib=False, full=False,
+               budgeted=True, features=None)
+    FINDING = {"package": "pkg", "target": "proofs", "test": "cold_heavy",
+               "seconds": 66.0, "key": "pkg/proofs/cold_heavy"}
+
+    def rerun(self, seconds, passes=None, status="ok", code=0):
+        saved = []
+        records = {0: [gate.timing_entry("pkg", "proofs", "cold_heavy", 66.0, "ok", True),
+                       gate.timing_entry("pkg", "proofs", "other", 1.0, "ok", True)]}
+
+        def fake_run_gate(manifest, filters, skips, targets, full, lib, timings, *rest, **kwargs):
+            saved.append(filters)
+            timings.append(gate.timing_entry("pkg", "proofs", "cold_heavy", seconds, status, True))
+            return code, ""
+
+        class Receipt:
+            def save(self, code, secs, *, timings=None, failed=None):
+                saved.append(("save", secs, timings))
+
+        @contextlib.contextmanager
+        def hold(label, **kwargs):
+            yield
+
+        with patch.object(gate, "run_gate", side_effect=fake_run_gate), \
+                patch.object(gate, "build_tests", return_value=0), \
+                patch.object(gate.gpu_queue, "hold", side_effect=hold), \
+                contextlib.redirect_stdout(io.StringIO()):
+            fresh = gate.rerun_timing_red([self.FINDING], [dict(self.RUN)],
+                                          [Receipt()], records, Path("/tmp/Cargo.toml"))
+        return fresh, saved, records
+
+    def test_only_flagged_tests_rerun_and_fast_time_clears_the_red(self):
+        fresh, saved, records = self.rerun(1.7)
+        self.assertEqual(saved[0], ["cold_heavy"])
+        self.assertEqual([gate.timing_fields(t)[3] for t in records[0]], [1.7, 1.0])
+        self.assertEqual(saved[1][0:2], ("save", 2.7))
+        merged = gate._swap_timings(list(records[0]), fresh)
+        with patch.object(gate.gpu_scope, "read_times", return_value={}):
+            self.assertEqual(gate.unmeasured_heavy(merged), [])
+
+    def test_slow_rerun_stays_red(self):
+        fresh, _, records = self.rerun(70.0)
+        with patch.object(gate.gpu_scope, "read_times", return_value={}):
+            self.assertEqual([f["test"] for f in gate.unmeasured_heavy(records[0])], ["cold_heavy"])
+        self.assertEqual(gate.timing_fields(list(fresh.values())[0])[3], 70.0)
+
+    def test_failed_rerun_changes_nothing(self):
+        fresh, saved, records = self.rerun(1.0, status="FAILED", code=101)
+        self.assertEqual(fresh, {})
+        self.assertEqual(gate.timing_fields(records[0][0])[3], 66.0)
+
 
 
 if __name__ == "__main__":

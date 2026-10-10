@@ -419,6 +419,10 @@ class CacheTests(unittest.TestCase):
             for mock in (build, run, hold):
                 mock.reset_mock()
             self.assertEqual(proofs.main(), 5, 'reuse must not hide the policy red')
+            # A saved timing red reruns only the flagged test (still slow here).
+            self.assertEqual([call.args[1] for call in run.call_args_list], [['slow']])
+            for mock in (build, run, hold):
+                mock.reset_mock()
             self.write('scripts/gpu_test_times.json',
                        '{"tests": {"manifold-nodes/gpu_proofs/slow": 80}}')
             self.assertEqual(proofs.main(), 0)
@@ -477,11 +481,10 @@ class CacheTests(unittest.TestCase):
         passed.path.write_text(json.dumps(record))
         code, calls, holds, executed = self.run_landing()
         self.assertNotEqual(code, 0)
-        self.assertEqual((calls, holds, executed), ([], 0, 0))
+        # The saved red goes to the proof gate, which reruns only that test.
+        self.assertTrue(any(c[:2] == ['python3', 'scripts/gpu_proofs_gate.py'] for c in calls))
+        self.assertEqual(executed, 1)
         self.assertIsNotNone(cache.proof_pass(self.repo, run).record)
-        transcripts = list((self.repo / 'target/landing-logs').glob('gpu-proofs-*.log'))
-        self.assertTrue(any('GPU-PROOFS TIMING: FAIL' in log.read_text()
-                            for log in transcripts))
 
     def test_failed_execution_with_changed_inputs_is_a_gate_refusal(self):
         self.write('tests/fixtures/ignored.bin', 'before')
