@@ -36,6 +36,8 @@ from scipy.special import expit, logit
 from tools.audio_analysis.eval.kick_attack_rejection import read_audio
 from tools.audio_analysis.eval.kick_fusion_bandwise import fusion_features
 from tools.audio_analysis.eval.kick_goal_labels import DEV_STEMS, GOAL, MORE, NEW, drum_kicks, fresh_onsets, kick_env_db, load
+from tools.audio_analysis.eval.kick_goal_project_kicks import PROJECT, confirmed
+from tools.audio_analysis.eval.kick_goal_recall_labels import RECALL
 from tools.audio_analysis.eval.kick_goal_rolls import kick_notes
 from tools.audio_analysis.eval.kick_goal_trigger_labels import TRIGGER
 from tools.audio_analysis.eval.kick_goal_wip_labels import WIP
@@ -99,12 +101,15 @@ def one_per_refractory(times):
 
 
 def stem_notes(track, kick_path, sr):
-    """Kick notes (stem time, s) of a kick stem, rolls included; cached per track."""
+    """Kick notes (stem time, s) of a kick stem, rolls included; cached per track.
+    With KICK_GOAL_PROJECT=1, a song with a project kick track keeps only the
+    attacks a kick note lands on (kick_goal_project_kicks)."""
     path = GOAL / f'notes_{track}.npy'
     if not path.exists():
         x = load(kick_path, sr)
         np.save(path, kick_notes(x, sr, kick_env_db(x, sr)))
-    return np.load(path)
+    notes = np.load(path)
+    return confirmed(track, notes) if PROJECT_ON and track in PROJECT else notes
 
 
 REFRACTORY = .060
@@ -112,7 +117,10 @@ TRUTH = os.environ.get('KICK_GOAL_TRUTH', 'strict')
 MORE_ON = os.environ.get('KICK_GOAL_MORE') == '1'
 TRIGGER_ON = os.environ.get('KICK_GOAL_TRIGGER') == '1'
 WIP_ON = os.environ.get('KICK_GOAL_WIP') == '1'
-SUFFIX = ('' if TRUTH == 'strict' else f'_{TRUTH}') + ('_more' if MORE_ON else '') + ('_trig' if TRIGGER_ON else '') + ('_wip' if WIP_ON else '')
+PROJECT_ON = os.environ.get('KICK_GOAL_PROJECT') == '1'
+RECALL_ON = os.environ.get('KICK_GOAL_RECALL') == '1'
+SUFFIX = (('' if TRUTH == 'strict' else f'_{TRUTH}') + ('_more' if MORE_ON else '') + ('_trig' if TRIGGER_ON else '')
+          + ('_wip' if WIP_ON else '') + ('_proj' if PROJECT_ON else '') + ('_rec' if RECALL_ON else ''))
 NEW_SONGS = ('pattern', 'back_to_you', 'burn_stems', 'cold_remix')
 # KICK_GOAL_MORE=1 adds the campaign 2 training songs (kick_goal_labels.MORE, labels_more.json).
 MORE_SONGS = tuple(MORE) if MORE_ON else ()
@@ -121,6 +129,9 @@ STEM_CFG = {**NEW, **MORE}
 TRIGGER_SONGS = tuple(TRIGGER) if TRIGGER_ON else ()
 # KICK_GOAL_WIP=1 adds the section-scored WIP mixdowns (kick_goal_wip_labels, labels_wip.json).
 WIP_SONGS = WIP if WIP_ON else ()
+# KICK_GOAL_RECALL=1 adds WIP mixdowns scored for recall only (kick_goal_recall_labels, labels_recall.json):
+# their kicks train and must be caught, nothing else in them is a non-kick. Precision summaries leave them out.
+RECALL_SONGS = RECALL if RECALL_ON else ()
 CORE_IDS = ('late_night_bass_heavy', 'midnight_patience_bass_heavy', 'expanded_midnight_patience_s2',
             'expanded_midnight_patience_s4', 'expanded_miracle_s1', 'miracle_bass', 'expanded_miracle_s4',
             'expanded_miracle_s6', 'heavy_on_mind_bass')
@@ -187,8 +198,10 @@ class Goal:
             self.labels['new'].update(json.loads((GOAL / 'labels_trigger.json').read_text())['new'])
         if WIP_SONGS:
             self.labels['new'].update(json.loads((GOAL / 'labels_wip.json').read_text())['new'])
+        if RECALL_SONGS:
+            self.labels['new'].update(json.loads((GOAL / 'labels_recall.json').read_text())['new'])
         if with_new:
-            for name in NEW_SONGS + MORE_SONGS + TRIGGER_SONGS + WIP_SONGS:
+            for name in NEW_SONGS + MORE_SONGS + TRIGGER_SONGS + WIP_SONGS + RECALL_SONGS:
                 self.records[name] = self._new(name)
 
     def _new(self, name):
@@ -242,6 +255,7 @@ class Goal:
         if sections:
             self._finish(rec, None)
             rec['stem_kicks'] = stem_kicks
+            rec['positives_only'] = bool(info.get('positives_only'))
         elif trigger:
             self._finish(rec, None, TRIGGER[name]['drums'])
         else:
@@ -294,6 +308,8 @@ def training_set(g, tracks, whole=False, feats='features'):
     for t in tracks:
         r = g.records[t]
         m, y_all = (r['train_mask'], r['train_y']) if whole and 'train_mask' in r else (r['training_mask'], r['labels'])
+        if r.get('positives_only'):
+            m = m & (y_all == 1)
         y = y_all[m]
         w = np.where(y == 1, .5 / max(1, y.sum()), .5 / max(1, (1 - y).sum()))
         xs.append(r[feats][m]); ys.append(y); ws.append(w)
