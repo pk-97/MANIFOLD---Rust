@@ -36,7 +36,7 @@ from scipy.special import expit, logit
 from tools.audio_analysis.eval.kick_attack_rejection import read_audio
 from tools.audio_analysis.eval.kick_fusion_bandwise import fusion_features
 from tools.audio_analysis.eval.kick_goal_labels import DEV_STEMS, GOAL, MORE, NEW, drum_kicks, fresh_onsets, kick_env_db, load
-from tools.audio_analysis.eval.kick_goal_project_kicks import PROJECT, confirmed, doubtful
+from tools.audio_analysis.eval.kick_goal_project_kicks import PROJECT, confirmed, doubtful, other_drum_stems
 from tools.audio_analysis.eval.kick_goal_recall_labels import RECALL
 from tools.audio_analysis.eval.kick_goal_rolls import kick_notes
 from tools.audio_analysis.eval.kick_goal_trigger_labels import TRIGGER
@@ -232,11 +232,17 @@ class Goal:
             if PROJECT_ON and name not in PROJECT:
                 doubt = doubtful(name, STEM_CFG[name]['kick'], stem_kicks - shift, sr) + shift
                 labels = [x for x in labels if not np.any(np.abs(doubt - x) <= 1e-6)]
+            if PROJECT_ON:
+                parts = [stem_derived(drum_kicks, p, sr) + shift for p in other_drum_stems(name, STEM_CFG[name])]
+                other = np.sort(np.concatenate(parts)) if parts else np.zeros(0)
+                far = np.array([u for u in other if not np.any(np.abs(stem_kicks - u) <= .07)])
+                doubt = np.concatenate([doubt, far])
         else:
             stem_kicks = fresh_onsets(stem_derived(kick_env_db, STEM_CFG[name]['kick'], sr)) + shift
             labels = info['labels']
         labels = one_per_refractory(labels)
-        regions = [(0.0, 1.2), (dur - 1.0, dur + 1.0)] + [(u - .07, u + .2) for u in info.get('uncertain', [])] + [(u - .07, u + .2) for u in doubt]
+        regions = ([(0.0, 1.2), (dur - 1.0, dur + 1.0)] + [(u - .07, u + .2) for u in info.get('uncertain', [])]
+                   + [(u - .07, u + .2) for u in doubt])
         if sections:
             # Only the proven sections are scored: everything between them is unscored.
             edges = [0.0] + [x for a, b in sorted(info['scored_spans_s']) for x in (a, b)] + [dur + 1.0]

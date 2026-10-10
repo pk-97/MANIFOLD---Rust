@@ -13,6 +13,8 @@ offset that puts the most notes on an attack.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from tools.audio_analysis.eval.als_extract import extract
@@ -28,6 +30,14 @@ ECHO_S = .2
 # Closer pairs are flams, merged into one kick by kick_goal_eval.one_per_refractory.
 REFRACTORY_S = .06
 
+# Drum stems with no drums entry in kick_goal_labels. Gerrit's room and tom mics are
+# left out: their kick-shaped hits are toms, which are not kicks.
+OTHER_DRUMS = {
+    'gerrit': ('Drums overhead.wav',),
+    'worship': ('Worship Stems - Bus 1-24b.wav', 'Worship Stems - Bus 2-24b.wav',
+                'Worship Stems - KSHMR Acoustic Fill 128BPM 03-24b.wav'),
+}
+
 # Projects found by fitting every kick track in Peter's 2024-2025 projects to each
 # stem (2026-10-10 scan). Late Night's kick also runs through a delay: 20 quiet
 # quarter-beat echoes before its drops have no note.
@@ -41,6 +51,14 @@ PROJECT = {
     'back_to_you': dict(als=ABL / '2024/States Project/States (Back to You) - MASTER FINAL V3.als', kick='48-DS Kick'),
     'burn_stems': dict(als=ABL / '2025/Fifty Project/Fifty (Burn) - PREMASTER T2.als', kick='69-DS Kick'),
 }
+
+
+def other_drum_stems(track, cfg):
+    """The stems besides the kick stem that may carry a kick the kick stem does not:
+    the configured drums stem, plus OTHER_DRUMS. A kick-shaped hit there far from
+    every label is left unscored, as on the trigger songs."""
+    extra = [Path(cfg['parts_dir']) / f for f in OTHER_DRUMS.get(track, ())] if cfg.get('parts_dir') else []
+    return list(cfg.get('drums', [])) + extra
 
 
 def doubtful(track, kick, attacks, sr):
