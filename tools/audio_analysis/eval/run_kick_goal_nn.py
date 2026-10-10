@@ -13,6 +13,7 @@ outer fits one net per held-out song on the other songs and saves its
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -27,6 +28,12 @@ from tools.audio_analysis.eval.kick_goal_nn import Song, predict, spectrum_cache
 from tools.audio_analysis.eval.run_kick_goal_data import ALL  # noqa: E402
 
 STATE = {}
+# KICK_GOAL_NN_SEED shifts every net's seed (run-to-run noise checks); a non-zero shift tags the output.
+SEED = int(os.environ.get('KICK_GOAL_NN_SEED', '0'))
+# KICK_GOAL_NN_SYNTH=1 adds the kick-swap clips (kick_goal_synth); KICK_GOAL_NN_ENSEMBLE=n averages n nets per song.
+SYNTH_ON = os.environ.get('KICK_GOAL_NN_SYNTH') == '1'
+ENSEMBLE = int(os.environ.get('KICK_GOAL_NN_ENSEMBLE', '1'))
+TAG = (f'_s{SEED}' if SEED else '') + ('_syn' if SYNTH_ON else '') + (f'_e{ENSEMBLE}' if ENSEMBLE > 1 else '')
 
 
 def _init():
@@ -50,7 +57,7 @@ def best_p(g, t, p, rmin=.9):
 def look(g, t):
     from PIL import Image
     r = g.records[t]
-    song = Song(g, t)
+    song = Song.real(g, t)
     z = np.load(GOAL / f'nested_f69{SUFFIX}_R3_self8.npz')
     cut = json.loads((GOAL / f'results_selfsim2_f69{SUFFIX}_R3_self8.json').read_text())['R3_self8']['all']['cutoffs'][t]
     idx, passages = score(g, t, z[t], cut)
@@ -71,17 +78,19 @@ def look(g, t):
 
 
 def outer(g):
-    data = {t: Song(g, t) for t in ALL}
+    data = {t: Song.real(g, t) for t in ALL}
+    clips = [Song.synth(p) for p in sorted((GOAL / 'synth').glob('*.npz'))] if SYNTH_ON else []
     base = np.load(GOAL / f'nested_f69{SUFFIX}.npz')
     out, rows = {}, []
     for k, o in enumerate(ALL):
         t0 = time.time()
-        net = train(g, [u for u in ALL if u != o], data, seed=k)
-        out[o] = predict(net, data[o])
+        usable = [c for c in clips if o not in c.sources]
+        out[o] = np.mean([predict(train([data[u] for u in ALL if u != o], k + 1000 * SEED + 100000 * e, usable), data[o])
+                          for e in range(ENSEMBLE)], axis=0)
         a, b = best_p(g, o, base[o]), best_p(g, o, out[o])
         rows.append((a, b))
         print(f'{o:28s} f69 {a:.2f}  net {b:.2f}  ({time.time() - t0:.0f} s)', flush=True)
-    np.savez(OUT / f'nn_outer{SUFFIX}.npz', **out)
+    np.savez(OUT / f'nn_outer{SUFFIX}{TAG}.npz', **out)
     a, b = np.mean(rows, axis=0)
     print(f'mean best precision at 90% recall: f69 {a:.3f}  net {b:.3f}')
 

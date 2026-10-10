@@ -53,15 +53,26 @@ def spectrum_cache(g, t):
 
 
 class Song:
-    """A song's spectrum and its candidates' slice anchors."""
+    """A spectrum, its candidates' slice anchors and training rows (mask, labels)."""
 
-    def __init__(self, g, t):
-        r = g.records[t]
-        self.spec = torch.from_numpy(spectrum_cache(g, t))
+    def __init__(self, spec, onset_s, emit_s, mask, y, name=''):
+        self.spec, self.mask, self.y, self.name = torch.from_numpy(spec), mask, y, name
         n = len(self.spec)
-        self.end = np.clip((r['emit_s'] / FRAME_S).astype(int), SLICE + JITTER, n - 1 - JITTER)
-        self.pre = np.clip(((r['onset_s'] - PRE_S) / FRAME_S).astype(int), 0, n - 2)
-        self.on = np.clip((r['onset_s'] / FRAME_S).astype(int), self.pre + 1, n - 1)
+        self.end = np.clip((emit_s / FRAME_S).astype(int), SLICE + JITTER, n - 1 - JITTER)
+        self.pre = np.clip(((onset_s - PRE_S) / FRAME_S).astype(int), 0, n - 2)
+        self.on = np.clip((onset_s / FRAME_S).astype(int), self.pre + 1, n - 1)
+
+    @classmethod
+    def real(cls, g, t):
+        r = g.records[t]
+        return cls(spectrum_cache(g, t), r['onset_s'], r['emit_s'], r['train_mask'], r['train_y'], t)
+
+    @classmethod
+    def synth(cls, path):
+        with np.load(path) as z:
+            song = cls(z['spec'].astype(np.float32), z['onset_s'], z['emit_s'], z['mask'], z['y'], path.stem)
+            song.sources = (str(z['target']), str(z['donor']))
+        return song
 
     def slices(self, idx, shift=None):
         end = self.end[idx] + (shift if shift is not None else 0)
@@ -94,28 +105,26 @@ def device():
     return torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
 
 
-def train(g, songs, data, seed):
-    """A net fitted on the songs' training rows: song-equal, class-balanced sampling."""
+def train(songs, seed, synth=()):
+    """A net fitted on the songs' training rows: song-equal, class-balanced sampling.
+    Kick-swap clips (synth) together get as many draws as the real songs, spread evenly."""
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
     dev = device()
     net = Net().to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=LR, weight_decay=1e-4)
-    rows = {}
-    for t in songs:
-        r = g.records[t]
-        m = r['train_mask']
-        rows[t] = (np.flatnonzero(m & (r['train_y'] == 1)), np.flatnonzero(m & (r['train_y'] == 0)))
-    per_song = max(1, int(np.median([len(p) for p, _ in rows.values()])))
+    rows = [(s, np.flatnonzero(s.mask & (s.y == 1)), np.flatnonzero(s.mask & (s.y == 0))) for s in list(songs) + list(synth)]
+    per_song = max(1, int(np.median([len(p) for _, p, _ in rows[:len(songs)]])))
+    per_clip = max(1, per_song * len(songs) // max(1, len(synth)))
     for _ in range(EPOCHS):
         batch_x, batch_y = [], []
-        for t in songs:
-            pos, neg = rows[t]
+        for k, (song, pos, neg) in enumerate(rows):
+            draws = per_song if k < len(songs) else per_clip
             for idx, y in ((pos, 1.0), (neg, 0.0)):
                 if not len(idx):
                     continue
-                pick = rng.choice(idx, per_song)
-                batch_x.append(data[t].slices(pick, rng.integers(-JITTER, JITTER + 1, len(pick))))
+                pick = rng.choice(idx, draws)
+                batch_x.append(song.slices(pick, rng.integers(-JITTER, JITTER + 1, len(pick))))
                 batch_y.append(torch.full((len(pick),), y))
         x, y = torch.cat(batch_x), torch.cat(batch_y)
         order = torch.from_numpy(rng.permutation(len(y)))
