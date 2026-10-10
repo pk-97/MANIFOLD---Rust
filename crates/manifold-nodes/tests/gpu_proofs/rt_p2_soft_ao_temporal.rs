@@ -114,6 +114,13 @@ fn upload_irr(device: &GpuDevice, r: f32, g: f32, b: f32, label: &str) -> GpuTex
     texture
 }
 
+/// Write targets for the accumulate channels a proof does not inspect. The
+/// read-only uploaded dummies cannot take a shader write, and binding one
+/// texture as both read and write in one dispatch races.
+fn write_sinks(device: &GpuDevice) -> [GpuTexture; 5] {
+    std::array::from_fn(|i| make_history(device, &format!("p2-write-sink-{i}")))
+}
+
 /// A history texture, freshly allocated (undefined content — every use
 /// below either reset=true's into it first, or reads it only after a
 /// prior write).
@@ -495,6 +502,7 @@ fn run_accumulate_with_sv(
     }
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
     let sv2_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-sv2-dummy");
+    let sinks = write_sinks(device);
     let svt_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-svt-dummy");
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let mut enc = device.create_encoder(label);
@@ -529,8 +537,8 @@ fn run_accumulate_with_sv(
             history.write_sv_m2(),
             history.read_sv_hold(),
             history.write_sv_hold(),
-            &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy,
-            &svt_dummy, &svt_dummy, &svt_dummy,
+            &sv2_dummy, &sv2_dummy, &sinks[0], &sv2_dummy, &sinks[1], &sv2_dummy, &sinks[2], &sv2_dummy, &sinks[3],
+            &svt_dummy, &svt_dummy, &sinks[4],
             label,
         );
     }
@@ -577,6 +585,7 @@ fn run_accumulate_with_svt(
     }
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
     let sv2_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-sv2-dummy");
+    let sinks = write_sinks(device);
     let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
     let mut enc = device.create_encoder(label);
     {
@@ -610,7 +619,7 @@ fn run_accumulate_with_svt(
             history.write_sv_m2(),
             history.read_sv_hold(),
             history.write_sv_hold(),
-            &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy,
+            &sv2_dummy, &sv2_dummy, &sinks[0], &sv2_dummy, &sinks[1], &sv2_dummy, &sinks[2], &sv2_dummy, &sinks[3],
             hi_svt,
             history.read_svt(),
             history.write_svt(),
@@ -968,6 +977,7 @@ fn refl_channel_blends_history_and_current() {
     let sv_hold_out = make_history(device, "bisect-sv-hold-out");
     // RS-A (caster cap 4 -> 8): 1x1 dummies for the sv2 channel, unread by this proof.
     let sv2_dummy = make_history(device, "bisect-sv2-dummy");
+    let sinks = write_sinks(device);
     let svt_dummy = make_history(device, "bisect-svt-dummy");
     let _sv2_m1_dummy = make_history(device, "bisect-sv2-m1-dummy");
     let _sv2_m2_dummy = make_history(device, "bisect-sv2-m2-dummy");
@@ -1007,8 +1017,8 @@ fn refl_channel_blends_history_and_current() {
             &sv_m2_out,
             &sv_hold_in,
             &sv_hold_out,
-            &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy,
-            &svt_dummy, &svt_dummy, &svt_dummy,
+            &sv2_dummy, &sv2_dummy, &sinks[0], &sv2_dummy, &sinks[1], &sv2_dummy, &sinks[2], &sv2_dummy, &sinks[3],
+            &svt_dummy, &svt_dummy, &sinks[4],
             "bisect-blend",
         );
         enc.commit_and_wait_completed();
@@ -1133,8 +1143,8 @@ fn refl_channel_blends_history_and_current() {
             &sv_m2_out,
             &sv_hold_in,
             &sv_hold_out,
-            &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy, &sv2_dummy,
-            &svt_dummy, &svt_dummy, &svt_dummy,
+            &sv2_dummy, &sv2_dummy, &sinks[0], &sv2_dummy, &sinks[1], &sv2_dummy, &sinks[2], &sv2_dummy, &sinks[3],
+            &svt_dummy, &svt_dummy, &sinks[4],
             "bisect-reset",
         );
         enc.commit_and_wait_completed();
