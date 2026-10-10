@@ -56,7 +56,7 @@ def balanced(y, hard):
 
 def main():
     from tools.audio_analysis.eval.snare_cands import candidates
-    from tools.audio_analysis.eval.snare_net import choose, rows, score
+    from tools.audio_analysis.eval.detector_eval import choose, rows, score
     from tools.audio_analysis.eval.kick_goal_eval import GOAL, Goal
     from tools.audio_analysis.eval.kick_goal_selfsim import self_features
     from tools.audio_analysis.eval.detector_songs import audio, rate, spec

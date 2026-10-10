@@ -54,7 +54,8 @@ from tools.audio_analysis.eval.detector_channels import N_FFT, flatness  # noqa:
 from tools.audio_analysis.eval.kick_attack_rejection import read_audio  # noqa: E402
 from tools.audio_analysis.eval.kick_goal_eval import GOAL  # noqa: E402
 from tools.audio_analysis.eval.snare_cands import DEADLINE, HOP, LOOKBACK, REFRACTORY, candidates  # noqa: E402
-from tools.audio_analysis.eval.snare_net import AHEAD, REFR, choose, fires  # noqa: E402
+from tools.audio_analysis.eval.detector_eval import REFR, choose, fires  # noqa: E402
+from tools.audio_analysis.eval.snare_net import AHEAD  # noqa: E402
 
 FINAL = GOAL / 'snare_final' / 'final.pkl'
 HELD = GOAL / 'snare_net_s0_snare_past_ms190_snare_flat1.npz'
@@ -87,7 +88,7 @@ def labelled_songs(g, dev):
     """(Song per labelled song, per-song scoring metadata) built exactly as snare_net builds them."""
     from tools.audio_analysis.eval.detector_channels import flat_cache
     from tools.audio_analysis.eval.detector_songs import audio, rate, spec
-    from tools.audio_analysis.eval.snare_net import rows
+    from tools.audio_analysis.eval.detector_eval import rows
     lab = json.loads((GOAL / 'snare_labels.json').read_text())
     data, meta = {}, {}
     for t, s in lab.items():

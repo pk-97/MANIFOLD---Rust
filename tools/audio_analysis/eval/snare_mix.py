@@ -30,7 +30,8 @@ STATE = {}
 
 def pool(g):
     from tools.audio_analysis.eval.kick_goal_eval import GOAL
-    from tools.audio_analysis.eval.snare_labels import STEM_SONGS, merge_layers, stem_hits
+    from tools.audio_analysis.eval.detector_labels import merge_layers, stem_hits
+    from tools.audio_analysis.eval.snare_labels import FAMILY
     from tools.audio_analysis.eval.kick_goal_eval import STEM_CFG, load
     out = []
     for name, e in json.loads((GOAL / 'snare_samples.json').read_text()).items():
@@ -38,7 +39,7 @@ def pool(g):
             # The 808 kit is AIFF-C compressed (unreadable here, even by afconvert): skipped.
             if not name.lower().endswith(('.aif', '.aiff')):
                 out.append(dict(name=name, audio=load(e['path'], 48000), users=e['users']))
-    for t, stems in STEM_SONGS.items():
+    for t, stems in FAMILY.stem_songs.items():
         info = g.labels['new'].get(t) or {}
         dirs = {Path(p).parent for p in info.get('mix_parts') or []}
         if t in STEM_CFG:
@@ -77,8 +78,8 @@ def build(task):
     t, n = task
     from tools.audio_analysis.eval.snare_cands import candidates
     from tools.audio_analysis.eval.snare_stack import measures
-    from tools.audio_analysis.eval.snare_labels import env_db, on_attack
-    from tools.audio_analysis.eval.snare_net import inside, nearest, rows
+    from tools.audio_analysis.eval.detector_labels import env_db, on_attack
+    from tools.audio_analysis.eval.detector_eval import inside, nearest, rows
     from tools.audio_analysis.eval.kick_goal_nn import spectrum
     from tools.audio_analysis.eval.run_kick_goal_tail_component import mix_audio
     from tools.audio_analysis.eval.kick_goal_eval import GOAL

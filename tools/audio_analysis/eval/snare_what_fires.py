@@ -9,7 +9,7 @@ from collections import Counter
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import numpy as np  # noqa: E402
 from tools.audio_analysis.eval.snare_cands import candidates  # noqa: E402
-from tools.audio_analysis.eval.snare_net import choose, fires, inside, nearest, rows  # noqa: E402
+from tools.audio_analysis.eval.detector_eval import choose, fires, inside, nearest, rows  # noqa: E402
 from tools.audio_analysis.eval.als_extract import extract  # noqa: E402
 from tools.audio_analysis.eval.kick_goal_eval import GOAL, Goal  # noqa: E402
 from tools.audio_analysis.eval.kick_goal_melodic import _source  # noqa: E402

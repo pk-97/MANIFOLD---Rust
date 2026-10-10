@@ -1,40 +1,28 @@
 #!/usr/bin/env python3
 """Snare candidate finder (causal) and its recall on the snare labels.
 
-Per 256-sample hop at 48 kHz: log energy of the 1-8 kHz band over the hop's last 5 ms. A candidate is a hop where
-that energy rises at least RISE_DB above the minimum of the previous LOOKBACK hops and is the first such hop since the
-energy last fell back (one candidate per attack, REFRACTORY hops apart). Availability = candidate + DEADLINE hops,
-as for kicks. Usage: snare_cands.py [RISE_DB ...]  (prints recall within 35 ms and candidates per second)."""
+detector_cands.rise_candidates on the 1-8 kHz band (5 ms energy per 256-sample hop): a rise of at least rise_db over
+the minimum of the previous LOOKBACK hops, re-armed when the rise falls back, REFRACTORY hops apart; availability =
+candidate + DEADLINE hops, as for kicks. Usage: snare_cands.py [RISE_DB ...]  (prints recall within 35 ms and
+candidates per second)."""
 import json
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import numpy as np  # noqa: E402
-from scipy.signal import butter, sosfilt  # noqa: E402
+from tools.audio_analysis.eval import detector_cands  # noqa: E402
+from tools.audio_analysis.eval.detector_cands import HOP  # noqa: E402
 
-HOP, LOOKBACK, REFRACTORY, DEADLINE = 256, 4, 6, 8
+LOOKBACK, REFRACTORY, DEADLINE = 4, 6, 8
+BAND = (1000, 8000)
 
 
-def band_hops(x, sr, lo=1000, hi=8000):
-    y = sosfilt(butter(4, (lo, hi), btype='band', fs=sr, output='sos'), x) ** 2
-    k = int(.005 * sr)
-    c = np.concatenate([[0.0], np.cumsum(y)])
-    ends = np.arange(HOP, len(x) + 1, HOP)
-    return 10 * np.log10((c[ends] - c[ends - k]) / k + 1e-12)
+def band_hops(x, sr, lo=BAND[0], hi=BAND[1]):
+    return detector_cands.band_hops(x, sr, lo, hi)
 
 
 def candidates(x, sr, rise_db=6.0):
-    e = band_hops(x, sr)
-    cand, last, armed = [], -100, True
-    for h in range(LOOKBACK, len(e)):
-        r = e[h] - e[h - LOOKBACK:h].min()
-        if r < rise_db / 2:
-            armed = True
-        if armed and r >= rise_db and h - last >= REFRACTORY:
-            cand.append(h)
-            last, armed = h, False
-    cand = np.array(cand, int)
-    return cand, cand + DEADLINE
+    return detector_cands.rise_candidates(band_hops(x, sr), rise_db, LOOKBACK, REFRACTORY, DEADLINE)
 
 
 def main():
