@@ -1,7 +1,7 @@
 # Realtime Kick Detector — the trained kick model as the app's only kick detector
 
-**Status:** IN PROGRESS — wired, awaiting Peter's live test · Opus 5.5 lead, Fable review
-**Prerequisites:** the research recipe on `feat/kick-realtime` (`tools/audio_analysis/eval/`, `docs/AUDIO_EVAL_HARNESS_GUIDE.md`).
+**Status:** SHIPPED 2026-10-10 (Peter live-tested) · owed: BUG-qy8q7 (drop kicks missed after a high-passed build-up roll) · Opus 5.5 lead, Fable review
+**Prerequisites:** the research recipe (`tools/audio_analysis/eval/`, `docs/AUDIO_EVAL_HARNESS_GUIDE.md`).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) before starting a phase.
 
 ## 1. What ships
