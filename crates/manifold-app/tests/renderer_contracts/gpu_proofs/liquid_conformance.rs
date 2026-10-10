@@ -299,6 +299,15 @@ struct LiquidRun {
 
 /// A device with a frame clock, as the app runs: every frame signals the
 /// clock's event and drains what retired.
+/// The shared harness device with the app's disk shader caches loaded once:
+/// a cold device spends most of a liquid run compiling the solver's kernels.
+fn shared_device() -> Arc<GpuDevice> {
+    static LOADED: std::sync::Once = std::sync::Once::new();
+    let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
+    LOADED.call_once(|| manifold_gpu::testkit::load_disk_shader_caches(device));
+    Arc::clone(device)
+}
+
 struct Clocked {
     device: Arc<GpuDevice>,
     event: GpuEvent,
@@ -308,6 +317,7 @@ struct Clocked {
 impl Clocked {
     fn new() -> Self {
         let device = Arc::new(GpuDevice::new_queued("gpu_proofs"));
+        manifold_gpu::testkit::load_disk_shader_caches(&device);
         let event = device.create_event();
         let (sender, retired) = RetireQueue::new();
         device.set_retirement(RetireMark::new(event.second_handle(), sender));
@@ -358,7 +368,7 @@ impl LiquidRun {
         clock: Option<Clocked>,
         project_fps: f64,
     ) -> Self {
-        let device = clock.as_ref().map_or_else(|| Arc::clone(&manifold_node_engine::testkit::gpu_harness::shared().device), |clock| Arc::clone(&clock.device));
+        let device = clock.as_ref().map_or_else(shared_device, |clock| Arc::clone(&clock.device));
         let scope = PhysicsStepScope::for_settings(!live, manifold_physics::PhysicsSettings {
             sim_rate: manifold_physics::SimRate::try_from(project_fps as u32).expect("authored rate"),
         });
@@ -1161,7 +1171,7 @@ impl Misses {
 const REST_HZ: u32 = 15;
 
 /// I20: a box at 0.05 and 0.5 of the liquid's density, let go 5 cm above
-/// where it floats, comes to rest at 15 Hz: over the last 2 s of 4, RMS
+/// where it floats, comes to rest at 15 Hz: over the last 2 s of 6, RMS
 /// motion under 1 cm/s and drift under 1 cm, its centre within a cell
 /// of where it floats, and no water removed. Guards against a run that
 /// passes by not moving: every frame runs a tick, the drop sets the water
@@ -1180,7 +1190,11 @@ fn liquid_floating_rest() {
                 let hz = REST_HZ;
                 let dt = 1.0 / f64::from(hz);
                 let mut run = rest_run(row, fixture, hz);
-                let mut ticks = rest_ticks(&mut run, row, 1, 2 * hz);
+                // Drift is the gap between the window's ends, so a sustained bob
+                // (BUG-u8nqr (GPU FLIP floating boxes keep bobbing at rest)) reads
+                // only where the ends land off phase: after the 4 s settle a 2 s
+                // window reads 2.7 cm on the light box, a 2 s settle only 0.8 cm.
+                let mut ticks = rest_ticks(&mut run, row, 1, 4 * hz);
                 let stirred = ticks.iter().map(|t| t.liquid.energy).fold(0.0, f64::max);
                 let window = rest_ticks(&mut run, row, 1, 2 * hz);
                 let push = window.windows(2).map(|w| w[1].bodies[0].linear_velocity[1] - w[0].bodies[0].linear_velocity[1]).sum::<f32>();
@@ -2104,24 +2118,27 @@ fn liquid_solvers(nodes: &[EffectGraphNode], found: &mut Vec<String>) {
     }
 }
 
-/// BUG-qssh (thumbnail differs run to run): the first bundled preset of each
+/// The cheapest bundled preset of each liquid solver (the 64-cell GPU FLIP
+/// dam break, not the 112-cell cliff the catalogue lists first: 4 s against
+/// 54 s a render). The test fails if a bundled solver is left uncovered.
+const THUMBNAIL_PRESETS: [&str; 2] = ["WaterDamBreakParticles", "WaterDamBreakMatter"];
+
+/// BUG-qssh (thumbnail differs run to run): one bundled preset of each
 /// liquid solver renders the same thumbnail bytes with every core busy as with
 /// the machine idle. Contention reaches the thumbnail through the solver, not
 /// the preset, so one preset per solver covers it.
 #[test]
 fn liquid_thumbnail_ignores_contention() {
-    let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
-    let mut changed = Vec::new();
-    let mut rendered = 0;
-    let mut covered = Vec::new();
+    let device = &shared_device();
+    let mut bundled = Vec::new();
     for id in bundled_preset_type_ids(PresetKind::Generator) {
-        let def = bundled_preset_def(&id).expect("bundled preset");
-        let mut solvers = Vec::new();
-        liquid_solvers(&def.nodes, &mut solvers);
-        if solvers.iter().all(|solver| covered.contains(solver)) {
-            continue;
-        }
-        covered.extend(solvers);
+        liquid_solvers(&bundled_preset_def(&id).expect("bundled preset").nodes, &mut bundled);
+    }
+    let mut changed = Vec::new();
+    let mut covered = Vec::new();
+    for id in THUMBNAIL_PRESETS {
+        let def = bundled_preset_def(&manifold_core::PresetTypeId::new(id)).unwrap_or_else(|| panic!("{id} is not a bundled preset"));
+        liquid_solvers(&def.nodes, &mut covered);
         let render = || {
             render_preset_thumbnail(device, PresetKind::Generator, def.as_ref(), THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, false)
                 .unwrap_or_else(|error| panic!("{id}: {error}"))
@@ -2139,9 +2156,9 @@ fn liquid_thumbnail_ignores_contention() {
         if idle != busy {
             changed.push(id);
         }
-        rendered += 1;
     }
-    assert!(rendered > 0, "no bundled liquid preset");
+    let missing: Vec<_> = bundled.iter().filter(|solver| !covered.contains(solver)).collect();
+    assert!(missing.is_empty(), "no thumbnail preset covers {missing:?}");
     assert!(changed.is_empty(), "thumbnails changed under contention: {changed:?}");
 }
 
