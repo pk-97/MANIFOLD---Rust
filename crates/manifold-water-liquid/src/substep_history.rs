@@ -33,8 +33,10 @@ fn capture_schedule() {
 }
 "#;
 
-pub fn history_bytes(cells: [u32; 3], slots: u32) -> u64 {
+manifold_core::testkit_visible! {
+pub(crate) fn history_bytes(cells: [u32; 3], slots: u32) -> u64 {
     ARGUMENT_BYTES + u64::from(slots) * (16 + (0..3).map(|a| face_len(cells, a) * 4).sum::<u64>())
+}
 }
 
 #[derive(Default)]

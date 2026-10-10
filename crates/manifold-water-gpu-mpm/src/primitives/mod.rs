@@ -6,7 +6,7 @@ manifold_core::testkit_visible! { pub(crate) mod matter_face_component; }
 pub(crate) mod matter_fill;
 mod matter_frame;
 mod matter_grid_update;
-pub mod matter_move_bodies;
+manifold_core::testkit_visible! { pub(crate) mod matter_move_bodies; }
 mod matter_state;
 mod matter_stats;
 mod matter_to_grid;

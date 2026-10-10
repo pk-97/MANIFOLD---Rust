@@ -751,7 +751,7 @@ two domains cross-faded on screen — it fakes the morph and pays for two solver
 
 ### 3.1 Records
 
-`crates/manifold-nodes-water/src/matter.rs` (new; test-only f64 reference in
+`crates/manifold-water-gpu-mpm/src/matter.rs` (new; test-only f64 reference in
 `matter/reference.rs`). Every record is `#[repr(C)]`, `Pod`, with a `KnownItem` channel
 spec and a compile-time size assert, following `WaterParticle` on the branch and
 `FluidParticle` in the surface design.
@@ -1279,7 +1279,7 @@ FLIP-only.
 | Coupled live ticks exchange in order, bounded by the live clock | `liquid_coupled_three_tick_reactions_are_ordered_and_required`; `substeps_host_sync_runs_live_between_iterations`; CPU: `liquid_clock_live_accepts_at_most_two_intervals_per_frame`; GPU: `liquid_live_flip_force_and_coupling_match_accepted_progress` |
 | Forces and impulses | `matter_impulse_once_per_tick_across_substeps`; `matter_force_lattice_matches_field`; `matter_input_stream_24_30_60` |
 | One liquid-domain predicate | negative gate: `rg -n '"node\.fluid_surface"' crates -g '*.rs'` returns hits only in `manifold-core/src/liquid_domain.rs`, (retired with CPU FLIP; in git history) and test code |
-| No FLIP fallback | negative gate: `rg -n -i 'fallback\|fall back' crates/manifold-nodes-water/src/primitives/matter_*.rs` returns nothing |
+| No FLIP fallback | negative gate: `rg -n -i 'fallback\|fall back' crates/manifold-water-gpu-mpm/src/primitives/matter_*.rs` returns nothing |
 | Every barrier-free atom on codegen | the existing classify source scans plus each atom's value test; `graph-tool fusion` output recorded per phase |
 | No new shared locks | negative gate: `git diff origin/main -- crates \| rg '^\+.*Arc<(Mutex\|RwLock)'` returns nothing |
 | Solver budget | Measured at landing (P1b, P4), p95 against 6 ms; the `matter_solver_perf` probe left with BUG-hkbdp.6.11 (water test cut) and lives in git history |
@@ -1287,7 +1287,7 @@ FLIP-only.
 | Stress splits cleanly (D33) | `matter_material_stress_splits` (every model, seeded random F and J: `deviatoric` trace below 1e-5 of its norm; `volumetric` unchanged when F̂ changes at fixed J; sum equals the f64 reference) ; `matter_material_rotation_is_stress_free` (every model with F, `s.j = 1`, zero `grad_v`: a pure rotation gives zero stress) |
 | Deformation follows its point (D34) | `matter_compaction_carries_deformation` (P3b: drain half a Goo blob; every surviving point keeps its F row bit for bit) |
 | Published record unchanged (D34) | the compile-time size assert on `FluidParticle` (`R/fluid_particles.rs`) |
-| Material points are permanent (D35) | `matter_material_points_permanent` (the real check: Goo in a closed box with no drain role, since `matter_drain` legitimately removes points; 600 ticks; live count constant); copy-paste guard only: `rg -n 'nb_delete\|remove_crowded\|remove_marker\|reseed' crates/manifold-nodes-water/src/primitives/shaders/matter_*.wgsl` returns nothing |
+| Material points are permanent (D35) | `matter_material_points_permanent` (the real check: Goo in a closed box with no drain role, since `matter_drain` legitimately removes points; 600 ticks; live count constant); copy-paste guard only: `rg -n 'nb_delete\|remove_crowded\|remove_marker\|reseed' crates/manifold-water-gpu-mpm/src/primitives/shaders/matter_*.wgsl` returns nothing |
 | Morph weight follows the beat, not the frame rate (D38) | `matter_morph_slew_and_reverse`; replay at 30 and 60 fps gives identical weights |
 | The dial's work, plasticity and integration are accounted separately (D38) | `matter_morph_parameter_work_identity`, `matter_morph_plastic_dissipation`, `matter_morph_energy_accounted` |
 | A morph changes rest volume, never mass (D38) | `matter_morph_conserves_mass` |
@@ -1593,7 +1593,7 @@ at the end of the phase.
 
 ### P2b — Two-way Box3D coupling
 
-- **Entry state:** P2a merged. Anchors: `rg -n 'pub fn advance_with_coupling|enum AdvancementPolicy' crates/manifold-nodes-water/src/physics.rs`, `rg -n 'fn set_coupled_rigid_inputs|fn accept_coupled_rigid_frame' crates/manifold-node-engine/src/exec/effect_node.rs`. ⚠ VERIFY-AT-IMPL that `RigidSceneObservation` carries everything `advance_with_coupling` needs (read `R/physics/worker.rs` whole); a missing field is an escalation.
+- **Entry state:** P2a merged. Anchors: `rg -n 'pub fn advance_with_coupling|enum AdvancementPolicy' crates/manifold-water-rigid/src/physics.rs`, `rg -n 'fn set_coupled_rigid_inputs|fn accept_coupled_rigid_frame' crates/manifold-node-engine/src/exec/effect_node.rs`. ⚠ VERIFY-AT-IMPL that `RigidSceneObservation` carries everything `advance_with_coupling` needs (read `R/physics/worker.rs` whole); a missing field is an escalation.
 - **Read-back:** D12; section 5; FLUID_ENGINE_INTEGRATION_PLAN.md section 8 (Phasing), its phase P8b (Two-way liquid/rigid coupling), including the rejected candidate.
 - **Deliverables:** `node.matter_body_reaction`; `MatterCoupling: StepCoupling`; the
   coupling hooks on `node.matter_domain`; the fenced reaction ring; the D4 body term;
@@ -1781,7 +1781,7 @@ Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P9 (Add Fluid authors the default liq
 ### P5-0 — The material stage (seam brief)
 
 - **Entry state:** P2b on main: `git merge-base --is-ancestor 6e39fd71b origin/main`.
-  Anchors: `rg -n 'pub struct MatterPoint' crates/manifold-nodes-water/src/matter.rs`
+  Anchors: `rg -n 'pub struct MatterPoint' crates/manifold-water-gpu-mpm/src/matter.rs`
   (`:23`). Re-derive both inventories and list any new site before touching anything:
   the inline water maths, `rg -n 'j \* \(j - 1\.0\)|\(j - 1\.0\) \* \(j - 1\.0\)|volume_ratio \*' crates/manifold-nodes/src/node_graph/primitives/shaders`
   (at `a28bc0dbb`: stress `matter_to_grid.wgsl:134` and `matter_stats.wgsl:134`, elastic

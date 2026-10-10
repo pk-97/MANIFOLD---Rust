@@ -19,7 +19,7 @@ Where the step's time goes today (GPU_FLIP_PRESSURE_SOLVE.md section 6 (Measures
 
 | Piece | Where | Shape |
 |---|---|---|
-| The step, one node, dense lattice | `crates/manifold-nodes-water/src/primitives/gpu_flip_step.rs` (`encode`), `shaders/gpu_flip_step.wgsl` | passes in order: `particle_distance` → `particles_to_faces` → extend old → `face_gravity` → solids (`open_fractions`, `solid_face_velocity`, `phi_into_solids`) → `water_from_phi` → pockets → `divergence` → pressure solve → `subtract_pressure` → `constrain_solid_faces` ×2 → extend new → `density_source` → density solve → project → extend → `faces_to_particles` (move) |
+| The step, one node, dense lattice | `crates/manifold-water-gpu-flip/src/primitives/gpu_flip_step.rs` (`encode`), `shaders/gpu_flip_step.wgsl` | passes in order: `particle_distance` → `particles_to_faces` → extend old → `face_gravity` → solids (`open_fractions`, `solid_face_velocity`, `phi_into_solids`) → `water_from_phi` → pockets → `divergence` → pressure solve → `subtract_pressure` → `constrain_solid_faces` ×2 → extend new → `density_source` → density solve → project → extend → `faces_to_particles` (move) |
 | The pressure solver | `gpu_flip_pressure.rs` (`PressureSolver::prepare`, `solve`) | MGPCG on the full lattice; rows assembled once per level; `MAX_ITERATIONS` = 900 (the Max Iterations card); one round template executes only the rounds a solve runs (`docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md`) |
 | The free surface | `particle_distance`, `water_from_phi` | φ from particles at every cell; water = φ < 0; the engine's level set |
 | Whitewater | `whitewater_step.rs` | reads the seam's faces and the surface level set; grid atoms over every whitewater cell (343,000 at 64), particle atoms over its pool |
