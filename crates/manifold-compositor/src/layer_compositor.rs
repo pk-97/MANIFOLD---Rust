@@ -649,6 +649,10 @@ pub struct LayerCompositor {
     /// forwarded to every chain's executor through dispatch_chain. Default = live
     /// constants so tests and non-RT graphs run unchanged.
     rt_quality: manifold_node_engine::exec::effect_node::RtQuality,
+    /// This frame's simulation step, forwarded to every chain through dispatch_chain.
+    sim_step: manifold_node_engine::exec::effect_node::SimStep,
+    /// Metrics every chain recorded this frame; drained by the host.
+    sim_metrics: manifold_node_engine::exec::sim_metrics::SimMetrics,
     /// SCENE_FX P4a — registry of previous-frame layer composited outputs,
     /// published after all layer renders and read by graph execution next frame.
     layer_skin_registry: manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
@@ -764,6 +768,8 @@ impl LayerCompositor {
             scene_viewport_request: None,
             scene_viewport_error: None,
             rt_quality: manifold_node_engine::exec::effect_node::RtQuality::default(),
+            sim_step: manifold_node_engine::exec::effect_node::SimStep::default(),
+            sim_metrics: Default::default(),
             layer_skin_registry: manifold_node_engine::runtime::layer_skin::LayerSkinRegistry::new(
                 device,
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
@@ -1061,6 +1067,8 @@ impl LayerCompositor {
                     &scope,
                     false,
                     manifold_node_engine::exec::effect_node::RtQuality::default(),
+                    manifold_node_engine::exec::effect_node::SimStep::default(),
+                    &mut Default::default(),
                     &self.layer_skin_registry,
                     None,
                 );
@@ -1375,6 +1383,8 @@ impl LayerCompositor {
                     scope,
                     false,
                     manifold_node_engine::exec::effect_node::RtQuality::default(),
+                    manifold_node_engine::exec::effect_node::SimStep::default(),
+                    &mut Default::default(),
                     layer_sources,
                     None,
                 );
@@ -1977,6 +1987,8 @@ impl LayerCompositor {
         scope: &str,
         profiling: bool,
         rt_quality: manifold_node_engine::exec::effect_node::RtQuality,
+        sim_step: manifold_node_engine::exec::effect_node::SimStep,
+        sim_metrics: &mut manifold_node_engine::exec::sim_metrics::SimMetrics,
         layer_sources: &manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
         project_tempo: Option<&manifold_node_engine::runtime::preset_context::ProjectTempo>,
     ) -> Option<&'a GpuTexture> {
@@ -1991,6 +2003,8 @@ impl LayerCompositor {
             scope,
             profiling,
             rt_quality,
+            sim_step,
+            sim_metrics,
             layer_sources,
             project_tempo,
         )
@@ -2011,6 +2025,8 @@ impl LayerCompositor {
         scope: &str,
         profiling: bool,
         rt_quality: manifold_node_engine::exec::effect_node::RtQuality,
+        sim_step: manifold_node_engine::exec::effect_node::SimStep,
+        sim_metrics: &mut manifold_node_engine::exec::sim_metrics::SimMetrics,
         layer_sources: &manifold_node_engine::runtime::layer_skin::LayerSkinRegistry,
         scene_viewport: Option<(
             &EffectId,
@@ -2033,6 +2049,8 @@ impl LayerCompositor {
             scope,
             profiling,
             rt_quality,
+            sim_step,
+            sim_metrics,
             layer_sources,
             scene_viewport,
             scene_viewport_error,
@@ -2336,6 +2354,8 @@ impl LayerCompositor {
                         &fx_scope(ld.layer_id),
                         self.profiling_enabled,
                         self.rt_quality,
+                        self.sim_step,
+                        &mut self.sim_metrics,
                         &self.layer_skin_registry,
                         scene_viewport_request
                             .as_ref()
@@ -2683,6 +2703,8 @@ impl LayerCompositor {
                                 &led_scope(group.layer_id),
                                 self.profiling_enabled,
                                 self.rt_quality,
+                                self.sim_step,
+                                &mut self.sim_metrics,
                                 &self.layer_skin_registry,
                                 frame.project_tempo,
                             ) {
@@ -2918,6 +2940,8 @@ impl LayerCompositor {
                     &fx_scope(group_id),
                     self.profiling_enabled,
                     self.rt_quality,
+                    self.sim_step,
+                    &mut self.sim_metrics,
                     &self.layer_skin_registry,
                     scene_viewport_request
                         .as_ref()
@@ -3478,6 +3502,8 @@ impl Compositor for LayerCompositor {
                 "master",
                 self.profiling_enabled,
                 self.rt_quality,
+                self.sim_step,
+                &mut self.sim_metrics,
                 &self.layer_skin_registry,
                 scene_viewport_request
                     .as_ref()
@@ -3557,6 +3583,8 @@ impl Compositor for LayerCompositor {
                 "led:master",
                 self.profiling_enabled,
                 self.rt_quality,
+                self.sim_step,
+                &mut self.sim_metrics,
                 &self.layer_skin_registry,
                 frame.project_tempo,
             ) {
@@ -3762,6 +3790,15 @@ impl Compositor for LayerCompositor {
         {
             cg.set_rt_quality(q);
         }
+    }
+
+    fn take_sim_metrics(&mut self) -> manifold_node_engine::exec::sim_metrics::SimMetrics {
+        self.sim_metrics.take()
+    }
+
+    fn set_sim_step(&mut self, step: manifold_node_engine::exec::effect_node::SimStep) {
+        // Chains pick it up on their next dispatch_chain call.
+        self.sim_step = step;
     }
 
     fn layer_scratch_texture(&self, layer_id: &str) -> Option<&GpuTexture> {

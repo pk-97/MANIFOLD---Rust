@@ -43,7 +43,7 @@ Paths: `R/` = `crates/manifold-nodes/src/node_graph/`, `RP/` = `crates/manifold-
 ### 1.2 Shared pieces that already exist
 
 - One coupling trait: `StepCoupling`, `SubstepExchange`, `Uncoupled` (`P/stepping.rs:14`, `:30`, `:53`), implemented by FLIP ((retired with CPU FLIP; in git history), `:352`) and MPM. `BodyImpulse` (`P/lib.rs:302`), `apply_impulses` (`:1054`), `TickStamp` (`P/interaction.rs:21`). A coupled Box3D world steps through `advance_worker` from exactly two owners: FLIP's ((retired with CPU FLIP; in git history), `:211`) and MPM's (`R/matter/coupling.rs:69`, `:264`), over `RigidSimulation::advance_with_coupling` (`R/physics.rs:623`, `R/physics/worker.rs:166`).
-- Offline mode: `offline_simulation()` (`R/physics.rs:59`), set only by export through `PhysicsStepScope::with_preview_budget` (`app/content_pipeline.rs:2034`). Live recording runs the live policy.
+- Offline mode: `SimStep.export` (`manifold-node-engine` `exec/effect_node.rs`), set only by export when `content_pipeline` builds the frame step (`SimStep::export`) and hands it down through `apply_sim_step`. Live recording runs the live policy.
 - Substep regions: compile-time and never nested (`R/substeps.rs:11`). A boundary opts into host syncs by naming a clock port (`SubstepBoundaryPorts`, `:40-46`; FREEZE_COMPILER_MAP.md section 9 (Executor contracts fusion leans on), item 12).
 - Solid distance: `signed_distance_lattice` (`P/sdf.rs:43`), derived lazily on `PreparedFluidGeometry` (`R/fluid_role.rs:37`, `:68`).
 - Domain layout: `domain_layout` ((retired with CPU FLIP; in git history)): cells per axis rounded up from Resolution along the longest side, box grown about its centre, no size-multiple rule.

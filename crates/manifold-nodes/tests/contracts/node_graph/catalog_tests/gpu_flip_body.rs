@@ -724,7 +724,6 @@ struct BoxRun {
     /// Ticks each `step` frame covers; above 1 the coupled pair host-syncs
     /// between them.
     ticks_per_frame: u32,
-    _scope: manifold_nodes_water::physics::PhysicsStepScope,
 }
 
 const BOX_SIZE: u32 = 64;
@@ -768,7 +767,6 @@ impl BoxRun {
         let fixture = "box scene";
         let device = manifold_gpu::testkit::test_device();
         let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-        let scope = manifold_nodes_water::physics::PhysicsStepScope::for_render(true);
         let manifest = manifold_core::params::ParamManifest::from_params(
             def.preset_metadata
                 .iter()
@@ -788,7 +786,7 @@ impl BoxRun {
         runtime.set_dump_all(true);
         let target =
             manifold_node_engine::gpu::render_target::RenderTarget::new(&device, BOX_SIZE, BOX_SIZE, manifold_gpu::GpuTextureFormat::Rgba16Float, "body sparse");
-        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, ungated, ticks_per_frame: 1, _scope: scope };
+        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, ungated, ticks_per_frame: 1 };
         // A poll count, not a wall-clock budget, so a loaded machine cannot fail it.
         let mut polls = 0u32;
         loop {

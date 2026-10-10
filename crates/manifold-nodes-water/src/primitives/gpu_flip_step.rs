@@ -2443,7 +2443,7 @@ impl Primitive for GpuFlipStep {
         // A graph saved without the domain's interval wire runs on the project's Sim Rate.
         let interval_duration = f64::from(ctx.scalar_or_param(
             "interval_duration",
-            crate::physics::simulation_interval() as f32,
+            ctx.sim_step.interval.0 as f32,
         ));
         let step_dt = (interval_duration/ f64::from(steps)) as f32;
         // 0 (export, or a graph without the wire) measures the whole frame.

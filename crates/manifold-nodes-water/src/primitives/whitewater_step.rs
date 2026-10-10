@@ -36,7 +36,6 @@ use crate::liquid::grid::face_len;
 use crate::liquid::bodies::{LiquidBody, LiquidShape};
 use crate::liquid::fields::FieldBinding;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use crate::physics::offline_simulation;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::Transform;
 use crate::whitewater::{DEFAULT_CAPACITY, MAX_CAPACITY, KnownValue, SPREAD_STEPS, SURFACE_CROSSING_BYTES, WhitewaterParticle, cell_total, face_offset, grid_box, grid_cells, refinement, require_extended_faces};
@@ -1788,7 +1787,7 @@ impl WhitewaterStep {
         }
         Ok(StepFrame {
             // A graph saved without the domain's interval wire runs on the project's Sim Rate.
-            dt: ctx.scalar_or_param("dt", crate::physics::simulation_interval() as f32),
+            dt: ctx.scalar_or_param("dt", ctx.sim_step.interval.0 as f32),
             shape,
             count,
             ticks: if ctx.inputs.slot("distance").is_some() { 1 } else { whole(ctx.scalar_or_param("ticks", 0.0)) },
@@ -1918,7 +1917,7 @@ impl Primitive for WhitewaterStep {
             }
             return;
         }
-        let offline = offline_simulation();
+        let offline = ctx.sim_step.offline();
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
         let fence: &dyn Fence = match &clock {

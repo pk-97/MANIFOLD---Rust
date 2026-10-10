@@ -202,7 +202,7 @@ impl Primitive for LiquidFrame {
         let epoch = ctx.scalar_or_param("epoch", 0.0).round().max(0.0) as u32;
         // Live uncoupled water presents at the cursor (section 3.4); export
         // presents exactly at the request whatever the wire says (D6).
-        let offline = crate::physics::offline_simulation();
+        let offline = ctx.sim_step.offline();
         let cursor_frame = (!offline && ctx.scalar_or_param("display_cursor", 0.0) >= 0.5).then(|| CursorFrame {
             epoch,
             requested: display_time,

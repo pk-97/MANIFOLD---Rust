@@ -12,11 +12,14 @@ use crate::validation::GraphError;
 /// Family-owned callbacks for one ordered pair of graph nodes.
 pub trait NodePairBehavior: AsAny + Send {
     fn set_enabled(&self, node: &mut dyn EffectNode, enabled: bool);
+    /// `step` is the frame's simulation step, given even when the second
+    /// node's inputs are incomplete.
     fn before_first(
         &self,
         first: &mut dyn EffectNode,
         second: &mut dyn EffectNode,
         second_inputs: Option<&mut EffectNodeContext<'_, '_>>,
+        step: crate::exec::effect_node::SimStep,
     );
     fn after_first(&self, first: &dyn EffectNode, second: &mut dyn EffectNode);
 }
@@ -245,6 +248,7 @@ pub(crate) mod tests {
             _first: &mut dyn EffectNode,
             _second: &mut dyn EffectNode,
             _second_inputs: Option<&mut EffectNodeContext<'_, '_>>,
+            _step: crate::exec::effect_node::SimStep,
         ) {
         }
 

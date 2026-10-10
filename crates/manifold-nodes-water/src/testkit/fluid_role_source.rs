@@ -29,6 +29,17 @@ pub(crate) fn run_inputs(
     output_slot: Slot,
     params: &ParamValues,
 ) -> bool {
+    run_inputs_under(primitive, backend, input_bindings, output_slot, params, Default::default())
+}
+
+pub(crate) fn run_inputs_under(
+    primitive: &mut FluidRoleSource,
+    backend: &mut MockBackend,
+    input_bindings: &[(&'static str, Slot)],
+    output_slot: Slot,
+    params: &ParamValues,
+    step: manifold_node_engine::exec::effect_node::SimStep,
+) -> bool {
     let output_bindings: &[(&'static str, Slot)] = &[("role", output_slot)];
     let mut scalar_scratch = Vec::new();
     let mut camera_scratch = Vec::new();
@@ -54,7 +65,7 @@ pub(crate) fn run_inputs(
     )
     .with_cpu_value_writes(&mut role_scratch);
     let pending = {
-        let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, None);
+        let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, None).with_sim_step(step);
         primitive.run(&mut ctx);
         ctx.outputs_pending
     };

@@ -449,6 +449,8 @@ mod cpu_tests {
         let array_len = |port: &str| (port == "interior").then_some(7);
         let ctx = manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformContext {
             frame: &frame,
+            sim_step: Default::default(),
+            sim_metrics: Default::default(),
             camera: None,
             array_len: &array_len,
         };

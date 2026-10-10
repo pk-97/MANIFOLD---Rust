@@ -471,7 +471,7 @@ impl PhysicsWorldNode {
     }
 
     fn publish_coupled_frame(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if crate::physics::authored_sample_only() {
+        if ctx.sim_step.authored_sample_only {
             return;
         }
         if !self.coupled_frame_ready {
@@ -488,7 +488,7 @@ impl PhysicsWorldNode {
             .rigid_scene_observation
             .as_ref()
             .map_or(0, |observation| observation.inputs.bodies.iter().flatten().count());
-        crate::physics_metrics::record_frame(
+        ctx.sim_metrics.record_frame(
             0.0,
             (body_count + copies.len()) as u32,
             0.0,
@@ -550,6 +550,7 @@ impl Primitive for PhysicsWorldNode {
         true
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        self.simulation.set_step(ctx.sim_step);
         if self.coupled_mode {
             self.publish_coupled_frame(ctx);
             return;
@@ -584,6 +585,7 @@ impl Primitive for PhysicsWorldNode {
             observation.inputs.acceleration_field.clone(),
             &observation.inputs.targeted_fields,
         );
+        ctx.sim_metrics.merge(&self.simulation.take_metrics());
         if result.is_ok()
             && self
                 .simulation
@@ -592,7 +594,7 @@ impl Primitive for PhysicsWorldNode {
         {
             self.rigid_scene_observation = Some(observation);
         }
-        if crate::physics::authored_sample_only() {
+        if ctx.sim_step.authored_sample_only {
             if let Err(error) = result {
                 ctx.error(error);
             }
@@ -602,7 +604,7 @@ impl Primitive for PhysicsWorldNode {
             ctx.error(error);
             ctx.outputs.set_scalar("physics_ms", ParamValue::Float(0.0));
         } else {
-            crate::physics_metrics::record_frame(
+            ctx.sim_metrics.record_frame(
                 self.simulation.physics_ms,
                 (body_count + self.simulation.active_copy_count) as u32,
                 self.simulation.pending_time.0 as f32,
@@ -683,6 +685,7 @@ impl PhysicsNode for PhysicsWorldNode {
         &self,
         transport: manifold_core::Seconds,
         sequence: u64,
+        _step: crate::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         if self.coupled_mode {
             return Err("Physics World coupled mode has no private impulse clock".into());
@@ -726,6 +729,7 @@ impl PhysicsNode for PhysicsWorldNode {
 
     fn capture_coupled_rigid(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
         self.set_coupled_physics(true);
+        self.simulation.set_step(ctx.sim_step);
         self.rigid_scene_observation = None;
         self.coupled_frame_ready = false;
         let Some(observation) = self.resolve_rigid_scene_observation(ctx, true)? else {
@@ -771,7 +775,7 @@ mod tests {
     use manifold_node_engine::exec::execution_plan::ResourceId;
     use manifold_core::scene_impulse::RigidImpulseTargets;
     use crate::physics::RigidBody;
-    use crate::physics::PhysicsAuthoredSampleScope;
+    use crate::physics::SimStep;
     use crate::physics_events::ResolvedNodeImpulse;
     use manifold_node_engine::ports::{PortType, ScalarType};
     use manifold_core::{Beats, Seconds};
@@ -805,6 +809,18 @@ mod tests {
         field_state: MockFieldState,
         invalid_speed: bool,
         coupled: bool,
+    ) -> Option<RigidSceneObservation> {
+        evaluate_mock_world_under(node, transport, body_shape, field_state, invalid_speed, coupled, SimStep::default())
+    }
+
+    fn evaluate_mock_world_under(
+        node: &mut PhysicsWorldNode,
+        transport: f64,
+        body_shape: u32,
+        field_state: MockFieldState,
+        invalid_speed: bool,
+        coupled: bool,
+        step: SimStep,
     ) -> Option<RigidSceneObservation> {
         let mut backend = MockBackend::new();
         let mut wire_slots: Vec<(&'static str, Slot)> = Vec::new();
@@ -929,7 +945,7 @@ mod tests {
             delta: Seconds(1.0 / 60.0),
             frame_count: 0,
         };
-        let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
+        let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None).with_sim_step(step);
         let graph_node: &mut dyn EffectNode = node;
         if coupled {
             let native = crate::node::get_mut(graph_node)
@@ -1146,14 +1162,14 @@ mod tests {
             false,
         )
         .is_some());
-        let _scope = PhysicsAuthoredSampleScope::new();
-        assert!(evaluate_mock_world(
+        assert!(evaluate_mock_world_under(
             &mut node,
             0.0,
             2,
             MockFieldState::Complete,
             false,
             false,
+            SimStep::default().authored_sample(),
         )
         .is_none());
     }
@@ -1177,7 +1193,7 @@ mod tests {
             .expect("PhysicsWorldNode has a native PhysicsNode registration");
         assert!(native.physics_impulse_epoch().is_none());
         assert!(native
-            .physics_impulse_stamp(Seconds::ZERO, 0)
+            .physics_impulse_stamp(Seconds::ZERO, 0, Default::default())
             .is_err());
 
         assert!(evaluate_mock_world(

@@ -128,7 +128,8 @@ fn group_mask_layer_source_reaches_dispatch_and_survives_reload() {
             registry.finish_snapshots();
             manifold_node_engine::runtime::chain_dispatch::dispatch_chain(&mut cache, &mut gpu, &input.texture,
                 &effects, &groups, &ctx, None, "group-mask-test", false,
-                manifold_node_engine::exec::effect_node::RtQuality::default(), &registry, None).unwrap().clone()
+                manifold_node_engine::exec::effect_node::RtQuality::default(),
+                manifold_node_engine::exec::effect_node::SimStep::default(), &mut Default::default(), &registry, None).unwrap().clone()
         };
         encoder.commit_and_wait_completed();
         let raw = manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &output, 16, 16);
