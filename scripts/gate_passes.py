@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,10 @@ from gate_workspace import Workspace
 from gate_policy import SHARED_ASSETS
 
 SCHEMA = 3
+MAX_FAILURES = 64
+FLAKY_WINDOW_DAYS = 14
+_NEXTEST_FAIL = re.compile(r'\s*FAIL\s+\[[^\]]*\]\s+(?:\(\d+/\d+\)\s+)?(\S+)\s+(\S.*?)\s*')
+_CARGO_FAIL = re.compile(r'test (\S+) \.\.\. FAILED\b')
 PROOF_FEATURE = 'gpu-proofs'
 SESSION = contextvars.ContextVar('pass_session', default=None)
 SNAPSHOT = contextvars.ContextVar('pass_snapshot', default=None)
@@ -80,7 +85,7 @@ class Snapshot:
 
 @contextlib.contextmanager
 def session():
-    token = SESSION.set({'tools': {}, 'accepted': [], 'planning': Snapshot()})
+    token = SESSION.set({'tools': {}, 'accepted': [], 'flaky': [], 'planning': Snapshot()})
     try:
         yield
     finally:
@@ -94,6 +99,47 @@ def snapshot():
         yield
     finally:
         SNAPSHOT.reset(token)
+
+
+def parse_failed_tests(output):
+    """Failing test names from nextest FAIL lines and cargo-test FAILED lines."""
+    if not isinstance(output, str):
+        return []
+    output = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', output)
+    names = set()
+    for line in output.splitlines():
+        if match := _NEXTEST_FAIL.fullmatch(line):
+            names.add(f'{match[1]} {match[2]}')
+        elif match := _CARGO_FAIL.match(line):
+            names.add(match[1])
+    return sorted(names)[:MAX_FAILURES]
+
+
+def flaky_line(test, leg, key):
+    return f'FLAKY {test} | leg {leg} | key {key[:16]}'
+
+
+def flaky_lines():
+    current = SESSION.get()
+    return list(current['flaky']) if current is not None else []
+
+
+def flaky_records(repo, now=None):
+    """(test, leg, key) for recent records where a test failed then passed on one key."""
+    common = git(Path(repo), 'rev-parse', '--git-common-dir')
+    directory = (Path(repo) / common).resolve() / 'gate-passes-v1'
+    now = now or datetime.now(timezone.utc)
+    found = []
+    for path in sorted(directory.glob('*.json')):
+        try:
+            record = json.loads(path.read_text())
+            for row in record.get('flaky', []):
+                when = datetime.fromisoformat(row['time'])
+                if (now - when).days <= FLAKY_WINDOW_DAYS:
+                    found.append((row['test'], row.get('leg', ''), record['key']))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return found
 
 
 def changed_passes(passes):
@@ -362,7 +408,15 @@ class Pass:
             return True
         return False
 
-    def save(self, code, seconds=0, *, timings=None):
+    def prior(self):
+        """Failures and flakes recorded earlier under this exact content key."""
+        try:
+            record = json.loads(self.path.read_text())
+            return dict(record.get('failures') or {}), list(record.get('flaky') or [])
+        except (OSError, ValueError, AttributeError, TypeError):
+            return {}, []
+
+    def save(self, code, seconds=0, *, timings=None, failed=None):
         """Return False only for unstable inputs, independently of cache writes."""
         if not self.key:
             return
@@ -375,18 +429,44 @@ class Pass:
             print(f'[NO REUSE] {self.label}: inputs changed during execution', flush=True)
         temporary = None
         try:
+            now = datetime.now(timezone.utc).isoformat()
+            failures, flaky = self.prior() if self.path is not None else ({}, [])
             if code:
                 if self.path is not None:
                     self.path.unlink(missing_ok=True)
+                if failed and not changed and self.directory is not None:
+                    # Same key, same file as a pass; pass is False so it never
+                    # satisfies reuse. Oldest names drop past the cap.
+                    failures.update({name: now for name in failed})
+                    failures = dict(sorted(failures.items(), key=lambda kv: kv[1])[-MAX_FAILURES:])
+                    self.directory.mkdir(parents=True, exist_ok=True)
+                    fd, temporary = tempfile.mkstemp(dir=self.directory, prefix='.fail-')
+                    with os.fdopen(fd, 'w') as stream:
+                        json.dump({'schema': SCHEMA, 'key': self.key, 'pass': False, 'time': now,
+                                   'failures': failures, 'flaky': flaky}, stream)
+                    os.replace(temporary, self.path)
+                    temporary = None
                 return False if changed else None
             if changed:
                 return False
             if self.directory is None:
                 return
             self.directory.mkdir(parents=True, exist_ok=True)
+            known = {row.get('test') for row in flaky}
+            for name in failures:
+                if name not in known:
+                    flaky.append({'test': name, 'leg': self.label, 'time': now})
+                    line = flaky_line(name, self.label, self.key)
+                    print(line, flush=True)
+                    current = SESSION.get()
+                    if current is not None:
+                        current['flaky'].append(line)
             record = {'schema': SCHEMA, 'key': self.key, 'pass': True,
                       'commit': git(self.repo, 'rev-parse', 'HEAD'),
-                      'time': datetime.now(timezone.utc).isoformat(), 'seconds': seconds}
+                      'time': now, 'seconds': seconds}
+            if failures:
+                record['failures'] = failures
+                record['flaky'] = flaky
             if timings is not None:
                 record['timings'] = timings
             fd, temporary = tempfile.mkstemp(dir=self.directory, prefix='.pass-')

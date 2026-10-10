@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 import shutil
 
+import gate_passes
 import gpu_queue
 from storage_budget import apply_cache_cleanup, plan_cache_cleanup
 
@@ -119,6 +120,43 @@ def defer_if_reserved(log_path, log_lines, dry_run):
     if not dry_run:
         log_path.write_text("".join(log_lines))
     return True
+
+
+def file_flaky_beads(sha):
+    """One bead per flaky test: a test that failed then passed on one content key.
+
+    Reads the gate-pass store (landing and nightly records alike). An open bead
+    for the same test gets a note instead of a duplicate.
+    """
+    try:
+        flaky = gate_passes.flaky_records(MAIN_CHECKOUT)
+        result = subprocess.run([BD, "list", "--status", "open", "--json", "--flat"],
+                                capture_output=True, text=True, timeout=30)
+        beads = json.loads(result.stdout) if result.returncode == 0 else []
+    except Exception as e:
+        print(f"[trunk-health] flaky scan skipped: {e}")
+        return
+    by_test = {}
+    for test, leg, key in flaky:
+        by_test.setdefault(test, []).append((leg, key))
+    for test, hits in sorted(by_test.items()):
+        title = f"flaky test: {test}"
+        detail = "; ".join(f"leg {leg} key {key[:16]}" for leg, key in hits)
+        note = f"trunk-health flaky @{sha} ({datetime.now().strftime('%Y-%m-%d')}): failed then passed on identical content: {detail}"
+        existing = next((b for b in beads if title in b.get("title", "")), None)
+        try:
+            if existing:
+                if note in (existing.get("notes") or ""):
+                    continue
+                cmd = [BD, "update", existing["id"], "--append-notes", note]
+            else:
+                cmd = [BD, "create", title, "-t", "bug", "-p", "2", "-l", "flaky,trunk-health,open",
+                       "-d", note + ". Fix by determinism or seed control, or convert a timing assertion to a work assertion (BUG-hkbdp.6.14 flake class)."]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            print(f"[trunk-health] flaky {'noted' if existing else 'filed'}: {test}"
+                  if r.returncode == 0 else f"[trunk-health] flaky bead failed (exit {r.returncode}): {test}")
+        except Exception as e:
+            print(f"[trunk-health] flaky bead failed: {e}")
 
 
 def main():
@@ -391,6 +429,9 @@ def main():
         except Exception as e:
             print(f"[trunk-health] failed to file bead: {e}")
             return 2
+
+    if BD:
+        file_flaky_beads(sha)
 
     # Auto-close beads for green gates — a gate that recovered closes its own
     # bead even when another gate is still red.
