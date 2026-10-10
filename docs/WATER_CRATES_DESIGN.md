@@ -1,7 +1,7 @@
 # Water Crates — one crate per water subsystem, the compiler holds the lines
-**Status:** ACCEPTED · 2026-10-10 · Peter approved D1–D13 with the GPU MPM crate named manifold-water-gpu-mpm · five stages, none started · Section 9 (Phasing).
-**Status:** PROPOSED · 2026-10-10 · Fable · five stages, none started · Section 9 (Phasing).
-**Prerequisites:** BUG-hkbdp.6.6 (CPU FLIP removal), BUG-hkbdp.6.2 (coupled-scene preparation out of the engine), BUG-hkbdp.6.3 (scene types out of the engine) and BUG-hkbdp.6.4 (seam review) landed on main; BUG-hkbdp.6.8 (explicit step context) landed before stage 2.
+
+**Status:** ACCEPTED · 2026-10-10 · Peter (GPU MPM crate named manifold-water-gpu-mpm) · five stages, stage 1 next · Section 9 (Phasing).
+**Prerequisites:** BUG-hkbdp.6.8 (explicit step context) lands before stage 2; the T2 batch it also needed landed 2026-10-10.
 **Work items:** BUG-hkbdp.6.12 (water subsystem boundaries the compiler enforces), under the epic BUG-hkbdp (renderer crate split epic). Stage beads are drafted beside this doc and created by the lead.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before any stage. Lead: Opus. Lanes make one commit then stop; the lead lands with `scripts/land_branch.py`.
 
