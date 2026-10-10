@@ -26,7 +26,7 @@ use manifold_nodes_water::liquid::bodies::LiquidBody;
 use manifold_nodes_water::liquid::coupling::HANDOVER_BOUND;
 use manifold_nodes_water::liquid::grid::{FACE_GRID_PORTS, face_len};
 use manifold_nodes_water::testkit::conformance::{BoxScene, Check, FIXTURE_DENSITY, Fixture, LiquidSolverRow, LiquidTotals, STACK_HEIGHT, set_type_param};
-use manifold_nodes_water::physics::{SimStep, native_ticks_on_this_thread};
+use manifold_water_rigid::physics::{SimStep, native_ticks_on_this_thread};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use {manifold_node_engine::ports::ArrayType, manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::exec::effect_node::EffectNodeContext, manifold_node_engine::exec::effect_node::EffectNodeType, manifold_node_engine::exec::effect_node::NodeErrorTap, manifold_node_engine::parameters::ParamDef, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes::bundled_presets::bundled_preset_type_ids};
 use manifold_node_engine::runtime::preset_context::PresetContext;

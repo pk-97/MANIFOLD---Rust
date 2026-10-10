@@ -36,8 +36,8 @@ use crate::liquid::clock::{ClockFrame, LiquidClock, FIELD_RESERVE_INTERVALS};
 use crate::liquid::coupling::LiquidRigidOwner;
 use crate::liquid::lattice::LiquidLattice;
 use crate::liquid::tick_samples::TickSamples;
-use crate::physics::ResolvedRigidImpulse;
-use crate::physics_events::{ResolvedNodeImpulse, map_rigid_receipt};
+use manifold_water_rigid::physics::ResolvedRigidImpulse;
+use manifold_water_rigid::physics_events::{ResolvedNodeImpulse, map_rigid_receipt};
 
 manifold_core::testkit_visible! {
 /// Trilinear reads of a field lattice; pure math, included by each atom that

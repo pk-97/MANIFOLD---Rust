@@ -12,6 +12,7 @@ def is_inert_plan_path(path):
 SHARED_ASSETS = ['crates/manifold-foundation/assets/fonts']
 GPU_DEFAULT_CPU_ONLY = {
     "manifold-nodes-water": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
+    "manifold-water-rigid": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
     "manifold-nodes-scene": "Device proofs require gpu-proofs; ungated imported-graph validation lives in the catalog",
     "manifold-compositor": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     "manifold-nodes-image": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
@@ -36,7 +37,8 @@ CATALOG_PACKAGE = 'manifold-nodes'
 PRIMITIVE_PATHS = ('crates/manifold-nodes-scene/src/node_graph/primitives/',
                    'crates/manifold-nodes-image/src/node_graph/primitives/',
                    'crates/manifold-node-engine/src/primitives/',
-                   'crates/manifold-nodes-water/src/primitives/')
+                   'crates/manifold-nodes-water/src/primitives/',
+                   'crates/manifold-water-rigid/src/primitives/')
 CATALOG_PATHS = (*PRIMITIVE_PATHS,
                  'crates/manifold-nodes/src/catalog_gen.rs',
                  'crates/manifold-node-engine/src/descriptor.rs',
@@ -45,7 +47,9 @@ CATALOG_PATHS = (*PRIMITIVE_PATHS,
 
 RENDERER_SRC = "crates/manifold-nodes/src/"
 ENGINE_SRC = "crates/manifold-node-engine/src/"
+RIGID_SRC = "crates/manifold-water-rigid/src/"
 WATER_SRC = "crates/manifold-nodes-water/src/"
+WATER_SRCS = (RIGID_SRC, WATER_SRC)
 CONTRACT_TESTS_DIR = ("crates/manifold-nodes/tests/contracts/",
                       "crates/manifold-app/tests/contracts/")
 GPU_CONTRACT_TARGETS = {"manifold-nodes": "main", "manifold-app": "renderer_contracts"}
@@ -320,6 +324,10 @@ EXPLICIT_ROWS = [
       ENGINE_SRC + "primitive.rs",
       ENGINE_SRC + "gpu/gpu_encoder.rs"),
      (RUNTIME_FILTERS, [])),
+    # CS-rigid (WATER_CRATES_DESIGN.md section 6.3): the rigid adapter and the
+    # pair contract are driven by the coupled liquid and the physics proofs.
+    ((RIGID_SRC,),
+     (["liquid_conformance::liquid_coupled_", "physics_boxes::", "physics_solids::"], [])),
 ]
 
 # Paths whose change affects every proof: BROAD.
@@ -468,7 +476,19 @@ PREFIX_ROWS += [
     ('crates/manifold-nodes-scene/src/', '.wgsl', "manifold-nodes", ['uniform_layout_extended', 'wgsl_validation'], []),
 ]
 
-PREFIX_ROWS += [(WATER_SRC, ".wgsl", "manifold-nodes", ["uniform_layout_extended", "wgsl_validation"], [])]
+PREFIX_ROWS += [(root, ".wgsl", "manifold-nodes", ["uniform_layout_extended", "wgsl_validation"], [])
+                for root in WATER_SRCS]
+
+# CS-rigid CPU suite: every consumer of the rigid adapter runs when it changes.
+PREFIX_ROWS += [
+    (RIGID_SRC, ".rs", "manifold-nodes-water",
+     ["liquid::coupling", "runtime::physics_carry", "runtime::physics_impulses",
+      "runtime::physics_sampling", "runtime::physics_source_runtime"], []),
+    (RIGID_SRC, ".rs", CATALOG_PACKAGE,
+     ["contracts::node_graph::catalog_tests::physics_sampling",
+      "contracts::node_graph::catalog_tests::physics_host_modulation", "physics_scene"], []),
+    (RIGID_SRC, ".rs", "manifold-app", ["contracts::node_graph::catalog_tests::physics_impulses"], []),
+]
 
 PREFIX_ROWS += [('crates/manifold-compositor/src/', ".wgsl", "manifold-nodes", ["wgsl_validation"], [])]
 

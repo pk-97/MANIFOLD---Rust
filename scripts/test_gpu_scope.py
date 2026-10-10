@@ -36,6 +36,7 @@ def fixture_workspace(repo):
         "manifold-nodes": ("crates/manifold-nodes", True, ["gpu_proofs", "glb_conformance", "main"]),
         "manifold-node-engine": ("crates/manifold-node-engine", True, []),
         "manifold-nodes-water": ("crates/manifold-nodes-water", True, []),
+        "manifold-water-rigid": ("crates/manifold-water-rigid", True, []),
         "manifold-ui-paint": ("crates/manifold-ui-paint", True, ["main"]),
         "manifold-gpu": ("crates/manifold-gpu", False, []),
     }
@@ -125,7 +126,7 @@ class ScopeTests(unittest.TestCase):
         result = g.Plan(paths=["synthetic"], workspace=workspace,
                         filters=set(g.SMOKE_FILTERS) | {"future::filter"})
         runs = result.runs()
-        self.assertEqual(len(runs), 14)
+        self.assertEqual(len(runs), 15)
         self.assertTrue(all(run["filters"] == result.final_filters() for run in runs))
 
     def test_whole_package_override_survives_filter_pruning(self):
@@ -178,8 +179,10 @@ class ScopeTests(unittest.TestCase):
         for directory in sorted(directories):
             self.assertIn(directory, CATALOG_PATHS)
             for suffix in ('.rs', '.wgsl'):
-                source = next(p for p in sorted((root / directory).rglob('*' + suffix))
-                              if p.name != 'mod.rs')
+                source = next((p for p in sorted((root / directory).rglob('*' + suffix))
+                               if p.name != 'mod.rs'), None)
+                if source is None:
+                    continue  # rigid primitives own no WGSL
                 with self.subTest(source=str(source.relative_to(root))):
                     selected = cpu_scope.plan_for_paths(
                         [source.relative_to(root).as_posix()], Path('/nonexistent'), workspace)
@@ -676,6 +679,13 @@ class ScopeTests(unittest.TestCase):
             self.assertIn("primitives::running_total::", water['filters'])
         root = plan([T + "lib.rs"])
         self.assertEqual(root.whole_packages, {"manifold-nodes-water"})
+
+    def test_rigid_sources_run_their_module_and_the_cs_rigid_suite(self):
+        result = plan(["crates/manifold-water-rigid/src/physics.rs"])
+        self.assertEqual(result.filters, {"physics::", "liquid_conformance::liquid_coupled_",
+                                          "physics_boxes::", "physics_solids::"})
+        self.assertFalse(result.whole_packages)
+        self.assertFalse(result.unmapped)
 
     def test_non_gpu_paths_run_nothing(self):
         p = plan(["docs/X.md", "scripts/a.py", "crates/manifold-ui/src/lib.rs"])

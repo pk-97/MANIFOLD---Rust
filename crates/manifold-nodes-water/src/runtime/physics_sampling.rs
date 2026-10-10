@@ -11,8 +11,8 @@ use manifold_core::Beats;
 use manifold_core::Seconds;
 use manifold_node_engine::scene::boundary_nodes::GENERATOR_INPUT_TYPE_ID;
 use manifold_node_engine::exec::effect_node::ParamValues;
-use crate::physics::SimStep;
-use crate::node;
+use manifold_water_rigid::physics::SimStep;
+use manifold_water_rigid::node;
 use manifold_node_engine::runtime::preset_context::ProjectTempo;
 use manifold_core::audio_mod::HopValue;
 use manifold_core::effects::PresetInstance;
@@ -463,7 +463,7 @@ impl super::WaterRuntimeState {
         const SAMPLE_RATE: f64 = 240.0;
         // Leave room for the retained tick endpoints and edit discontinuities.
         // This bounds input storage, not the amount of requested offline time.
-        const DRAIN_INTERVAL: usize = crate::physics::AUTHORED_HISTORY_CAPACITY / 4;
+        const DRAIN_INTERVAL: usize = manifold_water_rigid::physics::AUTHORED_HISTORY_CAPACITY / 4;
         let mut samples_since_drain = 0;
         // Clone only the shared map handle. Keep this borrow independent from
         // the scratch inputs mutated for each sample. Tempo edits take effect

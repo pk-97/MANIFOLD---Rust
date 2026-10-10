@@ -18,7 +18,7 @@ pub struct CoupledRigidInputs<'a> {
 }
 
 impl CoupledRigidInputs<'_> {
-    pub(crate) fn validate(self) -> Result<(), String> {
+    pub fn validate(self) -> Result<(), String> {
         if !self.density.is_finite() || self.density <= 0.0 {
             return Err("Fluid coupling: density must be finite and positive".into());
         }
@@ -55,7 +55,7 @@ impl Default for CoupledRigidFrame {
 
 /// How a prepared rigid world's bodies map onto a [`CoupledRigidFrame`]:
 /// shared by every liquid that owns a rigid world in-thread.
-pub(crate) struct CoupledRigidLayout {
+pub struct CoupledRigidLayout {
     bodies: [Option<BodyHandle>; MAX_BODIES],
     fragment_parents: [Option<usize>; MAX_BODIES],
     authored: [Transform; MAX_BODIES],
@@ -65,7 +65,7 @@ pub(crate) struct CoupledRigidLayout {
 
 impl CoupledRigidLayout {
     /// The layout of `rigid`, prepared from `initial`.
-    pub(crate) fn new(rigid: &RigidSimulation, initial: &RigidSceneInputs) -> Self {
+    pub fn new(rigid: &RigidSimulation, initial: &RigidSceneInputs) -> Self {
         let (bodies, copies) = rigid.native_handles();
         Self {
             bodies: *bodies,
@@ -88,13 +88,13 @@ impl CoupledRigidLayout {
     }
 
     /// Size `output`'s copy storage for this layout, before a tick captures into it.
-    pub(crate) fn prepare_output(&self, output: &mut CoupledRigidFrame) {
+    pub fn prepare_output(&self, output: &mut CoupledRigidFrame) {
         output
             .copies
             .resize(self.copies.len(), Transform::default());
     }
 
-    pub(crate) fn capture(
+    pub fn capture(
         &self,
         world: &PhysicsWorld,
         output: &mut CoupledRigidFrame,

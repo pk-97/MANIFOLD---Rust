@@ -70,7 +70,7 @@ fn physics_boxes_compiles_with_count_reset_and_shared_floor() {
 #[test]
 fn physics_boxes_contacts_deflect_the_pile_sideways() {
     use manifold_core::Seconds;
-    use manifold_nodes_water::physics::{MAX_BODIES, RigidBody, RigidSimulation};
+    use manifold_water_rigid::physics::{MAX_BODIES, RigidBody, RigidSimulation};
     use manifold_node_engine::scene::transform::Transform;
 
     let def: EffectGraphDef = serde_json::from_str(PHYSICS_BOXES_JSON).unwrap();

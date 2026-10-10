@@ -308,7 +308,7 @@ fn gpu_flip_whitewater_emits() {
 fn whitewater_live_scene_updates_on_the_lifecycle_thread() {
     let scene = WaterScene::dam_break(64);
     let mut show = Show::new(vendored_render_def(scene), (320, 180), true, &[]);
-    show.set_sim_step(manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0)));
+    show.set_sim_step(manifold_water_rigid::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0)));
     show.restart();
     let (mut content, mut worker) = (Vec::new(), Vec::new());
     let mut last = [0.0; 8];
@@ -1193,7 +1193,7 @@ fn liquid_frame_live_held_frame_matches_offline() {
             offline.readback(),
         ));
     }
-    let live_step = manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
+    let live_step = manifold_water_rigid::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
         .with_preview_budget(std::time::Duration::from_secs(1));
     // Live runs exact: the cursor presents behind the request by design.
     let mut live = Show::new(authored_cursor_history_def(0.0), (96, 54), false, &[]);
@@ -1224,7 +1224,7 @@ fn liquid_frame_live_held_frame_matches_offline() {
 /// found by B's time, and at least one frame shows a B older than the state.
 #[test]
 fn liquid_frame_whitewater_reads_the_selected_slot() {
-    let live_step = manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
+    let live_step = manifold_water_rigid::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
         .with_preview_budget(std::time::Duration::from_secs(1));
     let mut show = Show::new(history_def(), (96, 54), false, &[]);
     show.set_sim_step(live_step);
@@ -1265,7 +1265,7 @@ fn liquid_frame_whitewater_reads_the_selected_slot() {
 /// scalars together, and names the error.
 #[test]
 fn liquid_frame_encode_failure_publishes_the_selected_outputs() {
-    let live_step = manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
+    let live_step = manifold_water_rigid::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
         .with_preview_budget(std::time::Duration::from_secs(1));
     let [mut clean, mut failing] = [(), ()].map(|()| {
         let mut show = Show::new(history_def(), (96, 54), false, &[]);

@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use manifold_core::Seconds;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
-use manifold_nodes_water::physics::{MAX_BODIES, RigidBody, RigidSimulation, SimStep};
+use manifold_water_rigid::physics::{MAX_BODIES, RigidBody, RigidSimulation, SimStep};
 use manifold_node_engine::scene::transform::Transform;
 
 const JSON: &str = include_str!("../assets/generator-presets/PhysicsBoxes.json");

@@ -29,7 +29,7 @@ impl RuntimeExtension for WaterRuntimeState {
         for (node_id, instance) in slot.node_map {
             if let Some(snapshot) = graph
                 .get_node(*instance)
-                .and_then(|node| crate::node::get(node.node.as_ref()))
+                .and_then(|node| manifold_water_rigid::node::get(node.node.as_ref()))
                 .and_then(|node| node.fluid_domain_snapshot())
             {
                 output.push((node_id.clone(), snapshot));

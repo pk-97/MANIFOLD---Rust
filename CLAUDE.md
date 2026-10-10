@@ -63,6 +63,7 @@ The content thread owns `PlaybackEngine`, `EditingService`, `ContentPipeline`, a
 | `manifold-node-engine` | Graph loading, execution, freeze compiler and engine primitives |
 | `manifold-nodes-image` / `manifold-nodes-scene` | Image and scene primitive implementations |
 | `manifold-nodes-water` | Water and physics graph adapters, native simulation nodes and their runtime extensions |
+| `manifold-water-rigid` | Box3D rigid-body graph adapter and the native pair contract that coupled liquids implement |
 | `manifold-compositor` | Layer composition, generator rendering and preset thumbnails |
 | `manifold-ui-paint` | GPU painting for the bitmap UI |
 | `manifold-nodes` | Bundled presets, registration and catalog contracts. See `docs/NODE_CATALOG.md`, `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` |
@@ -75,7 +76,7 @@ The content thread owns `PlaybackEngine`, `EditingService`, `ContentPipeline`, a
 | `manifold-audio` | Audio capture behind one `CaptureBackend` trait → lock-free ring + off-RT analysis worker (`docs/AUDIO_INFRASTRUCTURE.md` section 11, `docs/AUDIO_MODULATION_DESIGN.md`) |
 | `manifold-app` | winit entry, Application, ContentThread, ContentPipeline |
 
-Dependencies: `foundation` and `gpu` have none; `core` depends only on `foundation`. `editing`/`playback`/`io` depend on `core`. **`ui` depends on `foundation` only** — mutations leave as `PanelAction` values translated to commands app-side; UI-reachable shared types go in `foundation`. Workspace dependencies: `node-engine` on `core`+`foundation`+`gpu`+`playback`; `nodes` on `core`+`gpu`+`node-engine`+`nodes-image`+`nodes-scene`+`nodes-water`; `nodes-image` on `core`+`foundation`+`gpu`+`native`+`node-engine`; `nodes-scene` on `core`+`foundation`+`gpu`+`node-engine`; `nodes-water` on `core`+`fluids`+`foundation`+`gpu`+`node-engine`+`physics`; `compositor` on `core`+`gpu`+`node-engine`+`playback`; `ui-paint` on `foundation`+`gpu`+`ui`; `media` on `core`+`playback`+`gpu`; `led` on `gpu`; `app` on all.
+Dependencies: `foundation` and `gpu` have none; `core` depends only on `foundation`. `editing`/`playback`/`io` depend on `core`. **`ui` depends on `foundation` only** — mutations leave as `PanelAction` values translated to commands app-side; UI-reachable shared types go in `foundation`. Workspace dependencies: `node-engine` on `core`+`foundation`+`gpu`+`playback`; `nodes` on `core`+`gpu`+`node-engine`+`nodes-image`+`nodes-scene`+`nodes-water`; `nodes-image` on `core`+`foundation`+`gpu`+`native`+`node-engine`; `nodes-scene` on `core`+`foundation`+`gpu`+`node-engine`; `nodes-water` on `core`+`fluids`+`foundation`+`gpu`+`node-engine`+`physics`+`water-rigid`; `water-rigid` on `core`+`gpu`+`node-engine`+`physics`; `compositor` on `core`+`gpu`+`node-engine`+`playback`; `ui-paint` on `foundation`+`gpu`+`ui`; `media` on `core`+`playback`+`gpu`; `led` on `gpu`; `app` on all.
 
 ## Invariants
 

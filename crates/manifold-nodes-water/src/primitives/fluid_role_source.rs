@@ -16,7 +16,7 @@ use crate::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
-use crate::physics_mesh::{PART_PORTS, parse_compound_materials};
+use manifold_water_rigid::physics_mesh::{PART_PORTS, parse_compound_materials};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::Transform;
 use geometry::{GeometryMode, prepare_geometry, prepare_wired_geometry};
@@ -964,7 +964,7 @@ mod tests {
                 &historical,
                 output,
                 &params,
-                crate::physics::SimStep::default().authored_sample(),
+                manifold_water_rigid::physics::SimStep::default().authored_sample(),
             ));
             let sampled = backend.cpu_values().get::<FluidRole>(output).unwrap();
             assert!(Arc::ptr_eq(&sampled.geometry, &larger.geometry));

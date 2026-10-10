@@ -1,0 +1,29 @@
+[package]
+name = "manifold-water-rigid"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+manifold-core = { path = "../manifold-core" }
+manifold-gpu = { path = "../manifold-gpu" }
+manifold-node-engine = { path = "../manifold-node-engine" }
+manifold-physics = { path = "../manifold-physics" }
+ahash = { workspace = true }
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+inventory = "0.3"
+log = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+manifold-water-rigid = { path = ".", features = ["testkit"] }
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
+# Reference oracle for the coupled-step tests in src/physics/coupling_tests.rs.
+manifold-fluids = { path = "../manifold-fluids" }
+
+[features]
+testkit = ["manifold-node-engine/testkit"]
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs"]
+
+[lints]
+workspace = true

@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from gate_policy import (
-    RENDERER_SRC, ENGINE_SRC, WATER_SRC, CONTRACT_TESTS_DIR, UI_PAINT_DIR, UI_PAINT_FILTERS,
+    RENDERER_SRC, ENGINE_SRC, WATER_SRC, WATER_SRCS, CONTRACT_TESTS_DIR, UI_PAINT_DIR, UI_PAINT_FILTERS,
     PROOFS_DIR, LANDING_BUDGET_S,
     SMOKE_FILTERS, RUNTIME_FILTERS, BROAD_FILTERS, SLOW_THRESHOLD_S, TIMES_PATH,
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
@@ -43,7 +43,7 @@ from gate_policy import (
 )
 from gate_workspace import Workspace, module_mounts
 
-SOURCE_ROOTS = (ENGINE_SRC, WATER_SRC, RENDERER_SRC)
+SOURCE_ROOTS = (ENGINE_SRC, *WATER_SRCS, RENDERER_SRC)
 
 
 def source_root(path):
@@ -138,7 +138,7 @@ def is_gpu_path(path, workspace=None):
             return True
     if path.endswith(".wgsl"):
         return True
-    if path.startswith((GPU_BACKEND_ROOT, UI_PAINT_DIR, ENGINE_SRC, WATER_SRC, *CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
+    if path.startswith((GPU_BACKEND_ROOT, UI_PAINT_DIR, ENGINE_SRC, *WATER_SRCS, *CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
         return True
     if "shaders/" in path or "gpu::gpu_encoder" in path:
         return True

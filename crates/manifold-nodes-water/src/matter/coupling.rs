@@ -96,7 +96,7 @@ mod tests {
     use manifold_physics::clock::TICK;
     use crate::liquid::coupling::PendingTick;
     use manifold_core::scene_impulse::RigidImpulseTargets;
-    use crate::physics::{RigidBody, RigidSceneInputs};
+    use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs};
     use manifold_node_engine::scene::transform::Transform;
 
     /// A reaction of Δv = +1 m/s (encoded at U = 128) reaches Box3D as a

@@ -606,7 +606,7 @@ fn matter_variable_speed_export_grouping_matches_raw_points() {
             &mut scene.graph, &scene.plan,
             FrameTime { beats: Beats(0.0), seconds: Seconds(TICK), delta: Seconds(0.0), frame_count: 1 },
             &mask, &params,
-            manifold_nodes_water::physics::SimStep::default(),
+            manifold_water_rigid::physics::SimStep::default(),
         );
         let interval_settings = |scene: &MatterScene, iteration| {
             let output = scene.graph.get_node(scene.domain).unwrap().node
@@ -759,7 +759,7 @@ fn matter_fixed_point_headroom() {
 #[test]
 fn matter_domain_holds_on_nonfinite_gravity() {
     let mut scene = MatterScene::new(&small_dam_break());
-    scene.executor.set_sim_step(manifold_nodes_water::physics::SimStep::live(Seconds(1.0 / 60.0)));
+    scene.executor.set_sim_step(manifold_water_rigid::physics::SimStep::live(Seconds(1.0 / 60.0)));
     for _ in 0..5 {
         scene.tick();
     }

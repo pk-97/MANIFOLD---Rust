@@ -24,10 +24,10 @@ use super::bodies::{pack_supports, unpack_supports, BodySupports, LiquidBody};
 #[cfg(test)]
 use manifold_physics::clock::TICK;
 use manifold_core::fluid_domain::FluidDomainLayout;
-use crate::coupled_frame::{CoupledRigidFrame, CoupledRigidLayout};
+use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidLayout};
 use crate::fluid_role::PreparedFluidGeometry;
 use manifold_core::scene_impulse::RigidImpulseTargets;
-use crate::physics::{RigidBody, RigidSceneInputs, RigidSimulation};
+use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs, RigidSimulation};
 use manifold_node_engine::scene::transform::Transform;
 
 /// One coupled Box3D body, in row order.
@@ -307,7 +307,7 @@ impl LiquidRigidOwner {
     pub fn completed_time(&self) -> Seconds { self.completed_time }
 
     /// The step the rigid worker runs under; the domain sets it each frame.
-    pub fn set_step(&mut self, step: crate::physics::SimStep) {
+    pub fn set_step(&mut self, step: manifold_water_rigid::physics::SimStep) {
         self.rigid.set_step(step);
     }
 
@@ -753,7 +753,7 @@ mod tests {
         inputs.bodies[0].as_mut().unwrap().kind = 2;
         let colliders = RigidImpulseTargets { bodies: 3, copies: false };
         let mut owner = LiquidRigidOwner::new(&inputs, OPEN, colliders, 1, None).unwrap();
-        owner.set_step(crate::physics::SimStep::live(Seconds(TICK)));
+        owner.set_step(manifold_water_rigid::physics::SimStep::live(Seconds(TICK)));
         // More than one live frame's budget has already completed before
         // an overloaded frame reanchors the authored scene.
         for tick in 0..6 {

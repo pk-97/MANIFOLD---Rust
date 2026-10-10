@@ -4,7 +4,7 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_to_srgb_png};
-use manifold_nodes_water::physics::{SimStep, native_ticks_on_this_thread};
+use manifold_water_rigid::physics::{SimStep, native_ticks_on_this_thread};
 use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::exec::sim_metrics::SimMetrics};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;

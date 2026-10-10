@@ -22,6 +22,7 @@ inventory = "0.3"
 manifold-nodes = { path = ".", features = ["testkit"] }
 manifold-nodes-scene = { path = "../manifold-nodes-scene", features = ["testkit"] }
 manifold-nodes-water = { path = "../manifold-nodes-water", features = ["testkit"] }
+manifold-water-rigid = { path = "../manifold-water-rigid", features = ["testkit"] }
 manifold-nodes-image = { path = "../manifold-nodes-image", features = ["testkit"] }
 manifold-gpu = { path = "../manifold-gpu", features = ["testkit"] }
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
