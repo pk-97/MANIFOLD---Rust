@@ -99,6 +99,10 @@ buffer gather):
    tests and their mirror `shaders/<name>.wgsl` oracles — both runtime paths are
    generated now; the hand kernels only re-proved the node-graph migration. Do not add
    new ones.
+   **Landing tests assert work done, never wall-clock time:** counts, dispatches,
+   compiles, allocations, frames waited on an explicit readiness condition. Timing
+   budgets are measurements behind a perf feature or the nightly run, never in the
+   landing set.
 
 **Scope — the in/out test (2026-07-11).** An atom is IN the mandate iff its kernel is a
 **barrier-free pure per-element function**: one thread computes one output element,

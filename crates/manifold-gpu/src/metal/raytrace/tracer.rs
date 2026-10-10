@@ -2912,7 +2912,7 @@ mod tests {
 
     use super::super::{RtObjectGeometry, blas_geometry_nonopaque};
     use super::{GpuDevice, MetalShadowRayTracer};
-    use manifold_foundation::cold_touch::{ColdTouchKind, cold_touch_count};
+    use manifold_foundation::cold_touch::{ColdTouchKind, thread_cold_touch_count};
 
     /// Executes the production normal-frame helper under production MSL options.
     #[cfg(feature = "gpu-proofs")]
@@ -3083,11 +3083,12 @@ mod tests {
     fn tracer_reconstruction_compiles_nothing() {
         let device = GpuDevice::new();
         let _t1 = MetalShadowRayTracer::new(&device);
-        let before = cold_touch_count(ColdTouchKind::PipelineCompile);
+        // Thread-scoped: sibling tests compile on their own threads.
+        let before = thread_cold_touch_count(ColdTouchKind::PipelineCompile);
         let _t2 = MetalShadowRayTracer::new(&device);
         assert_eq!(
             before,
-            cold_touch_count(ColdTouchKind::PipelineCompile),
+            thread_cold_touch_count(ColdTouchKind::PipelineCompile),
             "second tracer construction compiled pipelines — PSOs must be device-global"
         );
     }

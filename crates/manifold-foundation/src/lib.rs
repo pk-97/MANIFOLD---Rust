@@ -24,7 +24,7 @@ pub mod settings;
 pub mod units;
 pub mod uv_transform;
 
-pub use cold_touch::{ColdTouchKind, cold_touch_count, record_cold_touch, reset_cold_touch_counts, set_transport_playing, total_cold_touches};
+pub use cold_touch::{ColdTouchKind, cold_touch_count, record_cold_touch, reset_cold_touch_counts, set_transport_playing, thread_cold_touch_count, total_cold_touches};
 
 pub use feature_flags::RELIGHT_FEATURE_ENABLED;
 pub use hash::{fire_meter_key, fire_meter_key_for_clip_trigger, fire_meter_key_for_param};

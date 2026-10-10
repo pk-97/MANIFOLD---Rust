@@ -123,9 +123,9 @@ GLB_TESTS = frozenset({"glb_conformance_sweep"})
 # A shader included by more primitives than this is "shared WGSL" -> BROAD.
 SHARED_WGSL_USERS = 12
 
-# Proofs only a long run can make: they skip on the landing rows and run when
-# their own test changes (an exact filter names them, so the skip drops out,
-# see Plan.final_skips) and nightly under --all. Filters name the test fn.
+# Proofs only a long run can make: they skip on every landing run, whole-package
+# runs included, and run when an exact filter names them (see Plan.final_skips)
+# and nightly under --all. Filters name the test fn.
 # matter_look_volume_drift: MPM volume loss shows only over 60 s of still pool.
 REPORTER_SKIPS = [
     "matter_look_volume_drift",

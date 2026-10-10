@@ -136,6 +136,15 @@ class ScopeTests(unittest.TestCase):
         run = next(run for run in result.runs() if run["package"] == "manifold-compositor")
         self.assertEqual(run["filters"], [])
 
+    def test_whole_package_runs_still_skip_reporter_skips(self):
+        workspace = fixture_workspace(Path("/nonexistent"))
+        result = g.Plan(paths=["synthetic"], workspace=workspace,
+                        filters=set(g.SMOKE_FILTERS), whole_packages={"manifold-compositor"})
+        run = next(run for run in result.runs() if run["package"] == "manifold-compositor")
+        self.assertEqual(run["filters"], [])
+        for name in g.REPORTER_SKIPS:
+            self.assertIn(name, run["skips"])
+
     def test_missing_audited_owner_fails_before_pruning(self):
         workspace = fixture_workspace(Path("/nonexistent"))
         workspace.packages["manifold-nodes-scene"]["targets"] = [

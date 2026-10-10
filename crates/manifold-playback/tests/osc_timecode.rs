@@ -168,7 +168,7 @@ fn wait_for_receiving(
 #[test]
 fn osc_timecode_packet_drives_seek_when_paused() {
     let mut receiver = OscReceiver::new();
-    receiver.set_port(19801);
+    receiver.set_port(0);
     let mut osc_sync = OscSyncController::new();
     osc_sync.timecode_address = "/time".to_string();
     assert!(
@@ -176,6 +176,7 @@ fn osc_timecode_packet_drives_seek_when_paused() {
         "enable_osc must succeed with a receiver present"
     );
     assert!(osc_sync.is_osc_enabled);
+    assert!(receiver.is_listening(), "receiver failed to bind");
 
     let target = FakeSyncTarget {
         state: PlaybackState::Paused,
@@ -237,11 +238,12 @@ fn osc_timecode_packet_drives_seek_when_paused() {
 #[test]
 fn osc_timecode_arrival_triggers_play() {
     let mut receiver = OscReceiver::new();
-    receiver.set_port(19802);
+    receiver.set_port(0);
     let mut osc_sync = OscSyncController::new();
     osc_sync.timecode_address = "/time".to_string();
     osc_sync.follow_transport = true;
     assert!(osc_sync.enable_osc(&mut receiver));
+    assert!(receiver.is_listening(), "receiver failed to bind");
 
     let target = FakeSyncTarget {
         state: PlaybackState::Stopped,
