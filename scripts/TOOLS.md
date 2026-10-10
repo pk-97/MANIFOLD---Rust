@@ -22,6 +22,7 @@ Landing and gates:
   bridge-probe            presentation tear regression gate  [scripts/bridge_probe_gate.py]  (cost: broad)
   docs-index              regenerate docs/README.md after adding or renaming a doc  [scripts/gen_docs_index.py]  (cost: unit)
   glb-status              regenerate the glTF conformance status doc  [scripts/gen_glb_conformance_status.py]  (cost: unit)
+  water-edges             water crate edge census: cross-area reaches inside manifold-nodes-water; --check fails on a CUT row  [scripts/water_crate_edges.py]  (cost: unit)
   gate-runner             machine-written verdict trail for lane gates  [scripts/gate_runner.py]  (cost: focused)
 
 Machine: GPU, worktrees, disk:

@@ -14,7 +14,7 @@
 //! `GPU_FLIP_SMOKE_DIR` names the output directory (stills, mp4, timing CSV);
 //! `GPU_FLIP_SMOKE_FRAMES` the run length (900 when unset).
 
-use manifold_nodes_water::primitives::gpu_flip_preset::testkit::rendered_scene_bytes;
+use manifold_nodes_water::presets::gpu_flip::testkit::rendered_scene_bytes;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -24,7 +24,7 @@ use manifold_core::params::{Param, ParamManifest};
 use serde_json::{Value, json};
 use manifold_gpu::GpuTextureFormat;
 
-use manifold_nodes_water::primitives::gpu_flip_preset::{WaterScene, render_def};
+use manifold_nodes_water::presets::gpu_flip::{WaterScene, render_def};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
@@ -214,7 +214,7 @@ impl Smoke {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         let def = render_def(scene);
-        let Some(view) = manifold_nodes_water::primitives::gpu_flip_preset::testkit::fused_as_rendered(&def, &registry) else {
+        let Some(view) = manifold_nodes_water::presets::gpu_flip::testkit::fused_as_rendered(&def, &registry) else {
             return Self::with_def(scene, def);
         };
         let mut smoke = Self::with_def(scene, (*view.def).clone());
@@ -859,7 +859,7 @@ fn contact_sheet(stills: &[PathBuf], cols: usize, scale: f64, out: &Path) {
 fn with_params(def: EffectGraphDef, overrides: &Value) -> EffectGraphDef {
     let mut v = serde_json::to_value(def).expect("def serialises");
     for (name, params) in overrides.as_object().expect("overrides by node") {
-        let node = manifold_nodes_water::liquid::conformance::json_node_mut(&mut v, name)
+        let node = manifold_nodes_water::testkit::conformance::json_node_mut(&mut v, name)
             .unwrap_or_else(|| panic!("no node {name}"));
         if !node["params"].is_object() {
             node["params"] = json!({});

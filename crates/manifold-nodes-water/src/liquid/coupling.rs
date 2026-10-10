@@ -22,9 +22,9 @@ use manifold_physics::{BodyHandle, BodyImpulse, PhysicsWorld, Seconds, TickStamp
 
 use super::bodies::{pack_supports, unpack_supports, BodySupports, LiquidBody};
 #[cfg(test)]
-use crate::clock::TICK;
+use manifold_physics::clock::TICK;
 use manifold_core::fluid_domain::FluidDomainLayout;
-use crate::rigid_coupling::{CoupledRigidFrame, CoupledRigidLayout};
+use crate::coupled_frame::{CoupledRigidFrame, CoupledRigidLayout};
 use crate::fluid_role::PreparedFluidGeometry;
 use manifold_core::scene_impulse::RigidImpulseTargets;
 use crate::physics::{RigidBody, RigidSceneInputs, RigidSimulation};
@@ -729,7 +729,7 @@ mod tests {
         scene.bodies[0] = Some(RigidBody {
             transform: Transform { pos: [0.0, 1.0, 0.0], scale: [0.4; 3], ..Transform::default() },
             // 32 kg: the cube's edge is its scale times CUBE_EDGE_PER_SCALE.
-            density: 32.0 / (0.4 * crate::liquid::conformance::CUBE_EDGE_PER_SCALE).powi(3),
+            density: 32.0 / (0.4 * crate::testkit::conformance::CUBE_EDGE_PER_SCALE).powi(3),
             bounce: 0.0,
             ..RigidBody::default()
         });

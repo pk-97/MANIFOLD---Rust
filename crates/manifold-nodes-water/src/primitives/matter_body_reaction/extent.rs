@@ -2,7 +2,8 @@
 use crate::liquid::extent::liquid_lattice;
 use crate::matter::grid_bytes;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{field_reads, node_extent};
+use crate::liquid::extent::{field_reads};
+use crate::matter::node_extent;
 
 fn matter_body_reaction(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = liquid_lattice(x)?;

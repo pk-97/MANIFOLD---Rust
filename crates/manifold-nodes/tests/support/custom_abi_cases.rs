@@ -514,7 +514,7 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "gpu_flip_clock.rs",
+        source: "../liquid/bodies.rs",
         rust_struct: "GpuFlipBodyVertex",
         shader: "shaders/gpu_flip_clock.wgsl",
         shader_struct: "BodyVertex",

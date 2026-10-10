@@ -33,6 +33,7 @@
 //! (Copyright (c) 2020 Andreas Reich, github.com/Wumpf/blub,
 //! `density_projection_gather_error.comp`; see THIRD_PARTY_NOTICES.md).
 
+use crate::liquid::grid::face_bytes;
 use crate::primitives::prefix_scan::PrefixScan;
 use std::borrow::Cow;
 
@@ -94,13 +95,6 @@ manifold_core::testkit_visible! {
 /// FLIP Fluids _extrapolateFluidVelocities: configured CFL, never travel.
 pub(crate) fn band_layers(cfl: u32) -> u32 {
     (3f64.sqrt() * f64::from(cfl)).ceil() as u32 + 3
-}
-}
-
-manifold_core::testkit_visible! {
-/// Bytes of the step's face grid at `cells`: one record per padded cell.
-pub(crate) fn face_bytes(cells: [u32; 3]) -> u64 {
-    cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * size_of::<FaceSample>() as u64
 }
 }
 
@@ -2537,7 +2531,7 @@ impl Primitive for GpuFlipStep {
             .max(0.0)
             .min(
                 (clock_obstacles.size
-                    / size_of::<super::gpu_flip_clock::GpuFlipBodyVertex>() as u64)
+                    / size_of::<crate::liquid::bodies::GpuFlipBodyVertex>() as u64)
                     as f32,
             ) as u32;
         let source_count = ctx
@@ -2545,7 +2539,7 @@ impl Primitive for GpuFlipStep {
             .round()
             .max(0.0)
             .min(
-                (clock_sources.size / size_of::<super::gpu_flip_clock::GpuFlipBodyVertex>() as u64)
+                (clock_sources.size / size_of::<crate::liquid::bodies::GpuFlipBodyVertex>() as u64)
                     as f32,
             ) as u32;
         let live_hits = ctx.inputs.array("live_hits").unwrap_or(&zeros);

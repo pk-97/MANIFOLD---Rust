@@ -1,5 +1,5 @@
 //! Authored preset fixtures for the liquid conformance suite.
-use manifold_nodes_water::liquid::conformance::testkit::{G, liquid_totals, matter_totals, matter_faces, set_source_param};
+use manifold_nodes_water::testkit::conformance::testkit::{G, liquid_totals, matter_totals, matter_faces, set_source_param};
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
@@ -10,13 +10,13 @@ use manifold_core::liquid_domain::{MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_I
 use crate::bundled_presets::bundled_preset_def;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_nodes_water::matter::{MatterPoint, STATS_WORDS};
-use manifold_nodes_water::primitives::face_grid_scenes::matter_dam_break_faces;
+use manifold_nodes_water::testkit::face_grid_scenes::matter_dam_break_faces;
 use manifold_nodes_water::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use manifold_nodes_water::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
-use manifold_nodes_water::primitives::gpu_flip_preset::{SHIPPED_PRESET, WaterScene, render_def};
+use manifold_nodes_water::presets::gpu_flip::{SHIPPED_PRESET, WaterScene, render_def};
 use manifold_nodes_water::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
 
-use manifold_nodes_water::liquid::conformance::*;
+use manifold_nodes_water::testkit::conformance::*;
 
 const MPM_MOVES_ITS_OWN_BODIES: &str = "MPM moves its bodies by its own per-substep law (D7), which tracks when \
      its reaction lands; it shares the force handoff (D17) but the coupled motion law is not its prediction, so \
@@ -348,7 +348,7 @@ mod tests {
 
     use super::*;
     use manifold_node_engine::exec::extent::{ExtentError};
-use manifold_nodes_water::liquid::extent::LiquidPreset;
+use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
     use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain};
 

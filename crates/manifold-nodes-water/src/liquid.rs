@@ -8,9 +8,6 @@
 pub mod bodies;
 pub mod body_buffers;
 pub mod clock;
-#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-#[doc(hidden)]
-pub mod conformance;
 pub mod coupling;
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 #[doc(hidden)]
@@ -60,4 +57,3 @@ pub const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
 
 pub(crate) mod substep_history;
 
-pub(crate) mod migration;

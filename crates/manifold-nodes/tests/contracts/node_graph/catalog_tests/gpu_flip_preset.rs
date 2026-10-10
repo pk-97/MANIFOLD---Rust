@@ -1,9 +1,9 @@
-use manifold_nodes_water::primitives::gpu_flip_preset::testkit::{family_outputs, surface_detail_offset, assert_preset_root, rendered_scene_bytes};
+use manifold_nodes_water::presets::gpu_flip::testkit::{family_outputs, surface_detail_offset, assert_preset_root, rendered_scene_bytes};
 
-use manifold_nodes_water::primitives::gpu_flip_preset::*;
+use manifold_nodes_water::presets::gpu_flip::*;
 use manifold_nodes_water::testkit::liquid_extents::*;
 #[cfg(feature = "gpu-proofs")]
-use manifold_nodes_water::primitives::gpu_flip_preset::testkit::surface_group;
+use manifold_nodes_water::presets::gpu_flip::testkit::surface_group;
 use manifold_core::effect_graph_def::*;
 use manifold_core::PresetTypeId;
 use serde_json::{Value, json};
@@ -303,7 +303,7 @@ use serde_json::{Value, json};
     #[test]
     fn gpu_flip_band_uses_engine_cfl() {
         use manifold_nodes_water::primitives::gpu_flip_step::{ENGINE_CFL, band_layers};
-        use manifold_nodes_water::liquid::conformance::FACE_GRID_GPU_FLIP_LAYERS;
+        use manifold_nodes_water::testkit::conformance::FACE_GRID_GPU_FLIP_LAYERS;
         assert_eq!(FACE_GRID_GPU_FLIP_LAYERS, FACE_VALID_LAYERS);
         assert_eq!(band_layers(ENGINE_CFL), 12);
         assert!(band_layers(ENGINE_CFL) >= FACE_VALID_LAYERS);
@@ -335,7 +335,7 @@ use serde_json::{Value, json};
             let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
             let mut preset: Value = serde_json::from_str(&json).unwrap();
             let surface_id = if name == SHIPPED_PRESET { "surface" } else { "liquid_surface" };
-            let surface = manifold_nodes_water::liquid::conformance::json_node_mut(&mut preset, surface_id)
+            let surface = manifold_nodes_water::testkit::conformance::json_node_mut(&mut preset, surface_id)
                 .cloned().expect("nested surface");
             assert_eq!(surface["handle"], "Liquid Surface", "{name}: authored surface handle");
             assert_eq!(structure(&surface["group"]), structure(group), "{name}: authored surface drift");

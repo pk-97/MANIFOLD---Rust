@@ -22,7 +22,8 @@ use {crate::primitives::whitewater_cpu as grid_cpu, super::whitewater_cpu::Grid,
 use {crate::primitives::whitewater_particle_cpu as particle_cpu, super::whitewater_particle_cpu::Box3, super::whitewater_particle_cpu::Crest, super::whitewater_particle_cpu::Emission, super::whitewater_particle_cpu::Spawn, super::whitewater_particle_cpu::SpawnFields};
 use {crate::primitives::whitewater_pool_cpu as pool_cpu, super::whitewater_pool_cpu::Advect, super::whitewater_pool_cpu::Age, super::whitewater_pool_cpu::PoolState, super::whitewater_pool_cpu::Preserve, super::whitewater_step::empty_slot};
 use super::whitewater_step::{Report, StepShape};
-use crate::clock::{TICK, whitewater_fade};
+use crate::liquid::clock::whitewater_fade;
+use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
 use crate::liquid::grid::face_len;
 use manifold_node_engine::scene::transform::Transform;

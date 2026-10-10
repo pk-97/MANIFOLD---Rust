@@ -8,10 +8,10 @@ use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
 use manifold_nodes_image::node_graph::primitives::divide_by_value::DivideByValue;
 use manifold_nodes_water::primitives::dot_products::DotProducts;
-use manifold_nodes_water::primitives::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
+use manifold_nodes_water::testkit::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_nodes_water::primitives::matter_face_component::MatterFaceComponent;
-use manifold_nodes_water::primitives::gpu_flip_preset::WaterScene;
+use manifold_nodes_water::presets::gpu_flip::WaterScene;
 use crate::contracts::water::primitives::gpu_flip_scene_tests::Run;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_nodes_water::liquid::grid::{face_coords, face_dims, face_index, face_len};

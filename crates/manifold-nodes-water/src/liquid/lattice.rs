@@ -2,7 +2,8 @@
 //! side; [`LiquidLattice::surface`] derives the native FLIP mesh/solid grid
 //! with 1.5-cell padding. Both retain the authored box and uniform spacing.
 
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::parameters::ParamValue;
 use manifold_core::fluid_domain::FluidDomainLayout;
 #[cfg(test)]
 use manifold_core::fluid_domain::domain_layout;
@@ -17,6 +18,19 @@ pub const SURFACE_EXTRA_NODES: u32 = 4;
 
 /// Most nodes per axis a lattice wire may carry, as every lattice atom.
 pub const MAX_LATTICE_NODES: u32 = 1024;
+
+/// The six-bit closed-wall mask (bits −X +X −Y +Y −Z +Z) from a domain's
+/// `closed_*` toggles; a missing toggle is closed.
+pub(crate) fn closed_faces(params: &ParamValues) -> u32 {
+    ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"]
+        .iter()
+        .enumerate()
+        .fold(0, |mask, (bit, name)| {
+            let closed = !matches!(params.get(*name), Some(ParamValue::Bool(false)));
+            mask | (u32::from(closed) << bit)
+        })
+}
+
 
 /// The optional cell-centred interior field identifies its physical grid by
 /// exact length. Native FLIP fills all surface cells (nodes − 1); authored
@@ -246,7 +260,7 @@ mod tests {
             assert_eq!(solver.min(), layout.min.map(|x| x - 1.5 * layout.cell_size as f32));
             assert_eq!(solver.bounds(), authored.surface().bounds());
             assert_eq!(authored.surface().solid_bytes(), u64::from(resolution + 4).pow(3) * 4);
-            assert_eq!(crate::primitives::gpu_flip_step::face_bytes(solver.cells()),
+            assert_eq!(crate::liquid::grid::face_bytes(solver.cells()),
                 u64::from(resolution + 4).pow(3) * std::mem::size_of::<crate::fluid_particles::FaceSample>() as u64);
             assert_eq!(interior_cells(solver.nodes(), u64::from(resolution + 3).pow(3)), Some(solver.cells()));
             assert_eq!(crate::whitewater::face_offset(solver.nodes(), solver.cells()).unwrap(), [0; 3]);

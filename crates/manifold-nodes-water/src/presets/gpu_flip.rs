@@ -20,8 +20,8 @@ use manifold_core::effect_graph_def::find_node_mut;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
 
-use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
-use super::gpu_flip_step::FACE_VALID_LAYERS;
+use crate::primitives::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
+use crate::primitives::gpu_flip_step::FACE_VALID_LAYERS;
 use manifold_node_engine::load::catalog_source::preset_json as bundled_preset_json;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
@@ -40,7 +40,7 @@ pub(crate) const STEPS_PER_TICK: usize = 1;
 
 manifold_core::testkit_visible! {
 /// The main solve's iterations: the step's Auto.
-pub(crate) const PRESSURE_ITERATIONS: usize = super::gpu_flip_pressure::MAX_ITERATIONS as usize;
+pub(crate) const PRESSURE_ITERATIONS: usize = crate::primitives::gpu_flip_pressure::MAX_ITERATIONS as usize;
 }
 
 manifold_core::testkit_visible! {

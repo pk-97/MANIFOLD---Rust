@@ -116,6 +116,10 @@ impl KnownItem for WhitewaterParticle {
     const SPECS: &'static [ChannelSpec] = WHITEWATER_PARTICLE_SPECS;
 }
 
+/// FLIP's own default whitewater pool budget, and the most a pool may hold.
+pub const DEFAULT_CAPACITY: u32 = 100_000;
+pub const MAX_CAPACITY: u32 = 250_000;
+
 /// The `step` of each node.nearest_crossing pass, in order. A first pass at
 /// 2 then two at 1 find the nearest stored crossing wherever three passes at
 /// 1 settle on a neighbour's (GPU_WHITEWATER_DESIGN.md D4).

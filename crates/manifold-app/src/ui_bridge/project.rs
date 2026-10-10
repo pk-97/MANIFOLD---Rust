@@ -21,7 +21,7 @@ const DEFAULT_LIQUID_TEMPLATE: fn() -> manifold_editing::commands::graph::Liquid
 /// shipped GPU FLIP preset is checked against), with its card rows.
 pub(crate) fn gpu_flip_liquid_template() -> manifold_editing::commands::graph::LiquidTemplate {
     use manifold_editing::commands::graph::{ExposureSet, LiquidTemplate, TemplateExposure};
-    let body = manifold_nodes_water::primitives::gpu_flip_preset::gpu_flip_liquid_body();
+    let body = manifold_nodes_water::presets::gpu_flip::gpu_flip_liquid_body();
     let id = |name: &str| {
         body.nodes.iter().find(|node| node.node_id.as_str() == name)
             .unwrap_or_else(|| panic!("the GPU FLIP body has no {name}")).id
@@ -48,7 +48,7 @@ pub(crate) fn gpu_flip_liquid_template() -> manifold_editing::commands::graph::L
         }).collect();
         exposures.push(TemplateExposure::Shared { spec: Box::new(spec.clone()), targets });
     }
-    let output_node = id(manifold_nodes_water::primitives::gpu_flip_preset::LIQUID_BODY_OUTPUT);
+    let output_node = id(manifold_nodes_water::presets::gpu_flip::LIQUID_BODY_OUTPUT);
     LiquidTemplate {
         name_prefix: "Water",
         group_id_slot: body.nodes.len(),

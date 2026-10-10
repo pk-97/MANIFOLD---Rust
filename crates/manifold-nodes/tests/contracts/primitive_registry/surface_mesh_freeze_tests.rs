@@ -12,11 +12,11 @@ fn smoothed_surface_with_pointwise_tail() -> manifold_core::effect_graph_def::Ef
     )
     .expect("WaterDamBreakGpuFlip bundled");
     let mut preset: Value = serde_json::from_str(&source).expect("WaterDamBreakGpuFlip parses");
-    let surface = manifold_nodes_water::liquid::conformance::json_node_mut(&mut preset, "surface")
+    let surface = manifold_nodes_water::testkit::conformance::json_node_mut(&mut preset, "surface")
         .expect("Liquid Surface group");
     let group = &mut surface["group"];
     let (normals, output) = {
-        let normals = manifold_nodes_water::liquid::conformance::json_node_mut(group, "liquid_normals")
+        let normals = manifold_nodes_water::testkit::conformance::json_node_mut(group, "liquid_normals")
             .expect("surface normals")
             .get("id")
             .cloned()

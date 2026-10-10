@@ -729,7 +729,7 @@ struct BoxRun {
 
 const BOX_SIZE: u32 = 64;
 
-fn box_def(fixture: manifold_nodes_water::liquid::conformance::Fixture) -> manifold_core::effect_graph_def::EffectGraphDef {
+fn box_def(fixture: manifold_nodes_water::testkit::conformance::Fixture) -> manifold_core::effect_graph_def::EffectGraphDef {
     use manifold_nodes::testkit::liquid_conformance_fixtures::LIQUID_SOLVERS;
     let row = LIQUID_SOLVERS
         .iter()
@@ -739,19 +739,19 @@ fn box_def(fixture: manifold_nodes_water::liquid::conformance::Fixture) -> manif
 }
 
 impl BoxRun {
-    fn new(fixture: manifold_nodes_water::liquid::conformance::Fixture, all: bool, poison: bool, level: i32) -> Self {
+    fn new(fixture: manifold_nodes_water::testkit::conformance::Fixture, all: bool, poison: bool, level: i32) -> Self {
         Self::of(Self::at_level(fixture, level), all, poison)
     }
 
     /// The scene with every pass of an inactive clock slot run, as before
     /// the slots were gated.
-    fn ungated(fixture: manifold_nodes_water::liquid::conformance::Fixture, level: i32) -> Self {
+    fn ungated(fixture: manifold_nodes_water::testkit::conformance::Fixture, level: i32) -> Self {
         Self::with_levers(Self::at_level(fixture, level), false, false, true)
     }
 
-    fn at_level(fixture: manifold_nodes_water::liquid::conformance::Fixture, level: i32) -> manifold_core::effect_graph_def::EffectGraphDef {
+    fn at_level(fixture: manifold_nodes_water::testkit::conformance::Fixture, level: i32) -> manifold_core::effect_graph_def::EffectGraphDef {
         let mut def = box_def(fixture);
-        manifold_nodes_water::liquid::conformance::set_node_param(
+        manifold_nodes_water::testkit::conformance::set_node_param(
             &mut def,
             "domain",
             "solve_level",
@@ -802,7 +802,7 @@ impl BoxRun {
     }
 
     fn render(&mut self, warming: bool) {
-        use manifold_nodes_water::clock::TICK;
+        use manifold_physics::clock::TICK;
         let frame_seconds = f64::from(self.ticks_per_frame) * TICK;
         let time = self.frame as f64 * frame_seconds;
         let ctx = manifold_node_engine::runtime::preset_context::PresetContext {
@@ -902,7 +902,7 @@ impl BoxRun {
 /// NaN into every body partial slot before the solve.
 #[test]
 fn gpu_flip_body_step_sparse_matches_all_tiles() {
-    use manifold_nodes_water::liquid::conformance::Fixture;
+    use manifold_nodes_water::testkit::conformance::Fixture;
     for (fixture, level) in [(Fixture::SubmergedBox, 0), (Fixture::FloatingBox, 0), (Fixture::SubmergedBox, 1), (Fixture::FloatingBox, 1)] {
         let mut dense = BoxRun::new(fixture, true, false, level);
         let mut sparse = BoxRun::new(fixture, false, false, level);
@@ -950,7 +950,7 @@ fn gpu_flip_body_step_sparse_matches_all_tiles() {
 /// so it kept a stale φ outside C; now the next active step retires it.
 #[test]
 fn gpu_flip_inactive_slots_match_the_ungated_step() {
-    use manifold_nodes_water::liquid::conformance::Fixture;
+    use manifold_nodes_water::testkit::conformance::Fixture;
     const STEP: &str = "node.gpu_flip_step";
     const TICKS: u32 = 30;
     for (fixture, level) in [(Fixture::SubmergedBox, 0), (Fixture::FloatingBox, 0), (Fixture::FloatingBox, 1)] {
@@ -1012,7 +1012,7 @@ fn gpu_flip_fresh_speed_preserves_coupled_bodies_two_ticks_a_frame() {
 }
 
 fn fresh_speed_preserves_coupled_bodies(ticks_per_frame: u32) {
-    use manifold_nodes_water::liquid::conformance::Fixture;
+    use manifold_nodes_water::testkit::conformance::Fixture;
     const STEP: &str = "node.gpu_flip_step";
     const TICKS: u32 = 8;
     fn baseline(def: manifold_core::effect_graph_def::EffectGraphDef) -> manifold_core::effect_graph_def::EffectGraphDef {
@@ -1100,7 +1100,7 @@ impl BoxRun {
 /// the coupled pressure solve must lift it out of the pool.
 #[test]
 fn gpu_flip_rising_box_clears_the_surface() {
-    use manifold_nodes_water::liquid::conformance::{BoxScene, Fixture, set_node_param};
+    use manifold_nodes_water::testkit::conformance::{BoxScene, Fixture, set_node_param};
     let scene = BoxScene::of(Fixture::SubmergedBox).expect("the submerged box");
     let mut def = box_def(Fixture::SubmergedBox);
     set_node_param(&mut def, "box_body", "density", manifold_core::effect_graph_def::SerializedParamValue::Float { value: 250.0 });

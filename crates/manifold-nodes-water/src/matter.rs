@@ -5,7 +5,7 @@
 //! GPU liquid's: `liquid`.
 
 use manifold_node_engine::channel_names::well_known;
-use crate::clock::TICK;
+use manifold_physics::clock::TICK;
 use crate::liquid::lattice::LiquidLattice;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
@@ -327,6 +327,19 @@ pub fn lattice_nodes(nodes: [u32; 3]) -> u64 {
     nodes.iter().map(|&n| u64::from(n)).product()
 }
 
+/// Lattice-wide node kernels read the accumulator and grid through the node
+/// count; P2G's word index is an i32 node index times four.
+pub fn node_extent(
+    x: &manifold_node_engine::exec::extent::AtomExtent<'_>,
+    lattice: &LiquidLattice,
+) -> Result<u64, manifold_node_engine::exec::extent::Verdict> {
+    let nodes = lattice_nodes(lattice.nodes());
+    if nodes > i32::MAX as u64 || nodes * u64::from(ACCUM_WORDS_PER_NODE) > u64::from(u32::MAX) {
+        return Err(x.uncovered(format!("{nodes} nodes overflow the accumulator's 32-bit word index")));
+    }
+    Ok(nodes)
+}
+
 /// Bytes of the per-node arrays. The atom that allocates each one and every
 /// atom that dispatches over it take the size from here, from the same
 /// `nodes` wires, so storage always covers the dispatch.
@@ -462,7 +475,7 @@ mod tests {
     /// round-trip exactly in f32 for every resolution and substep count.
     #[test]
     fn matter_momentum_unit_round_trips() {
-        let tick = crate::clock::TICK;
+        let tick = manifold_physics::clock::TICK;
         assert_eq!(momentum_unit(0.0625, tick / 34.0), 128.0);
         assert_eq!(momentum_unit(1.0, 1.0 / 64.0), 64.0);
         assert!(momentum_unit_fits(128.0, 0.0625, (tick / 34.0) as f32));

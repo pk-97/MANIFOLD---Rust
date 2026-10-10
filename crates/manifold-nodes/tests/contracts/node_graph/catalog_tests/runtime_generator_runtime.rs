@@ -57,7 +57,7 @@ use manifold_node_engine::runtime::*;
 
     #[test]
     fn native_flip_grid_shared_solid_keeps_live_card_binding_fanout() {
-        use manifold_nodes_water::primitives::gpu_flip_preset::{render_def, WaterScene};
+        use manifold_nodes_water::presets::gpu_flip::{render_def, WaterScene};
         use manifold_core::effect_graph_def::{BindingTarget, EffectGraphWire, SerializedParamValue};
         // This migration fixture reconstructs the old flat authored solid.
         let mut def = manifold_core::flatten::flatten_groups(&render_def(WaterScene::still_pool(16))).unwrap();

@@ -2,7 +2,7 @@ mod tests {
 use manifold_nodes_water::testkit::liquid_extents::walk;
 #[test]
 fn fluid_bricks_preset_extents_cover_dense_storage_and_schedule() {
-    use manifold_nodes_water::primitives::gpu_flip_preset::{WaterScene, render_def};
+    use manifold_nodes_water::presets::gpu_flip::{WaterScene, render_def};
     for resolution in [64, 128] {
         for scale in [1, 2, 4] {
             let def = render_def(WaterScene::dam_break(resolution).with_surface_scale(scale));
@@ -19,7 +19,7 @@ fn fluid_bricks_preset_extents_cover_dense_storage_and_schedule() {
 fn fluid_bricks_dense_fusion_is_independent_of_optional_schedules() {
     use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_node_engine::freeze::install::fuse_generator_view;
-    use manifold_nodes_water::primitives::gpu_flip_preset::{WaterScene, render_def};
+    use manifold_nodes_water::presets::gpu_flip::{WaterScene, render_def};
 
     fn remove_schedules(value: &mut serde_json::Value) -> usize {
         match value {

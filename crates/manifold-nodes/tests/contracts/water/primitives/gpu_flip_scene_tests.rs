@@ -8,13 +8,13 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 
 #[cfg(test)]
-use manifold_nodes_water::primitives::gpu_flip_preset::{DAM_COLUMN, DAM_FILL_HEIGHT, REST_PER_CELL, DAM_OBSTACLE};
+use manifold_nodes_water::presets::gpu_flip::{DAM_COLUMN, DAM_FILL_HEIGHT, REST_PER_CELL, DAM_OBSTACLE};
 #[cfg(test)]
 use manifold_nodes_water::primitives::gpu_flip_volume::VolumeDrift;
 #[cfg(test)]
 use manifold_nodes_water::primitives::liquid_stats::SOLVER_WORDS;
 
-use manifold_nodes_water::primitives::gpu_flip_preset::{FACE_NODES, STEP_NODE, WaterScene, water_def};
+use manifold_nodes_water::presets::gpu_flip::{FACE_NODES, STEP_NODE, WaterScene, water_def};
 use manifold_nodes_water::liquid::grid::face_len;
 #[cfg(test)]
 use manifold_nodes_water::primitives::gpu_flip_volume::volume_and_area;
@@ -547,7 +547,7 @@ fn gpu_flip_face_grid_is_the_last_ticks_faces() {
         let differ = state.iter().zip(&last).filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b)).count();
         let moving = state.iter().filter(|s| s.velocity.iter().any(|v| *v != 0.0)).count();
         let grid = run.face_grid();
-        let expected = manifold_nodes_water::liquid::conformance::gpu_flip_faces(bytemuck::cast_slice(&state), run.solver_grid().cells());
+        let expected = manifold_nodes_water::testkit::conformance::gpu_flip_faces(bytemuck::cast_slice(&state), run.solver_grid().cells());
         let gathered = (0..3)
             .map(|axis| grid[axis].iter().zip(&expected[axis]).filter(|(a, b)| a.to_bits() != b.to_bits()).count())
             .sum::<usize>();
