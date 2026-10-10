@@ -66,7 +66,7 @@ fn parse_args() -> Result<Args, String> {
         start_s: 0.0,
         dur_s: f32::INFINITY,
         sensitivity: 1.0,
-        attack_ms: 5.0,
+        attack_ms: 0.0,
         release_ms: 120.0,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();

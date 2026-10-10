@@ -93,13 +93,11 @@ pub(crate) const AUDIO_RELEASE_MAX_MS: f32 = 2000.0;
 /// Leading-label width for the audio shaping sliders.
 pub(crate) const AUDIO_SHAPE_LABEL_W: f32 = 52.0;
 
-// `AudioModShape`'s own field defaults (mirrors `manifold_core::audio_mod`'s
-// `default_sensitivity()`/`default_attack_ms()`/`default_release_ms()` —
-// plain consts here so this crate doesn't need a `manifold-core` type import
-// just to know a slider's right-click-reset target, BUG-061).
-pub(crate) const AUDIO_SENS_DEFAULT: f32 = 1.0;
-pub(crate) const AUDIO_ATTACK_DEFAULT_MS: f32 = 5.0;
-pub(crate) const AUDIO_RELEASE_DEFAULT_MS: f32 = 120.0;
+// `AudioModShape`'s defaults: one definition, shared with manifold-core.
+pub(crate) use manifold_foundation::audio_shape::{
+    ATTACK_DEFAULT_MS as AUDIO_ATTACK_DEFAULT_MS, RELEASE_DEFAULT_MS as AUDIO_RELEASE_DEFAULT_MS,
+    SENSITIVITY_DEFAULT as AUDIO_SENS_DEFAULT,
+};
 
 /// Map a normalized position to an audio shaping scalar.
 pub(crate) fn audio_shape_value_from_norm(which: AudioShapeParam, norm: f32) -> f32 {

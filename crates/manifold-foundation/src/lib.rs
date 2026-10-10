@@ -15,6 +15,7 @@
 //! model, no GPU. Domain types the UI needs are adapted at the app boundary
 //! (`docs/UI_LAYERING_INVERSION.md`).
 
+pub mod audio_shape;
 pub mod cold_touch;
 pub mod feature_flags;
 pub mod fonts;

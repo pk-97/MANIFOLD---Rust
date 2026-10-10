@@ -272,13 +272,13 @@ pub struct AudioModSource {
 }
 
 fn default_sensitivity() -> f32 {
-    1.0
+    manifold_foundation::audio_shape::SENSITIVITY_DEFAULT
 }
 fn default_attack_ms() -> f32 {
-    5.0
+    manifold_foundation::audio_shape::ATTACK_DEFAULT_MS
 }
 fn default_release_ms() -> f32 {
-    120.0
+    manifold_foundation::audio_shape::RELEASE_DEFAULT_MS
 }
 fn one() -> f32 {
     1.0
