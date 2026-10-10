@@ -41,13 +41,12 @@
 //! per-frame allocation, D1: no cumulative cursor — see
 //! [`frame_sample_bounds`]).
 //!
-//! Each analyzed send also runs the trained kick detector inline on the same samples,
+//! Each analyzed send also runs the trained kick and snare detectors inline on the same samples,
 //! just before its analyzer, so a fire lands on the hop that contains it (the live path
 //! runs it on a worker thread; docs/KICK_REALTIME_DESIGN.md section 1b).
 
 use manifold_audio::analysis::StreamingSendAnalyzer;
-use manifold_audio::detectors::kick_detector;
-use manifold_audio::kick::{KickDetector, KickFire};
+use manifold_audio::detectors::{DetectorEvent, EventDetector, send_detectors};
 use manifold_core::audio_features::{
     AudioFeatureHop, AudioHopError, AudioHopStamp, new_audio_analysis_epoch,
 };
@@ -84,23 +83,25 @@ struct AnalyzedSend {
     source: SendSource,
     analyzer: StreamingSendAnalyzer,
     epoch: u64,
-    /// `None` when the kick model was refused: kick then stays 0.
-    kick: Option<KickDetector>,
-    kick_fires: Vec<KickFire>,
+    /// The trained detectors whose models loaded; a refused one's feature stays 0.
+    detectors: Vec<Box<dyn EventDetector>>,
+    events: Vec<DetectorEvent>,
 }
 
-/// Runs a send's kick detector on `samples` and queues its fires; call just before the
+/// Runs a send's trained detectors on `samples` and queues their fires; call just before the
 /// analyzer is pushed the same samples.
-fn detect_kicks(
-    kick: &mut Option<KickDetector>,
-    fires: &mut Vec<KickFire>,
+fn detect_events(
+    detectors: &mut [Box<dyn EventDetector>],
+    events: &mut Vec<DetectorEvent>,
     analyzer: &mut StreamingSendAnalyzer,
     samples: &[f32],
 ) {
-    let Some(kick) = kick.as_mut() else { return };
-    fires.clear();
-    kick.push(samples, fires);
-    analyzer.queue_kick_fires(fires.iter().map(|f| f.sample));
+    events.clear();
+    for d in detectors.iter_mut() {
+        events.reserve(d.max_events(samples.len()));
+        d.push(samples, events);
+    }
+    analyzer.queue_detector_events(events);
 }
 
 /// Sample-index bounds `[start, end)` for frame `frame_idx`, at `rate` Hz,
@@ -390,7 +391,7 @@ impl<'a> OfflineAudioModDriver<'a> {
                 let visuals = &mut self.visuals;
                 let epoch = entry.epoch;
                 let hop_size = entry.analyzer.hop();
-                detect_kicks(&mut entry.kick, &mut entry.kick_fires, &mut entry.analyzer, frame);
+                detect_events(&mut entry.detectors, &mut entry.events, &mut entry.analyzer, frame);
                 let mut push_error = None;
                 entry.analyzer.push_with_hops(frame, |analyzed, column| {
                     if visual {
@@ -479,9 +480,9 @@ fn build_analyzed_send(
     };
     // D3: settle envelopes/decays before frame 0 with up to 1s of pre-roll.
     let preroll_end = audio.pre_roll_samples.min(buf.len());
-    let mut kick = kick_detector(audio.sample_rate);
-    let mut kick_fires = Vec::with_capacity(256);
-    detect_kicks(&mut kick, &mut kick_fires, &mut analyzer, &buf[..preroll_end]);
+    let mut detectors = send_detectors(audio.sample_rate);
+    let mut events = Vec::with_capacity(256);
+    detect_events(&mut detectors, &mut events, &mut analyzer, &buf[..preroll_end]);
     analyzer.push(&buf[..preroll_end]);
 
     AnalyzedSend {
@@ -490,8 +491,8 @@ fn build_analyzed_send(
         source,
         analyzer,
         epoch,
-        kick,
-        kick_fires,
+        detectors,
+        events,
     }
 }
 

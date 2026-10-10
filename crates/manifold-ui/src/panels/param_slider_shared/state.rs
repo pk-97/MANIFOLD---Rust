@@ -169,14 +169,15 @@ mod audio_row_tests {
     /// drawer stayed at five buttons while serde/runtime shipped. This pins
     /// the row that actually feeds pixels.
     #[test]
-    fn feature_row_carries_kick_pitch_and_presence() {
+    fn feature_row_carries_kick_snare_pitch_and_presence() {
         let labels = audio_kind_labels();
-        assert_eq!(labels.len(), 8);
-        // Kick was inserted after Transients (index 4), shifting Pitch/Presence.
+        assert_eq!(labels.len(), 9);
+        // Kick and Snare follow Transients (index 4), shifting Pitch/Presence.
         assert_eq!(labels[5], "Kick");
-        assert_eq!(labels[6], "Pitch");
-        assert_eq!(labels[7], "Presence");
-        assert_eq!(AUDIO_KIND_COUNT, 8);
+        assert_eq!(labels[6], "Snare");
+        assert_eq!(labels[7], "Pitch");
+        assert_eq!(labels[8], "Presence");
+        assert_eq!(AUDIO_KIND_COUNT, 9);
         // Order-parity with core lives in manifold-app's ui_translate tests —
         // this crate deliberately cannot see manifold-core.
     }
@@ -233,7 +234,7 @@ pub(crate) struct SourceChip {
 pub(crate) const TRIGGER_SOURCE_CHIPS: [(&str, crate::types::AudioFeatureKind, crate::types::AudioBand); 5] = [
     ("Kick", crate::types::AudioFeatureKind::Kick, crate::types::AudioBand::Low),
     ("Bass", crate::types::AudioFeatureKind::Transients, crate::types::AudioBand::Low),
-    ("Snare", crate::types::AudioFeatureKind::Transients, crate::types::AudioBand::Mid),
+    ("Snare", crate::types::AudioFeatureKind::Snare, crate::types::AudioBand::Mid),
     ("Hats", crate::types::AudioFeatureKind::Transients, crate::types::AudioBand::High),
     ("Transients", crate::types::AudioFeatureKind::Transients, crate::types::AudioBand::Full),
 ];
@@ -248,10 +249,11 @@ pub(crate) const TRIGGER_SOURCE_CHIPS: [(&str, crate::types::AudioFeatureKind, c
 pub(crate) fn trigger_source_chips(current: crate::types::AudioFeature) -> Vec<SourceChip> {    let mut chips: Vec<SourceChip> = TRIGGER_SOURCE_CHIPS
         .iter()
         .map(|&(label, kind, band)| {
-            // `Kick` ignores `band` at evaluation time (always reads Low), so
-            // a saved Kick cell matches its chip regardless of the stored band.
+            // `Kick` and `Snare` ignore `band` at evaluation time (always Low / Mid), so
+            // a saved Kick or Snare cell matches its chip regardless of the stored band.
             let active = kind == current.kind
-                && (band == current.band || kind == crate::types::AudioFeatureKind::Kick);
+                && (band == current.band
+                    || matches!(kind, crate::types::AudioFeatureKind::Kick | crate::types::AudioFeatureKind::Snare));
             SourceChip {
                 label: label.to_string(),
                 feature: crate::types::AudioFeature::new(kind, band),

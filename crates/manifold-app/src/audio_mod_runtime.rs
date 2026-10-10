@@ -33,7 +33,7 @@ use manifold_audio::analysis::{
     AudioFeatureWorker, GainBank, LinearResampler, MonoReader, StreamingSendAnalyzer,
 };
 use manifold_audio::capture::{self, CaptureBackend, CaptureSource};
-use manifold_audio::detectors::{DetectorEvent, DetectorWorker, EventKind, kick_detector};
+use manifold_audio::detectors::{DetectorEvent, DetectorWorker, send_detectors};
 use manifold_core::{AudioSend, LayerId, Seconds, SendFeatures};
 use manifold_core::audio_features::{AudioFeatureHop, AudioHopBatch, AudioHopError, AudioHopStamp,
     AudioInputDiscontinuity, AudioInputProblem, AudioInputSource, new_audio_analysis_epoch};
@@ -105,9 +105,9 @@ struct SendAnalyzer {
     capture_generation: Option<u64>,
     channels: Vec<u16>,
     layers: Vec<LayerId>,
-    /// The send's trained event detectors (kick) on their own thread, fed the same mono
+    /// The send's trained event detectors (kick, snare) on their own thread, fed the same mono
     /// from the same origin as `analyzer`. `None` when the model was refused or the thread
-    /// could not start: kick then stays 0.
+    /// could not start: kick and snare then stay 0.
     detectors: Option<DetectorWorker>,
     /// This update's mixed mono, held between [`Self::stage`] and analysis.
     staged: Vec<f32>,
@@ -124,8 +124,8 @@ impl SendAnalyzer {
             capture_generation,
             channels: send.channels.clone(),
             layers: send.layers().to_vec(),
-            detectors: kick_detector(rate).and_then(|kick| {
-                DetectorWorker::spawn(vec![Box::new(kick)])
+            detectors: Some(send_detectors(rate)).filter(|d| !d.is_empty()).and_then(|detectors| {
+                DetectorWorker::spawn(detectors)
                     .inspect_err(|e| log::error!("[AudioMod] detector worker did not start: {e}"))
                     .ok()
             }),
@@ -143,15 +143,14 @@ impl SendAnalyzer {
         }
     }
 
-    /// Queues the worker's kick fires into the analyzer, waiting at most until `deadline`.
+    /// Queues the worker's fires into the analyzer, waiting at most until `deadline`.
     /// Fires that miss it are queued on a later update and land on the first hop analysed
     /// after their sample (one frame late).
     fn collect_events(&mut self, deadline: std::time::Instant, scratch: &mut Vec<DetectorEvent>) {
         let Some(worker) = self.detectors.as_mut() else { return };
         scratch.clear();
         worker.collect(deadline, scratch);
-        self.analyzer
-            .queue_kick_fires(scratch.iter().filter(|e| e.kind == EventKind::Kick).map(|e| e.sample));
+        self.analyzer.queue_detector_events(scratch);
     }
 
     fn analyze_hops(
@@ -1130,6 +1129,42 @@ mod hop_tests {
         }
         let want: Vec<u64> = inline.iter().map(|f| f.sample.div_ceil(hop) * hop).collect();
         assert_eq!(fired, want);
+    }
+
+    /// Snares ride the same worker: every inline snare fire reaches the Mid band's snare value
+    /// as one 1.0 hop, at or after its emission (fires are stamped at the emission and decided
+    /// about 40 ms later, so they land on the next hop analysed).
+    #[test]
+    fn worker_snare_fires_land_on_the_mid_band() {
+        use manifold_audio::kick::container::Container;
+        use manifold_audio::snare::SnareDetector;
+        use std::time::{Duration, Instant};
+
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-audio/tests/fixtures/snare/clip_dense.mkick");
+        let golden = Container::parse(&std::fs::read(path).unwrap()).unwrap();
+        let n = golden.shape("audio_i16").unwrap()[0];
+        let input: Vec<f32> = golden.i16s("audio_i16", &[n]).unwrap().iter().map(|&v| v as f32 / 32768.0).collect();
+        let mut inline = Vec::new();
+        SnareDetector::new(48_000).unwrap().push(&input, &mut inline);
+        assert!(inline.len() > 5);
+
+        let send = AudioSend::new("Snare");
+        let mut analyzer = SendAnalyzer::new(48_000, 250.0, 2500.0, &send, None);
+        let mut batch = AudioHopBatch::default();
+        let mut events = Vec::with_capacity(256);
+        let mut fired = Vec::new();
+        for frame in input.chunks(800) {
+            analyzer.stage(frame);
+            analyzer.collect_events(Instant::now() + Duration::from_secs(5), &mut events);
+            let mono = std::mem::take(&mut analyzer.staged);
+            analyzer.analyze_hops(&mono, &mut batch, |_| None, |_| {}).unwrap();
+            analyzer.staged = mono;
+            fired.extend(batch.hops().iter().filter(|h| h.features.bands[2].snare == 1.0).map(|h| h.stamp.end_sample));
+        }
+        assert_eq!(fired.len(), inline.len());
+        for (hop_end, f) in fired.iter().zip(&inline) {
+            assert!(*hop_end >= f.sample && *hop_end <= f.decided_at + 800, "fire {f:?} landed at {hop_end}");
+        }
     }
 
     #[test]

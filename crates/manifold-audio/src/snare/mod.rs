@@ -4,8 +4,11 @@
 //! The net reuses the kick's CNN family (`kick::net`).
 
 pub mod cands;
+pub mod detector;
 pub mod flat;
 pub mod net;
+
+pub use detector::{SnareDetector, SnareError, SnareFire};
 
 #[cfg(test)]
 mod tests;
