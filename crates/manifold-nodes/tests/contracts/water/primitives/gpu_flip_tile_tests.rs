@@ -309,68 +309,6 @@ fn gpu_flip_gather_unrolled_matches_original_every_face_word() {
     }
 }
 
-#[test]
-#[cfg(feature = "water-race-probes")]
-fn gpu_flip_gather_unrolled_bounded_timing() {
-    let device = manifold_gpu::testkit::test_device();
-    let pipelines = gather_pipelines(&device);
-    for side in [64, 128] {
-        let n = [side; 3];
-        let (ranges, particles) = gather_population(n, [0.0; 3], 0.125, true);
-        let p = StepParams::default().with_grid_for_test(n, [0.0; 3], 0.125)
-            .with_gather_for_test(particles.len() as u32, 1, 1.0 / 60.0);
-        let ranges = gather_buffer(&device, &ranges);
-        let sorted = gather_buffer(&device, &particles);
-        drop(particles);
-        let unused = gather_buffer(&device, &vec![0u32; side.pow(3) as usize]);
-        let mut plan = [0u32; 12];
-        plan[0] = p.step_dt_for_test().to_bits();
-        plan[11] = 1;
-        let clock = gather_buffer(&device, &plan);
-        let words = (side as usize + 1).pow(3) * 8;
-        let faces = [
-            device.create_buffer_shared(words as u64 * 4),
-            device.create_buffer_shared(words as u64 * 4),
-        ];
-        let mut samples = [Vec::with_capacity(8), Vec::with_capacity(8)];
-        for sample in 0..12 {
-            for i in if sample % 2 == 0 { [0, 1] } else { [1, 0] } {
-                let millis = gather_pass(
-                    &device,
-                    &pipelines[i],
-                    &p,
-                    &[
-                        (1, &ranges),
-                        (2, &sorted),
-                        (4, &faces[i]),
-                        (29, &unused),
-                        (45, &unused),
-                        (46, &clock),
-                    ],
-                );
-                if sample >= 4 {
-                    samples[i].push(millis);
-                }
-            }
-            assert_eq!(
-                read::<u32>(&faces[0], words),
-                read::<u32>(&faces[1], words),
-                "{side}³, sample {sample}: exact face words"
-            );
-        }
-        for times in &mut samples {
-            times.sort_by(f64::total_cmp);
-        }
-        let median = |times: &[f64]| (times[3] + times[4]) * 0.5;
-        eprintln!(
-            "GATHER_UNROLL n={side} markers={} half_volume=true warm=4 measured=8 old_median_ms={:.6} unrolled_median_ms={:.6} exact=true",
-            p.capacity_for_test(),
-            median(&samples[0]),
-            median(&samples[1])
-        );
-    }
-}
-
 /// The step shader's poison entry: NaN into every cell array of the tiles
 /// outside rings 0 and 1, after the retire. Named here only, so the step's
 /// own source never spells it (a test below holds that).

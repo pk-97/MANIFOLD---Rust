@@ -705,8 +705,7 @@ fn set_profiling(ct: &mut crate::content_thread::ContentThread, on: bool) {
     }
 }
 
-/// Join the frame's GPU spans back to their nodes, the way the frame probe
-/// in `gpu_flip_frame_perf.rs` does.
+/// Join the frame's GPU spans back to their nodes.
 fn split(ct: &mut crate::content_thread::ContentThread, granularity: ProfileGranularity) -> Split {
     let gpu_profiles = ct.content_pipeline.take_gpu_profiles();
     let mut steps = ct.content_pipeline.take_step_profiles();

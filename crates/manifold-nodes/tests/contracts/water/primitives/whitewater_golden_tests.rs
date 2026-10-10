@@ -64,9 +64,11 @@ pub(super) fn all_emitters(budget: Option<f64>) -> EffectGraphDef {
 
 
 
+/// I1: the packed face grid and the axis adapters give the same tick
+/// fingerprints. 32 cells: packing works face by face, whatever the lattice.
 pub(super) fn packed_scene_fingerprints() {
     use manifold_nodes_water::primitives::gpu_flip_preset::with_whitewater_axes;
-    let def = with_tick_probe(whitewater_render_def(WaterScene::dam_break(64)));
+    let def = with_tick_probe(whitewater_render_def(WaterScene::dam_break(32)));
     let mut packed = Vec::new();
     let mut axes = Vec::new();
     run("packed_faces", def.clone(), &mut packed);

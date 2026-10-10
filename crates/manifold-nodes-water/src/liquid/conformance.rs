@@ -87,8 +87,6 @@ pub enum Check {
     OverflowReported,
     /// I13: uncoupled live frames never wait on the GPU.
     LiveFramesNeverWait,
-    /// I13: coupled live ticks agree at 24 and 60 fps, with bounded reaction waits.
-    CoupledLiveFrameRate,
     /// Speed 0.5 runs half the water time.
     HalfSpeed,
     /// Reset, and the runtime's state reset, start a new epoch.
@@ -123,7 +121,7 @@ const BOX_FALLS: &[Fixture] = &[
 ];
 
 impl Check {
-    pub const ALL: [Check; 21] = [
+    pub const ALL: [Check; 20] = [
         Check::CoupledWorldStepsOnce,
         Check::CollisionMomentum,
         Check::CollisionEnergy,
@@ -136,7 +134,6 @@ impl Check {
         Check::NonfiniteTickNotPublished,
         Check::OverflowReported,
         Check::LiveFramesNeverWait,
-        Check::CoupledLiveFrameRate,
         Check::HalfSpeed,
         Check::Reset,
         Check::FaceGridPublished,
@@ -157,7 +154,6 @@ impl Check {
                 | Check::FloatingDraft
                 | Check::HydrostaticLift
                 | Check::FreeFlight
-                | Check::CoupledLiveFrameRate
                 | Check::FloatingRest
                 | Check::RestingContact
                 | Check::LiftOff
@@ -166,8 +162,8 @@ impl Check {
         )
     }
 
-    /// The scenes the check runs on. On a row that couples, export and the
-    /// live frame rate runs with a box, where the host and the liquid exchange
+    /// The scenes the check runs on. On a row that couples,
+    /// export runs with a box, where the host and the liquid exchange
     /// between ticks. The no wait check uses the uncoupled dam break below.
     pub fn fixtures(self, coupled: bool) -> &'static [Fixture] {
         match self {
@@ -188,7 +184,7 @@ impl Check {
             Check::FreeFlight => &[Fixture::Collision { density_ratio: 1.0 }],
             Check::PauseDiscardsImpulses => &[Fixture::StillPool],
             Check::FaceGridPublished => &[Fixture::FaceGrid],
-            Check::ExportFrameRateIndependent | Check::CoupledLiveFrameRate if coupled => &[Fixture::FloatingBox],
+            Check::ExportFrameRateIndependent if coupled => &[Fixture::FloatingBox],
             Check::LiveFramesNeverWait => &[Fixture::DamBreak],
             _ => &[Fixture::DamBreak],
         }

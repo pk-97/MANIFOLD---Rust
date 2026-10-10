@@ -796,9 +796,11 @@ mod tests {
     }
 
     fn ready_coupled(bodies: &mut LiquidBodies, roles: &[Option<FluidRole>], coupled: &[Arc<PreparedFluidGeometry>]) {
-        let start = std::time::Instant::now();
+        // A poll count, not a wall-clock budget, so a loaded machine cannot fail it.
+        let mut polls = 0u32;
         while bodies.prepare(roles, coupled, 0.0625, false).expect("colliders") == BodiesStatus::Pending {
-            assert!(start.elapsed().as_secs() < 30, "the lattice never arrived");
+            polls += 1;
+            assert!(polls < 6000, "the lattice never arrived");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }

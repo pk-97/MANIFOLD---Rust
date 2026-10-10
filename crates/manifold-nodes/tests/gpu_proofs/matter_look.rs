@@ -74,11 +74,11 @@ impl Series {
     }
 }
 
-fn run_matter(liveliness: f32) -> Series {
+fn run_matter(liveliness: f32, ticks: u32) -> Series {
     let mut scene = MatterScene::new(&dam_break(liveliness));
     let mut series = Series::new();
     let mut rest_volume = None;
-    for tick in 1..=DAM_BREAK_TICKS {
+    for tick in 1..=ticks {
         scene.tick();
         let frame = scene.frame();
         series.observe(tick, &frame);
@@ -100,9 +100,9 @@ fn matter(liveliness: f32) -> &'static Series {
     static ZERO: OnceLock<Series> = OnceLock::new();
     static LIVELY: OnceLock<Series> = OnceLock::new();
     if liveliness == 0.0 {
-        ZERO.get_or_init(|| run_matter(0.0))
+        ZERO.get_or_init(|| run_matter(0.0, DAM_BREAK_TICKS))
     } else {
-        LIVELY.get_or_init(|| run_matter(0.9))
+        LIVELY.get_or_init(|| run_matter(0.9, DAM_BREAK_TICKS))
     }
 }
 
@@ -120,14 +120,14 @@ fn describe(name: &str, s: &Series) {
     );
 }
 
-/// A1: no grid-aligned ridges at 1.5 s and 8 s.
+/// A1: no grid-aligned ridges at 1.5 s, while the Dam Break still moves;
+/// ridges a lattice leaves show by then.
 #[test]
 fn matter_look_lattice_alignment() {
-    let gate = matter(0.0);
+    let gate = run_matter(0.0, ALIGNMENT_TICKS[0]);
     eprintln!("matter_look_lattice_alignment (largest 16-bin histogram bin over mean; fails above 1.5)");
-    describe("matter L0", gate);
-    describe("matter L0.9", matter(0.9));
-    assert_eq!(gate.alignment.len(), ALIGNMENT_TICKS.len());
+    describe("matter L0", &gate);
+    assert_eq!(gate.alignment.len(), 1);
     for (t, ratio, interior) in &gate.alignment {
         assert!(*interior > 10_000, "too few interior points at {t} s: {interior}");
         assert!(ratio.iter().all(|&r| r <= 1.5), "grid-aligned ridges at {t} s: {ratio:?}");

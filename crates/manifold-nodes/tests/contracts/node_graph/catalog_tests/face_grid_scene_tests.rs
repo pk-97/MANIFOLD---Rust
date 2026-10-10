@@ -1,7 +1,6 @@
 //! The face grid on whole scenes: the matter component fused with a consumer
-//! against its standalone kernels, and the seam's P10 demo, a face-speed
-//! slice of GPU FLIP and MPM Dam Break side by side
-//! (`docs/GPU_WHITEWATER_DESIGN.md` P1 (Grid outputs)).
+//! against its standalone kernels (`docs/GPU_WHITEWATER_DESIGN.md` P1 (Grid
+//! outputs)).
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
@@ -11,12 +10,10 @@ use manifold_nodes_water::primitives::dot_products::DotProducts;
 use manifold_nodes_water::primitives::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_nodes_water::primitives::matter_face_component::MatterFaceComponent;
-use manifold_nodes_water::primitives::gpu_flip_preset::WaterScene;
-use crate::contracts::water::primitives::gpu_flip_scene_tests::Run;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_nodes_water::liquid::grid::{face_coords, face_dims, face_index, face_len};
+use manifold_nodes_water::liquid::grid::face_len;
 use manifold_nodes_water::liquid::lattice::PADDING_NODES;
-use manifold_nodes_water::matter::{MatterGridNode, MatterPoint};
+use manifold_nodes_water::matter::MatterGridNode;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId};
 use manifold_node_engine::runtime::preset_context::PresetContext;
@@ -27,7 +24,6 @@ use manifold_node_engine::gpu::render_target::RenderTarget;
 /// 4 m domain.
 const CELLS: [u32; 3] = [64; 3];
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
-const FACE_INPUTS: [&str; 3] = ["face_u_in", "face_v_in", "face_w_in"];
 
 /// A matter scene on the app's generator path, every output held past its
 /// frame so any array reads back after it.
@@ -103,11 +99,6 @@ impl MatterRun {
         backend.array_buffer(backend.slot_for(res).expect("resource bound")).expect("array resource")
     }
 
-    /// Every record `res` holds.
-    fn read_all<T: bytemuck::Pod>(&self, res: ResourceId) -> Vec<T> {
-        self.read(res, self.buffer(res).size as usize / std::mem::size_of::<T>())
-    }
-
     /// The first `len` records of `res`, copied out of private storage.
     fn read<T: bytemuck::Pod>(&self, res: ResourceId, len: usize) -> Vec<T> {
         let buffer = self.buffer(res);
@@ -120,77 +111,6 @@ impl MatterRun {
         read(&shared, len)
     }
 
-    /// The matter frame's face grid, x, y and z.
-    fn face_grid(&self) -> [Vec<f32>; 3] {
-        std::array::from_fn(|axis| self.read(self.input_of("node.matter_frame", FACE_INPUTS[axis]).0, face_len(CELLS, axis) as usize))
-    }
-
-    /// Cells of the authored box holding a live point, x fastest.
-    fn liquid_cells(&self) -> Vec<bool> {
-        let layout = manifold_core::fluid_domain::domain_layout(None, 4.0, CELLS[0]).expect("the preset's domain");
-        assert_eq!(layout.cells, CELLS);
-        let points: Vec<MatterPoint> = self.read_all(self.output_of("node.matter_state", "out"));
-        let mut liquid = vec![false; CELLS.iter().product::<u32>() as usize];
-        for p in points.iter().filter(|p| p.id != 0) {
-            let c: [u32; 3] = std::array::from_fn(|a| {
-                let at = (f64::from(p.position[a] - layout.min[a]) / layout.cell_size).floor();
-                (at.max(0.0) as u32).min(CELLS[a] - 1)
-            });
-            liquid[(c[0] + CELLS[0] * (c[1] + CELLS[1] * c[2])) as usize] = true;
-        }
-        liquid
-    }
-}
-
-/// Faces carrying velocity around the liquid, as (carrying, counted), by
-/// layer: the liquid cells' own faces; one layer out across the face's axis
-/// (sharing an edge with an own face); one layer out along it. Tank-wall
-/// faces are left out, since the wall condition zeroes them: the grid's edge,
-/// and `padding` more layers where the walls stand inside the grid (GPU
-/// FLIP's native grid, walls 1.5 cells in).
-fn layer_shares(faces: &[Vec<f32>; 3], liquid: &[bool], cells: [u32; 3], padding: u32) -> [(usize, usize); 3] {
-    let cell = |c: [u32; 3]| liquid[(c[0] + cells[0] * (c[1] + cells[1] * c[2])) as usize];
-    let mut shares = [(0, 0); 3];
-    for (axis, values) in faces.iter().enumerate() {
-        let dims = face_dims(cells, axis);
-        let own = |f: [u32; 3]| {
-            let mut below = f;
-            below[axis] = below[axis].wrapping_sub(1);
-            (f[axis] < cells[axis] && cell(f)) || (f[axis] > 0 && cell(below))
-        };
-        let near = |f: [u32; 3], along: bool| {
-            (0..3).filter(|&b| (b == axis) == along).any(|b| {
-                [f[b].checked_sub(1), Some(f[b] + 1).filter(|&x| x < dims[b])].into_iter().flatten().any(|x| {
-                    let mut g = f;
-                    g[b] = x;
-                    own(g)
-                })
-            })
-        };
-        for (index, &value) in values.iter().enumerate() {
-            let f = face_coords(cells, axis, index);
-            let in_wall = (0..3).any(|b| if b == axis {
-                f[b] <= padding || f[b] >= cells[b] - padding
-            } else {
-                f[b] < padding || f[b] >= cells[b] - padding
-            });
-            if in_wall {
-                continue;
-            }
-            let layer = if own(f) {
-                0
-            } else if near(f, false) {
-                1
-            } else if near(f, true) {
-                2
-            } else {
-                continue;
-            };
-            shares[layer].1 += 1;
-            shares[layer].0 += usize::from(value != 0.0);
-        }
-    }
-    shares
 }
 
 /// The v component folded with its consumer into one fused dispatch, on the
@@ -241,118 +161,4 @@ fn matter_face_component_fused_matches_unfused() {
     let (worst, at) = fused.iter().zip(&unfused).enumerate().map(|(i, (a, b))| ((a - b).abs(), i)).fold((0.0, 0), |m, d| if d.0 > m.0 { d } else { m });
     println!("fused against standalone: worst {worst:e} at face {at}, peak {peak:e}, {moving} of {len} faces nonzero");
     assert!(worst <= 1e-6 * peak, "fused differs from the standalone kernels by {worst} at face {at} (peak {peak})");
-}
-
-/// Cell-centre speed through the middle depth, rows from the top of the tank.
-fn speed_slice(faces: &[Vec<f32>; 3], cells: [u32; 3]) -> Vec<f32> {
-    let k = cells[2] / 2;
-    let mut slice = Vec::with_capacity((cells[0] * cells[1]) as usize);
-    for j in (0..cells[1]).rev() {
-        for i in 0..cells[0] {
-            let v: [f32; 3] = std::array::from_fn(|a| {
-                let mut far = [i, j, k];
-                far[a] += 1;
-                0.5 * (faces[a][face_index(cells, a, [i, j, k])] + faces[a][face_index(cells, a, far)])
-            });
-            slice.push(v.iter().map(|c| c * c).sum::<f32>().sqrt());
-        }
-    }
-    slice
-}
-
-/// Black through red and yellow to white.
-fn heat(t: f32) -> [u8; 3] {
-    let t = t.clamp(0.0, 1.0) * 3.0;
-    [t, t - 1.0, t - 2.0].map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
-}
-
-/// L2, the seam's P10 demo: GPU FLIP and MPM Dam Break at 64 after the same 45
-/// ticks, each solver's face grid as a cell-centre speed slice through the
-/// middle depth on one colour scale, GPU FLIP left. Set FACE_GRID_DEMO_PNG to a
-/// path to write the picture.
-#[test]
-fn face_grid_demo_gpu_flip_and_matter_side_by_side() {
-    const FRAMES: usize = 45;
-    const SCALE: usize = 4;
-    const GAP: usize = 8;
-    let scene = WaterScene::race_dam_break(64).with_faces();
-    let mut gpu_flip = Run::new(scene);
-    for _ in 0..FRAMES {
-        gpu_flip.frame();
-    }
-    // The native solver grid: the authored 64 plus three cells of wall padding.
-    let gpu_flip_cells = [gpu_flip.n() as u32; 3];
-    assert_eq!(gpu_flip_cells, [67; 3]);
-    let gpu_flip_faces = gpu_flip.face_grid();
-    let gpu_flip_liquid: Vec<bool> = gpu_flip.water().iter().map(|&w| w > 0.5).collect();
-    drop(gpu_flip);
-    let mut matter = MatterRun::new(matter_dam_break_faces(None, false));
-    for _ in 0..FRAMES {
-        matter.frame();
-    }
-    let matter_faces = matter.face_grid();
-    let matter_liquid = matter.liquid_cells();
-
-    let slices = [speed_slice(&gpu_flip_faces, gpu_flip_cells), speed_slice(&matter_faces, CELLS)];
-    let runs = [
-        ("GPU FLIP", &gpu_flip_faces, &gpu_flip_liquid, &slices[0], gpu_flip_cells, 1),
-        ("MPM", &matter_faces, &matter_liquid, &slices[1], CELLS, 0),
-    ];
-    for (name, faces, liquid, slice, cells, padding) in runs {
-        for (axis, face) in faces.iter().enumerate() {
-            assert!(face.iter().all(|v| v.is_finite()), "{name} axis {axis} holds a non-finite face");
-        }
-        let fastest = slice.iter().copied().fold(0.0_f32, f32::max);
-        let moving: Vec<f32> = slice.iter().copied().filter(|&s| s > 0.0).collect();
-        let mean = moving.iter().sum::<f32>() / moving.len().max(1) as f32;
-        let shares = layer_shares(faces, liquid, cells, padding);
-        let share = shares.map(|(carrying, counted)| format!("{carrying}/{counted} ({:.1}%)", 100.0 * carrying as f64 / counted.max(1) as f64));
-        println!(
-            "{name}: {} liquid cells; faces carrying velocity: own {}, one out across {}, one out along {}; slice: {} of {} cells moving, fastest {fastest:.3} m/s, mean {mean:.3} m/s",
-            liquid.iter().filter(|&&l| l).count(),
-            share[0],
-            share[1],
-            share[2],
-            moving.len(),
-            slice.len()
-        );
-        assert!((0.1..20.0).contains(&fastest), "{name} slice speed {fastest} m/s is not a falling column's");
-        // Both solvers carry velocity on the liquid's own faces and across
-        // one layer; only GPU FLIP's extension also fills the layer along the
-        // axis (MATTER_FACE_VALID_LAYERS is 0 for that reason).
-        // Keep the original 1% allowance for physically stationary faces:
-        // this readback contains velocity, not validity. Wall zeros may
-        // contribute to extension averages but must not seed valid zero
-        // fronts ahead of the fluid (BUG-2dxjf).
-        let gpu_flip = name == "GPU FLIP";
-        let full = if gpu_flip { 3 } else { 2 };
-        for (layer, &(carrying, counted)) in shares.iter().enumerate().take(full) {
-            let allowed = if gpu_flip { counted / 100 } else { 0 };
-            assert!(
-                counted > 0 && counted - carrying <= allowed,
-                "{name} layer {layer}: {carrying} of {counted} faces carry velocity"
-            );
-        }
-    }
-
-    let sides = [gpu_flip_cells[0] as usize, CELLS[0] as usize];
-    let side = sides[0].max(sides[1]);
-    let top = slices.iter().flatten().copied().fold(0.0_f32, f32::max);
-    let (w, h) = (2 * side * SCALE + GAP, side * SCALE);
-    let mut rgba = [48_u8, 48, 48, 255].repeat(w * h);
-    for (panel, slice) in slices.iter().enumerate() {
-        let n = sides[panel];
-        for y in 0..n * SCALE {
-            for x in 0..n * SCALE {
-                let [r, g, b] = heat(slice[(y / SCALE) * n + x / SCALE] / top);
-                let at = (y * w + panel * (side * SCALE + GAP) + x) * 4;
-                rgba[at..at + 4].copy_from_slice(&[r, g, b, 255]);
-            }
-        }
-    }
-    println!("colour scale: white = {top:.3} m/s");
-    if let Ok(path) = std::env::var("FACE_GRID_DEMO_PNG") {
-        std::fs::write(&path, manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, w as u32, h as u32)).expect("demo PNG writes");
-        println!("wrote {path}");
-    }
 }

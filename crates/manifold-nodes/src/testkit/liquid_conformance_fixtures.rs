@@ -220,8 +220,8 @@ fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
 
 /// The FLIP Fluids engine's own coupled tank (its gravity tests: 2.4 m at
 /// 48 cells, water to 1.5 m) with a density-neutral cube at its body's
-/// height, on GPU FLIP. The side by side against the engine runs here
-/// because that is where the engine is proven a valid reference.
+/// height, on GPU FLIP. Hydrostatic lift runs here because the engine is a
+/// proven reference in this tank.
 pub fn gpu_flip_engine_tank() -> (EffectGraphDef, BoxScene) {
     gpu_flip_engine_tank_moved(0.0)
 }

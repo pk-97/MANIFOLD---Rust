@@ -230,13 +230,15 @@ mod tests {
     }
 
     fn wait_for_distance(geometry: &Arc<PreparedFluidGeometry>) -> Arc<DistanceLattice> {
-        let start = std::time::Instant::now();
+        // A poll count, not a wall-clock budget, so a loaded machine cannot fail it.
+        let mut polls = 0u32;
         loop {
             match geometry.distance_lattice() {
                 DistanceState::Ready(lattice) => return lattice,
                 DistanceState::Failed(error) => panic!("{error}"),
                 DistanceState::Pending => {
-                    assert!(start.elapsed().as_secs() < 30, "the distance lattice never arrived");
+                    polls += 1;
+                    assert!(polls < 6000, "the distance lattice never arrived");
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
             }

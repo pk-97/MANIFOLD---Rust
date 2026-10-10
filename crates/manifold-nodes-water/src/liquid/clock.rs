@@ -203,6 +203,25 @@ mod tests {
         }
     }
 
+    /// Live pacing, frame by frame: every display frame accepts at most two
+    /// fixed 60 Hz intervals, so 20 and 24 fps run two a frame and drop the
+    /// rest, 30 fps runs two and 60 fps one, and each frame ends on the
+    /// boundary of the intervals it accepted.
+    #[test]
+    fn liquid_clock_live_accepts_at_most_two_intervals_per_frame() {
+        for fps in [20u32, 24, 30, 60] {
+            let mut clock = LiquidClock::default();
+            let ticks_per_frame = (60 / fps).min(2);
+            clock.advance(0.0, TICK, 1.0, 0.0, false, false);
+            for frame in 1..=fps {
+                let out = clock.advance(f64::from(frame) / f64::from(fps), TICK, 1.0, 0.0, false, false);
+                assert_eq!(out.ticks, ticks_per_frame, "{fps} fps frame {frame}: accepted interval count");
+                let boundary = f64::from(frame * ticks_per_frame) * TICK;
+                assert!((out.simulation_time - boundary).abs() < 1e-9, "{fps} fps frame {frame}: lost simulation time");
+            }
+        }
+    }
+
     /// Jitter preserves contiguous fixed steps and a monotone target while
     /// discarded transport is accounted for separately from accepted time.
     #[test]

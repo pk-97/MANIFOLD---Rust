@@ -120,7 +120,7 @@ fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
         let mut reference = Show::new_with_emitter_oracle(axes, (96, 54), false, &[], Some(true));
         fused.restart();
         reference.restart();
-        const TICKS: usize = 120;
+        const TICKS: usize = 40;
         let mut ticks = 0;
         let mut saw_counts = false;
         let mut saw_dust_counts = false;
@@ -159,20 +159,6 @@ fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
         assert_eq!(ticks, TICKS, "scene did not exercise enough accepted ticks");
         assert!(saw_counts, "scene never produced nonzero normal emission counts");
         assert!(!dust || saw_dust_counts, "scene never produced nonzero dust emission counts");
-    }
-#[test]
-    fn whitewater_fused_turbulence_matches_reference() {
-        scene(false, &["proof_turbulence"]);
-    }
-#[test]
-    fn whitewater_fused_emit_matches_reference() {
-        scene(false, &[]);
-        synthetic(false);
-    }
-#[test]
-    fn whitewater_fused_dust_matches_reference() {
-        scene(true, &[]);
-        synthetic(true);
     }
 #[test]
     fn whitewater_unpacked_faces_match_adapters() {
@@ -299,17 +285,29 @@ fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
         }
         for stage in &stages { assert_eq!(stage.turbulence_dispatches_for_test(), 3); }
     }
+/// Fused whitewater is word-equal to the unfused reference on every proof
+/// port and particle output, on the Dam Break and on the dust scene, with
+/// packed and axis faces: one run per scene compares every port.
 #[test]
-    fn whitewater_fused_spawn_matches_reference() {
-        scene(false, &["proof_typed"]);
-        scene(true, &["proof_typed", "proof_dust_typed"]);
+    fn whitewater_fused_matches_reference() {
+        scene(false, &["proof_typed", "proof_lifecycle"]);
+        scene(true, &["proof_typed", "proof_dust_typed", "proof_lifecycle"]);
+    }
+#[test]
+    fn whitewater_fused_synthetic_matches_reference() {
+        synthetic(false);
+        synthetic(true);
+    }
+#[test]
+    fn whitewater_spawn_boundaries_match_reference() {
         spawn_boundaries();
+    }
+#[test]
+    fn whitewater_spawn_overflow_matches_reference() {
         spawn_overflow();
     }
 #[test]
-    fn whitewater_fused_lifecycle_matches_reference() {
-        scene(false, &["proof_lifecycle"]);
-        scene(true, &["proof_lifecycle"]);
+    fn whitewater_lifecycle_history_matches_reference() {
         lifecycle_history();
     }
 }

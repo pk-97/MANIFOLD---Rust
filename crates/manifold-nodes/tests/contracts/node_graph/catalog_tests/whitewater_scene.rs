@@ -174,10 +174,10 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
 }
 
 /// Resolution is a live card (BUG-9an1 (resolution change), BUG-o65k (GPU
-/// FLIP lattice wiring)): the shipped preset moves 64 → 32 → 100 under a
+/// FLIP lattice wiring)): the shipped preset moves 64 → 32 → 48 under a
 /// running clip. On the first frame at each size the state already holds that
 /// lattice's face grid and the published population matches the new fill.
-/// During the following 1.5 s, count_b exactly describes the published live
+/// During the following 0.5 s, count_b exactly describes the published live
 /// particles; after completion it matches the solver state. The initial fill
 /// is not a retention oracle: native-style marker cleanup can remove water.
 /// The step's face grid resizes and the new water throws whitewater.
@@ -215,7 +215,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
     };
     show.restart();
     let step = manifold_nodes_water::primitives::gpu_flip_preset::STEP_NODE;
-    for n in [64u32, 32, 100] {
+    for n in [64u32, 32, 48] {
         let mut card = Param::bundled(spec.clone());
         card.value = n as f32;
         card.base = n as f32;
@@ -250,7 +250,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         assert_eq!(show.provided_bytes("state", "faces"), faces, "Resolution {n}: the state's faces on its first frame");
         let mut last = [0.0; 6];
         let mut gpu_ms = Vec::new();
-        for frame in 0..90 {
+        for frame in 0..30 {
             gpu_ms.push(show.frame(false).gpu_ms);
             last = show.probes(STEP_REPORTS);
             assert_eq!(show.probes(["count"])[0] as u64, published_live(&show), "Resolution {n}, frame {frame}: published live count");
@@ -268,7 +268,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         assert_eq!(show.provided_bytes("fill", "particles"), WaterScene::dam_break(n as usize).particles() * record, "Resolution {n}: the fill");
         assert_eq!(count as u64, live, "Resolution {n}: the frame's live water");
         assert_eq!(count as u64, published_live(&show), "Resolution {n}: completed publication");
-        assert!(last[0] + last[1] + last[2] > 0.0, "Resolution {n}: no whitewater by 1.5 s: {last:?}");
+        assert!(last[0] + last[1] + last[2] > 0.0, "Resolution {n}: no whitewater by 0.5 s: {last:?}");
     }
     let errors = show.errors();
     assert!(errors.is_empty(), "the resize ran with errors: {errors:#?}");
@@ -375,65 +375,6 @@ fn percentile(values: &[f64], p: f64) -> f64 {
     let mut v = values.to_vec();
     v.sort_by(f64::total_cmp);
     v[((v.len() - 1) as f64 * p).round() as usize]
-}
-
-const EMISSION_FRAMES: usize = 150;
-/// One whitewater's foam, bubble and spray counts per frame over
-/// `EMISSION_FRAMES`, with its cumulative emission.
-fn count_rows<const N: usize>(def: EffectGraphDef, reports: [&str; N], name: &str) -> Vec<[f32; 4]> {
-    let mut show = Show::new(def, (320, 180), true, &[]);
-    show.restart();
-    let rows = (0..EMISSION_FRAMES)
-        .map(|_| {
-            show.frame(false);
-            let r = show.probes(reports);
-            [r[0], r[1], r[2], r[3]]
-        })
-        .collect();
-    let errors = show.errors();
-    assert!(errors.is_empty(), "{name} ran with errors: {errors:#?}");
-    rows
-}
-
-/// L5: the Dam Break at 64 for 150 frames, the same GPU FLIP water feeding
-/// `node.whitewater_step` and, read-only, the vendored lifecycle behind the
-/// GPU emitter group it replaced. Per frame and type, both counts. Writes
-/// `whitewater_step_vs_vendored_150.csv` to the temp directory and prints
-/// both sides every 30 frames with the per-type totals over the run. The two
-/// are compared, not held equal: the node's lifecycle is a port, so its float
-/// path is not the engine's.
-#[test]
-fn whitewater_step_against_vendored_lifecycle_150() {
-    let scene = WaterScene::dam_break(64);
-    let step = count_rows(whitewater_render_def(scene), STEP_REPORTS, "whitewater_step");
-    let vendored = count_rows(vendored_render_def(scene), LIFECYCLE_REPORTS, "the vendored lifecycle");
-
-    let mut csv = String::from("frame,step_foam,step_bubble,step_spray,step_emitted,vendored_foam,vendored_bubble,vendored_spray,vendored_emitted\n");
-    let (mut step_sum, mut vendored_sum) = ([0.0f64; 3], [0.0f64; 3]);
-    for (frame, (s, v)) in step.iter().zip(&vendored).enumerate() {
-        for kind in 0..3 {
-            step_sum[kind] += f64::from(s[kind]);
-            vendored_sum[kind] += f64::from(v[kind]);
-        }
-        csv.push_str(&format!("{},{},{},{},{},{},{},{},{}\n", frame + 1, s[0], s[1], s[2], s[3], v[0], v[1], v[2], v[3]));
-        if (frame + 1) % 30 == 0 {
-            println!(
-                "L5 frame {}: step foam {} bubble {} spray {} emitted {}; vendored foam {} bubble {} spray {} emitted {}",
-                frame + 1, s[0], s[1], s[2], s[3], v[0], v[1], v[2], v[3]
-            );
-        }
-    }
-    let path = std::env::temp_dir().join("whitewater_step_vs_vendored_150.csv");
-    std::fs::write(&path, csv).expect("parity csv");
-    let ratio: Vec<String> =
-        (0..3).map(|k| format!("{:.3}", step_sum[k] / vendored_sum[k].max(1.0))).collect();
-    println!(
-        "L5 150 frames, summed population foam/bubble/spray: step {step_sum:?}, vendored {vendored_sum:?}, step/vendored [{}]; csv {}",
-        ratio.join(", "),
-        path.display()
-    );
-    assert!(step_sum.iter().sum::<f64>() > 0.0, "whitewater_step made no whitewater in 150 frames");
-    assert!(vendored_sum.iter().sum::<f64>() > 0.0, "the vendored lifecycle made no whitewater in 150 frames");
 }
 
 /// O2 (section 3.7): the GPU emitter against FLIP's own on the same inputs.

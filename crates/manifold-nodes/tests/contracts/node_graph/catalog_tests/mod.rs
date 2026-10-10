@@ -86,8 +86,6 @@ mod liquid_bricks;
 #[cfg(feature = "gpu-proofs")]
 pub(crate) mod gpu_flip_body;
 
-#[cfg(feature = "water-race-probes") ]
-mod gpu_flip_render_smoke;
 
 #[cfg(feature = "gpu-proofs") ]
 mod liquid_prepare;

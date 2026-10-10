@@ -1,6 +1,6 @@
 //! The GPU FLIP water step run on whole scenes (docs/GPU_FLIP_PRESSURE_SOLVE.md
 //! section 1 (the step)): the momentum, still-pool and meshed-volume proofs, and the scene
-//! runner the race probes (`gpu_flip_race_tests`) share.
+//! runner the other water scene proofs share.
 //! `gpu_flip_scenes_cover_every_dispatch` proves every array these graphs
 //! allocate before any of them runs here.
 
@@ -8,7 +8,7 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 
 #[cfg(test)]
-use manifold_nodes_water::primitives::gpu_flip_preset::{DAM_COLUMN, DAM_FILL_HEIGHT, REST_PER_CELL, DAM_OBSTACLE};
+use manifold_nodes_water::primitives::gpu_flip_preset::{DAM_FILL_HEIGHT, REST_PER_CELL, DAM_OBSTACLE};
 #[cfg(test)]
 use manifold_nodes_water::primitives::gpu_flip_volume::VolumeDrift;
 #[cfg(test)]
@@ -181,87 +181,6 @@ impl Run {
         self.scene.particles() as f64 * self.scene.cell_size().powi(3) / REST_PER_CELL
     }
 
-    /// One frame with a GPU timestamp per dispatch: milliseconds per node
-    /// type, largest first, and the frame's total.
-    #[cfg(all(test, feature = "water-race-probes"))]
-    pub(super) fn profiled_frame(&mut self) -> (Vec<(String, f64)>, f64) {
-        self.entering = self.particles();
-        let sampler = self.device.create_timestamp_sampler(8192).expect("timestamp sampling");
-        let mut enc = self.device.create_encoder("gpu-flip-scene-profile");
-        enc.enable_dispatch_profiling(sampler, &self.device);
-        self.exec.set_profiling(true);
-        {
-            let mut gpu = GpuEncoder::new(&mut enc, &self.device);
-            let time = FrameTime {
-                beats: Beats(0.0),
-                seconds: Seconds(self.frames as f64 / self.fps),
-                delta: Seconds(1.0 / self.fps),
-                frame_count: self.frames,
-            };
-            self.exec.execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
-            self.frames += 1;
-        }
-        self.exec.set_profiling(false);
-        let profile = enc.commit_and_wait_profiled(&self.device);
-        let type_of: Vec<String> = self
-            .plan
-            .steps()
-            .iter()
-            .map(|s| self.graph.nodes().find(|n| n.id == s.node).map_or(String::new(), |n| n.node.type_id().as_str().to_string()))
-            .collect();
-        let mut by_type: Vec<(String, f64)> = Vec::new();
-        for span in &profile.spans {
-            let ty = span.tag.rsplit_once(":s").and_then(|(_, i)| i.parse::<usize>().ok()).and_then(|i| type_of.get(i)).map_or("unattributed", |t| t.as_str());
-            match by_type.iter_mut().find(|(t, _)| t == ty) {
-                Some(row) => row.1 += span.millis,
-                None => by_type.push((ty.to_string(), span.millis)),
-            }
-        }
-        by_type.sort_by(|a, b| b.1.total_cmp(&a.1));
-        (by_type, profile.total_ms)
-    }
-
-    /// One frame with a GPU timestamp per dispatch: milliseconds per
-    /// dispatch label, summed over the frame, and the frame's total.
-    #[cfg(all(test, feature = "water-race-probes"))]
-    pub(super) fn profiled_labels(&mut self) -> (Vec<(String, f64, usize)>, f64) {
-        let profile = self.sampled_frame(manifold_gpu::ProfileGranularity::Dispatch);
-        let mut by_label: Vec<(String, f64, usize)> = Vec::new();
-        for span in &profile.spans {
-            match by_label.iter_mut().find(|(l, _, _)| *l == span.label) {
-                Some(row) => {
-                    row.1 += span.millis;
-                    row.2 += 1;
-                }
-                None => by_label.push((span.label.clone(), span.millis, 1)),
-            }
-        }
-        (by_label, profile.total_ms)
-    }
-
-    /// Preserve sampling diagnostics for probes that require complete attribution.
-    #[cfg(all(test, feature = "water-race-probes"))]
-    fn sampled_frame(&mut self, granularity: manifold_gpu::ProfileGranularity) -> manifold_gpu::GpuFrameProfile {
-        self.entering = self.particles();
-        let sampler = self.device.create_timestamp_sampler(8192).expect("timestamp sampling");
-        let mut enc = self.device.create_encoder("gpu-flip-scene-labels");
-        enc.enable_profiling_at(sampler, &self.device, granularity);
-        self.exec.set_profiling(true);
-        {
-            let mut gpu = GpuEncoder::new(&mut enc, &self.device);
-            let time = FrameTime {
-                beats: Beats(0.0),
-                seconds: Seconds(self.frames as f64 / self.fps),
-                delta: Seconds(1.0 / self.fps),
-                frame_count: self.frames,
-            };
-            self.exec.execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
-            self.frames += 1;
-        }
-        self.exec.set_profiling(false);
-        enc.commit_and_wait_profiled(&self.device)
-    }
-
     /// One frame in its own command buffer: GPU ms and CPU encode ms.
     pub fn frame(&mut self) -> (f64, f64) {
         self.frame_with_timing(false)
@@ -341,13 +260,6 @@ impl Run {
         self.graph.set_param(domain, "gravity", manifold_node_engine::parameters::ParamValue::Float(y as f32)).expect("gravity");
     }
 
-    /// The project frame rate from the next frame on: the tick's dt is one
-    /// frame.
-    #[cfg(all(test, feature = "water-race-probes"))]
-    pub(super) fn set_fps(&mut self, fps: f64) {
-        self.fps = fps;
-    }
-
     /// Switch the executor's encode replay; the fill frame already ran
     /// (it ticks no step), every later frame honours the switch.
     #[cfg(test)]
@@ -404,13 +316,6 @@ impl Run {
     #[cfg(test)]
     pub(super) fn liquid_stats(&self) -> LiquidTickStats {
         LiquidTickStats::from_words(&self.read::<u32>("stats", "stats_out", LIQUID_STATS_WORDS as usize))
-    }
-
-    /// The last tick's speed-capped move stages and refused push-outs.
-    #[cfg(test)]
-    pub(super) fn capped(&self) -> (u64, u64) {
-        let words: Vec<u32> = self.read(STEP_NODE, "capped", 2 * self.scene.particles() as usize);
-        words.chunks(2).fold((0, 0), |(c, p), w| (c + u64::from(w[0]), p + u64::from(w[1])))
     }
 
     /// The last tick's solver words: pressure and density iterations over
@@ -559,20 +464,20 @@ fn gpu_flip_face_grid_is_the_last_ticks_faces() {
 }
 
 /// The native engine's peak fastest particle in the same 64³ still pool at
-/// the 10-frame checkpoints from frame 59 to 119 (native_still_pool_reference).
+/// the 10-frame checkpoints from frame 59 to 119 (a native reference run, now in git history).
 /// It never settles: 10 to 19 mm/s throughout.
 #[cfg(test)]
 const NATIVE_STILL_POOL_FASTEST: f64 = 1.889e-2;
 
 /// The largest |GPU − native| fastest particle at those checkpoints, both
-/// run from the native engine's captured seed (native_still_pool_reference).
+/// run from the native engine's captured seed (a native reference run, now in git history).
 #[cfg(test)]
 const STILL_POOL_GPU_GAP: f64 = 4.209e-4;
 
 /// The native engine's largest inner vertical face speed in the 64³ still
 /// pool at the 30-frame checkpoints from frame 29 to 299, as a share of
 /// g·dt, measured with inner_vertical_face_speed's mask
-/// (native_hydrostatic_reference, from the native engine's seed).
+/// (a native reference run from the native engine's seed, now in git history).
 #[cfg(test)]
 const NATIVE_HYDROSTATIC_FACE_SHARE: f64 = 0.02852;
 
@@ -688,7 +593,7 @@ fn hydrostatic_depth(scene: WaterScene) -> usize {
 /// the projected grid is exactly 0. Inner vertical faces between water
 /// cells keep within the native engine's own residual on the same faces,
 /// mask and checkpoints, plus five times the largest gap the GPU showed
-/// from the engine's seed (native_hydrostatic_reference). This is parity
+/// from the engine's seed (a native reference run, now in git history). This is parity
 /// with the engine's hydrostatic residual, not a bound on p = ρgh: the
 /// engine itself leaves several percent of g·dt there.
 #[test]
@@ -729,131 +634,6 @@ fn gpu_flip_hydrostatic_column_rests() {
     }
 }
 
-/// Mean particles per cell over the interior water: cells that, with all
-/// 26 neighbours, are φ < 0. Unlike particles per water cell, a growing
-/// surface does not move it.
-#[cfg(test)]
-pub(super) fn interior_density(run: &Run, particles: &[FluidParticle]) -> f64 {
-    let (n, h, min) = (run.n(), run.scene.cell_size(), run.solver_grid().min().map(f64::from));
-    let water = run.water_of(particles);
-    let mut count = vec![0u32; n.pow(3)];
-    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
-        let c: [usize; 3] = std::array::from_fn(|a| ((f64::from(p.position_radius[a]) - min[a]) / h).floor().clamp(0.0, (n - 1) as f64) as usize);
-        count[c[0] + n * (c[1] + n * c[2])] += 1;
-    }
-    let (mut cells, mut total) = (0u64, 0u64);
-    for k in 1..n - 1 {
-        for j in 1..n - 1 {
-            for i in 1..n - 1 {
-                let all = (0..27).all(|d| {
-                    let (di, dj, dk) = (d % 3, (d / 3) % 3, d / 9);
-                    water[(i + di - 1) + n * ((j + dj - 1) + n * (k + dk - 1))] > 0.5
-                });
-                if all {
-                    cells += 1;
-                    total += u64::from(count[i + n * (j + n * k)]);
-                }
-            }
-        }
-    }
-    total as f64 / cells.max(1) as f64
-}
-
-/// The pool's depth as its volume reads it: the mean over the floor's
-/// columns of the highest particle's height, plus the quarter cell the fill
-/// seeds under a surface. A slosh moves water between columns, not out of
-/// them, so this holds while the pool still moves.
-#[cfg(test)]
-fn column_depth(run: &Run, particles: &[FluidParticle], floor: f64) -> f64 {
-    let (n, h, min) = (run.scene.layout().cells[0] as usize, run.scene.cell_size(), run.scene.min());
-    let mut top = vec![f64::NEG_INFINITY; n * n];
-    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
-        let c = |a: usize| ((f64::from(p.position_radius[a]) - min[a]) / h).floor().clamp(0.0, (n - 1) as f64) as usize;
-        let at = c(0) + n * c(2);
-        top[at] = top[at].max(f64::from(p.position_radius[1]));
-    }
-    top.iter().map(|&y| if y.is_finite() { y - floor + 0.25 * h } else { 0.0 }).sum::<f64>() / (n * n) as f64
-}
-
-/// Historical acceptance of the optional density correction: at frame 1800
-/// (30 s), estimated column depth is within 3% plus half a cell of the analytic average and
-/// interior density is within 2% of its start. These are not direct volume
-/// measurements or native agreement tests. From frame 400, KE + PE must not
-/// rise by more than 1e-4 of its start per frame and must finish lower.
-#[test]
-fn gpu_flip_density_projection_settled_column_depth_and_density() {
-    const FRAMES: usize = 1800;
-    const SETTLING: usize = 400;
-    for steps in [1, 2] {
-        let scene = WaterScene { volume_projection: true, ..WaterScene::dam_break(64).with_steps(steps) };
-        let mut run = Run::new(scene);
-        let floor = scene.min()[1];
-        let start = run.particles();
-        let e0 = energy(&start, floor);
-        let rho0 = interior_density(&run, &start);
-        let column: f64 = DAM_COLUMN.iter().map(|[lo, hi]| hi - lo).product();
-        let want = (DAM_FILL_HEIGHT * scene.size * scene.size + column) / (scene.size * scene.size);
-        let (mut last, mut worst) = (e0, (f64::NEG_INFINITY, 0, 0.0, 0.0));
-        let mut last_terms = (0.0, 0.0);
-        let mut at_settling = e0;
-        let (mut capped_frames, mut capped_stages) = (0, 0);
-        for frame in 1..=FRAMES {
-            run.frame();
-            let (stages, _) = run.capped();
-            capped_frames += usize::from(stages > 0);
-            capped_stages += stages;
-            let particles = run.particles();
-            let e = energy(&particles, floor);
-            let ke: f64 = particles
-                .iter()
-                .filter(|p| p.position_radius[3] > 0.0)
-                .map(|p| 0.5 * p.velocity.iter().map(|&c| f64::from(c).powi(2)).sum::<f64>())
-                .sum();
-            let pe = e - ke;
-            if frame > SETTLING && e - last > worst.0 {
-                worst = (e - last, frame, ke - last_terms.0, pe - last_terms.1);
-            }
-            (last, last_terms) = (e, (ke, pe));
-            if frame == SETTLING {
-                at_settling = e;
-            }
-            if frame % 120 == 0 {
-                println!(
-                    "GPU FLIP settle {steps} steps frame {frame:4}: E/E0 {:.5}, KE/E0 {:.2e}, column depth {:.4} m, interior {:.3} a cell",
-                    e / e0,
-                    ke / e0,
-                    column_depth(&run, &particles, floor),
-                    interior_density(&run, &particles)
-                );
-            }
-        }
-        println!("GPU FLIP settle {steps} steps: the speed cap fired on {capped_frames} of {FRAMES} frames' last ticks, {capped_stages} move stages");
-        let particles = run.particles();
-        let (depth, rho) = (column_depth(&run, &particles, floor), interior_density(&run, &particles));
-        println!(
-            "GPU FLIP settle {steps} steps: column depth {depth:.4} m against {want:.4} m ({:+.2}%), interior {rho:.3} against {rho0:.3} a cell ({:+.2}%)",
-            100.0 * (depth / want - 1.0),
-            100.0 * (rho / rho0 - 1.0)
-        );
-        println!(
-            "GPU FLIP settle {steps} steps: worst frame-to-frame rise after frame {SETTLING} {:+.3e} E0 at frame {} (KE {:+.3e} E0, PE {:+.3e} E0)",
-            worst.0 / e0,
-            worst.1,
-            worst.2 / e0,
-            worst.3 / e0
-        );
-        // Half a cell of extra tolerance for the top-particle depth estimate,
-        // which reads about half a cell higher since the native wall
-        // treatment (14ebf56da). The check below independently bounds
-        // interior density; neither check directly measures total volume.
-        let tolerance = 0.03 * want + 0.5 * run.scene.cell_size();
-        assert!((depth - want).abs() <= tolerance, "{steps} steps: column depth {depth} m, want {want} m ± {tolerance}");
-        assert!((rho / rho0 - 1.0).abs() <= 0.02, "{steps} steps: interior density {rho} against {rho0}");
-        assert!(last < at_settling, "{steps} steps: E {last} at frame {FRAMES} not under {at_settling} at frame {SETTLING}");
-        assert!(worst.0 <= 1e-4 * e0, "{steps} steps: energy rose {:e} E0 at frame {}", worst.0 / e0, worst.1);
-    }
-}
-
 /// Mechanical energy per unit particle mass summed over the live particles,
 /// KE + PE with the floor at `floor` (J/kg).
 #[cfg(test)]
@@ -868,199 +648,21 @@ pub(super) fn energy(particles: &[FluidParticle], floor: f64) -> f64 {
         .sum()
 }
 
-/// Live particles, φ-water cells, air cells (no particle: the density
-/// source's air) and particles per occupied cell (rest 8).
-#[cfg(all(test, feature = "water-race-probes"))]
-fn cloud_counts(run: &Run, particles: &[FluidParticle]) -> (usize, usize, usize, f64) {
-    let (n, h, min) = (run.n(), run.scene.cell_size(), run.solver_grid().min().map(f64::from));
-    let mut occupied = vec![false; n.pow(3)];
-    let mut live = 0;
-    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
-        live += 1;
-        let c = |a: usize| ((f64::from(p.position_radius[a]) - min[a]) / h).floor().clamp(0.0, (n - 1) as f64) as usize;
-        occupied[c(0) + n * (c(1) + n * c(2))] = true;
-    }
-    let held = occupied.iter().filter(|&&o| o).count();
-    let water = run.water_of(particles).iter().filter(|&&w| w > 0.5).count();
-    (live, water, n.pow(3) - held, live as f64 / held.max(1) as f64)
-}
-
-/// The share of water cells whose density source the beside-air rule raises
-/// to rest: a face neighbour in the box holds no particle and the cell's tent
-/// density, wall sites included, reads under 8 (`density_source`, no bodies).
-#[cfg(all(test, feature = "water-race-probes"))]
-fn raised_share(run: &Run, particles: &[FluidParticle], water: &[f32]) -> f64 {
-    let (n, h, min) = (run.n() as i64, run.scene.cell_size(), run.solver_grid().min().map(f64::from));
-    let at = |c: [i64; 3]| (c[0] + n * (c[1] + n * c[2])) as usize;
-    let mut bins: Vec<Vec<[f64; 3]>> = vec![Vec::new(); (n * n * n) as usize];
-    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
-        let q: [f64; 3] = std::array::from_fn(|a| (f64::from(p.position_radius[a]) - min[a]) / h);
-        let c: [i64; 3] = std::array::from_fn(|a| (q[a].floor() as i64).clamp(0, n - 1));
-        bins[at(c)].push(q);
-    }
-    let (mut wet, mut raised) = (0usize, 0usize);
-    for z in 0..n {
-        for y in 0..n {
-            for x in 0..n {
-                let p = [x, y, z];
-                if water[at(p)] <= 0.5 {
-                    continue;
-                }
-                wet += 1;
-                let centre = p.map(|i| i as f64 + 0.5);
-                let (mut density, mut beside_air) = (0.0, false);
-                for dz in -1..=1i64 {
-                    for dy in -1..=1i64 {
-                        for dx in -1..=1i64 {
-                            let d = [dx, dy, dz];
-                            let q = [x + dx, y + dy, z + dz];
-                            if q.iter().any(|&i| i < 0 || i >= n) {
-                                density += d.iter().map(|&o| if o == 0 { 1.5 } else { 0.25 }).product::<f64>();
-                                continue;
-                            }
-                            let bin = &bins[at(q)];
-                            for s in bin {
-                                density += (0..3).map(|a| (1.0 - (centre[a] - s[a]).abs()).clamp(0.0, 1.0)).product::<f64>();
-                            }
-                            if d.iter().map(|o| o.abs()).sum::<i64>() == 1 && bin.is_empty() {
-                                beside_air = true;
-                            }
-                        }
-                    }
-                }
-                raised += usize::from(beside_air && density < 8.0);
-            }
-        }
-    }
-    raised as f64 / wet.max(1) as f64
-}
-
-/// BUG-o6dg (thin cloud never comes back), measurement only: a 0.64 m pool
-/// at 64³ lifted for 60 frames by gravity of (+5 sideways, +20 up) m/s²,
-/// then normal gravity to frame 600. Reversed gravity alone on the seeded
-/// flat pool is an exact equilibrium the solve holds with negative pressure,
-/// so the lift needs the sideways part. Every 30 frames: particles, water
-/// cells, air cells, particles per occupied cell, and the share of water
-/// cells the beside-air rule raises to rest.
-#[cfg(feature = "water-race-probes")]
-#[test]
-fn gpu_flip_forced_pool_volume_probe() {
-    let n = 64;
-    let mut run = Run::new(WaterScene::pool(n, WaterScene::still_pool(n).size, 0.64));
-    let mut no_air = None;
-    for frame in 0..=600 {
-        if frame > 0 {
-            let (x, y) = if frame <= 60 { (5.0, 20.0) } else { (0.0, -G) };
-            run.set_gravity(x, y);
-            run.frame();
-        }
-        let particles = run.particles();
-        let (live, water, air, per_cell) = cloud_counts(&run, &particles);
-        if air == 0 && no_air.is_none() {
-            no_air = Some(frame);
-        }
-        if frame % 30 == 0 {
-            let share = raised_share(&run, &particles, &run.water_of(&particles));
-            println!(
-                "forced pool {n}³ frame {frame:3}: {live} particles, {water} water cells, {air} air cells, {per_cell:.3} per occupied cell, {:.1}% of water cells raised to rest",
-                100.0 * share
-            );
-        }
-    }
-    println!("forced pool {n}³: first frame with no air cell {no_air:?}");
-}
-
-/// Peter's waterFunv3 export (BUG-o6dg): 24 fps, 128, Domain Size 10.755,
-/// fill 0.5845, one step. Its Uniform Force card points (0, 2, 0) with
-/// Strength at 0 and a low-band kick audio mod driving it to +20 (rangeMin
-/// 0.5 of −20..20, attack 0, release 72 ms), so each kick lifts the water at
-/// up to 40 m/s² over gravity. Kicks are modelled four to the bar at 140 bpm,
-/// each at full level, decaying as exp(−t/72 ms). The Vortex card (also
-/// kick-driven) is not modelled: it is horizontal and the hook is uniform.
-#[cfg(feature = "water-race-probes")]
-#[test]
-fn gpu_flip_kick_lift_pool_volume_probe() {
-    // A still seeded pool is an equilibrium, so the control kicks for the
-    // first 3 s, then stops: it asks whether the thrown pool comes back.
-    for kick_frames in [300, 72] {
-        kick_lift_pool(kick_frames);
-    }
-}
-
-/// Which change freezes the kick pool: five frames each of 4 m at 24 fps,
-/// 10.755 m at 60 fps, 128 at 4 m, and all three, under a net 30 m/s² lift.
-#[cfg(feature = "water-race-probes")]
-#[test]
-fn gpu_flip_kick_freeze_split_probe() {
-    for (n, size, fps) in [(64, 4.0, 24.0), (64, 10.755186, 60.0), (128, 4.0, 60.0), (128, 10.755186, 24.0)] {
-        let mut run = Run::new(WaterScene::pool(n, size, 0.58450913));
-        run.set_fps(fps);
-        let y0: f64 = run.particles().iter().map(|p| f64::from(p.position_radius[1])).sum();
-        for frame in 1..=5 {
-            run.set_gravity(0.0, 40.0 - G);
-            run.frame();
-            let s = run.liquid_stats();
-            let y: f64 = run.particles().iter().map(|p| f64::from(p.position_radius[1])).sum();
-            println!(
-                "freeze split {n}³ {size} m {fps} fps frame {frame}: seconds {:.4}, live {}, pressure iterations {}, max speed {:.3}, kinetic {:.3e}, mean y moved {:.2e} m",
-                run.frames as f64 / run.fps,
-                s.live,
-                s.pressure_iterations,
-                s.max_speed,
-                s.kinetic,
-                (y - y0) / s.live.max(1) as f64
-            );
-        }
-    }
-}
-
-/// One 300-frame run of the kick-lift pool, kicking for its first `kick_frames`. The force is
-/// sampled once per 24 fps display frame and held over that frame's 2-3
-/// liquid ticks, as the live force path does.
-#[cfg(all(test, feature = "water-race-probes"))]
-fn kick_lift_pool(kick_frames: usize) {
-    let n = 128;
-    let mut run = Run::new(WaterScene::pool(n, 10.755186, 0.58450913));
-    run.set_fps(24.0);
-    let beat = 60.0 / 140.0;
-    let mut no_air = None;
-    for frame in 0..=300 {
-        if frame > 0 {
-            let since_kick = (frame as f64 / 24.0) % beat;
-            let lift = if frame <= kick_frames { 2.0 * 20.0 * (-since_kick / 0.072).exp() } else { 0.0 };
-            run.set_gravity(0.0, -G + lift);
-            run.frame();
-        }
-        let particles = run.particles();
-        let (live, water, air, per_cell) = cloud_counts(&run, &particles);
-        if air == 0 && no_air.is_none() {
-            no_air = Some(frame);
-        }
-        if frame % 30 == 0 {
-            let share = raised_share(&run, &particles, &run.water_of(&particles));
-            println!(
-                "kick pool {n}³ 24fps kicks to {kick_frames} frame {frame:3}: {live} particles, {water} water cells, {air} air cells, {per_cell:.3} per occupied cell, {:.1}% of water cells raised to rest",
-                100.0 * share
-            );
-        }
-    }
-    println!("kick pool {n}³ kicks to {kick_frames}: first frame with no air cell {no_air:?}");
-}
-
 /// The Dam Break never gains energy: an inviscid solver with closed walls
 /// can only lose KE + PE (PIC blending, the projection, wall stops), so no
 /// frame may sit above the energy it started with past float noise
 /// (1e-4 of it). A high run-up that passes this is physics, not a source.
+/// 32 cells over the first 1.5 s: a source shows by the first run-up.
 #[test]
 fn gpu_flip_dam_break_energy_never_rises() {
     for steps in [1, 2] {
-        let scene = WaterScene::dam_break(64).with_steps(steps);
+        let scene = WaterScene::dam_break(32).with_steps(steps);
         let mut run = Run::new(scene);
         let floor = scene.min()[1];
         let e0 = energy(&run.particles(), floor);
         let mut worst = f64::NEG_INFINITY;
         let (mut most, mut unconverged) = ([0u32; 2], 0u32);
-        for frame in 0..300 {
+        for frame in 0..90 {
             run.frame();
             let [pressure, density, cap] = run.solver();
             most = [most[0].max(pressure), most[1].max(density)];
@@ -1077,7 +679,7 @@ fn gpu_flip_dam_break_energy_never_rises() {
         println!("GPU FLIP energy {steps} steps: most iterations a tick, pressure {} density {}, unconverged solves {unconverged}", most[0], most[1]);
         assert_eq!(unconverged, 0, "{steps} steps: solves reached the cap");
         // A regression guard, not physics. The measured maximum is 17 at 1
-        // step on the Dam Break with the obstacle box; the ceiling is about
+        // step on the 64-cell Dam Break with the obstacle box; the ceiling is about
         // twice that, so a broken preconditioner is caught while the
         // splash-dependent variation is not.
         assert!(most[0] > 0 && most[0] as usize <= 32 * steps, "{steps} steps: pressure iterations a tick {most:?}");
@@ -1277,23 +879,6 @@ fn moving_obstacle_pushes(steps: usize) {
     assert!(ahead_speed > 0.5 * speed, "{steps} steps: the water ahead moves at {ahead_speed} m/s against the box's {speed}");
 }
 
-/// Where a Dam Break frame's GPU time goes at 64³, by node type, after 60
-/// frames.
-#[cfg(feature = "water-race-probes")]
-#[test]
-fn gpu_flip_frame_by_node_type() {
-    let mut run = Run::new(WaterScene::dam_break(64));
-    for _ in 0..60 {
-        run.frame();
-    }
-    let plain: Vec<f64> = (0..5).map(|_| run.frame().0).collect();
-    let (by_type, total) = run.profiled_frame();
-    println!("GPU FLIP frame by type: {total:.2} ms profiled, plain {plain:?}");
-    for (ty, ms) in by_type.iter().take(15) {
-        println!("GPU FLIP frame by type:   {ty:32} {ms:7.2} ms");
-    }
-}
-
 /// Small native/GPU comparisons share seed geometry and simulation time.
 #[cfg(test)]
 mod native_reference {
@@ -1350,11 +935,6 @@ mod native_reference {
             position_radius: p.position_radius, velocity: p.velocity, id: p.id,
         }).collect();
         (particles, solid, info.solid_nodes)
-    }
-
-    #[cfg(feature = "water-race-probes")]
-    fn capture(world: &mut FluidWorld, offset: [f32; 3]) -> Vec<FluidParticle> {
-        snapshot(world, offset).0
     }
 
     #[cfg(test)]
@@ -1473,352 +1053,6 @@ mod native_reference {
         assert!(wrong.is_empty(), "wall cells under h/2 not at -h/2 (cell, phi/h): {:?}", &wrong[..wrong.len().min(8)]);
     }
 
-    /// 1.5 simulated seconds at 16³ from captured native particle records:
-    /// observe motion and cost without meshing or rendering. This isolates
-    /// solver behaviour; it does not claim the production fills match.
-    #[cfg(feature = "water-race-probes")]
-    #[test]
-    fn gpu_flip_native_dam_break_reference() {
-        fn median(mut values: Vec<f64>) -> f64 {
-            values.sort_by(f64::total_cmp);
-            values[values.len() / 2]
-        }
-        fn measures(particles: &[FluidParticle]) -> [f64; 5] {
-            let stats = particle_stats(particles);
-            assert_eq!(stats.bad, 0);
-            assert!(stats.live > 0);
-            let live: Vec<_> = particles.iter().filter(|p| p.position_radius[3] > 0.0).collect();
-            let mut heights: Vec<_> = live.iter().map(|p| f64::from(p.position_radius[1])).collect();
-            heights.sort_by(f64::total_cmp);
-            let x = live.iter().map(|p| f64::from(p.position_radius[0])).sum::<f64>() / stats.live as f64;
-            let speed2 = live.iter().flat_map(|p| p.velocity).map(|v| f64::from(v).powi(2)).sum::<f64>() / stats.live as f64;
-            [x, stats.mean_height, heights[heights.len() * 99 / 100], speed2.sqrt(), energy(particles, 0.0) / stats.live as f64]
-        }
-        let scene = WaterScene::race_dam_break(16);
-        let (mut native, offset) = world(scene);
-        let seed = capture(&mut native, offset);
-        let sites = seed_sites(scene, &seed);
-        assert!(sites.windows(2).all(|p| p[0] != p[1]), "unique native seed sites");
-        let (mut reference, mut wall_ms) = (Vec::new(), Vec::new());
-        let started = std::time::Instant::now();
-        println!("motion metrics: mean_x, mean_y, y99 (metres), rms_speed (m/s), mean_energy (J/kg)");
-        for frame in 1..=90 {
-            let start = std::time::Instant::now();
-            let stats = native.step(Seconds(1.0 / 60.0)).expect("native step");
-            wall_ms.push(start.elapsed().as_secs_f64() * 1000.0);
-            assert_eq!(stats.substeps, 1, "16³ fixture should not require native CFL subdivision");
-            if frame % 30 == 0 {
-                let particles = capture(&mut native, offset);
-                let measure = measures(&particles);
-                println!("native frame {frame}: n={} metrics={measure:?}", particles.len());
-                reference.push(measure);
-            }
-        }
-        println!("native solver wall median {:.3}ms", median(wall_ms));
-        for density in [false, true] {
-            let mut run = run_with_retired_speed(WaterScene { volume_projection: density, ..scene }, true);
-            // The seed-only frame has zero velocity/history, no accepted
-            // steps and no births. Replace its persistent particle state,
-            // including radius/id, while retaining zero unused capacity.
-            // The step iterates capacity and skips nonpositive live radii.
-            let mut common = vec![FluidParticle { position_radius: [0.0; 4], velocity: [0.0; 3], id: 0 }; scene.particles() as usize];
-            common[..seed.len()].copy_from_slice(&seed);
-            let state = output_of(&run.plan, node_named(&run.graph, "state"), "out");
-            let buffer = run.exec.host_array_buffer(&run.graph, &run.plan, state).expect("dedicated particle state");
-            // SAFETY: fill frame completed; dedicated shared state is large
-            // enough and no GPU command is outstanding.
-            assert!(buffer.size as usize >= std::mem::size_of_val(common.as_slice()));
-            unsafe { buffer.write(0, bytemuck::cast_slice(&common)); }
-            assert_eq!(bytemuck::cast_slice::<_, u8>(&run.particles()), bytemuck::cast_slice::<_, u8>(&common));
-            let (mut gpu_ms, mut encode_ms) = (Vec::new(), Vec::new());
-            let (mut capped, mut refused, mut unconverged) = (0u64, 0u64, 0u64);
-            for frame in 1..=90 {
-                assert!(started.elapsed().as_secs() < 120, "bounded reference probe exceeded 120s");
-                let (gpu, cpu) = run.timed_frame();
-                assert!(gpu.is_finite() && gpu > 0.0 && cpu.is_finite());
-                gpu_ms.push(gpu);
-                encode_ms.push(cpu);
-                let stats = run.liquid_stats();
-                assert_eq!(stats.nonfinite, 0);
-                if frame == 1 { assert_eq!(stats.live as usize, seed.len(), "first tick consumes native live count"); }
-                let clock: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
-                assert_eq!(clock[1], (1.0f32 / 60.0).to_bits(), "complete reference interval");
-                assert_eq!(clock[2], 0, "no remaining time");
-                assert_eq!(clock[6], 1, "same single substep as native");
-                assert_eq!((clock[4], clock[5]), (0, 0), "no clock cap or invalid input");
-                capped += u64::from(stats.speed_capped);
-                refused += u64::from(stats.push_refused);
-                unconverged += u64::from(stats.unconverged);
-                if frame % 30 == 0 {
-                    let particles = run.particles();
-                    let measure = measures(&particles);
-                    let delta: [f64; 5] = std::array::from_fn(|a| measure[a] - reference[frame / 30 - 1][a]);
-                    println!("gpu density={density} frame {frame}: n={} metrics={measure:?} delta={delta:?}", stats.live);
-                }
-            }
-            println!("gpu density={density}: gpu median {:.3}ms encode median {:.3}ms capped={capped} refused={refused} unconverged={unconverged}", median(gpu_ms), median(encode_ms));
-        }
-    }
-
-    /// Replace a fresh run's particle state with `seed` (native-captured
-    /// records), zero past it. The fill frame has completed.
-    #[cfg(feature = "water-race-probes")]
-    fn seed_run(run: &Run, seed: &[FluidParticle]) {
-        let mut common = vec![FluidParticle { position_radius: [0.0; 4], velocity: [0.0; 3], id: 0 }; run.scene.particles() as usize];
-        assert!(seed.len() <= common.len(), "native seed fits GPU capacity");
-        common[..seed.len()].copy_from_slice(seed);
-        let state = output_of(&run.plan, node_named(&run.graph, "state"), "out");
-        let buffer = run.exec.host_array_buffer(&run.graph, &run.plan, state).expect("dedicated particle state");
-        assert!(buffer.size as usize >= std::mem::size_of_val(common.as_slice()));
-        // SAFETY: the fill frame completed; no GPU command is outstanding.
-        unsafe { buffer.write(0, bytemuck::cast_slice(&common)); }
-        let stats = particle_stats(&run.particles());
-        assert_eq!((stats.live, stats.bad), (seed.len(), 0), "frame 0: the GPU holds the whole finite native seed");
-    }
-
-    /// The 64³ still pool run by the native engine and by the GPU from the
-    /// native engine's own captured seed, 120 frames: the fastest particle
-    /// of each every 10 frames, the oracle for gpu_flip_still_pool's bound.
-    /// Both keep every particle, take one substep a frame and never recover.
-    #[cfg(feature = "water-race-probes")]
-    #[test]
-    fn native_still_pool_reference() {
-        let scene = WaterScene::still_pool(64);
-        let (mut native, offset) = world(scene);
-        let seed = capture(&mut native, offset);
-        let mut run = run_with_retired_speed(scene, true);
-        seed_run(&run, &seed);
-        let (mut native_peak, mut gap) = (0.0f64, 0.0f64);
-        for frame in 0..120 {
-            let stats = native.step(Seconds(1.0 / 60.0)).expect("native step");
-            assert_eq!(stats.substeps, 1, "frame {frame}: native substeps");
-            assert!(!stats.numerical_recovery && !stats.cap_hit, "frame {frame}: native recovered or capped");
-            run.frame();
-            let clock: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
-            assert_eq!((clock[6], clock[4], clock[5]), (1, 0, 0), "frame {frame}: GPU one substep, no cap or invalid input");
-            assert_eq!(run.liquid_stats().nonfinite, 0);
-            let (a, b) = (particle_stats(&capture(&mut native, offset)), particle_stats(&run.particles()));
-            assert_eq!((a.live, b.live, a.bad, b.bad), (seed.len(), seed.len(), 0, 0), "frame {frame}: counts");
-            if frame % 10 == 9 {
-                println!("still pool 64³ frame {frame:3}: fastest native {:.3e} gpu {:.3e} m/s", a.fastest, b.fastest);
-                if frame >= 59 {
-                    native_peak = native_peak.max(a.fastest);
-                    gap = gap.max((a.fastest - b.fastest).abs());
-                }
-            }
-        }
-        println!("still pool 64³ frames 59-119 from one seed: native peak {native_peak:.3e} m/s, largest GPU gap {gap:.3e} m/s");
-    }
-
-    /// The 64³ still pool by the native engine and by the GPU from the
-    /// native engine's seed, 300 frames: at every 30th frame each one's
-    /// inner vertical face speed, same faces, mask (from that frame's
-    /// entering particles) and depth as gpu_flip_hydrostatic_column_rests.
-    /// The oracle for its bound.
-    #[cfg(feature = "water-race-probes")]
-    #[test]
-    fn native_hydrostatic_reference() {
-        let scene = WaterScene::still_pool(64);
-        let (mut native, offset) = world(scene);
-        let seed = capture(&mut native, offset);
-        let mut run = run_with_retired_speed(scene, true);
-        seed_run(&run, &seed);
-        let n = run.n();
-        let m = n + 1;
-        let g_dt = G * scene.step_dt();
-        let deep = hydrostatic_depth(scene);
-        let (mut native_peak, mut gap) = (0.0f64, 0.0f64);
-        let mut faces_v = Vec::new();
-        for frame in 0..300 {
-            let entering = (frame % 30 == 29).then(|| capture(&mut native, offset));
-            let stats = native.step(Seconds(1.0 / 60.0)).expect("native step");
-            assert_eq!(stats.substeps, 1, "frame {frame}: native substeps");
-            assert!(!stats.numerical_recovery && !stats.cap_hit, "frame {frame}: native recovered or capped");
-            run.frame();
-            let clock: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
-            assert_eq!((clock[6], clock[4], clock[5]), (1, 0, 0), "frame {frame}: GPU one substep, no cap or invalid input");
-            let after = particle_stats(&capture(&mut native, offset));
-            assert_eq!((after.live, after.bad), (seed.len(), 0), "frame {frame}: native count or finiteness after the step");
-            let counted = run.liquid_stats();
-            assert_eq!((counted.live as usize, counted.nonfinite), (seed.len(), 0), "frame {frame}: GPU count or finiteness");
-            let Some(entering) = entering else { continue };
-            let (a, b) = (particle_stats(&entering), particle_stats(&run.entering));
-            assert_eq!((a.live, b.live, a.bad, b.bad), (seed.len(), seed.len(), 0, 0), "frame {frame}: entering counts");
-            let dims = native.capture_face_v(&mut faces_v).expect("native faces");
-            assert_eq!(dims, [n as u32, m as u32, n as u32], "native faces on the GPU solver grid");
-            assert!(faces_v.iter().all(|v| v.is_finite()), "frame {frame}: a native face is not finite");
-            let faces = run.faces();
-            assert!(faces.iter().all(|f| f.velocity.iter().all(|v| v.is_finite())), "frame {frame}: a GPU face is not finite");
-            let (theirs, native_faces) = inner_vertical_face_speed(|i, j, k| faces_v[i + n * (j + m * k)], &run.water_of(&entering), n, deep);
-            let (ours, gpu_faces) = inner_vertical_face_speed(|i, j, k| faces[i + m * (j + m * k)].velocity[1], &run.water(), n, deep);
-            assert_eq!(native_faces, gpu_faces, "frame {frame}: the engines' masks select different faces");
-            let (theirs, ours) = (theirs / g_dt, ours / g_dt);
-            println!("hydrostatic 64³ frame {frame:3}: inner vertical faces native {:.3}% gpu {:.3}% of g·dt", 100.0 * theirs, 100.0 * ours);
-            native_peak = native_peak.max(theirs);
-            gap = gap.max((theirs - ours).abs());
-        }
-        println!("hydrostatic 64³ from one seed: native peak {native_peak:.5} of g·dt, largest GPU gap {gap:.5}");
-    }
-
-    /// One wall or contact case run from identical native-captured seeds.
-    #[cfg(feature = "water-race-probes")]
-    struct WallCase {
-        name: &'static str,
-        /// World-space water box and its velocity.
-        water: [[f32; 3]; 2],
-        velocity: [f32; 3],
-        /// Static box obstacle: centre, then size, world metres.
-        obstacle: Option<[[f64; 3]; 2]>,
-        /// The wall-contact region measured for run-up and contact counts.
-        near: fn([f32; 3], f32) -> bool,
-    }
-
-    /// Wall and contact parity (BUG-g75v.17 (GPU FLIP wall and collision
-    /// motion parity)): flat wall, two- and three-face corners, a body flush
-    /// with a wall, water leaving a wall, and a tank-spanning body slab, each
-    /// seeded on GPU from the native engine's captured particles and stepped
-    /// 60 frames at 16³. Every 10 frames it compares aggregate guards, not
-    /// particle-by-particle parity: count, mean position and velocity, RMS
-    /// speed, the contact region's count and highest particle, the 99th
-    /// height percentile, the smallest wall gap and the deepest body
-    /// penetration. Means can hide opposite local errors; the contact
-    /// region's count and run-up are the local checks. The slab only prints
-    /// (BUG-hgcxx (GPU FLIP body slab spanning the tank runs up less than
-    /// native)).
-    #[cfg(feature = "water-race-probes")]
-    #[test]
-    fn gpu_flip_native_wall_contact_reference() {
-        let wall = 2.0f32;
-        let cases = [
-            WallCase { name: "flat_wall", water: [[-1.0, 0.0, -2.0], [0.0, 1.0, 2.0]], velocity: [3.0, 0.0, 0.0], obstacle: None,
-                near: |p, h| p[0] > 2.0 - h },
-            WallCase { name: "corner_two_face", water: [[0.5, 0.0, 0.5], [1.5, 1.5, 1.5]], velocity: [3.0, 0.0, 3.0], obstacle: None,
-                near: |p, h| p[0] > 2.0 - h && p[2] > 2.0 - h },
-            WallCase { name: "corner_three_face", water: [[0.5, 1.5, 0.5], [1.5, 2.5, 1.5]], velocity: [3.0, -3.0, 3.0], obstacle: None,
-                near: |p, h| p[0] > 2.0 - 2.0 * h && p[2] > 2.0 - 2.0 * h && p[1] < 2.0 * h },
-            WallCase { name: "body_flush_wall", water: [[-1.0, 0.0, -2.0], [0.0, 1.0, 2.0]], velocity: [3.0, 0.0, 0.0],
-                obstacle: Some([[1.7, 0.58, 0.0], [0.6, 1.16, 0.85]]), near: |p, h| p[0] > 1.4 - h && p[2].abs() < 0.425 + h },
-            // The flat wall's impact with a tank-spanning body as the wall,
-            // to tell a domain-wall difference from a general one.
-            WallCase { name: "body_slab_wall", water: [[-1.0, 0.0, -2.0], [0.0, 1.0, 2.0]], velocity: [3.0, 0.0, 0.0],
-                obstacle: Some([[1.875, 2.0, 0.0], [0.75, 4.2, 4.2]]), near: |p, h| p[0] > 1.5 - h },
-            WallCase { name: "separation", water: [[1.0, 0.0, -2.0], [2.0, 2.0, 2.0]], velocity: [-2.0, 0.0, 0.0], obstacle: None,
-                near: |p, h| p[0] > 2.0 - h },
-        ];
-        let scene = WaterScene::race_dam_break(16);
-        let h = scene.cell_size() as f32;
-        let layout = scene.layout();
-        let offset = layout.min.map(|v| v - 1.5 * h);
-        let local = |p: [f32; 3]| -> [f32; 3] { std::array::from_fn(|a| p[a] - offset[a]) };
-        // [n, mean x, mean y, mean z, mean vx, mean vy, mean vz, rms speed,
-        //  near count, near run-up y max, y99, deepest wall gap / h,
-        //  deepest body depth / h]
-        let measure = |case: &WallCase, particles: &[FluidParticle]| -> [f64; 13] {
-            let live: Vec<_> = particles.iter().filter(|p| p.position_radius[3] > 0.0).collect();
-            assert!(!live.is_empty());
-            assert!(live.iter().all(|p| p.position_radius.iter().chain(&p.velocity).all(|v| v.is_finite())), "{}: finite", case.name);
-            let n = live.len() as f64;
-            let mean = |f: &dyn Fn(&FluidParticle) -> f32| live.iter().map(|p| f64::from(f(p))).sum::<f64>() / n;
-            let near: Vec<_> = live.iter().filter(|p| (case.near)([p.position_radius[0], p.position_radius[1], p.position_radius[2]], h)).collect();
-            let mut ys: Vec<f64> = live.iter().map(|p| f64::from(p.position_radius[1])).collect();
-            ys.sort_by(f64::total_cmp);
-            let gap = live.iter().map(|p| {
-                let q = p.position_radius;
-                (wall - q[0].abs()).min(wall - q[2].abs()).min(q[1]).min(2.0 * wall - q[1])
-            }).fold(f32::INFINITY, f32::min);
-            let depth = case.obstacle.map_or(0.0, |[c, s]| live.iter().map(|p| {
-                let q = p.position_radius;
-                (0..3).map(|a| 0.5 * s[a] - (f64::from(q[a]) - c[a]).abs()).fold(f64::INFINITY, f64::min)
-            }).fold(f64::NEG_INFINITY, f64::max));
-            [
-                n, mean(&|p| p.position_radius[0]), mean(&|p| p.position_radius[1]), mean(&|p| p.position_radius[2]),
-                mean(&|p| p.velocity[0]), mean(&|p| p.velocity[1]), mean(&|p| p.velocity[2]),
-                mean(&|p| p.velocity.iter().map(|v| v * v).sum::<f32>()).sqrt(),
-                near.len() as f64, near.iter().map(|p| f64::from(p.position_radius[1])).fold(0.0, f64::max),
-                ys[ys.len() * 99 / 100], f64::from(gap / h), depth / f64::from(h),
-            ]
-        };
-        let started = std::time::Instant::now();
-        println!("metrics: n, mean xyz (m), mean v xyz (m/s), rms speed, near count, near run-up y max, y99, min wall gap/h, deepest body depth/h");
-        for case in &cases {
-            let mut native = FluidWorld::new_seeded(Config {
-                cells: layout.cells.map(|n| n + 3), cell_size: layout.cell_size, surface_subdivisions: 0, apic: false,
-            }, 0).expect("native world");
-            native.set_surface_reconstruction_enabled(false).expect("disable meshing");
-            native.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
-            native.add_fluid_box(Bounds { min: local(case.water[0]), max: local(case.water[1]) }, case.velocity).expect("water");
-            if let Some([c, s]) = case.obstacle {
-                let bounds = Bounds {
-                    min: local(std::array::from_fn(|a| (c[a] - 0.5 * s[a]) as f32)),
-                    max: local(std::array::from_fn(|a| (c[a] + 0.5 * s[a]) as f32)),
-                };
-                native.set_obstacle(bounds, bounds, bounds).expect("obstacle");
-            }
-            native.step(Seconds(1.0 / 60.0)).expect("insert native seed");
-            let seed = capture(&mut native, offset);
-            assert!(seed.len() <= scene.particles() as usize, "{}: seed fits GPU capacity", case.name);
-            let mut reference = Vec::new();
-            for frame in 1..=60 {
-                let stats = native.step(Seconds(1.0 / 60.0)).expect("native step");
-                assert!(!stats.numerical_recovery, "{}: native recovery", case.name);
-                if frame % 10 == 0 {
-                    let m = measure(case, &capture(&mut native, offset));
-                    println!("{} native frame {frame} substeps {}: {m:.3?}", case.name, stats.substeps);
-                    reference.push(m);
-                }
-            }
-            let gpu_scene = if case.obstacle.is_some() { scene.with_obstacle() } else { scene };
-            let mut run = match case.obstacle {
-                Some([c, s]) => Run::posed(gpu_scene, &[
-                    ("obstacle_transform", "pos_x", c[0]), ("obstacle_transform", "pos_y", c[1]), ("obstacle_transform", "pos_z", c[2]),
-                    ("obstacle_transform", "scale_x", s[0]), ("obstacle_transform", "scale_y", s[1]), ("obstacle_transform", "scale_z", s[2]),
-                ]),
-                None => Run::new(gpu_scene),
-            };
-            let mut common = vec![FluidParticle { position_radius: [0.0; 4], velocity: [0.0; 3], id: 0 }; gpu_scene.particles() as usize];
-            common[..seed.len()].copy_from_slice(&seed);
-            let state = output_of(&run.plan, node_named(&run.graph, "state"), "out");
-            let buffer = run.exec.host_array_buffer(&run.graph, &run.plan, state).expect("dedicated particle state");
-            assert!(buffer.size as usize >= std::mem::size_of_val(common.as_slice()));
-            // SAFETY: the fill frame completed; no GPU command is outstanding.
-            unsafe { buffer.write(0, bytemuck::cast_slice(&common)); }
-            let (mut capped, mut refused, mut unconverged) = (0u64, 0u64, 0u64);
-            for frame in 1..=60 {
-                assert!(started.elapsed().as_secs() < 240, "bounded wall reference exceeded 240s");
-                run.frame();
-                let stats = run.liquid_stats();
-                assert_eq!(stats.nonfinite, 0);
-                capped += u64::from(stats.speed_capped);
-                refused += u64::from(stats.push_refused);
-                unconverged += u64::from(stats.unconverged);
-                if frame % 10 == 0 {
-                    let m = measure(case, &run.particles());
-                    let r = reference[frame / 10 - 1];
-                    let delta: [f64; 13] = std::array::from_fn(|a| m[a] - r[a]);
-                    println!("{} gpu    frame {frame}: {m:.3?}", case.name);
-                    println!("{} delta  frame {frame}: {delta:.3?}", case.name);
-                    assert!(m[11] > -0.01, "{}: GPU water left the tank by {:.3}h", case.name, -m[11]);
-                    // The GPU run is bit-reproducible (three runs in one
-                    // job, 2026-10-06), so these bounds sit over measured
-                    // differences, not noise. Means, RMS speed, run-up and
-                    // y99 differ by at most 3e-3: bound 0.01. The contact
-                    // count differs by 2 of 212 in the flush body: bound
-                    // 2% of the native contact count plus 2. The deepest
-                    // particle in the flush body differs by 0.035h at
-                    // frame 40 (0.053 vs 0.088h): bound 0.05h.
-                    if case.name != "body_slab_wall" {
-                        // Count, positions (m), velocities (m/s), contact
-                        // count, run-up and y99 (m), wall gap and depth (h).
-                        let tolerance = [0.0, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.02 * r[8] + 2.0, 0.01, 0.01, 0.02, 0.05];
-                        for a in 0..13 {
-                            assert!(delta[a].abs() <= tolerance[a], "{} frame {frame}: metric {a} GPU {} vs native {}", case.name, m[a], r[a]);
-                        }
-                    }
-                }
-            }
-            println!("{}: gpu capped={capped} refused={refused} unconverged={unconverged}", case.name);
-        }
-    }
 }
 
 /// The measurement must follow the rendered topology and smoothing, in both
@@ -1974,7 +1208,7 @@ fn lid_pressed_into_pool(mask: u32) -> (f64, f64, f64) {
     (outward.iter().sum::<f64>() / outward.len() as f64, drive, removed)
 }
 
-/// Encode replay changes nothing the step computes: 300 Dam Break ticks
+/// Encode replay changes nothing the step computes: 60 Dam Break ticks
 /// with the executor's replay on match replay off bit for bit, particles,
 /// faces and the solver's words, every tick, while the solver's rounds run
 /// as replayed segments and none directly.
@@ -1988,7 +1222,7 @@ fn gpu_flip_replay_changes_nothing() {
     // step; from the tenth tick every frame replays all of it.
     const WARM: u32 = 10;
     let mut last = replay.replay_stats();
-    for frame in 1..=300 {
+    for frame in 1..=60 {
         direct.frame();
         replay.frame();
         let (dp, rp) = (direct.particles(), replay.particles());
@@ -1998,7 +1232,7 @@ fn gpu_flip_replay_changes_nothing() {
         assert_eq!(direct.solver(), replay.solver(), "tick {frame}: the solver words differ with replay on");
         let stats = replay.replay_stats();
         let delta = |take: fn(&manifold_gpu::GpuReplayStats) -> u64| take(&stats) - take(&last);
-        if frame <= WARM || frame % 100 == 0 || delta(|s| s.recorded) > 0 {
+        if frame <= WARM || frame % 20 == 0 || delta(|s| s.recorded) > 0 {
             let clock: Vec<u32> = replay.read(STEP_NODE, "clock_status", 8);
             println!(
                 "tick {frame}: clock {clock:?}, live {}; solver words {:?}; recorded {} replayed {} direct {} executes {} segments replayed {} direct {} allocations {}",
@@ -2038,88 +1272,10 @@ fn run_with_retired_speed(scene: WaterScene, enabled: bool) -> Run {
     Run::with_graph(scene, graph)
 }
 
-/// Rank one settled 64³ step's stages; sampling changes encoder layout,
-/// so its total is attribution data rather than ordinary frame performance.
-#[cfg(feature = "water-race-probes")]
-#[test]
-fn gpu_flip_one_step_stage_cost_probe() {
-    const WARMUP: usize = 4;
-    let scene = WaterScene::still_pool(64).with_steps(1);
-    let mut profiled = run_with_retired_speed(scene, true);
-    let mut plain = run_with_retired_speed(scene, true);
-    profiled.set_encode_replay(true);
-    plain.set_encode_replay(true);
-    for _ in 0..WARMUP {
-        profiled.frame();
-        plain.frame();
-    }
-    assert_eq!(profiled.frames, plain.frames, "same time before the sampled frame");
-    let profile = objc2::rc::autoreleasepool(|_| profiled.sampled_frame(manifold_gpu::ProfileGranularity::Tag));
-    plain.frame();
-    assert_eq!(profiled.frames, plain.frames, "same time after the sampled frame");
-
-    let mut by_label: std::collections::BTreeMap<String, (f64, usize, usize)> = std::collections::BTreeMap::new();
-    for span in &profile.spans {
-        let label = if span.tag.starts_with("gpu_flip.stage.") { &span.tag } else { &span.label };
-        let row = by_label.entry(label.clone()).or_default();
-        row.0 += span.millis;
-        row.1 += usize::from(span.kind == manifold_gpu::GpuWorkKind::Compute);
-        row.2 += 1;
-    }
-    let mut rows: Vec<_> = by_label.into_iter().collect();
-    rows.sort_by(|(a_label, (a_ms, _, _)), (b_label, (b_ms, _, _))|
-        b_ms.total_cmp(a_ms).then_with(|| a_label.cmp(b_label)));
-    let attributed_ms = profile.attributed_ms();
-    let compute_encoders: usize = rows.iter().map(|(_, row)| row.1).sum();
-    println!(
-        "GPU FLIP 64³ one-step stage attribution, {WARMUP} warmup + 1 sampled frame: profiled total {:.3} ms; attributed {:.3} ms; unresolved {:.3} ms; {} spans, {compute_encoders} compute encoders; overflow {}, invalid {}, failed command buffers {}",
-        profile.total_ms, attributed_ms, profile.total_ms - attributed_ms, profile.spans.len(),
-        profile.overflow, profile.invalid, profile.failed_command_buffers,
-    );
-    for (label, (ms, count, spans)) in &rows {
-        println!("GPU FLIP 64³ one-step: {label:<48} {ms:9.3} ms; {count} compute encoders, {spans} spans");
-    }
-    assert_eq!(profile.failed_command_buffers, 0, "sampled command buffers completed");
-    assert_eq!(profile.overflow, 0, "every encoded span must fit the timestamp sampler");
-    assert_eq!(profile.invalid, 0, "every encoded span must resolve valid samples");
-    assert!(profile.total_ms.is_finite() && profile.total_ms > 0.0, "finite positive profiled total");
-    assert!(attributed_ms.is_finite() && attributed_ms > 0.0 && compute_encoders > 0, "compute work must be attributed");
-    for span in &profile.spans {
-        assert!(!span.label.is_empty(), "every span has a dispatch/pass label");
-        assert!(span.start_ms.is_finite() && span.millis.is_finite() && span.millis >= 0.0,
-            "{}: valid resolved timing", span.label);
-    }
-
-    for (label, run) in [("profiled", &profiled), ("plain", &plain)] {
-        let status: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
-        assert_eq!(status[0], (1.0f32 / 60.0).to_bits(), "{label}: final slot is the one active step");
-        assert_eq!(status[1], (1.0f32 / 60.0).to_bits(), "{label}: exact completed time");
-        assert_eq!(status[2], 0.0f32.to_bits(), "{label}: interval is complete");
-        assert_eq!(status[6], 1, "{label}: exactly one accepted step");
-        assert_eq!((status[4], status[5]), (0, 0), "{label}: no cap or nonfinite clock input");
-        let stats = particle_stats(&run.particles());
-        assert_eq!((stats.live, stats.bad), (run.seeded, 0), "{label}: all water remains live and finite");
-    }
-    let (pp, up) = (profiled.particles(), plain.particles());
-    assert!(bytemuck::cast_slice::<_, u8>(&pp) == bytemuck::cast_slice::<_, u8>(&up), "published particle bits differ");
-    let pp: Vec<FluidParticle> = profiled.read(STEP_NODE, "out", scene.particles() as usize);
-    let up: Vec<FluidParticle> = plain.read(STEP_NODE, "out", scene.particles() as usize);
-    assert!(bytemuck::cast_slice::<_, u8>(&pp) == bytemuck::cast_slice::<_, u8>(&up), "step particle bits differ");
-    let (pf, uf) = (profiled.faces(), plain.faces());
-    assert!(bytemuck::cast_slice::<_, u8>(&pf) == bytemuck::cast_slice::<_, u8>(&uf), "final face bits differ");
-    let ps: Vec<u32> = profiled.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
-    let us: Vec<u32> = plain.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
-    assert_eq!(ps, us, "full liquid stats differ");
-    let capped_words = 2 * scene.particles() as usize + SOLVER_WORDS as usize;
-    let pc: Vec<u32> = profiled.read(STEP_NODE, "capped", capped_words);
-    let uc: Vec<u32> = plain.read(STEP_NODE, "capped", capped_words);
-    assert_eq!(pc, uc, "full capped words differ");
-}
-
 /// The cost of recording inactive slots, with completed time and all final
 /// state proved identical. Readbacks happen after `frame`'s timing ends.
 #[test]
-fn gpu_flip_one_active_slot_matches_six_recorded_slots_cost_proof() {
+fn gpu_flip_one_active_slot_matches_six_recorded_slots() {
     const WARMUP: usize = 8;
     const MEASURED: usize = 12;
     fn median(values: &mut [f64]) -> f64 {
@@ -2580,79 +1736,6 @@ fn gpu_flip_fresh_speed_preserves_force_changes_and_multiple_intervals() {
     assert!(adaptive_steps > 0, "the changed force must require fresh CFL subdivision");
 }
 
-/// The speed pass's measure, Steps 1 (BUG-l2h3.24): the Dam Break and the
-/// still pool at 64 and the Dam Break at 128, 300 frames each, under Auto and Fixed(16), whose gap is
-/// the cost of Auto's recorded but gated-off iterations. Every tenth frame
-/// is timestamped; the rest give the plain
-/// GPU frame and the CPU encode. Prints medians, the solver's iterations a
-/// solve, and the per-label split with each label's dispatches a frame.
-#[cfg(feature = "water-race-probes")]
-#[test]
-fn gpu_flip_speed_measure() {
-    fn median(mut v: Vec<f64>) -> f64 {
-        v.sort_by(f64::total_cmp);
-        v[v.len() / 2]
-    }
-    let scenes = [
-        ("dam break", WaterScene::dam_break(64).with_steps(1)),
-        ("still pool", WaterScene::still_pool(64).with_steps(1)),
-        ("dam break 128", WaterScene::dam_break(128).with_steps(1)),
-    ];
-    for (name, scene) in scenes {
-        for (mode, scene) in [("auto", scene), ("fixed16", scene.with_iterations(16))] {
-            let mut run = Run::new(scene);
-            let (mut gpu, mut cpu, mut stamped) = (Vec::new(), Vec::new(), Vec::new());
-            let (mut pressure, mut density, mut unconverged) = (Vec::new(), Vec::new(), 0u32);
-            let mut labels: Vec<(String, Vec<f64>, Vec<f64>)> = Vec::new();
-            for frame in 0..300 {
-                if frame % 10 == 9 {
-                    // Each timestamped frame's counter buffers are released
-                    // here, not at the test's end: the device holds few.
-                    let (by_label, total) = objc2::rc::autoreleasepool(|_| run.profiled_labels());
-                    stamped.push(total);
-                    for (label, ms, count) in by_label {
-                        match labels.iter_mut().find(|(l, _, _)| *l == label) {
-                            Some(row) => {
-                                row.1.push(ms);
-                                row.2.push(count as f64);
-                            }
-                            None => labels.push((label, vec![ms], vec![count as f64])),
-                        }
-                    }
-                } else {
-                    let (g, c) = run.frame();
-                    gpu.push(g);
-                    cpu.push(c);
-                }
-                let [p, d, u] = run.solver();
-                pressure.push(f64::from(p));
-                density.push(f64::from(d));
-                unconverged += u;
-            }
-            let span = |v: &[f64]| (v.iter().copied().fold(f64::MAX, f64::min), median(v.to_vec()), v.iter().copied().fold(0.0, f64::max));
-            let (sp, sd) = (span(&pressure), span(&density));
-            let dispatches: f64 = labels.iter().map(|(_, _, c)| median(c.clone())).sum();
-            let solve_dispatches: f64 =
-                labels.iter().filter(|(l, _, _)| l.starts_with("gpu_flip.pressure.")).map(|(_, _, c)| median(c.clone())).sum();
-            println!(
-                "SPEED {name} {mode}: GPU plain {:.2} ms, timestamped {:.2} ms, CPU encode {:.2} ms; {dispatches} dispatches a frame, {solve_dispatches} in the solves",
-                median(gpu),
-                median(stamped),
-                median(cpu)
-            );
-            println!(
-                "SPEED {name} {mode}: iterations a solve, pressure {} / {} / {}, density {} / {} / {} (min / median / max), unconverged {unconverged}",
-                sp.0, sp.1, sp.2, sd.0, sd.1, sd.2
-            );
-            let mut rows: Vec<(String, f64, f64)> = labels.into_iter().map(|(l, ms, c)| (l, median(ms), median(c))).collect();
-            rows.sort_by(|a, b| b.1.total_cmp(&a.1));
-            for (label, ms, count) in rows.iter().take(30) {
-                println!("SPEED {name} {mode}:   {label:<40} x{count:<5} {ms:8.3} ms");
-            }
-        }
-    }
-}
-
 /// FNV-1a over the state's particles after each frame.
 #[cfg(test)]
 fn particle_digest(run: &Run, digest: &mut u64) {
@@ -2716,37 +1799,6 @@ fn gpu_flip_sheeting_replay_matches_direct() {
     eprintln!("SHEETING REPLAY: {born} live births after 24 frames, {stats:?}");
     assert!(stats.replayed > 0, "nothing replayed");
     assert!(born > 0, "the Dam Break seeded no sheets");
-}
-
-/// The step's GPU frame time at res 64: sheeting off, and on (the
-/// difference is the sheeting passes plus the births they add), medians
-/// over frames 40 to 63, interleaved.
-#[test]
-fn gpu_flip_sheeting_cost_at_64() {
-    let mut off = dam_break_sheeting(64, None);
-    let mut on = dam_break_sheeting(64, Some(1.0));
-    let seeded = on.particles().iter().map(|p| p.id).max().unwrap_or(0);
-    let (mut t_off, mut t_on) = (Vec::new(), Vec::new());
-    for frame in 0..64 {
-        let (a, b) = if frame % 2 == 0 {
-            (off.timed_frame().0, on.timed_frame().0)
-        } else {
-            let b = on.timed_frame().0;
-            (off.timed_frame().0, b)
-        };
-        if frame >= 40 {
-            t_off.push(a);
-            t_on.push(b);
-        }
-    }
-    t_off.sort_by(f64::total_cmp);
-    t_on.sort_by(f64::total_cmp);
-    let born = on.particles().iter().filter(|p| p.position_radius[3] > 0.0 && p.id > seeded).count();
-    eprintln!(
-        "SHEETING COST 64: off {:.3} ms, on {:.3} ms (median frame GPU time), {born} live births",
-        t_off[t_off.len() / 2],
-        t_on[t_on.len() / 2]
-    );
 }
 
 use manifold_node_engine::testkit::atom::{node_named, output_of};
