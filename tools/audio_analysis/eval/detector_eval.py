@@ -77,6 +77,22 @@ def score(s, emit, p, avail, th, sr):
     return matched, len(pos), false
 
 
+def song_result(s, emit, p, avail, th, sr, ahead=0.0):
+    """One song's scored result for comparisons (detector_compare): caught, positives, false fires, cutoff, scored
+    minutes (duration less unscored windows) and the lateness of each caught event's trigger in ms (the decision,
+    emission + ahead, minus the label)."""
+    m, n, f = score(s, emit, p, avail, th, sr)
+    fired = emit[fires(p, avail, th, sr)]
+    late = []
+    for t in s['positives']:
+        if len(fired):
+            e = fired[np.argmin(np.abs(fired - t))]
+            if abs(e - t) <= TOL:
+                late.append(round(1000 * (e + ahead - t), 1))
+    gone = sum(b - a for a, b in s['unscored'])
+    return dict(matched=m, labels=n, extra=f, cutoff=float(th), minutes=max(0.0, s['duration_s'] - gone) / 60, late_ms=late)
+
+
 def pooled(items, th):
     """Summed (caught, positives, false) over (labels, emit, p, avail, sr) items."""
     m = n = f = 0
@@ -102,10 +118,10 @@ def choose(items, min_precision=None):
     return best[1]
 
 
-def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None):
+def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None, per_song=None, ahead=0.0):
     """Score every song with a cutoff chosen on the others. meta[t] = (labels, emit, avail, sr); held[t] = held-out
     probabilities. Recall-only songs never choose a cutoff. Returns (caught, positives, false); fills cutoffs[t]
-    when given."""
+    and per_song[t] (song_result, decisions at emission + ahead) when given."""
     tm = tn = tf = 0
     songs = list(held)
     for t in songs:
@@ -115,6 +131,8 @@ def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None):
             cutoffs[t] = th
         s, emit, avail, sr = meta[t]
         m, n, f = score(s, emit, held[t], avail, th, sr)
+        if per_song is not None:
+            per_song[t] = song_result(s, emit, held[t], avail, th, sr, ahead)
         tm, tn, tf = tm + m, tn + n, tf + f
         if log:
             log(f'  {t:14s} cutoff {th:.2f}: {m}/{n} caught, {f} false fires')
@@ -133,3 +151,9 @@ def dense_recall(lab, meta, held, cutoffs, key='dense_pos'):
         m += int(np.sum(nearest(d, f) <= TOL)) if len(f) else 0
         n += len(d)
     return m, n
+
+
+def write_results(path, per_song):
+    """Per-song results in the layout detector_compare reads (the kick fast loop's, under the key 'net')."""
+    import json
+    path.write_text(json.dumps(dict(results=dict(net=dict(per_song=per_song))), indent=1, default=float))

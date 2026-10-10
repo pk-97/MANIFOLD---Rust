@@ -17,7 +17,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import numpy as np  # noqa: E402
 
-from tools.audio_analysis.eval.detector_eval import HOP, dense_recall, held_out, rows  # noqa: E402
+from tools.audio_analysis.eval.detector_eval import HOP, dense_recall, held_out, rows, write_results  # noqa: E402
 # Look-ahead past emission (SNARE_AHEAD_MS, default 40) and slice length (SNARE_PAST_MS, default 150); SNARE_FLAT=1 adds
 # the noisiness channel (detector_channels) as a third input channel.
 AHEAD = float(os.environ.get('SNARE_AHEAD_MS', '40')) / 1000
@@ -64,12 +64,14 @@ def main():
             clips.append(c)
         print(f'{len(clips)} mix clips, {sum(int(c.y[c.mask].sum()) for c in clips)} pasted or own snares', flush=True)
     held = held_out_nets(lab, data, seed, clips, log=lambda m: print(m, flush=True))
-    cut = {}
-    tot_m, tot_n, tot_f = held_out(lab, meta, held, log=lambda m: print(m, flush=True), cutoffs=cut)
+    cut, per_song = {}, {}
+    tot_m, tot_n, tot_f = held_out(lab, meta, held, log=lambda m: print(m, flush=True), cutoffs=cut, per_song=per_song, ahead=AHEAD)
     print(f'net only, held out: R {tot_m / tot_n:.3f} P {tot_m / max(1, tot_m + tot_f):.3f} ({tot_m}/{tot_n}, {tot_f} false)')
     dm, dn = dense_recall(lab, meta, held, cut)
     print(f'fast runs (unscored above): {dm}/{dn} prominent snares caught')
-    np.savez(GOAL / f'snare_net_s{seed}{"_mix" if mix else ""}{TAG}.npz', **held)
+    name = f'snare_net_s{seed}{"_mix" if mix else ""}{TAG}'
+    np.savez(GOAL / f'{name}.npz', **held)
+    write_results(GOAL / f'{name}.json', per_song)
 
 
 if __name__ == '__main__':

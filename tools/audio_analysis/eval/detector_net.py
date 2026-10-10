@@ -90,7 +90,7 @@ def held_out_nets(lab, data, seed, clips=(), log=print):
 
 def main():
     configure()
-    from tools.audio_analysis.eval.detector_eval import held_out
+    from tools.audio_analysis.eval.detector_eval import held_out, write_results
     from tools.audio_analysis.eval.kick_goal_eval import GOAL, Goal
     from tools.audio_analysis.eval.kick_goal_nn import device
     family, cands_name = sys.argv[1], sys.argv[2]
@@ -102,10 +102,13 @@ def main():
         print(m, flush=True)
     data, meta = songs_data(Goal(mode='v3'), lab, family_candidates(cands_name, fam), device(), log)
     held = held_out_nets(lab, data, seed, log=log)
-    m, n, f = held_out(lab, meta, held, log=log)
+    per_song = {}
+    m, n, f = held_out(lab, meta, held, log=log, per_song=per_song, ahead=AHEAD)
     r, p = m / n, m / max(1, m + f)
     log(f'{family} net ({cands_name}{TAG}), held out: R {r:.3f} P {p:.3f} F1 {2 * r * p / max(1e-9, r + p):.3f} ({m}/{n}, {f} false)')
-    np.savez(GOAL / f'{family}_net_s{seed}_{cands_name.replace(":", "_")}{TAG}.npz', **held)
+    name = f'{family}_net_s{seed}_{cands_name.replace(":", "_")}{TAG}'
+    np.savez(GOAL / f'{name}.npz', **held)
+    write_results(GOAL / f'{name}.json', per_song)
 
 
 if __name__ == '__main__':
