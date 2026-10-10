@@ -1,4 +1,4 @@
-//! The trained snare detector. Every number comes from the model container
+//! The trained snare detector (docs/SNARE_REALTIME_DESIGN.md). Every number comes from the model container
 //! (`assets/snare_model.mkick`); `tools/audio_analysis/snare_release.py` (`model_entries`,
 //! `reference`) is the reference and writes the parity goldens under `tests/fixtures/snare/`.
 //! The net reuses the kick's CNN family (`kick::net`).
