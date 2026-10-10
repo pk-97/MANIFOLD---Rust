@@ -33,7 +33,11 @@ Corollary (2026-07-10, sibling of BUG-060): a tree node's **text/icon clip is th
 - `manifold-app/src/` — `app.rs` + `app_render.rs` + `app_lifecycle.rs`
 - `crates/manifold-nodes/src/` — catalog registration (`registry.rs`), bundled effect/generator preset lookup, and catalog generation; preset assets live in `crates/manifold-nodes/assets/` and are loaded from disk.
 - `crates/manifold-node-engine/src/` — graph vocabulary and runtime; `load/`, `exec/`, `freeze/`, `runtime/`, and `gpu/` own loading, execution, compilation, playback state and GPU dispatch. Generic engine atoms live in `primitives/` and `atomic/`.
-- `crates/manifold-nodes-water/src/` — water primitives, fluid adapters, simulation runtime and proof helpers; depends on the generic engine, with no image or scene family dependency.
+- Water is seven crates, layered so Cargo refuses an upward reach (`docs/WATER_CRATES_DESIGN.md` is the contract; `crates/manifold-app/tests/crate_layering.rs` pins the edges):
+  - `crates/manifold-water-rigid/src/` — Box3D rigid bodies as graph nodes and the native pair contract (`node.rs`); the bottom, names no liquid.
+  - `crates/manifold-water-liquid/src/` — the liquid seam every solver shares: clock, lattice, bodies, coupling, fields, frame ring, whitewater grid vocabulary and the shared atoms in `primitives/`; on rigid.
+  - `crates/manifold-water-gpu-flip/src/`, `manifold-water-gpu-mpm/src/`, `manifold-water-whitewater/src/`, `manifold-water-surface/src/` — the leaves: GPU FLIP, GPU MLS-MPM (Matter), the whitewater step and the surface mesher; each on liquid, none on another leaf.
+  - `crates/manifold-nodes-water/src/` — registration: links the six, owns migrations, bundled water presets, the physics scene, the runtime extension and the cross-solver test harnesses. No image or scene family dependency.
 - `crates/manifold-nodes-image/src/node_graph/` — image primitives and retained composite builders; image-specific helpers live in the crate's `effects/` and `generators/` directories.
 - `crates/manifold-nodes-scene/src/node_graph/` — scene primitives, glTF import, scene exposure and scene-modifier support; scene-specific generator helpers live in the crate's `generators/` directory.
 - `crates/manifold-compositor/src/` — layer composition, generator rendering, presentation, preset thumbnails and upscaling.

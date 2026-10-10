@@ -1,6 +1,7 @@
-//! Water and physics graph adapters.
-//! Owns native simulation nodes and their graph runtime extensions.
-//! Depends on the engine and native solvers, never other node families or UI.
+//! The water registration crate: links the six manifold-water-* crates, and
+//! owns what names more than one of them: graph migrations, the bundled water
+//! presets, the physics scene, the runtime extension and the cross-solver
+//! test harnesses. Never depends on another node family or the UI.
 
 use manifold_water_gpu_flip as _;
 use manifold_water_gpu_mpm as _;
