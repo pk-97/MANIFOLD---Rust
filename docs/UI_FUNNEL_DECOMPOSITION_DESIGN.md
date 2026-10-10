@@ -2,7 +2,7 @@
 
 **Status: COMPLETE — all phases shipped: P-P/P-B 2026-07-21, P-D/P-I/P-S 2026-07-22, P-Z closed 2026-07-22. Landing reports in docs/landings/2026-07-2{1,2}-ui-funnel-*. Follow-on design items on the register: CHROME_PARAMS, GESTURE_ENTRY, ROW_MODEL_EDGES, VERIFICATION_INFRA (priority one). · Fable**
 **Prerequisites:** WIDGET_TREE (COMPLETE 2026-07-21), SCENE_PANEL_EXPOSURE_CONVERGENCE (COMPLETE 2026-07-21). Campaign register: `docs/ARCHITECTURE_DEBT.md` (inventory + wave map; status for this wave lives ONLY on this doc's Status line).
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase. Pure-move commits gate on `scripts/move_identity_check.py` (built + self-tested 2026-07-21).
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase. Pure-move commits gate on `move_identity_check` (retired; in git history) (built + self-tested 2026-07-21).
 
 **The governing insight: the funnel files are not big because the UI is big — they are big because four concerns (projecting state, describing surfaces, routing gestures, translating to commands) each live a slice in every domain's file instead of each owning a thin layer.** Every UI change funnels through `dispatch` (18 args, 303-variant match), `dispatch_inspector` (one 3,160-line function), `sync_inspector_data`/`push_state`, and `tick_and_render` (one 3,270-line frame function). The end state is the matrix: **layers are the hard boundaries, domains are small files within each layer.** Payoff test, honest form: adding a new panel touches nothing outside its own domain plus one registration line per registry.
 
@@ -35,7 +35,7 @@ Companion docs: `WIDGET_TREE_DESIGN.md` (the layer vocabulary this extends; its 
 | `scene_setup_panel.rs` + `panels/inspector.rs` + `param_slider_shared.rs` | 3,584 / 4,231 / 3,166 — VM types, outliner builders, column layout, shared slider builders | P-S consumers; split along the same layer lines |
 | Widget-tree layer | `param_surface.rs` (ParamSurface/ParamRow/RowIndex/row_action), INV-1..8, `no_bespoke_row_infra` | EXISTS — the vocabulary and enforcement this wave extends |
 | Flow suite | 40 flows `scripts/ui-flows/`, selector-state asserts (no pixels) | EXISTS — behavior oracle; coverage enumerated per phase (BUG-252 (eight-scene-flow-scripts-dead-at-step-2-on-stale…) count-match rule) |
-| Move-identity verifier | `scripts/move_identity_check.py` — pinned-color `--color-moved` parse, zero-residue gate; self-tested (pure move → 0, smuggled edit → 1) | BUILT |
+| Move-identity verifier | `move_identity_check` (retired; in git history) — pinned-color `--color-moved` parse, zero-residue gate; self-tested (pure move → 0, smuggled edit → 1) | BUILT |
 | `cargo public-api` | not installed; `manifold-app` has no lib target | REJECTED as gate (adversarial review HIGH-1) |
 
 Classification: **exists** — domain sub-dispatchers, widget-tree layer + enforcement, Harness/undo_baseline oracles, flow suite, `ActiveInspectorDrag` as the scrub-address shape precedent, `View::identity`/keyed builders. **One wire away** — `dispatch` already delegates per domain (inspector is just the domain that never got split); `state_sync` already has per-concern functions (they just share one file); `param_surface()` is already THE projection for cards. **Genuinely new** — `DispatchCtx`, `ScrubState`/`ScrubAddress`/`ValueRef`, per-domain intent enums, the `frame/` stage seams, the regrowth invariant test. No new identity/addressing/dispatch systems: `ValueRef` reuses `GraphParamTarget`+`ParamId` addressing (D2 of widget-tree), intents reuse the existing delegate seams. Zero-new-systems test: passes.
@@ -115,7 +115,7 @@ pub struct ScrubState { /* interior free: active ValueRef + captured baseline */
 
 | Invariant | Enforcement |
 |---|---|
-| INV-G1 Pure-move commits have zero non-scaffold residue; scaffold (dispatch-split structural lines) is separately counted, pattern-bounded, capped ≤25/commit | `scripts/move_identity_check.py` — routing preservation proven by variant-census equality, not by reading arms; run per lane pre-gate and per landing batch |
+| INV-G1 Pure-move commits have zero non-scaffold residue; scaffold (dispatch-split structural lines) is separately counted, pattern-bounded, capped ≤25/commit | `move_identity_check` (retired; in git history) — routing preservation proven by variant-census equality, not by reading arms; run per lane pre-gate and per landing batch |
 | INV-G2 No register-listed file regrows | `godfile_regrowth` invariant test (D11), rides nextest |
 | INV-G3 Scrub behavior parity | `undo_baseline` + `mapping_undo_baseline` suites green UNMODIFIED through P-I; scrub flows green |
 | INV-G4 No structural work moves to per-frame path | `MANIFOLD_RENDER_TRACE=1` spot-check at every P-P/P-F landing (>20ms frame fails); review line "no new per-frame work/alloc" |

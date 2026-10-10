@@ -268,9 +268,7 @@ Bash(scripts/gate_runner.py show *)
 Bash(scripts/gate_runner.py report *)
 Bash(scripts/token_report.py *)
 Bash(scripts/run_ui_flows.py *)
-Bash(scripts/move_identity_check.py *)
 Bash(scripts/gen_glb_conformance_status.py)
-Bash(scripts/test_move_identity_check.py)
 WebSearch
 WebFetch(domain:www.latentspacemusic.com)
 Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-app-kit-0.2.2/src/**)
@@ -293,9 +291,7 @@ Rationale for the script rules (unchanged from the original audit):
 | `scripts/gate_runner.py show *` / `report *` | read-only (verdicts trail / subprocess-free report); `pre-wave` is NOT allowlisted |
 | `scripts/token_report.py *` | reads transcripts, flags only |
 | `scripts/run_ui_flows.py *` | bounded by `scripts/ui-flows/manifest.json` — which is agent-editable, so this is a section 4 residual-risk rule |
-| `scripts/move_identity_check.py *` | git refs only |
 | `scripts/gen_glb_conformance_status.py` | no arguments |
-| `scripts/test_move_identity_check.py` | no arguments — but it is an editable file executed directly; section 4 residual risk |
 
 Deliberately NOT allowlisted, keep classified: `psql` in wildcard form (one
 literal read-only query IS allowlisted — see block; the wildcard never),
