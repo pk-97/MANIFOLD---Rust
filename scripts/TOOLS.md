@@ -54,6 +54,7 @@ Render and measure:
   blob-bench              measure the BlobDetector V2 C ABI  [scripts/blob_v2_native_bench.py]  (cost: focused)
   kick-labels             ground-truth kick times from drum stems  [scripts/kick_label_extract.py]  (cost: focused)
   kick-release            kick model release: train [--provisional] the final model; export --hooks DIR --out DIR writes the model file and parity goldens  [tools/audio_analysis/kick_release.py]  (cost: broad)
+  snare-release           snare model release: train the final net (cutoff from the held-out run); export --out DIR writes the model file and parity goldens  [tools/audio_analysis/snare_release.py]  (cost: broad)
   repair-audio-fixture    rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply  [scripts/repair_audio_fixture.py]  (cost: focused)
 
 CPU reference oracles (f64, seconds, no GPU):

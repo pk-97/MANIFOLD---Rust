@@ -23,7 +23,8 @@ import sys
 RECIPE_ENV = dict(KICK_GOAL_MORE='1', KICK_GOAL_TRIGGER='1', KICK_GOAL_WIP='1', KICK_GOAL_TRUTH='v3', KICK_GOAL_PROJECT='1',
                   KICK_GOAL_RECALL='1', KICK_GOAL_MELODIC='1', KICK_GOAL_NN_AHEAD_MS='40')
 # Net input settings other than the recipe's would silently change the net's shape.
-OFF_RECIPE = ('KICK_GOAL_NN_BANDS', 'KICK_GOAL_NN_PAST_MS', 'KICK_GOAL_NN_PERC', 'KICK_GOAL_NN_STEREO', 'KICK_GOAL_NN_SYNTH')
+OFF_RECIPE = ('KICK_GOAL_NN_BANDS', 'KICK_GOAL_NN_PAST_MS', 'KICK_GOAL_NN_PERC', 'KICK_GOAL_NN_STEREO', 'KICK_GOAL_NN_SYNTH',
+              'KICK_GOAL_NN_FLAT', 'KICK_GOAL_WIP2')
 for _k, _v in RECIPE_ENV.items():
     if os.environ.get(_k, _v) != _v:
         sys.exit(f'{_k}={os.environ[_k]} is not the release recipe ({_v})')

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Section-scored training songs from Peter's WIP mixdowns.
 
-Usage: kick_goal_wip_labels.py   (writes GOAL/labels_wip.json and GOAL/{song}_mix.npy)
+Usage: kick_goal_wip_labels.py [--wip2]   (writes GOAL/labels_wip.json, or with --wip2 GOAL/labels_wip2.json, and
+GOAL/{song}_mix.npy)
+
+--wip2: the proven 2024/2025 WIPs (kick_goal_wip_2425; every wip_labels/{song}.json it wrote).
 
 Source: the 2026 project survey (2026-10-10), one JSON per project in
 ~/.cache/manifold/ableton/wip_labels/. Each WIP's export start was proven against
@@ -32,6 +35,9 @@ from tools.audio_analysis.eval.kick_goal_labels import GOAL, sha  # noqa: E402
 SR = 48000
 SURVEY = Path.home() / '.cache/manifold/ableton/wip_labels'
 WIP = ('48_hours', 'facade', 'got_it', 'renew', 'flight')
+WIP2_LABELS = GOAL / 'labels_wip2.json'
+# The 2024/2025 WIP songs (kick_goal_wip_2425), once labelled.
+WIP2 = tuple(json.loads(WIP2_LABELS.read_text())['new']) if WIP2_LABELS.exists() else ()
 
 
 def decode(path):
@@ -58,8 +64,14 @@ def labels(name):
 
 
 def main():
-    out = {name: labels(name) for name in WIP}
-    path = GOAL / 'labels_wip.json'
+    from tools.audio_analysis.eval.kick_goal_eval import GOAL as G
+    if '--wip2' in sys.argv:
+        W = json.loads((G / 'snare_wip.json').read_text())
+        names = tuple(t for t in W if (SURVEY / f'{t}.json').exists())
+        path = WIP2_LABELS
+    else:
+        names, path = WIP, GOAL / 'labels_wip.json'
+    out = {name: labels(name) for name in names}
     path.write_text(json.dumps(dict(method=__doc__, new=out), indent=1))
     print(path, sha(path))
 
