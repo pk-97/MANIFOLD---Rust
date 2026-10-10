@@ -36,7 +36,7 @@ from scipy.special import expit, logit
 from tools.audio_analysis.eval.kick_attack_rejection import read_audio
 from tools.audio_analysis.eval.kick_fusion_bandwise import fusion_features
 from tools.audio_analysis.eval.kick_goal_labels import DEV_STEMS, GOAL, MORE, NEW, drum_kicks, fresh_onsets, kick_env_db, load
-from tools.audio_analysis.eval.kick_goal_project_kicks import PROJECT, confirmed
+from tools.audio_analysis.eval.kick_goal_project_kicks import PROJECT, confirmed, doubtful
 from tools.audio_analysis.eval.kick_goal_recall_labels import RECALL
 from tools.audio_analysis.eval.kick_goal_rolls import kick_notes
 from tools.audio_analysis.eval.kick_goal_trigger_labels import TRIGGER
@@ -218,6 +218,7 @@ class Goal:
             np.savez(cache, candidates=cand, available=avail, features=feats, hop=hop, duration=dur)
         shift = info['kick_lag_ms'] / 1000
         trigger = info.get('kind') == 'trigger'
+        doubt = np.zeros(0)
         sections = info.get('kind') == 'sections'
         if sections:
             stem_kicks, labels = np.asarray(info['labels']), list(info['labels'])
@@ -228,11 +229,14 @@ class Goal:
             stem_kicks = stem_notes(name, STEM_CFG[name]['kick'], sr) + shift
             labels = sorted([float(x) for x in stem_kicks if 1.0 <= x <= dur - 1.0] +
                             [x for x in info['labels'] if not np.any(np.abs(stem_kicks - x) <= .07)])
+            if PROJECT_ON and name not in PROJECT:
+                doubt = doubtful(name, STEM_CFG[name]['kick'], stem_kicks - shift, sr) + shift
+                labels = [x for x in labels if not np.any(np.abs(doubt - x) <= 1e-6)]
         else:
             stem_kicks = fresh_onsets(stem_derived(kick_env_db, STEM_CFG[name]['kick'], sr)) + shift
             labels = info['labels']
         labels = one_per_refractory(labels)
-        regions = [(0.0, 1.2), (dur - 1.0, dur + 1.0)] + [(u - .07, u + .2) for u in info.get('uncertain', [])]
+        regions = [(0.0, 1.2), (dur - 1.0, dur + 1.0)] + [(u - .07, u + .2) for u in info.get('uncertain', [])] + [(u - .07, u + .2) for u in doubt]
         if sections:
             # Only the proven sections are scored: everything between them is unscored.
             edges = [0.0] + [x for a, b in sorted(info['scored_spans_s']) for x in (a, b)] + [dur + 1.0]
