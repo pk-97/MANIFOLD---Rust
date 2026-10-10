@@ -2,7 +2,7 @@ use manifold_node_engine::parameters::ParamValue;
 
 #[test]
 fn surface_stage_defaults_and_manifest_bindings() {
-    use manifold_nodes_water::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
+    use manifold_water_surface::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
     use manifold_node_engine::primitive::PrimitiveSpec;
     let iterations = SmoothSurfaceMesh::PARAMS
         .iter()

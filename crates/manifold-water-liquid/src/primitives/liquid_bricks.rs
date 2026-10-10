@@ -5,6 +5,9 @@
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 pub const COMMON: &str = include_str!("shaders/liquid_bricks_common.wgsl");
+/// The solid clip every liquid surface shares: node.clamp_liquid_to_solids
+/// runs it and the mesher includes it.
+pub const CLAMP_TO_SOLIDS_ELEMENT: &str = include_str!("shaders/clamp_liquid_to_solids_element.wgsl");
 pub(crate) const WIDTH: u32 = 8;
 pub(crate) const HEADER: u64 = 8;
 pub(crate) const GRID_OFFSET: u64 = 4;

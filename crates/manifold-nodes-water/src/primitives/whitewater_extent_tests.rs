@@ -11,7 +11,7 @@ use manifold_water_whitewater::primitives::extend_lattice::ExtendLattice;
 use manifold_water_whitewater::primitives::lattice_curvature::LatticeCurvature;
 use manifold_water_liquid::primitives::liquid_cells::LiquidCells;
 use manifold_water_whitewater::primitives::nearest_crossing::NearestCrossing;
-use super::particle_volume::{ParticleVolume, refined_nodes};
+use manifold_water_surface::primitives::particle_volume::{ParticleVolume, refined_nodes};
 use manifold_water_whitewater::primitives::surface_crossings::SurfaceCrossings;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_core::fluid_domain::domain_layout;

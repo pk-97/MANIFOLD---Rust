@@ -31,6 +31,7 @@ manifold-water-liquid = { path = "../manifold-water-liquid", features = ["testki
 manifold-water-gpu-flip = { path = "../manifold-water-gpu-flip", features = ["testkit"] }
 manifold-water-gpu-mpm = { path = "../manifold-water-gpu-mpm", features = ["testkit"] }
 manifold-water-whitewater = { path = "../manifold-water-whitewater", features = ["testkit"] }
+manifold-water-surface = { path = "../manifold-water-surface", features = ["testkit"] }
 manifold-nodes-image = { path = "../manifold-nodes-image", features = ["testkit"] }
 manifold-gpu = { path = "../manifold-gpu", features = ["testkit"] }
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }

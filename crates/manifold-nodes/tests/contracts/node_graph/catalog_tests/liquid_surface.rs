@@ -1,10 +1,10 @@
 use manifold_water_gpu_flip::primitives::testkit::gpu_flip as gpu_flip_nodes;
 use manifold_water_liquid::primitives::testkit::liquid as liquid_nodes;
-use manifold_nodes_water::primitives::testkit::surface as surface_nodes;
+use manifold_water_surface::primitives::testkit::surface as surface_nodes;
 use std::borrow::Cow;
 
 
-use manifold_nodes_water::primitives::particle_volume::ParticleVolume;
+use manifold_water_surface::primitives::particle_volume::ParticleVolume;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::particles::{FluidParticle};
@@ -12,7 +12,7 @@ use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 
-use manifold_nodes_water::testkit::liquid_surface::*;
+use manifold_water_surface::testkit::liquid_surface::*;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 
 
@@ -22,7 +22,7 @@ use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 pub(crate) fn blob_bounds(harness: &mut Harness, blobs: Slot) -> Slot {
     let (bounds, _) = harness.array::<f32>(&[], 2);
     // The executor prepares the reduction before its first run; so does this.
-    let mut node = manifold_nodes_water::primitives::blob_bounds::BlobBounds::new();
+    let mut node = manifold_water_surface::primitives::blob_bounds::BlobBounds::new();
     node.prepare_pipelines(&harness.device);
     let (_, errors) = harness.run(
         &mut node,
@@ -411,7 +411,7 @@ fn volume_distance_on_lattice(band_extra: f32, lattice: Lattice, solid_nodes: [u
     }
     let levelset: Vec<f32> = read(&levelset_buf, total);
     if band_extra > 0.0 {
-        use manifold_nodes_water::primitives::lattice_bricks::{LatticeBricks, brick_layout};
+        use manifold_water_surface::primitives::lattice_bricks::{LatticeBricks, brick_layout};
         let layout = brick_layout(solid_nodes, scale).unwrap();
         let (bricks, _) = harness.array::<u32>(&[], layout.words as usize);
         let (_, errors) = harness.run(

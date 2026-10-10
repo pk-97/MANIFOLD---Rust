@@ -826,3 +826,7 @@ mod tests {
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+
+/// The dense gather the brick layout is proven against.
+#[cfg(any(test, feature = "testkit"))]
+pub const GATHER_REFERENCE: &str = include_str!("shaders/lattice_bricks_gather_reference.wgsl");
