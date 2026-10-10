@@ -4,6 +4,9 @@
 //! settled tick at a time, the A/B frame ring of the particle-frame seam, and
 //! the face grid layout every solver publishes. Solver rules (substep bounds,
 //! reaction encodings, block sorting) stay with each solver.
+//!
+//! Sits on manifold-water-rigid. Never depends on a solver or mesher crate
+//! (gpu-flip, gpu-mpm, whitewater, surface) or on manifold-nodes-water.
 
 pub mod bodies;
 pub mod body_buffers;

@@ -63,6 +63,9 @@ TAG += '_syn' if SYNTH_ON else ''
 # target and donor are both outside the held-out group.
 BUILDUP = os.environ.get('KICK_GOAL_NN_BUILDUP', '')
 TAG += '_bu' if BUILDUP == 'train' else ''
+# KICK_GOAL_NN_BUILDUP_DOSE=N: train on at most N build-up clips per target song (the readout still scores all).
+DOSE = int(os.environ.get('KICK_GOAL_NN_BUILDUP_DOSE', '0'))
+TAG += f'{DOSE}' if BUILDUP == 'train' and DOSE else ''
 # KICK_GOAL_MELODIC=1: project melodic note starts weigh as certain non-kicks (kick_goal_melodic).
 MELODIC_ON = os.environ.get('KICK_GOAL_MELODIC') == '1'
 TAG += '_mel' if MELODIC_ON else ''
@@ -124,10 +127,15 @@ def nets(g, folds):
                 c = Song(z['spec'].astype(np.float32), z['onset_s'], z['emit_s'] + AHEAD_MS / 1000, z['mask'], z['y'], p.stem).to(dev)
                 c.sources, c.roll = (str(z['target']), str(z['donor'])), z['roll']
             build.append(c)
+    dosed, per_target = [], {}
+    for c in build:
+        per_target[c.sources[0]] = per_target.get(c.sources[0], 0) + 1
+        if not DOSE or per_target[c.sources[0]] <= DOSE:
+            dosed.append(c)
     out, readout = {}, np.zeros(4)
     for k, f in enumerate(folds):
         t0 = time.time()
-        usable = [c for c in clips + (build if BUILDUP == 'train' else []) if not set(c.sources) & set(f)]
+        usable = [c for c in clips + (dosed if BUILDUP == 'train' else []) if not set(c.sources) & set(f)]
         fitted = [train([data[u] for u in ALL if u not in f], 1000 * k + 7 * e + 100000 * SEED, usable) for e in range(NETS)]
         out[k] = {t: np.mean([predict(net, data[t]) for net in fitted], axis=0) for t in f}
         for c in build:
