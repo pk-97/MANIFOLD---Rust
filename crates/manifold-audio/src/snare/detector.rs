@@ -52,12 +52,13 @@ impl From<ContainerError> for SnareError {
     }
 }
 
-/// One fire: its emission on the input clock, the input sample count at which it was decided,
-/// and its candidate's hops on the 48 kHz model grid.
+/// One fire: the input sample count at which it was decided (the stamp, as for kicks, so a fire lands on
+/// the same hop whatever the chunking), its emission on the input clock, and its candidate's hops on the
+/// 48 kHz model grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SnareFire {
     pub sample: u64,
-    pub decided_at: u64,
+    pub emission: u64,
     pub cand_hop: u64,
     pub avail_hop: u64,
 }
@@ -181,8 +182,8 @@ impl SnareDetector {
             self.len -= 1;
             if self.decide(&p) {
                 on_fire(SnareFire {
-                    sample: self.input.input_count((p.avail_hop + 1) * self.hop),
-                    decided_at: self.input.input_count(p.ready),
+                    sample: self.input.input_count(p.ready),
+                    emission: self.input.input_count((p.avail_hop + 1) * self.hop),
                     cand_hop: p.cand_hop,
                     avail_hop: p.avail_hop,
                 });
@@ -280,8 +281,8 @@ mod tests {
                 .filter(|&a| det.net.ready_sample(a) <= pcm.len() as u64)
                 .map(|a| (a + 1) * hop)
                 .collect();
-            let got: Vec<u64> = fires.iter().map(|f| f.sample).collect();
-            let lag_ms: Vec<f64> = fires.iter().map(|f| (f.decided_at - f.sample) as f64 / 48.0).collect();
+            let got: Vec<u64> = fires.iter().map(|f| f.emission).collect();
+            let lag_ms: Vec<f64> = fires.iter().map(|f| (f.sample - f.emission) as f64 / 48.0).collect();
             let (lo, hi) = lag_ms.iter().fold((f64::INFINITY, 0.0f64), |(a, b), &v| (a.min(v), b.max(v)));
             println!(
                 "{name}: {} decided, fires {}/{} (golden total {nf}), decision lag after emission {lo:.1}..{hi:.1} ms",

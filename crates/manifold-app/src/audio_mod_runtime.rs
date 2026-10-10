@@ -1132,8 +1132,7 @@ mod hop_tests {
     }
 
     /// Snares ride the same worker: every inline snare fire reaches the Mid band's snare value
-    /// as one 1.0 hop, at or after its emission (fires are stamped at the emission and decided
-    /// about 40 ms later, so they land on the next hop analysed).
+    /// as one 1.0 hop, the hop containing its decision, exactly as kicks do.
     #[test]
     fn worker_snare_fires_land_on_the_mid_band() {
         use manifold_audio::kick::container::Container;
@@ -1161,10 +1160,9 @@ mod hop_tests {
             analyzer.staged = mono;
             fired.extend(batch.hops().iter().filter(|h| h.features.bands[2].snare == 1.0).map(|h| h.stamp.end_sample));
         }
-        assert_eq!(fired.len(), inline.len());
-        for (hop_end, f) in fired.iter().zip(&inline) {
-            assert!(*hop_end >= f.sample && *hop_end <= f.decided_at + 800, "fire {f:?} landed at {hop_end}");
-        }
+        let hop = analyzer.analyzer.hop() as u64;
+        let want: Vec<u64> = inline.iter().map(|f| f.sample.div_ceil(hop) * hop).collect();
+        assert_eq!(fired, want);
     }
 
     #[test]

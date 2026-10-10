@@ -147,13 +147,15 @@ impl DetectorWorker {
                     std::thread::park_timeout(Duration::from_millis(5));
                     continue;
                 }
-                scratch.clear();
+                // Each detector's events go out as soon as it has run, so a slow later detector (the
+                // snare's net) never holds an earlier one's fires (the kick's) past the content
+                // thread's wait.
                 for d in detectors.iter_mut() {
                     d.push(&buf[..n], &mut scratch);
-                }
-                for e in scratch.drain(..) {
-                    if event_prod.try_push(e).is_err() {
-                        worker.event_overflow.fetch_add(1, Ordering::Relaxed);
+                    for e in scratch.drain(..) {
+                        if event_prod.try_push(e).is_err() {
+                            worker.event_overflow.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
                 worker.processed.fetch_add(n as u64, Ordering::Release);
