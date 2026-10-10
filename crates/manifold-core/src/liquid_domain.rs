@@ -211,9 +211,9 @@ mod tests {
         let allowed = [
             "manifold-core/src/liquid_domain.rs",
             "manifold-core/src/type_id_migration.rs",
-            "manifold-node-engine/src/water/primitives/fluid_surface.rs",
-            "manifold-node-engine/src/water/primitives/matter_domain.rs",
-            "manifold-node-engine/src/water/primitives/gpu_flip_domain.rs",
+            "manifold-nodes-water/src/primitives/fluid_surface.rs",
+            "manifold-nodes-water/src/primitives/matter_domain.rs",
+            "manifold-nodes-water/src/primitives/gpu_flip_domain.rs",
         ];
         let patterns: Vec<String> = LIQUID_DOMAIN_TYPE_IDS
             .iter()

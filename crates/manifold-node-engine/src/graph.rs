@@ -11,8 +11,7 @@ use std::collections::hash_map::Entry;
 
 use crate::exec::effect_node::{EffectNode, NodeInstanceId, NodeWire, ParamValues};
 use crate::parameters::ParamValue;
-use crate::water::physics::RigidImpulseTargets;
-use crate::water::physics_scene::CoupledScene;
+use crate::exec::node_pairs::{NodePair, NodePairBehavior};
 use crate::validation::{GraphError, validate_connection};
 
 /// One instance of an [`EffectNode`] within a [`Graph`].
@@ -119,7 +118,7 @@ pub struct Graph {
     modifier_buffer_budget: Option<crate::load::expand::PreparedModifierBufferBudget>,
     prepared_params: AHashMap<NodeInstanceId, Vec<PreparedParam>>,
     prepared_param_rejections: usize,
-    coupled_scenes: Vec<CoupledScene>,
+    node_pairs: Vec<NodePair>,
 }
 
 impl Graph {
@@ -134,7 +133,7 @@ impl Graph {
             modifier_buffer_budget: None,
             prepared_params: AHashMap::default(),
             prepared_param_rejections: 0,
-            coupled_scenes: Vec::new(),
+            node_pairs: Vec::new(),
         }
     }
 
@@ -303,66 +302,52 @@ manifold_core::testkit_visible! {
             .map(|inst| inst.id)
     }
 
-manifold_core::testkit_visible! {
-    pub(crate) fn coupled_scenes(&self) -> &[CoupledScene] {
-        &self.coupled_scenes
+    pub fn node_pairs(&self) -> &[NodePair] {
+        &self.node_pairs
     }
-}
 
-    pub(crate) fn add_coupled_scene(
+    /// Register an ordered pair during graph preparation, before compilation.
+    pub fn add_node_pair(
         &mut self,
-        fluid: NodeInstanceId,
-        rigid: NodeInstanceId,
-        colliders: RigidImpulseTargets,
+        first: NodeInstanceId,
+        second: NodeInstanceId,
+        behavior: Box<dyn NodePairBehavior>,
     ) -> Result<(), GraphError> {
-        if fluid == rigid {
-            return Err(GraphError::CycleDetected {
-                involves: vec![fluid],
-            });
+        if first == second {
+            return Err(GraphError::CycleDetected { involves: vec![first] });
         }
-        if self.nodes.get(&fluid).is_none() {
-            return Err(GraphError::NodeNotFound(fluid));
+        for id in [first, second] {
+            if !self.nodes.contains_key(&id) {
+                return Err(GraphError::NodeNotFound(id));
+            }
         }
-        if self.nodes.get(&rigid).is_none() {
-            return Err(GraphError::NodeNotFound(rigid));
+        if self.node_pairs.iter().any(|pair| pair.first == first && pair.second == second) {
+            return Err(GraphError::CycleDetected { involves: vec![first, second] });
         }
-        if let Some(existing) = self
-            .coupled_scenes
-            .iter_mut()
-            .find(|pair| pair.fluid == fluid && pair.rigid == rigid)
-        {
-            existing.colliders.bodies |= colliders.bodies;
-            existing.colliders.copies |= colliders.copies;
-        } else {
-            self.coupled_scenes.push(CoupledScene {
-                fluid,
-                rigid,
-                colliders,
-            });
+        for id in [first, second] {
+            behavior.set_enabled(self.nodes.get_mut(&id).expect("validated pair node").node.as_mut(), true);
         }
-        self.nodes
-            .get_mut(&fluid)
-            .expect("validated coupled fluid node")
-            .node
-            .set_coupled_physics(true);
-        self.nodes
-            .get_mut(&rigid)
-            .expect("validated coupled rigid node")
-            .node
-            .set_coupled_physics(true);
+        self.node_pairs.push(NodePair { first, second, behavior });
         Ok(())
     }
 
-    pub(crate) fn node_pair_mut(
+    /// Update family metadata during preparation; recompilation follows any change.
+    pub fn pair_behavior_mut(
         &mut self,
-        a: NodeInstanceId,
-        b: NodeInstanceId,
-    ) -> Option<(&mut NodeInstance, &mut NodeInstance)> {
-        if a == b {
-            return None;
-        }
-        let [first, second] = self.nodes.get_disjoint_mut([&a, &b]);
-        Some((first?, second?))
+        first: NodeInstanceId,
+        second: NodeInstanceId,
+    ) -> Option<&mut dyn NodePairBehavior> {
+        let pair = self.node_pairs.iter_mut().find(|pair| pair.first == first && pair.second == second)?;
+        Some(pair.behavior.as_mut())
+    }
+
+    pub(crate) fn pair_nodes_mut(
+        &mut self,
+        pair_index: usize,
+    ) -> Option<(&dyn NodePairBehavior, &mut NodeInstance, &mut NodeInstance)> {
+        let pair = self.node_pairs.get(pair_index)?;
+        let [first, second] = self.nodes.get_disjoint_mut([&pair.first, &pair.second]);
+        Some((pair.behavior.as_ref(), first?, second?))
     }
 
     /// Iterate the (handle, node id) pairs registered on this graph.
@@ -383,27 +368,15 @@ manifold_core::testkit_visible! {
         // strand a stale handle->dead-id mapping that future
         // node_id_by_handle lookups would honor.
         self.handles.retain(|_, v| *v != id);
-        let affected: Vec<_> = self
-            .coupled_scenes
-            .iter()
-            .filter(|pair| pair.fluid == id || pair.rigid == id)
-            .copied()
+        let affected: Vec<_> = self.node_pairs
+            .extract_if(.., |pair| pair.first == id || pair.second == id)
             .collect();
-        self.coupled_scenes
-            .retain(|pair| pair.fluid != id && pair.rigid != id);
         for pair in affected {
-            let surviving = if pair.fluid == id {
-                pair.rigid
-            } else {
-                pair.fluid
-            };
-            if !self
-                .coupled_scenes
-                .iter()
-                .any(|other| other.fluid == surviving || other.rigid == surviving)
+            let surviving = if pair.first == id { pair.second } else { pair.first };
+            if !self.node_pairs.iter().any(|other| other.first == surviving || other.second == surviving)
                 && let Some(inst) = self.nodes.get_mut(&surviving)
             {
-                inst.node.set_coupled_physics(false);
+                pair.behavior.set_enabled(inst.node.as_mut(), false);
             }
         }
         Some(removed)
@@ -845,6 +818,33 @@ mod tests {
             kind: PortKind::Output,
             required: false,
         }
+    }
+
+    #[test]
+    fn removing_pairs_disables_a_survivor_only_after_its_last_pair() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        struct DisableCounter(Arc<AtomicUsize>);
+        impl NodePairBehavior for DisableCounter {
+            fn set_enabled(&self, _: &mut dyn EffectNode, enabled: bool) {
+                if !enabled { self.0.fetch_add(1, Ordering::Relaxed); }
+            }
+            fn before_first(&self, _: &mut dyn EffectNode, _: &mut dyn EffectNode, _: Option<&mut EffectNodeContext<'_, '_>>, _: crate::exec::effect_node::SimStep) {}
+            fn after_first(&self, _: &dyn EffectNode, _: &mut dyn EffectNode) {}
+        }
+        let mut graph = Graph::new();
+        let mut add = || graph.add_node(Box::new(crate::scene::boundary_nodes::Source::new()));
+        let shared = add();
+        let first = add();
+        let second = add();
+        let disabled = Arc::new(AtomicUsize::new(0));
+        graph.add_node_pair(shared, first, Box::new(DisableCounter(disabled.clone()))).unwrap();
+        graph.add_node_pair(shared, second, Box::new(DisableCounter(disabled.clone()))).unwrap();
+        assert!(graph.add_node_pair(shared, first, Box::new(DisableCounter(disabled.clone()))).is_err());
+        graph.remove_node(first).unwrap();
+        assert_eq!(disabled.load(Ordering::Relaxed), 0);
+        graph.remove_node(second).unwrap();
+        assert_eq!(disabled.load(Ordering::Relaxed), 1);
+        assert!(graph.node_pairs().is_empty());
     }
 
     #[test]

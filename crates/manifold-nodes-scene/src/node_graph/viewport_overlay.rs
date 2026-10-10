@@ -20,7 +20,7 @@
 //! integer-stepped line draw.
 
 use manifold_node_engine::scene::camera::Camera;
-use manifold_node_engine::water::fluid::FluidDomainLayout;
+use manifold_core::fluid_domain::FluidDomainLayout;
 
 /// One overlay line segment in world space, with its RGBA8 color.
 #[derive(Debug, Clone, Copy)]

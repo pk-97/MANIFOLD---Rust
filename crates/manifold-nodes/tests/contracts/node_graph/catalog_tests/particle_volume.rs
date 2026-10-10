@@ -1,7 +1,8 @@
-use manifold_node_engine::testkit::liquid_surface::{Harness, Lattice, read};
+use manifold_node_engine::testkit::array_harness::{Harness, read};
+use manifold_nodes_water::testkit::liquid_surface::Lattice;
 use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
-    use manifold_node_engine::water::primitives::particle_volume::*;
-    use manifold_node_engine::water::fluid_particles::{CellRange, FluidBlob, bin_counts};
+    use manifold_nodes_water::primitives::particle_volume::*;
+    use manifold_nodes_water::fluid_particles::{CellRange, FluidBlob, bin_counts};
 
     fn expected(
         lattice: &Lattice,
@@ -47,7 +48,7 @@ use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
                     let distance = v.iter().map(|value| value * value).sum::<f32>().sqrt();
                     band.min(reach * (distance - 1.0))
                 });
-                manifold_node_engine::testkit::particle_volume::union(particle_phi, interior, p, min, lattice.size, levels)
+                manifold_nodes_water::testkit::particle_volume::union(particle_phi, interior, p, min, lattice.size, levels)
             })
             .collect()
     }
@@ -292,8 +293,8 @@ use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
     #[test]
     fn fluid_mesh_grid_native_interior_matches_cell_centred_plane() {
         for resolution in [8, 16] {
-            let layout = manifold_node_engine::water::fluid::domain_layout(None, 2.0, resolution).unwrap();
-            let mesh = manifold_node_engine::water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+            let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, resolution).unwrap();
+            let mesh = manifold_nodes_water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
             let lattice = Lattice { center: mesh.bounds().pos, size: mesh.bounds().scale, cell: mesh.cell_size() };
             let field: Vec<f32> = (0..resolution.pow(3)).map(|i| {
                 layout.min[0] + (i % resolution) as f32 * mesh.cell_size() + 0.5 * mesh.cell_size() - 0.3

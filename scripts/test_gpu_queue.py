@@ -522,6 +522,59 @@ class GpuQueueTests(unittest.TestCase):
             ("hold-exit", "cargo +nightly test --release -p demo -- --nocapture"),
         ])
 
+    def test_cargo_nextest_run_builds_before_the_lock_and_preserves_args(self):
+        events = []
+
+        @contextmanager
+        def recording_hold(label, **kwargs):
+            events.append(("hold-enter", label))
+            try:
+                yield
+            finally:
+                events.append(("hold-exit", label))
+
+        child = type("Child", (), {"wait": lambda self: 0,
+                                    "send_signal": lambda self, sig: None})()
+        command = [
+            "cargo", "+nightly", "--locked", "nextest", "run", "--release",
+            "--features", "gpu-proofs", "-p", "demo", "-E", "test(contracts)", "--no-fail-fast",
+            "--", "--nocapture",
+        ]
+        with patch.object(gpu_queue.subprocess, "run", side_effect=lambda cmd: events.append(("build", cmd)) or subprocess.CompletedProcess(cmd, 0)), \
+             patch.object(gpu_queue.subprocess, "Popen", side_effect=lambda cmd: events.append(("run", cmd)) or child), \
+             patch.object(gpu_queue, "hold", side_effect=recording_hold):
+            self.assertEqual(gpu_queue.run_queued(command), 0)
+
+        self.assertEqual(events, [
+            ("build", [
+                "cargo", "+nightly", "--locked", "nextest", "run", "--release",
+                "--features", "gpu-proofs", "-p", "demo", "-E", "test(contracts)",
+                "--no-run", "--", "--nocapture",
+            ]),
+            ("hold-enter", "cargo +nightly --locked nextest run --release --features gpu-proofs -p demo -E test(contracts) --no-fail-fast -- --nocapture"),
+            ("run", command),
+            ("hold-exit", "cargo +nightly --locked nextest run --release --features gpu-proofs -p demo -E test(contracts) --no-fail-fast -- --nocapture"),
+        ])
+
+    def test_cargo_nextest_no_run_takes_no_lock(self):
+        command = ["cargo", "nextest", "run", "-p", "demo", "-E", "test(contracts)", "--no-run"]
+        with patch.object(gpu_queue.subprocess, "run", return_value=subprocess.CompletedProcess(command, 0)), \
+             patch.object(gpu_queue, "hold", side_effect=AssertionError("nextest --no-run must not lock")):
+            self.assertEqual(gpu_queue.run_queued(command), 0)
+
+    def test_cargo_nextest_build_failure_takes_no_lock(self):
+        command = ["cargo", "nextest", "run", "-p", "demo", "-E", "test(contracts)"]
+        with patch.object(gpu_queue.subprocess, "run", return_value=subprocess.CompletedProcess(command, 101)), \
+             patch.object(gpu_queue, "hold", side_effect=AssertionError("failed nextest prebuild must not lock")):
+            self.assertEqual(gpu_queue.run_queued(command), 101)
+
+    def test_unsupported_nextest_subcommands_are_rejected_before_lock(self):
+        for command in (["cargo", "nextest"], ["cargo", "nextest", "list"]):
+            with self.subTest(command=command), \
+                    patch.object(gpu_queue.subprocess, "run", side_effect=AssertionError("must reject")), \
+                    patch.object(gpu_queue, "hold", side_effect=AssertionError("must reject")):
+                self.assertEqual(gpu_queue.run_queued(command), 2)
+
     def test_cargo_run_build_excludes_runtime_args(self):
         events = []
         child = type("Child", (), {"wait": lambda self: 0, "send_signal": lambda self, sig: None})()
@@ -547,14 +600,16 @@ class GpuQueueTests(unittest.TestCase):
             self.assertEqual(gpu_queue.run_queued(no_run), 0)
 
     def test_cargo_prebuild_is_rejected_inside_an_inherited_hold(self):
-        command = ["cargo", "run", "-p", "demo"]
-        gpu_queue._held_depth = 1
-        try:
-            with patch.object(gpu_queue.subprocess, "run", side_effect=AssertionError("must not build")), \
-                 patch.object(gpu_queue, "hold", side_effect=AssertionError("must not nest")):
-                self.assertEqual(gpu_queue.run_queued(command), 2)
-        finally:
-            gpu_queue._held_depth = 0
+        for command in (["cargo", "run", "-p", "demo"],
+                        ["cargo", "nextest", "run", "-p", "demo"]):
+            with self.subTest(command=command):
+                gpu_queue._held_depth = 1
+                try:
+                    with patch.object(gpu_queue.subprocess, "run", side_effect=AssertionError("must not build")), \
+                         patch.object(gpu_queue, "hold", side_effect=AssertionError("must not nest")):
+                        self.assertEqual(gpu_queue.run_queued(command), 2)
+                finally:
+                    gpu_queue._held_depth = 0
 
     def test_unsupported_cargo_invocation_is_rejected_before_lock(self):
         command = ["cargo", "metadata", "--no-deps"]

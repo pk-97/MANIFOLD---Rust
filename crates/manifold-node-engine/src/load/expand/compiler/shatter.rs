@@ -115,6 +115,7 @@ pub(super) fn prepare(
     index: &FlatSceneIndex,
     routes: &[SceneModifierNodeRoute],
     binding_sources: &mut Vec<Option<SceneModifierBindingSource>>,
+    registry: &PrimitiveRegistry,
 ) -> Result<(), SceneModifierExpandError> {
     let mut used_parents = BTreeSet::new();
     for instance in &owner.scene_modifiers {
@@ -188,6 +189,17 @@ pub(super) fn prepare(
             let parent_acceleration =
                 input(def, world, &format!("body_acceleration_{parent_slot}"));
             let parent = node(def, parent_input.0)?.clone();
+            let density = number(parent.params.get("density"))
+                .or_else(|| {
+                    registry
+                        .construct(&parent.type_id)?
+                        .parameters()
+                        .iter()
+                        .find(|param| param.name == "density")?
+                        .default
+                        .as_scalar()
+                })
+                .ok_or_else(|| invalid("shatter", "parent body has no numeric density default"))?;
             wire(def, release.clone(), parent.id, "release_count");
             let authored_pose = input(def, parent.id, "transform")
                 .ok_or_else(|| invalid("shatter", "parent authored transform is missing"))?;
@@ -209,7 +221,7 @@ pub(super) fn prepare(
                     }
                 })
                 .collect();
-            let slots: Vec<_> = (0..crate::water::physics::MAX_BODIES)
+            let slots: Vec<_> = (0..manifold_core::scene_impulse::RigidImpulseTargets::BODY_CAPACITY)
                 .filter(|slot| !used.contains(slot))
                 .take(count)
                 .collect();
@@ -339,13 +351,7 @@ pub(super) fn prepare(
                     body.params.insert("collider_parts".into(), float(1.0));
                     // A piece is the parent's material; its mass follows
                     // its own hull.
-                    body.params.insert(
-                        "density".into(),
-                        float(
-                            number(parent.params.get("density"))
-                                .unwrap_or(crate::water::physics::DEFAULT_DENSITY),
-                        ),
-                    );
+                    body.params.insert("density".into(), float(density));
                     wire(def, authored_pose.clone(), body_copy, "transform");
                     if let Some(local) = &local {
                         wire(def, local.clone(), body_copy, "source_transform");

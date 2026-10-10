@@ -1,5 +1,5 @@
 //! Node graph engine for loading, execution and freeze compilation.
-//! Owns graph types, GPU dispatch, shared node helpers, built-ins and water simulation.
+//! Owns graph types, GPU dispatch, shared node helpers and built-ins.
 //! Never depends on node families, the catalog, compositor, UI paint,
 //! UI, editing, IO, media or the app.
 
@@ -46,4 +46,3 @@ pub mod gpu;
 pub mod load;
 pub mod primitives;
 pub mod scene;
-pub mod water;

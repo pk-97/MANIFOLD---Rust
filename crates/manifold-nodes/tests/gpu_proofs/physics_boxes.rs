@@ -4,8 +4,8 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_to_srgb_png};
-use manifold_node_engine::water::physics::{PhysicsStepScope, native_ticks_on_this_thread};
-use manifold_node_engine::{persistence::PrimitiveRegistry, water::physics_metrics};
+use manifold_nodes_water::physics::{SimStep, native_ticks_on_this_thread};
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::exec::sim_metrics::SimMetrics};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -15,7 +15,8 @@ const JSON: &str = include_str!("../../assets/generator-presets/PhysicsBoxes.jso
 #[test]
 fn physics_boxes_render_motion_and_latch_count_until_reset() {
     // Authored history must use the live clock from its first observation.
-    let _live = PhysicsStepScope::for_render(false);
+    let live = SimStep::live(manifold_core::Seconds(1.0 / 60.0));
+    let step = std::cell::Cell::new(live);
     let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
     let (width, height) = (640, 400);
@@ -64,7 +65,7 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
             anim_progress: 0.0,
             trigger_count: 0,
         };
-        physics_metrics::begin_frame();
+        runtime.set_sim_step(step.get());
         let mut encoder = device.create_encoder("physics-boxes-proof");
         runtime.render(
             &mut GpuEncoder::new(&mut encoder, device),
@@ -73,7 +74,9 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
             params,
         );
         encoder.commit_and_wait_completed();
-        physics_metrics::take_frame()
+        let mut metrics = SimMetrics::default();
+        runtime.drain_sim_metrics(&mut metrics);
+        metrics
     };
     let first = render(0, &params);
     assert_eq!(
@@ -89,7 +92,7 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
     for frame in 1..=180 {
         let metrics = render(frame, &params);
         assert_eq!(metrics.body_count, 259);
-        assert!(metrics.physics_cpu_ms.is_finite() && metrics.physics_cpu_ms >= 0.0);
+        assert!(metrics.cpu_ms.is_finite() && metrics.cpu_ms >= 0.0);
     }
     let dropped = readback_raw_halves(device, &target.texture, width, height);
     std::fs::write(
@@ -152,10 +155,7 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
     )
     .unwrap();
     {
-        let _zero_budget = PhysicsStepScope::with_preview_budget(
-            false,
-            std::time::Duration::ZERO,
-        );
+        step.set(live.with_preview_budget(std::time::Duration::ZERO));
         // Thirty owed intervals accept two; the other twenty-eight are dropped.
         let before_stall = native_ticks_on_this_thread();
         let stalled = render(215, &params);
@@ -175,6 +175,7 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
             "discarded time must not become catch-up debt on the next frame"
         );
         assert!(!next.sim_step_cap_hit && !next.sim_nonfinite);
+        step.set(live);
     }
     eprintln!(
         "Physics Boxes: 256 -> pending 32 -> Reset 32 -> Reset 0 -> Reset 4000 verified; images /tmp/physics_boxes_initial.png and /tmp/physics_boxes_dropped.png"

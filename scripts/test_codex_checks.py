@@ -106,6 +106,10 @@ class PlannerTests(unittest.TestCase):
         run = next(c for c in checks if c['name'] == 'tests/fixture')
         self.assertEqual(build['argv'][-1], filterset)
         self.assertEqual(run['argv'][-1], filterset)
+        self.assertIn('--no-run', build['argv'])
+        self.assertNotIn('--no-fail-fast', build['argv'])
+        self.assertIn('--no-fail-fast', run['argv'])
+        self.assertNotIn('--no-run', run['argv'])
         self.assertEqual(run['argv'][:5], ['env', 'CARGO_BUILD_JOBS=4', 'python3',
                                          str(Path(__file__).resolve().parent / 'gpu_queue.py'), '--'])
         self.assertEqual(build['argv'][:3], ['env', 'CARGO_BUILD_JOBS=4', 'cargo'])

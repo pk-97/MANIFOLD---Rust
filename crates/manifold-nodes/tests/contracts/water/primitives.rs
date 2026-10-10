@@ -12,5 +12,3 @@ mod gpu_flip_tile_tests;
 #[cfg(feature = "gpu-proofs")]
 mod whitewater_golden_tests;
 
-#[cfg(feature = "water-race-probes")]
-mod gpu_flip_race_tests;

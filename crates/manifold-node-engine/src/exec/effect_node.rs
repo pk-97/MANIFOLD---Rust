@@ -50,6 +50,102 @@ pub struct NodeWire {
     pub to: (NodeInstanceId, &'static str),
 }
 
+/// The previous live frame's measured load against the display frame budget.
+/// A live clock takes a second interval only after an on-time frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameLoad {
+    pub previous: Seconds,
+    pub budget: Seconds,
+}
+
+/// How every simulation node steps this frame. The host sets it once per
+/// frame on the executor; nodes read it from [`EffectNodeContext::sim_step`].
+/// A value carried with the call, never ambient thread state, so a test or
+/// proof thread can never disagree with the content thread.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SimStep {
+    /// Export runs every owed interval deterministically; live yields at
+    /// `preview_budget` and caps accepted intervals by `live_load`.
+    pub export: bool,
+    /// The project Sim Rate interval.
+    pub interval: Seconds,
+    /// Live only: wall-clock work allowed before a step yields. Yielding
+    /// never discards simulation time.
+    pub preview_budget: std::time::Duration,
+    /// Live only: the previous frame's load. `None` keeps the two-interval cap.
+    pub live_load: Option<FrameLoad>,
+    /// Evaluate historical physics inputs without publishing graph outputs.
+    pub authored_sample_only: bool,
+    /// Let a bounded historical input batch advance the native simulation.
+    /// Honoured only in export; live preview stays observe-only.
+    pub history_drain: bool,
+}
+
+impl SimStep {
+    /// What a host that never chose a step gets: export at 60 Hz.
+    pub const DEFAULT_INTERVAL: Seconds = Seconds(1.0 / 60.0);
+
+    pub fn export(interval: Seconds) -> Self {
+        Self {
+            export: true,
+            interval,
+            preview_budget: std::time::Duration::ZERO,
+            live_load: None,
+            authored_sample_only: false,
+            history_drain: false,
+        }
+    }
+
+    /// Live preview whose step budget is one Sim Rate interval.
+    pub fn live(interval: Seconds) -> Self {
+        Self {
+            export: false,
+            preview_budget: std::time::Duration::from_secs_f64(interval.0),
+            ..Self::export(interval)
+        }
+    }
+
+    pub fn with_preview_budget(self, budget: std::time::Duration) -> Self {
+        Self { preview_budget: budget, ..self }
+    }
+
+    pub fn with_live_load(self, load: Option<FrameLoad>) -> Self {
+        Self { live_load: load, ..self }
+    }
+
+    pub fn authored_sample(self) -> Self {
+        Self { authored_sample_only: true, ..self }
+    }
+
+    pub fn draining_history(self) -> Self {
+        Self { history_drain: true, ..self }
+    }
+
+    pub fn offline(self) -> bool {
+        self.export
+    }
+
+    /// The live step budget; `None` in export.
+    pub fn budget(self) -> Option<std::time::Duration> {
+        (!self.export).then_some(self.preview_budget)
+    }
+
+    /// The live frame load; `None` in export.
+    pub fn load(self) -> Option<FrameLoad> {
+        self.live_load.filter(|_| !self.export)
+    }
+
+    pub fn history_drain_active(self) -> bool {
+        self.history_drain && self.export
+    }
+}
+
+impl Default for SimStep {
+    fn default() -> Self {
+        Self::export(Self::DEFAULT_INTERVAL)
+    }
+}
+
 /// Per-frame timing supplied to every [`EffectNode::evaluate`] call.
 #[derive(Debug, Clone, Copy)]
 pub struct FrameTime {
@@ -65,8 +161,7 @@ pub struct FrameTime {
 }
 
 /// Resolved per-frame RT quality values — samples per pixel for each
-/// RT term plus ray-tracing dispatch resolution. Lives in manifold-nodes
-/// (next to FrameTime) and is set per-frame by the compositor via
+/// RT term plus ray-tracing dispatch resolution. Set per-frame by the compositor via
 /// Executor::set_rt_quality.
 ///
 /// Default = live constants: shadows=1, ao/gi=4, reflections=8, ray=1/2.
@@ -322,6 +417,10 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// `node.layer_source` primitive emits the fallback when this is
     /// absent or when the requested layer id is missing.
     pub layer_skin_registry: Option<&'ctx LayerSkinRegistry>,
+    /// This frame's simulation step; the executor copies its own in.
+    pub sim_step: SimStep,
+    /// The executor's metrics slot for this frame; discards when unset.
+    pub sim_metrics: crate::exec::sim_metrics::SimMetricsSink<'ctx>,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -351,6 +450,8 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             rebuild_epoch: 0,
             rt_quality: RtQuality::default(),
             layer_skin_registry: None,
+            sim_step: SimStep::default(),
+            sim_metrics: crate::exec::sim_metrics::SimMetricsSink::DISCARD,
         }
     }
 
@@ -389,7 +490,19 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             rebuild_epoch,
             rt_quality,
             layer_skin_registry,
+            sim_step: SimStep::default(),
+            sim_metrics: crate::exec::sim_metrics::SimMetricsSink::DISCARD,
         }
+    }
+
+    pub fn with_sim_step(mut self, step: SimStep) -> Self {
+        self.sim_step = step;
+        self
+    }
+
+    pub fn with_sim_metrics(mut self, sink: crate::exec::sim_metrics::SimMetricsSink<'ctx>) -> Self {
+        self.sim_metrics = sink;
+        self
     }
 
     /// Zero-copy feedback ping-pong (called from `late_capture` only):
@@ -641,17 +754,19 @@ pub struct DenseBufferFusion {
     pub schedule_inputs: &'static [&'static str],
 }
 
-/// Object-safe access to a concrete node for family-owned proofs.
+/// Object-safe access to a concrete node for family-owned interfaces and proofs.
 ///
 /// Call it on the trait object (`node.node.as_ref().as_any()`), never on the
 /// `Box`: the blanket impl also covers `Box<dyn EffectNode>`, whose downcast
 /// to a node type is always `None`.
 pub trait AsAny {
     fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 impl<T: std::any::Any> AsAny for T {
     fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
 }
 
 /// One unit of GPU work in the effect graph.
@@ -1269,34 +1384,6 @@ pub trait EffectNode: Send + AsAny {
         false
     }
 
-    /// Current accepted setup state for native fluid-domain bounds. Nodes that
-    /// expose fluid-domain observations return `Some`; all other nodes return
-    /// `None`.
-    fn fluid_domain_snapshot(&self) -> Option<crate::water::fluid::FluidDomainSnapshot> {
-        None
-    }
-
-    /// Resolved rigid inputs from the latest successful graph evaluation.
-    /// Pending or invalid inputs must clear the previous observation.
-    fn rigid_scene_observation(&self) -> Option<&crate::water::physics::RigidSceneObservation> {
-        None
-    }
-
-    /// Configure ownership during graph preparation, before any evaluation.
-    fn set_coupled_physics(&mut self, _enabled: bool) {}
-
-    /// Current authored project timing for recorded-take compatibility.
-    /// Hosts install an immutable snapshot; native I/O stays on the worker.
-    fn set_physics_project_tempo(&mut self, _tempo: Option<&crate::runtime::preset_context::ProjectTempo>) {}
-
-    /// Transport times in `(from, until]` the physics history replay must
-    /// sample exactly before the next frame: a GPU liquid asks for each
-    /// coming tick's start, so its forces are evaluated per tick.
-    fn request_physics_samples(&mut self, _from: f64, _until: f64, _out: &mut Vec<f64>) {}
-
-    /// Authored dependency identity, prepared before evaluating live controls.
-    fn set_physics_source_identity(&mut self, _identity: Result<[u8; 32], String>) {}
-
     /// File-location parameters whose contents are authenticated by
     /// source_asset_identity or the native prepared-geometry preflight.
     /// Only these path spellings may be omitted from take provenance; the
@@ -1313,70 +1400,6 @@ pub trait EffectNode: Send + AsAny {
     ) -> crate::scene::source_asset::SourceAssetIdentity<'_> {
         crate::scene::source_asset::SourceAssetIdentity::Unsupported
     }
-
-    /// Resolve the rigid participant before its paired liquid step. This must
-    /// not construct or advance a second native world, or publish outputs.
-    fn capture_coupled_rigid(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
-        Err("Node does not support coupled rigid input capture".into())
-    }
-
-    /// Hand the captured rigid inputs to the liquid's existing worker owner.
-    /// A missing observation is pending; an error fails the entire pair.
-    fn set_coupled_rigid_inputs(
-        &mut self,
-        _observation: Option<&crate::water::physics::RigidSceneObservation>,
-        _colliders: crate::water::physics::RigidImpulseTargets,
-        _error: Option<&str>,
-    ) {}
-
-    fn coupled_rigid_frame(&self) -> Option<&crate::water::fluid::CoupledRigidFrame> {
-        None
-    }
-
-    /// Latch the rigid result of the liquid step before any scene consumer runs.
-    fn accept_coupled_rigid_frame(
-        &mut self,
-        _frame: Option<&crate::water::fluid::CoupledRigidFrame>,
-    ) {}
-
-    /// Epoch of native impulse inputs accepted by this node, if any.
-    fn physics_impulse_epoch(&self) -> Option<u64> {
-        None
-    }
-
-    /// Timestamp an impulse against the exact native observation accepted at
-    /// the supplied transport value, if this node owns such a clock.
-    fn physics_impulse_stamp(
-        &self,
-        _transport: manifold_core::Seconds,
-        _sequence: u64,
-    ) -> Result<manifold_physics::input::EventStamp, String> {
-        Err("node does not expose a native impulse clock".into())
-    }
-
-    /// Queue one resolved impulse for a native fixed-tick simulation.
-    fn enqueue_physics_impulse(
-        &mut self,
-        _stamp: manifold_physics::input::EventStamp,
-        _impulse: crate::water::physics_events::ResolvedNodeImpulse,
-    ) -> Result<manifold_physics::TickStamp, String> {
-        Err("node does not accept physics impulses".into())
-    }
-
-    /// Drain native tick-start impulse receipts into the graph-owned sink.
-    fn drain_physics_impulses(
-        &mut self,
-        _consume: &mut dyn FnMut(
-            manifold_physics::input::AppliedEvent<
-                crate::water::physics_events::ResolvedNodeImpulse,
-            >,
-        ),
-    ) {
-    }
-
-    /// Drain the stamps of impulses discarded because the simulation's clock
-    /// was held (pause, Speed 0); they are never applied.
-    fn drain_discarded_impulses(&mut self, _consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {}
 
     /// Return a fresh pass with its own renderer and render history, never this node's own state.
     fn viewport_pass(&self) -> Option<Box<dyn crate::scene::scene_viewport::ViewportPass>> {

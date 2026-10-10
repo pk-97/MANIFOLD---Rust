@@ -15,3 +15,4 @@ mod runtime;
 #[cfg(test)]
 mod water;
 mod node_graph;
+mod particle_pipeline_integration;

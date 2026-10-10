@@ -1,7 +1,7 @@
 //! P3 cross-atom proofs. CPU tests exercise the real preset partitioner;
 //! device tests compare generated fused and standalone presentation paths.
 
-use {manifold_nodes_image::node_graph::primitives::interpolate_particle_frames::InterpolateParticleFrames, manifold_nodes_scene::node_graph::primitives::particles_to_copies::ParticlesToCopies, manifold_node_engine::water::primitives::push_out_of_solid::PushOutOfSolid};
+use {manifold_nodes_image::node_graph::primitives::interpolate_particle_frames::InterpolateParticleFrames, manifold_nodes_scene::node_graph::primitives::particles_to_copies::ParticlesToCopies, manifold_nodes_water::primitives::push_out_of_solid::PushOutOfSolid};
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 use manifold_node_engine::freeze::classify::CapacityExpr;
 use manifold_node_engine::freeze::codegen::{FusionRegion, InputSource, RegionNode, generate_fused};
@@ -70,7 +70,7 @@ fn fluid_particle_blend_fused_codegen_validates() {
 
 /// Pass-2 CPU reference fixtures, not proof of the current GPU publisher.
 pub(super) mod publication_contract {
-    use manifold_node_engine::water::fluid_particles::FluidParticle;
+    use manifold_node_engine::particles::FluidParticle;
 
     struct ReferenceIds {
         next: u64,
@@ -284,10 +284,10 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
 
 #[cfg(feature = "gpu-proofs")]
 mod gpu_tests {
-    use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
+    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
     use crate::contracts::node_graph::catalog_tests::particle_frame_blend_tests::*;
     use manifold_node_engine::mesh::InstanceTransform;
-    use manifold_node_engine::water::fluid_particles::FluidParticle;
+    use manifold_node_engine::particles::FluidParticle;
     use manifold_node_engine::freeze::codegen::ENTRY;
     use manifold_gpu::GpuBinding;
 

@@ -17,17 +17,17 @@ impl ProjectTempo {
         Self { map, fallback_bpm }
     }
 
-    pub(crate) fn map(&self) -> &TempoMap {
+    pub fn map(&self) -> &TempoMap {
         &self.map
     }
 
-    pub(crate) fn fallback_bpm(&self) -> Bpm {
+    pub fn fallback_bpm(&self) -> Bpm {
         self.fallback_bpm
     }
 
     /// Cheap unchanged-source check. A populated map determines its own
     /// beat-zero tempo; the project's displayed BPM is then irrelevant.
-    pub(crate) fn shares_mapping(&self, other: &Self) -> bool {
+    pub fn shares_mapping(&self, other: &Self) -> bool {
         self.map.shares_points(&other.map)
             && (!self.map.points().is_empty() || self.fallback_bpm == other.fallback_bpm)
     }

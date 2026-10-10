@@ -11,13 +11,12 @@ mod mesh_boundary;
 pub mod mesh_change;
 pub mod mesh_partition;
 pub mod mesh_source;
-pub mod physics_mesh;
+pub mod mesh_selection;
 pub mod render_mode;
 pub mod scene_object;
 pub mod scene_viewport;
 pub mod source_asset;
 pub mod transform;
-pub mod vector_field;
 pub mod viewport_camera;
 
 pub mod viewport_outputs;

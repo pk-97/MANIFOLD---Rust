@@ -15,7 +15,7 @@ use manifold_nodes::testkit::source_roots::WGSL_SRC_ROOTS;
 /// Source trees referenced by the extended ABI cases. These include the
 /// non-primitive engine helpers whose shader declarations are proved here.
 pub const ABI_SOURCE_ROOTS: &[&str] = &[
-    "../manifold-node-engine/src/water/liquid",
+    "../manifold-nodes-water/src/liquid",
     "../manifold-node-engine/src/exec",
     "../manifold-node-engine/src/testkit",
 ];

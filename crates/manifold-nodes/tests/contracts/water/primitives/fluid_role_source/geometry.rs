@@ -1,10 +1,10 @@
 pub(super) mod tests {
     use std::fs;
-    use manifold_node_engine::water::primitives::fluid_role_source::{CompoundPreparation, WiredPreparation};
-    use manifold_node_engine::water::primitives::fluid_role_source::geometry::{GeometryMode, prepare_geometry, prepare_wired_geometry};
-    use manifold_node_engine::testkit::fluid_role_source::cube_triangle_list;
+    use manifold_nodes_water::primitives::fluid_role_source::{CompoundPreparation, WiredPreparation};
+    use manifold_nodes_water::primitives::fluid_role_source::geometry::{GeometryMode, prepare_geometry, prepare_wired_geometry};
+    use manifold_nodes_water::testkit::fluid_role_source::cube_triangle_list;
     use manifold_node_engine::scene::mesh_source::MeshSource;
-    use manifold_node_engine::scene::physics_mesh::MeshSelection;
+    use manifold_node_engine::scene::mesh_selection::MeshSelection;
     use manifold_node_engine::scene::transform::Transform;
 
     pub(crate) fn write_two_material_cube_fixture() -> (std::path::PathBuf, CompoundPreparation) {
@@ -75,7 +75,7 @@ pub(super) mod tests {
         for (slot, source_path) in [&path, &second_path].into_iter().enumerate() {
             wired.sources[slot] = Some(MeshSource::Gltf {
                 path: std::sync::Arc::from(source_path.to_str().unwrap()),
-                selection: manifold_node_engine::water::primitives::fluid_role_source::default_selection(32).with_material(slot as i32),
+                selection: manifold_nodes_water::primitives::fluid_role_source::default_selection(32).with_material(slot as i32),
             });
         }
         let transform = Transform { pos: [0.0, 2.0, 0.0], ..Transform::default() };

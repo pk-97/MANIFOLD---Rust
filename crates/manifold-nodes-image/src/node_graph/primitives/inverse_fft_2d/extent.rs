@@ -1,5 +1,5 @@
 //! Buffer extent rule owned by this node.
-use manifold_node_engine::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn inverse_fft_2d(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let size = x.param("size", 256.0).round();

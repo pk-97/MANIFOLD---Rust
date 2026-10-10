@@ -6,6 +6,10 @@
 //! The aliases [`NodeInput`] and [`NodeOutput`] document intent at the call site
 //! without changing the underlying type.
 
+/// The largest count a scalar wire carries exactly: wires are f32, and past
+/// 2^24 a count can round up past the storage sized from the true count.
+pub const EXACT_F32_COUNT: u32 = 1 << 24;
+
 /// What kind of data flows through a port.
 ///
 /// `Array` is the storage-buffer wire type used by particle, mesh, line, and
@@ -75,6 +79,10 @@ pub enum PortType {
     /// `Transform` / `Atmosphere`; unwired = Rendered = byte-identical to
     /// no render_mode.
     RenderMode,
+    // RigidBody and FluidRole are water payloads named here because primitive!
+    // port declarations resolve types by ident. They leave once
+    // CpuWireRegistration (exec/cpu_values.rs) also keys a declared port name,
+    // so a name-keyed CPU variant can reject unregistered names.
     /// CPU-only rigid-body description; native world state never travels on wires.
     RigidBody,
     /// CPU-only prepared geometry and authored controls for a fluid role.

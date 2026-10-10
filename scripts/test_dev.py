@@ -22,7 +22,6 @@ class InventoryTests(unittest.TestCase):
     def test_cost_defaults_and_nightly_override(self):
         self.assertEqual(dev.script_cost("scripts/test_gpu_proofs_gate.py"), "unit")
         self.assertEqual(dev.script_cost("scripts/test_landing_gate.py"), "unit")
-        self.assertEqual(dev.script_cost("scripts/test_census.py"), "focused")
         self.assertEqual(dev.script_cost("scripts/unregistered.py"), "broad")
         self.assertEqual(dev.script_cost("scripts/unregistered.sh"), "broad")
         self.assertEqual(dev.script_cost("crate-move-drafts/snapshot_stage.py"), "unit")

@@ -17,10 +17,9 @@ use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::water::fluid::TICK;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
-use manifold_node_engine::water::liquid::bodies::LiquidBody;
-use manifold_node_engine::water::physics::PhysicsStepScope;
+use manifold_physics::clock::TICK;
+use manifold_node_engine::particles::FluidParticle;
+use manifold_nodes_water::liquid::bodies::LiquidBody;
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use manifold_node_engine::{ports::ArrayType, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef, persistence::PrimitiveRegistry, scene::transform::Transform};
 use manifold_node_engine::runtime::preset_context::PresetContext;
@@ -212,7 +211,6 @@ struct Run {
     target: RenderTarget,
     device: Arc<GpuDevice>,
     frame: u32,
-    _offline: PhysicsStepScope,
 }
 
 impl Run {
@@ -221,7 +219,6 @@ impl Run {
         let device = Arc::clone(&harness.device);
         let mut registry = PrimitiveRegistry::with_builtin();
         registry.register(PROBE_TYPE, || Box::new(CouplingProbe::new()));
-        let offline = PhysicsStepScope::for_render(true);
         let json = preset(scene);
         let mut runtime = PresetRuntime::from_json_str_with_device(
             &json,
@@ -235,7 +232,7 @@ impl Run {
         .unwrap_or_else(|e| panic!("coupled preset builds: {e}"));
         runtime.set_dump_all(true);
         let target = RenderTarget::new(&device, SIZE, SIZE, GpuTextureFormat::Rgba16Float, "matter-coupling");
-        let mut run = Self { runtime, target, device, frame: 0, _offline: offline };
+        let mut run = Self { runtime, target, device, frame: 0 };
         let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("matter coupling asset warmup");
         loop {
             run.render(0, true);

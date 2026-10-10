@@ -6,8 +6,6 @@ use super::groups::splice_card_with_canonical_fallback;
 use super::*;
 use crate::{exec::backend::Backend, ports::PortType};
 
-pub(super) use crate::water::runtime::physics_sampling::physics_sample_steps;
-
 manifold_core::testkit_visible! {
 pub(crate) const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 }
@@ -76,14 +74,7 @@ fn output_resource(
 pub struct PresetRuntime {
     pub graph: Graph,
     pub plan: ExecutionPlan,
-    /// Captured event routes belong to this installed graph, never a rebuild.
-    pub(crate) impulse_identity: std::sync::Arc<()>,
-    pub(crate) scene_impulses: crate::water::runtime::scene_impulses::SceneImpulses,
-    /// Plan-aligned physics input ancestry, built once with the graph.
-    pub(crate) physics_sample_steps: Option<Vec<bool>>,
-    pub(crate) physics_input_snapshot: Option<crate::water::runtime::physics_sampling::PhysicsInputSnapshot>,
-    pub(crate) last_physics_frame_time: Option<FrameTime>,
-    pub(crate) physics_project_tempo: Option<crate::runtime::preset_context::ProjectTempo>,
+    pub(crate) extensions: Vec<Box<dyn super::extensions::RuntimeExtension>>,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
     /// `rt_enabled`/`temporal_upscale`), the compiled plan's
@@ -235,8 +226,6 @@ pub(super) enum PresetIo {
 
 manifold_core::testkit_visible! {
 pub(crate) struct EffectSlot {
-    #[cfg(feature = "gpu-proofs")]
-    pub(crate) physics_sources: crate::water::runtime::physics_source_state::PhysicsSourceState,
     pub(super) effect_id: EffectId,
     pub(super) effect_type: PresetTypeId,
     /// Index into the chain's `effects` slice at the time this slot
@@ -806,8 +795,6 @@ impl PresetRuntime {
                             &prefix,
                         );
                         effect_nodes.push(EffectSlot {
-                            #[cfg(feature = "gpu-proofs")]
-                            physics_sources: Default::default(),
                             effect_id: fx.id.clone(),
                             effect_type: fx.effect_type().clone(),
                             legacy_index: *legacy_index,
@@ -1178,8 +1165,6 @@ impl PresetRuntime {
                 "",
             );
             effect_nodes.push(EffectSlot {
-                #[cfg(feature = "gpu-proofs")]
-                physics_sources: Default::default(),
                 effect_id: fx.id.clone(),
                 effect_type: fx.effect_type().clone(),
                 legacy_index: *legacy_index,
@@ -1231,7 +1216,7 @@ impl PresetRuntime {
         }
 
         // Compile and find the resources we need to pin / read.
-        let plan = match crate::water::runtime::physics_sampling::retain_physics_setup_outputs(&mut graph)
+        let plan = match super::extensions::before_compile(&mut graph)
             .and_then(|()| compile(&graph)) {
             Ok(p) => p,
             Err(e) => {
@@ -1354,25 +1339,21 @@ impl PresetRuntime {
         let topology_hash = compute_topology_hash(effects, groups, 0, 0, preview_effect);
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
-        let physics_sample_steps = match physics_sample_steps(&graph, &plan) {
-            Ok(steps) => steps,
+        let extensions = match super::extensions::create(
+            &graph,
+            &plan,
+            effect_nodes.len(),
+        ) {
+            Ok(state) => state,
             Err(reason) => {
                 log::error!("[chain-error] {reason}");
                 return None;
             }
         };
-        let physics_input_snapshot = physics_sample_steps.as_ref().map(|steps| {
-            crate::water::runtime::physics_sampling::PhysicsInputSnapshot::prepare(&graph, &plan, steps)
-        });
         let mut runtime = Self {
             graph,
             plan,
-            physics_sample_steps,
-            physics_input_snapshot,
-            last_physics_frame_time: None,
-            physics_project_tempo: None,
-            impulse_identity: std::sync::Arc::new(()),
-            scene_impulses: Default::default(),
+            extensions,
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::new(Box::new(backend)),
@@ -1411,12 +1392,12 @@ impl PresetRuntime {
         // no effect in the chain declares any).
         runtime.apply_string_defaults();
         #[cfg(feature = "gpu-proofs")]
-        runtime.initialize_chain_physics_sources(effects, primitives);
+        runtime.for_each_extension(|extension, context| extension.initialize_chain(context, effects, primitives));
         if let Some(prior) = prior {
             runtime.harvest_state_from(prior);
         }
         #[cfg(feature = "gpu-proofs")]
-        runtime.install_physics_source_identities();
+        runtime.for_each_extension(|extension, context| extension.install_sources(context));
         Some(runtime)
     }
 
@@ -1528,7 +1509,8 @@ impl PresetRuntime {
         // slot is at rest, and the outer reclaims control as soon as
         // it moves. Effects are looked up by their captured
         // `legacy_index` (stable across a topology-stable lifetime).
-        for slot in &mut self.effect_nodes {
+        for slot_index in 0..self.effect_nodes.len() {
+            let slot = &mut self.effect_nodes[slot_index];
             let Some(fx) = effects.get(slot.legacy_index) else {
                 // Index drifted (caller mutated `effects` without
                 // letting the topology hash catch it). Tolerate
@@ -1546,7 +1528,9 @@ impl PresetRuntime {
             // inner-node values change.
             if fx.graph_version != slot.applied_graph_version {
                 #[cfg(feature = "gpu-proofs")]
-                slot.refresh_chain_physics_source(&mut self.graph, fx, None);
+                for extension in &mut self.extensions {
+                    extension.refresh_slot(&mut self.graph, slot_index, slot.extension_scope(), fx);
+                }
                 // `slot.card_prefix` translates `fx.graph`'s (unprefixed,
                 // per-card) node ids into the segment's `c{i}.`-prefixed
                 // `node_map`/`fused_retarget` namespace for a segment member
@@ -1609,7 +1593,9 @@ impl PresetRuntime {
             }
             slot.bound.apply(&mut self.graph, &fx.params);
             #[cfg(feature = "gpu-proofs")]
-            slot.physics_sources.set_instance(&mut self.graph, Some(fx));
+            for extension in &mut self.extensions {
+                extension.after_slot_bindings(&mut self.graph, slot_index, fx);
+            }
             // Push the "3D Shading" D3 relight knobs into the spliced graph
             // every frame. Float-knob edits are no longer structural (D8/P7),
             // so the chain doesn't rebuild on a drag; these writes keep the
@@ -1716,7 +1702,7 @@ impl PresetRuntime {
         // The `with_gpu` variant passes `state: None, owner_key: 0`,
         // which makes those primitives panic.
         self.refresh_plan_if_forced_outputs_changed();
-        self.sample_physics_history(frame_time);
+        self.for_each_extension(|extension, context| extension.before_frame(context, frame_time));
         self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,
@@ -1725,8 +1711,7 @@ impl PresetRuntime {
             &mut self.state_store,
             ctx.owner_key,
         );
-        self.last_physics_frame_time = Some(frame_time);
-        self.observe_impulse_setup();
+        self.for_each_extension(|extension, context| extension.after_frame(context.graph, frame_time));
 
         self.output_texture()
     }
@@ -1814,7 +1799,7 @@ impl PresetRuntime {
                 .apply_inner_overrides(&mut self.graph, &seg.node_map, Some(def));
         }
         #[cfg(feature = "gpu-proofs")]
-        self.refresh_physics_source_graphs(def);
+        self.for_each_extension(|extension, context| extension.refresh_generator(context, def));
     }
 
     /// Re-bake every binding's reshape from the live manifest — the in-place
@@ -1911,11 +1896,10 @@ impl PresetRuntime {
             return;
         }
         self.refresh_plan_if_forced_outputs_changed();
-        self.sample_physics_history(time);
+        self.for_each_extension(|extension, context| extension.before_frame(context, time));
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
-        self.last_physics_frame_time = Some(time);
-        self.observe_impulse_setup();
+        self.for_each_extension(|extension, context| extension.after_frame(context.graph, time));
         self.consume_trigger_markers();
     }
 
@@ -1994,7 +1978,7 @@ impl PresetRuntime {
         self.executor
             .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
         self.refresh_plan_if_forced_outputs_changed();
-        self.sample_physics_history(frame_time);
+        self.for_each_extension(|extension, context| extension.before_frame(context, frame_time));
         self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,
@@ -2006,8 +1990,7 @@ impl PresetRuntime {
             // dead — found by the R2 accumulation gate, D-62).
             ctx.owner_key,
         );
-        self.last_physics_frame_time = Some(frame_time);
-        self.observe_impulse_setup();
+        self.for_each_extension(|extension, context| extension.after_frame(context.graph, frame_time));
 
         // A held terminal leaves the host's target holding the last frame it
         // wrote, overlays included; drawing them again would stack.
@@ -2024,9 +2007,7 @@ impl PresetRuntime {
     /// Reset all generator state (per-primitive `extra_fields` + the runtime
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
-        self.impulse_identity = std::sync::Arc::new(());
-        self.reset_modifier_impulses();
-        self.last_physics_frame_time = None;
+        self.for_each_extension(|extension, _| extension.reset());
         for view in &mut self.math_views {
             view.events.clear();
             for variant in &mut view.variants {
@@ -2099,4 +2080,8 @@ impl EffectSlot {
 impl PresetRuntime {
     pub fn width_for_test(&self) -> u32 { self.width }
     pub fn height_for_test(&self) -> u32 { self.height }
+    pub fn set_dimensions_for_test(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+    }
 }

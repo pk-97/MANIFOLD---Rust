@@ -1,6 +1,6 @@
 use manifold_node_engine::testkit::atom::Chain;
 use manifold_node_engine::testkit::atom::*;
-use manifold_node_engine::testkit::liquid_surface::params;
+use manifold_node_engine::testkit::array_harness::params;
 use crate::node_graph::primitives::divide_by_value::DivideByValue;
 use serde_json::json;
 #[test]

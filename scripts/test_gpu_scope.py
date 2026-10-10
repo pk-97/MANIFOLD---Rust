@@ -13,7 +13,8 @@ import gpu_scope as g
 
 R = "crates/manifold-nodes/src/"
 E = "crates/manifold-node-engine/src/"
-W = E + "water/primitives/"
+T = "crates/manifold-nodes-water/src/"
+W = T + "primitives/"
 P = E + "primitives/"
 
 
@@ -34,6 +35,7 @@ def fixture_workspace(repo):
         "manifold-nodes-image": ("crates/manifold-nodes-image", True, []),
         "manifold-nodes": ("crates/manifold-nodes", True, ["gpu_proofs", "glb_conformance", "main"]),
         "manifold-node-engine": ("crates/manifold-node-engine", True, []),
+        "manifold-nodes-water": ("crates/manifold-nodes-water", True, []),
         "manifold-ui-paint": ("crates/manifold-ui-paint", True, ["main"]),
         "manifold-gpu": ("crates/manifold-gpu", False, []),
     }
@@ -123,7 +125,7 @@ class ScopeTests(unittest.TestCase):
         result = g.Plan(paths=["synthetic"], workspace=workspace,
                         filters=set(g.SMOKE_FILTERS) | {"future::filter"})
         runs = result.runs()
-        self.assertEqual(len(runs), 13)
+        self.assertEqual(len(runs), 14)
         self.assertTrue(all(run["filters"] == result.final_filters() for run in runs))
 
     def test_whole_package_override_survives_filter_pruning(self):
@@ -132,6 +134,15 @@ class ScopeTests(unittest.TestCase):
                         filters=set(g.SMOKE_FILTERS), whole_packages={"manifold-compositor"})
         run = next(run for run in result.runs() if run["package"] == "manifold-compositor")
         self.assertEqual(run["filters"], [])
+
+    def test_whole_package_runs_still_skip_reporter_skips(self):
+        workspace = fixture_workspace(Path("/nonexistent"))
+        result = g.Plan(paths=["synthetic"], workspace=workspace,
+                        filters=set(g.SMOKE_FILTERS), whole_packages={"manifold-compositor"})
+        run = next(run for run in result.runs() if run["package"] == "manifold-compositor")
+        self.assertEqual(run["filters"], [])
+        for name in g.REPORTER_SKIPS:
+            self.assertIn(name, run["skips"])
 
     def test_missing_audited_owner_fails_before_pruning(self):
         workspace = fixture_workspace(Path("/nonexistent"))
@@ -251,6 +262,20 @@ class ScopeTests(unittest.TestCase):
 
     def test_retired_crate_proof_requires_confirmed_git_deletion(self):
         path = "crates/retired-catalog/tests/gpu_proofs/proof.rs"
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / '.git').touch()
+            workspace = fixture_workspace(repo)
+            for output, expected in [(path + '\n', []), ('', [path])]:
+                with self.subTest(deleted=bool(output)), mock.patch.object(
+                    g.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout=output, stderr='')
+                ):
+                    result = g.plan_for_paths([path], repo, shader_users=lambda _: [], workspace=workspace,
+                                              cpu_plan=None)
+                    self.assertEqual([item[0] for item in result.unmapped], expected)
+
+    def test_deleted_contract_test_requires_confirmed_git_deletion(self):
+        path = "crates/manifold-nodes/tests/contracts/water/race_probe.rs"
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             (repo / '.git').touch()
@@ -504,13 +529,13 @@ class ScopeTests(unittest.TestCase):
                 self.assertTrue(all(any(f in name for f in result.filters) for name in relevant))
                 self.assertFalse(result.unmapped)
 
-    def test_engine_pressure_fixtures_select_their_consuming_proofs(self):
+    def test_water_pressure_fixtures_select_their_consuming_proofs(self):
         for name in ("dambreak_pressure_problems.bin.zst", "deep_pool_pressure_problems.bin.zst",
                      "deep_pool_density_problems.bin.zst", "gpu_flip_pressure_golden.txt"):
-            path = "crates/manifold-node-engine/tests/fixtures/" + name
+            path = "crates/manifold-nodes-water/tests/fixtures/" + name
             result = plan([path])
             self.assertEqual(result.paths, [path])
-            self.assertEqual(result.filters, {"water::primitives::gpu_flip_pressure_tests::"})
+            self.assertEqual(result.filters, {"primitives::gpu_flip_pressure_tests::"})
             self.assertFalse(result.unmapped)
 
     def test_contract_mounts_select_real_module_names(self):
@@ -529,27 +554,6 @@ class ScopeTests(unittest.TestCase):
         path = "crates/manifold-nodes/tests/contracts/freeze/orphan.rs"
         result = plan([path], repo=self._repo_with(path))
         self.assertEqual([row[0] for row in result.unmapped], [path])
-
-    def test_cpu_flip_reference_inputs_select_consuming_proofs(self):
-        required = {
-            "liquid_conformance::", "water_basin::", "fluid_surface_perf::",
-            "node_graph::primitives::whitewater_scene_tests::",
-            "node_graph::primitives::gpu_flip_render_smoke_tests::",
-            "water::primitives::gpu_flip_preset::",
-            "load::expand::acceleration::",
-            "water::runtime::physics_carry::", "water::runtime::physics_sampling::",
-            "water::runtime::physics_impulses::tests::coupled_playback_tests::",
-        }
-        for path in (R + "testkit/reference_fixtures.rs", *(
-                g.CPU_FLIP_FIXTURES_DIR + name for name in (
-                    "WaterBasin.json", "WaterDamBreak.json", "WaterDamBreakGpu.json"))):
-            with self.subTest(path=path):
-                result = plan([path])
-                self.assertEqual(result.paths, [path])
-                self.assertEqual(result.filters, required)
-                self.assertFalse(result.unmapped)
-                self.assertFalse(result.broad)
-                self.assertTrue(set(g.SMOKE_FILTERS) <= set(result.final_filters()))
 
     def test_ui_paint_selects_own_lib_proofs_and_renderer_smoke(self):
         result = plan(["crates/manifold-ui-paint/src/native_text.rs"])
@@ -587,7 +591,7 @@ class ScopeTests(unittest.TestCase):
         self.assertIn("gpu_flip_extend_faces_", result.filters)
         self.assertFalse(result.unmapped)
     def test_mesh_grid_sources_select_native_value_proofs(self):
-        for path in (E + 'water/liquid/lattice.rs', W + 'liquid_frame.rs',
+        for path in (T + 'liquid/lattice.rs', W + 'liquid_frame.rs',
                      W + 'liquid_solid_distance.rs', W + 'shaders/liquid_solid_distance_body.wgsl'):
             result = plan([path], users=lambda _: [W + 'liquid_solid_distance.rs'],
                           repo=self._repo_with(path))
@@ -630,7 +634,7 @@ class ScopeTests(unittest.TestCase):
         for path in (W + "blob_bounds.rs", W + "shaders/blob_bounds.wgsl"):
             result = plan([path], users=lambda _: [W + "blob_bounds.rs"],
                           repo=self._repo_with(path))
-            self.assertTrue({"water::primitives::blob_bounds::",
+            self.assertTrue({"primitives::blob_bounds::",
                              "liquid_surface_tests::",
                              "liquid_bricks::tests::gpu_tests::"} <= result.filters)
             self.assertFalse(result.unmapped)
@@ -641,13 +645,13 @@ class ScopeTests(unittest.TestCase):
                      W + 'shaders/gpu_flip_narrow_band.wgsl'):
             result = plan([path], users=lambda _: [W + 'gpu_flip_narrow_band_tests.rs'],
                           repo=self._repo_with(path))
-            self.assertTrue(set(g.SMOKE_FILTERS + ["narrow_band", "face_grid_demo_gpu_flip_and_matter_side_by_side"]) <= set(result.final_filters()))
+            self.assertTrue(set(g.SMOKE_FILTERS + ["narrow_band"]) <= set(result.final_filters()))
             self.assertNotIn("gpu_flip_", result.filters)
             self.assertFalse(result.broad)
             self.assertFalse(result.unmapped)
 
     def test_whitewater_emitters_select_shared_value_and_fusion_proofs(self):
-        expected = "water::primitives::whitewater_emitter_gpu_tests::"
+        expected = "primitives::whitewater_emitter_gpu_tests::"
         for atom in ("turbulence_field", "inside_turbulence_potential",
                      "turbulence_emission_count", "whitewater_emitter_velocity",
                      "whitewater_obstacle_source", "whitewater_influence", "dust_potential"):
@@ -664,8 +668,23 @@ class ScopeTests(unittest.TestCase):
         shader = W + 'shaders/whitewater_fused.wgsl'
         for path in (step, shader):
             result = plan([path], users=lambda _: [step], repo=self._repo_with(path))
-            self.assertIn("water::primitives::whitewater_golden_tests::", result.filters)
+            self.assertIn("contracts::water::primitives::whitewater_golden_tests::", result.filters)
+            self.assertIn("contracts::water::primitives::whitewater_step::", result.filters)
+            self.assertIn("primitives::whitewater_step_tests::", result.filters)
             self.assertFalse(result.unmapped)
+
+    def test_water_sources_and_shaders_keep_module_scope(self):
+        source = W + "running_total.rs"
+        shader = W + "shaders/running_total.wgsl"
+        for path in (source, shader):
+            result = plan([path], users=lambda _: [source], repo=self._repo_with(path))
+            self.assertEqual(result.filters, {"primitives::running_total::"})
+            self.assertFalse(result.whole_packages)
+            self.assertFalse(result.unmapped)
+            water = next(run for run in result.runs() if run['package'] == 'manifold-nodes-water')
+            self.assertIn("primitives::running_total::", water['filters'])
+        root = plan([T + "lib.rs"])
+        self.assertEqual(root.whole_packages, {"manifold-nodes-water"})
 
     def test_non_gpu_paths_run_nothing(self):
         p = plan(["docs/X.md", "scripts/a.py", "crates/manifold-ui/src/lib.rs"])
@@ -753,27 +772,16 @@ class ScopeTests(unittest.TestCase):
         p = plan([W + 'matter_fill.rs'])
         self.assertTrue({"matter_", "substeps_"} <= p.filters)
 
-    def test_batch_two_paths_select_face_grid_demo(self):
-        name = "node_graph::primitives::face_grid_scene_tests::face_grid_demo_gpu_flip_and_matter_side_by_side"
-        for path in (W + 'gpu_flip_step.rs', W + 'shaders/gpu_flip_step.wgsl',
-                     W + 'gpu_flip_pressure.rs', W + 'shaders/gpu_flip_pressure.wgsl',
-                     W + 'gpu_flip_lentine.rs', W + 'shaders/gpu_flip_lentine.wgsl',
-                     W + 'gpu_flip_narrow_band.rs', W + 'shaders/gpu_flip_narrow_band.wgsl'):
-            result = plan([path], users=lambda _: [W + 'gpu_flip_step.rs'],
-                          repo=self._repo_with(path))
-            self.assertTrue(any(f in name for f in result.final_filters()), path)
-            self.assertFalse(any(s in name for s in result.final_skips()), path)
-
     def test_gpu_flip_row_reaches_the_scene_proofs(self):
-        for path in (W + 'gpu_flip_step.rs', W + 'liquid_state.rs', E + 'water/liquid/extent.rs'):
+        for path in (W + 'gpu_flip_step.rs', W + 'liquid_state.rs', T + 'liquid/extent.rs'):
             self.assertTrue({"gpu_flip_", "face_grid_tests::"} <= plan([path]).filters, path)
         shader = W + 'shaders/gpu_flip_step.wgsl'
         p = plan([shader], users=lambda s: [W + 'gpu_flip_step.rs'], repo=self._repo_with(shader))
         self.assertIn("gpu_flip_", p.filters)
 
     def test_clock_and_fields_get_force_proofs_not_body_or_step(self):
-        for path in (E + 'water/liquid/clock.rs', E + 'water/liquid/fields.rs',
-                     E + 'water/liquid/fields/tests.rs'):
+        for path in (T + 'liquid/clock.rs', T + 'liquid/fields.rs',
+                     T + 'liquid/fields/tests.rs'):
             p = plan([path])
             self.assertIn("gpu_flip_face_gravity", p.filters, path)
             self.assertNotIn("gpu_flip_", p.filters, path)
@@ -789,7 +797,7 @@ class ScopeTests(unittest.TestCase):
     def test_body_step_and_pressure_paths_still_pull_the_body_proofs(self):
         for path in (W + 'gpu_flip_bodies.rs', W + 'gpu_flip_body_tests.rs',
                      W + 'gpu_flip_step.rs', W + 'gpu_flip_pressure.rs',
-                     E + 'water/liquid/bodies.rs', E + 'water/liquid/coupling.rs'):
+                     T + 'liquid/bodies.rs', T + 'liquid/coupling.rs'):
             self.assertIn("gpu_flip_", plan([path]).filters, path)
 
     def test_gated_sort_scan_and_inverse_pull_the_inactive_slot_proof(self):
@@ -816,15 +824,16 @@ class ScopeTests(unittest.TestCase):
             self.assertTrue(wanted <= p.filters, path)
 
     def test_mixed_diff_keeps_the_broad_row_whole(self):
-        p = plan([E + 'water/liquid/clock.rs', W + 'gpu_flip_step.rs'])
+        p = plan([T + 'liquid/clock.rs', W + 'gpu_flip_step.rs'])
         self.assertIn("gpu_flip_", p.filters)
 
-    def test_reporters_skip_unless_their_own_file_is_touched(self):
+    def test_long_proofs_skip_unless_their_own_test_is_named(self):
         for name in g.REPORTER_SKIPS:
             self.assertIn(name, plan([W + 'gpu_flip_step.rs']).final_skips() +
                           plan([W + 'matter_fill.rs']).final_skips())
-        own = plan(["crates/manifold-nodes/tests/gpu_proofs/matter_cost_probe.rs"])
-        self.assertNotIn("matter_cost_probe", own.final_skips())
+        own = plan([W + 'matter_fill.rs'])
+        own.filters.add("matter_look::matter_look_volume_drift")
+        self.assertNotIn("matter_look_volume_drift", own.final_skips())
 
     def with_times(self, times):
         d = tempfile.mkdtemp()
@@ -867,9 +876,9 @@ class ScopeTests(unittest.TestCase):
                 self.assertLessEqual(g.read_times(g.TIMES_PATH).get(name, 0), g.SLOW_THRESHOLD_S, name)
 
     def test_slow_exact_filter_runs(self):
-        name = "liquid_conformance::liquid_coupled_live_frame_rate"
+        name = "liquid_conformance::liquid_floating_rest"
         self.with_times({name: 222})
-        p = plan([E + 'water/liquid/clock.rs'])
+        p = plan([T + 'liquid/clock.rs'])
         p.filters.add(name)
         self.assertIn(name, p.filters)
         self.assertNotIn(name, p.final_skips())

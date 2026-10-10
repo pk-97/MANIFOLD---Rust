@@ -185,7 +185,7 @@ def main():
         # Compile the default-feature suite before admission. Its execution
         # stays with the nightly GPU legs because selected tests may open a
         # device transitively and must yield to an announced landing.
-        [*nightly_nextest, "--no-run"],
+        gpu_queue.cargo_build_command(nightly_nextest, "nextest-run"),
         ["cargo", "deny", "check", "bans"],
         ["python3", "scripts/feature_matrix.py"],
     ]

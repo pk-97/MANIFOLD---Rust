@@ -21,11 +21,12 @@ impl EffectNode for DocumentFixture {
     fn parameters(&self) -> &[ParamDef] { PARAMS }
     fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
 }
+#[cfg(test)]
 pub(crate) fn registry() -> PrimitiveRegistry {
     let mut registry = PrimitiveRegistry::with_builtin();
     register(&mut registry);
     registry
 }
-pub(crate) fn register(registry: &mut PrimitiveRegistry) {
+pub fn register(registry: &mut PrimitiveRegistry) {
     registry.register("test.document", || Box::new(DocumentFixture(EffectNodeType::new("test.document"))));
 }

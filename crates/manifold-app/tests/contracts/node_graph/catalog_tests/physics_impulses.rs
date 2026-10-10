@@ -5,11 +5,14 @@ use manifold_physics::input::EventStamp;
 use manifold_physics::FieldValue;
 
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_nodes_water::runtime::WaterRuntimeExt;
 use manifold_node_engine::exec::effect_node::FrameTime;
-use manifold_node_engine::water::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
+use manifold_nodes_water::node;
+use manifold_core::scene_impulse::ImpulseTarget;
+use manifold_nodes_water::physics_events::ResolvedNodeImpulse;
 use manifold_node_engine::{parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry};
 
-use manifold_node_engine::water::runtime::physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
+use manifold_nodes_water::runtime::physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind};
 use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef};
 use manifold_core::Beats;
@@ -18,8 +21,6 @@ use std::{borrow::Cow, cell::Cell};
 
 mod source_tests;
 mod scene_routes_tests;
-#[cfg(feature = "gpu-proofs")]
-mod coupled_playback_tests;
 
 const DT: f64 = 1.0 / 60.0;
 thread_local! { static POSITIONS: Cell<[f32; 2]> = const { Cell::new([0.0; 2]) }; }
@@ -127,9 +128,6 @@ fn fixture() -> EffectGraphDef {
     })).unwrap()
 }
 fn registry() -> PrimitiveRegistry {
-    #[cfg(feature = "gpu-proofs")]
-    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
-    #[cfg(not(feature = "gpu-proofs"))]
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("node.render_scene", || {
         Box::new(CpuScene(
@@ -160,6 +158,7 @@ fn reference(id: &str) -> SceneNodeRef {
 }
 fn prepare(runtime: &PresetRuntime, def: &EffectGraphDef, ids: &[&str]) -> PreparedSceneImpulse {
     runtime
+        .water_ref()
         .prepare_scene_impulse(
             def,
             &reference("scene"),
@@ -189,6 +188,7 @@ fn capture(
     sequence: u64,
 ) {
     runtime
+        .water()
         .capture_scene_impulse(binding, target, time(0.0), sequence, |_, source| Ok(source))
         .unwrap();
 }
@@ -218,9 +218,9 @@ fn scene_impulse_captures_fields_and_targets_before_edits_and_applies_once() {
         [0.0, 5.0],
         "capture cannot step native worlds"
     );
-    runtime.deliver_scene_impulse(&mut hit_a).unwrap();
-    runtime.deliver_scene_impulse(&mut hit_a).unwrap();
-    runtime.deliver_scene_impulse(&mut hit_b).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit_a).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit_a).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit_b).unwrap();
     assert!(hit_a.is_scheduled() && hit_b.is_scheduled());
     runtime.execute_frame(time(DT));
     let positions = POSITIONS.get();
@@ -233,7 +233,7 @@ fn scene_impulse_captures_fields_and_targets_before_edits_and_applies_once() {
         "{positions:?}"
     );
     let mut receipts = Vec::new();
-    runtime.drain_scene_impulses(|id, event| {
+    runtime.water().drain_scene_impulses(|id, event| {
         assert_eq!(id.as_str(), "world");
         receipts.push(event);
     });
@@ -250,7 +250,7 @@ fn scene_impulse_captures_fields_and_targets_before_edits_and_applies_once() {
             [if index == 0 { 2.0 } else { 7.0 }, 0.0, 0.0]
         );
     }
-    runtime.drain_scene_impulses(|_, _| panic!("receipts must drain once"));
+    runtime.water().drain_scene_impulses(|_, _| panic!("receipts must drain once"));
 }
 
 #[test]
@@ -261,6 +261,7 @@ fn scene_impulse_requires_initialized_recipients_and_explicit_clock_mapping() {
     let mut hit = binding.new_capture();
     assert!(
         runtime
+            .water()
             .capture_scene_impulse(&mut binding, &mut hit, time(0.0), 0, |_, t| Ok(t))
             .unwrap_err()
             .contains("not initialized")
@@ -268,6 +269,7 @@ fn scene_impulse_requires_initialized_recipients_and_explicit_clock_mapping() {
     runtime.execute_frame(time(0.0));
     assert!(
         runtime
+            .water()
             .capture_scene_impulse(&mut binding, &mut hit, time(12.0), 0, |_, _| Err(
                 "clock unavailable".into()
             ))
@@ -276,12 +278,13 @@ fn scene_impulse_requires_initialized_recipients_and_explicit_clock_mapping() {
     );
     assert!(hit.test_field().is_none());
     runtime
+        .water()
         .capture_scene_impulse(&mut binding, &mut hit, time(12.0), 0, |_, t| {
             Ok(Seconds(t.0 - 12.0))
         })
         .unwrap();
     assert_eq!(hit.source_time().unwrap().seconds, Seconds(12.0));
-    runtime.deliver_scene_impulse(&mut hit).unwrap();
+    runtime.water().deliver_scene_impulse(&mut hit).unwrap();
     assert_eq!(hit.scheduled_ticks().next().unwrap().1.unwrap().tick, 0);
 }
 
@@ -297,6 +300,7 @@ fn scene_impulse_does_not_overwrite_pending_capture_or_reallocate_recipient_stor
     edit(&mut runtime, "field", "x", 9.0);
     assert!(
         runtime
+            .water()
             .capture_scene_impulse(&mut binding, &mut hit, time(1.0), 1, |_, t| Ok(t))
             .is_err()
     );
@@ -330,6 +334,7 @@ fn scene_impulse_rejects_reset_and_replacement_worlds() {
     replacement.execute_frame(time(0.0));
     assert!(
         replacement
+            .water()
             .deliver_scene_impulse(&mut hit)
             .unwrap_err()
             .contains("rebuilt")
@@ -338,6 +343,7 @@ fn scene_impulse_rejects_reset_and_replacement_worlds() {
     first_runtime.execute_frame(time(0.0));
     assert!(
         first_runtime
+            .water()
             .deliver_scene_impulse(&mut hit)
             .unwrap_err()
             .contains("reset")
@@ -363,11 +369,12 @@ fn scene_impulse_invalid_field_never_reuses_previous_value() {
         .set_param_unchecked(field, "x", ParamValue::Float(f32::NAN));
     assert!(
         runtime
+            .water()
             .capture_scene_impulse(&mut binding, &mut hit, time(0.0), 1, |_, t| Ok(t))
             .is_err()
     );
     assert!(hit.test_field().is_none());
-    assert!(runtime.deliver_scene_impulse(&mut hit).is_err());
+    assert!(runtime.water().deliver_scene_impulse(&mut hit).is_err());
     edit(&mut runtime, "field", "x", 3.0);
     capture(&mut runtime, &mut binding, &mut hit, 1);
     assert_eq!(
@@ -391,6 +398,7 @@ fn scene_impulse_samples_clock_at_capture_without_rewriting_graph_controls() {
     let mut binding = prepare(&runtime, &def, &["part_a"]);
     let mut hit = binding.new_capture();
     runtime
+        .water()
         .capture_scene_impulse(&mut binding, &mut hit, time(0.125), 0, |_, _| {
             Ok(Seconds::ZERO)
         })
@@ -441,6 +449,7 @@ fn scene_impulse_rejects_stateful_ancestry_and_inactive_selections() {
     let runtime = runtime(&def);
     assert!(
         runtime
+            .water_ref()
             .prepare_scene_impulse(
                 &def,
                 &reference("scene"),
@@ -455,7 +464,7 @@ fn scene_impulse_rejects_stateful_ancestry_and_inactive_selections() {
 
 #[test]
 fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
-    use manifold_node_engine::water::physics::RigidImpulseTargets;
+    use manifold_core::scene_impulse::RigidImpulseTargets;
     let mut def = fixture();
     let mut control = runtime(&def);
     control.execute_frame(time(0.0));
@@ -491,6 +500,7 @@ fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
         .instance_by_node_id(&NodeId::new("world_b"))
         .unwrap();
     let node = &mut runtime.graph.get_node_mut(second).unwrap().node;
+    let node = node::get_mut(node.as_mut()).expect("native world fixture");
     let epoch = node.physics_impulse_epoch().unwrap();
     for sequence in 0..256 {
         node.enqueue_physics_impulse(
@@ -512,7 +522,7 @@ fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
     let mut binding = prepare(&runtime, &def, &["part_a", "part_b"]);
     let mut hit = binding.new_capture();
     capture(&mut runtime, &mut binding, &mut hit, 1000);
-    assert!(runtime.deliver_scene_impulse(&mut hit).is_err());
+    assert!(runtime.water().deliver_scene_impulse(&mut hit).is_err());
     assert_eq!(
         hit.scheduled_ticks()
             .filter(|(_, tick)| tick.is_some())
@@ -520,11 +530,11 @@ fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
         1
     );
     assert!(!hit.is_scheduled());
-    assert!(runtime.deliver_scene_impulse(&mut hit).is_err());
+    assert!(runtime.water().deliver_scene_impulse(&mut hit).is_err());
     runtime.execute_frame(time(DT));
     assert!((POSITIONS.get()[0] - baseline - (2.0 * DT) as f32).abs() < 1e-5);
     let mut receipts = 0;
-    runtime.drain_scene_impulses(|id, event| {
+    runtime.water().drain_scene_impulses(|id, event| {
         assert_eq!(id.as_str(), "world");
         assert_eq!(event.source.sequence, 1000);
         receipts += 1;
@@ -565,44 +575,5 @@ fn scene_impulse_captures_spatial_shape_before_center_edits() {
     assert_eq!(
         second.test_field().unwrap().sample([0.0, 10.0, 0.0]),
         [-1.0, 0.0, 0.0]
-    );
-}
-
-#[cfg(feature = "gpu-proofs")]
-#[test]
-fn scene_impulse_selection_combines_body_slots_copies_and_fluid_domain() {
-    use manifold_node_engine::water::physics::RigidImpulseTargets;
-    let mut def = fixture();
-    def.nodes.push(
-        serde_json::from_value(serde_json::json!({
-            "id":14, "nodeId":"fluid", "typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID
-        }))
-        .unwrap(),
-    );
-    def.wires
-        .retain(|wire| !(matches!(wire.to_node, 8 | 9) && wire.to_port == "transform"));
-    for (from_node, from_port, to_node, to_port) in [
-        (4, "body", 6, "copies"),
-        (6, "instances", 8, "instances"),
-        (14, "vertices", 9, "vertices"),
-    ] {
-        def.wires
-            .push(manifold_core::effect_graph_def::EffectGraphWire {
-                from_node,
-                from_port: from_port.into(),
-                to_node,
-                to_port: to_port.into(),
-            });
-    }
-    let runtime = runtime(&def);
-    let binding = prepare(&runtime, &def, &["part_a", "part_a_2", "part_b"]);
-    assert_eq!(binding.test_recipient_count(), 1, "coupled participants share one native event owner");
-    assert_eq!(binding.test_recipient_id(0).as_str(), "fluid");
-    assert_eq!(
-        binding.test_recipient_target(0),
-        ImpulseTarget::FluidAndRigid(RigidImpulseTargets {
-            bodies: 1,
-            copies: true
-        })
     );
 }

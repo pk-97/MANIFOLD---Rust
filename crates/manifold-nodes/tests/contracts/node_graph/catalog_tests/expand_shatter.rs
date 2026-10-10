@@ -114,6 +114,31 @@ use manifold_core::effect_graph_def::*;
     }
 
     #[test]
+    fn shatter_inherits_parent_density_or_registered_default() {
+        let registry = PrimitiveRegistry::with_builtin();
+        let body = registry.construct("node.rigid_body").unwrap();
+        let default = body.parameters().iter()
+            .find(|param| param.name == "density")
+            .unwrap().default.as_scalar().unwrap();
+        assert_eq!(default, 600.0);
+        for (authored, expected) in [(None, default), (Some(float(1234.0)), 1234.0)] {
+            let mut owner = fixture();
+            let parent = owner.nodes.iter_mut().find(|node| node.id == 111).unwrap();
+            parent.params.remove("density");
+            if let Some(value) = authored {
+                parent.params.insert("density".into(), value);
+            }
+            let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
+            let fragments: Vec<_> = prepared.def.nodes.iter()
+                .filter(|node| node.params.contains_key("fragment_parent")).collect();
+            assert_eq!(fragments.len(), 16);
+            for fragment in fragments {
+                assert_eq!(number(fragment.params.get("density")), Some(expected));
+            }
+        }
+    }
+
+    #[test]
     fn shatter_fans_parent_acceleration_and_reserves_targeted_slots() {
         let mut owner = fixture();
         owner.nodes.push(

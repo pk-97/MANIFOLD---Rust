@@ -3,6 +3,20 @@
 
 use crate::{parameters::ParamValue, exec::effect_node::ParamValues};
 
+/// Engine implementation inputs that invalidate recorded simulation results.
+#[cfg(feature = "gpu-proofs")]
+pub const ENGINE_SOURCE_IDENTITY: &str = env!("MANIFOLD_PHYSICS_INTEGRATION_IDENTITY");
+
+/// Family implementation inputs that invalidate recorded simulation results.
+#[cfg(feature = "gpu-proofs")]
+pub struct SourceImplementationIdentity {
+    pub name: &'static str,
+    pub identity: &'static str,
+}
+
+#[cfg(feature = "gpu-proofs")]
+inventory::collect!(SourceImplementationIdentity);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceAssetIdentity<'a> {
     /// This loader does not yet expose verifiable content provenance.

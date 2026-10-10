@@ -1521,7 +1521,7 @@ mod tests {
             std::env::temp_dir().join(format!("manifold-drop-{}.mp4", std::process::id()));
         std::fs::write(&temp_path, b"test").unwrap();
 
-        let prefs = UserPrefs::load();
+        let prefs = UserPrefs::for_test();
         let mut service = ProjectIOService::new(&prefs);
         let mut project = Project::default();
         project.settings.bpm = Bpm(120.0);
@@ -1597,7 +1597,7 @@ mod tests {
         manifold_io::saver::save_project_v1(&project, &fixture_path)
             .expect("write V1 fixture with repairable content");
 
-        let mut prefs = UserPrefs::load();
+        let mut prefs = UserPrefs::for_test();
         let mut service = ProjectIOService::new(&prefs);
         let action = service.open_project_from_path(&fixture_path, &mut prefs);
 
@@ -1670,7 +1670,7 @@ mod tests {
         manifold_io::saver::save_project_v1(&project, &fixture_path)
             .expect("write V1 fixture with an old-shape scene generator graph");
 
-        let mut prefs = UserPrefs::load();
+        let mut prefs = UserPrefs::for_test();
         let mut service = ProjectIOService::new(&prefs);
         let action = service.open_project_from_path(&fixture_path, &mut prefs);
 

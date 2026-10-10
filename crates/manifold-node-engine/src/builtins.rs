@@ -19,5 +19,13 @@ fn builtins_match_registry() {
             assert!(registry.construct(type_id).is_some(), "cannot construct {name}");
         }
     }
-    println!("primitive count: {}", registry.known_type_ids().count());
+    // System boundaries are graph vocabulary; node.__* factories are macro
+    // and validation fixtures compiled only into the test harness.
+    let mut actual: Vec<_> = registry.known_type_ids()
+        .filter(|id| id.starts_with("node.") && !id.starts_with("node.__"))
+        .collect();
+    let mut expected: Vec<_> = BUILTINS.iter().filter_map(|(_, id)| *id).collect();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(actual, expected, "engine node factories must equal the D11 list");
 }

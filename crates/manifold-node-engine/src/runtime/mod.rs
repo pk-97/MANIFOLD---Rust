@@ -38,6 +38,7 @@ use manifold_core::{Beats, Seconds};
 use crate::gpu::render_target::RenderTarget;
 
 mod errors;
+mod scene_events;
 pub mod generator_provider;
 pub use errors::{ChainError, JsonGeneratorLoadError};
 use errors::record_chain_error;
@@ -67,6 +68,7 @@ mod convert_heal;
 mod math_view;
 mod math_view_events;
 mod lifecycle;
+pub mod extensions;
 
 manifold_core::testkit_visible! {
 pub(crate) mod core;

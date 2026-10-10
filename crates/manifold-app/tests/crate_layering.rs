@@ -23,13 +23,13 @@ const LAYERS: &[Layer] = &[
     },
     Layer {
         package: "manifold-nodes",
-        normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene"],
-        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-physics", "manifold-playback"],
+        normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water"],
+        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback"],
     },
     Layer {
         package: "manifold-app",
-        normal_and_build: &["manifold-audio", "manifold-compositor", "manifold-core", "manifold-editing", "manifold-gpu", "manifold-io", "manifold-led", "manifold-media", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-playback", "manifold-profiler", "manifold-recording", "manifold-nodes", "manifold-spectral", "manifold-ui", "manifold-ui-paint"],
-        dev: &["manifold-foundation", "manifold-physics", "manifold-fluids", "manifold-nodes", "manifold-compositor", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene"],
+        normal_and_build: &["manifold-audio", "manifold-compositor", "manifold-core", "manifold-editing", "manifold-gpu", "manifold-io", "manifold-led", "manifold-media", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-playback", "manifold-profiler", "manifold-recording", "manifold-nodes", "manifold-spectral", "manifold-ui", "manifold-ui-paint"],
+        dev: &["manifold-foundation", "manifold-physics", "manifold-fluids", "manifold-nodes", "manifold-compositor", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water"],
     },
 
     Layer {
@@ -40,15 +40,21 @@ const LAYERS: &[Layer] = &[
 
     Layer {
         package: "manifold-nodes-image",
-        normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu", "manifold-native", "manifold-node-engine", "manifold-physics"],
+        normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu", "manifold-native", "manifold-node-engine"],
         dev: &["manifold-node-engine", "manifold-nodes-image"],
     },
 
     Layer {
         package: "manifold-node-engine",
         normal_and_build: &["manifold-foundation", "manifold-core", "manifold-gpu",
-                            "manifold-native", "manifold-playback", "manifold-physics", "manifold-fluids"],
+                            "manifold-native", "manifold-playback"],
         dev: &["manifold-nodes"],
+    },
+    Layer {
+        package: "manifold-nodes-water",
+        normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu",
+                            "manifold-node-engine", "manifold-physics", "manifold-fluids"],
+        dev: &["manifold-node-engine", "manifold-playback"],
     },
     Layer {
         package: "manifold-ui-paint",
@@ -100,6 +106,10 @@ fn workspace_dependencies_obey_layering() {
         assert!(normal_and_build.contains(&(source, "manifold-nodes-scene")),
                 "missing leaf dependency: {source} -> manifold-nodes-scene");
     }
+    for source in ["manifold-nodes", "manifold-app"] {
+        assert!(normal_and_build.contains(&(source, "manifold-nodes-water")),
+                "missing water dependency: {source} -> manifold-nodes-water");
+    }
     assert!(normal_and_build.contains(&("manifold-app", "manifold-compositor")),
             "missing leaf dependency: manifold-app -> manifold-compositor");
     for layer in LAYERS {
@@ -116,4 +126,42 @@ fn workspace_dependencies_obey_layering() {
             }
         }
     }
+}
+
+/// Water vocabulary leaving the engine is a ratchet: this count may only go
+/// down. Lower it when a move lands; never raise it. Obsolete when the engine
+/// names no water words at all.
+const ENGINE_WATER_WORD_FILES: usize = 54;
+const ENGINE_WATER_WORD_EXEMPT: &[&str] = &["atomic/fluid_sim_2d", "param_tooltips", "trigger_shadow_lint"];
+
+fn engine_water_word_files(dir: &Path, root: &Path, hits: &mut Vec<String>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            engine_water_word_files(&path, root, hits);
+            continue;
+        }
+        let relative = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+        if ENGINE_WATER_WORD_EXEMPT.iter().any(|exempt| relative.contains(exempt)) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let text = text.to_lowercase();
+        if ["fluid", "liquid", "physics", "whitewater"].iter().any(|word| text.contains(word)) {
+            hits.push(relative);
+        }
+    }
+}
+
+#[test]
+fn engine_water_vocabulary_only_shrinks() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-node-engine/src");
+    let mut hits = Vec::new();
+    engine_water_word_files(&src, &src, &mut hits);
+    hits.sort();
+    assert!(hits.len() <= ENGINE_WATER_WORD_FILES,
+        "engine files naming water words rose to {} (ratchet {ENGINE_WATER_WORD_FILES}); move the water behaviour to manifold-nodes-water instead:\n{}",
+        hits.len(), hits.join("\n"));
+    assert!(hits.len() >= ENGINE_WATER_WORD_FILES,
+        "engine water-word files fell to {}; lower ENGINE_WATER_WORD_FILES to match", hits.len());
 }

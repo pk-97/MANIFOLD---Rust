@@ -1,19 +1,19 @@
-use manifold_node_engine::water::primitives::gpu_flip_preset::testkit::{family_outputs, surface_detail_offset, assert_preset_root, rendered_scene_bytes};
+use manifold_nodes_water::presets::gpu_flip::testkit::{family_outputs, surface_detail_offset, assert_preset_root, rendered_scene_bytes};
 
-use manifold_node_engine::water::primitives::gpu_flip_preset::*;
-use manifold_node_engine::testkit::liquid_extents::*;
+use manifold_nodes_water::presets::gpu_flip::*;
+use manifold_nodes_water::testkit::liquid_extents::*;
 #[cfg(feature = "gpu-proofs")]
-use manifold_node_engine::water::primitives::gpu_flip_preset::testkit::surface_group;
+use manifold_nodes_water::presets::gpu_flip::testkit::surface_group;
 use manifold_core::effect_graph_def::*;
 use manifold_core::PresetTypeId;
 use serde_json::{Value, json};
-    use manifold_node_engine::water::liquid::extent::{ExtentError, ExtentReport};
+    use manifold_node_engine::exec::extent::{ExtentError, ExtentReport};
 
     use manifold_node_engine::{parameters::ParamValue, persistence::PrimitiveRegistry};
 
     #[test]
     fn gpu_flip_defaults_disable_optional_corrections_and_preserve_opt_ins() {
-        use manifold_node_engine::water::primitives::gpu_flip_step::GpuFlipStep;
+        use manifold_nodes_water::primitives::gpu_flip_step::GpuFlipStep;
         use manifold_node_engine::parameters::ParamValue;
         use manifold_node_engine::primitive::PrimitiveSpec;
 
@@ -302,8 +302,8 @@ use serde_json::{Value, json};
     /// face grid's published valid layers.
     #[test]
     fn gpu_flip_band_uses_engine_cfl() {
-        use manifold_node_engine::water::primitives::gpu_flip_step::{ENGINE_CFL, band_layers};
-        use manifold_node_engine::water::liquid::conformance::FACE_GRID_GPU_FLIP_LAYERS;
+        use manifold_nodes_water::primitives::gpu_flip_step::{ENGINE_CFL, band_layers};
+        use manifold_nodes_water::testkit::conformance::FACE_GRID_GPU_FLIP_LAYERS;
         assert_eq!(FACE_GRID_GPU_FLIP_LAYERS, FACE_VALID_LAYERS);
         assert_eq!(band_layers(ENGINE_CFL), 12);
         assert!(band_layers(ENGINE_CFL) >= FACE_VALID_LAYERS);
@@ -330,17 +330,12 @@ use serde_json::{Value, json};
             }
             value
         };
-        let registry = PrimitiveRegistry::with_cpu_flip_reference();
-        for name in [SHIPPED_PRESET, "WaterDamBreakGpu", "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
-            let mut preset: Value = if name == "WaterDamBreakGpu" {
-                let source = manifold_nodes::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreakGpu.json");
-                serde_json::from_str(source).unwrap()
-            } else {
-                let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
-                serde_json::from_str(&json).unwrap()
-            };
+        let registry = PrimitiveRegistry::with_builtin();
+        for name in [SHIPPED_PRESET, "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
+            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
+            let mut preset: Value = serde_json::from_str(&json).unwrap();
             let surface_id = if name == SHIPPED_PRESET { "surface" } else { "liquid_surface" };
-            let surface = manifold_node_engine::water::liquid::conformance::json_node_mut(&mut preset, surface_id)
+            let surface = manifold_nodes_water::testkit::conformance::json_node_mut(&mut preset, surface_id)
                 .cloned().expect("nested surface");
             assert_eq!(surface["handle"], "Liquid Surface", "{name}: authored surface handle");
             assert_eq!(structure(&surface["group"]), structure(group), "{name}: authored surface drift");
@@ -396,33 +391,6 @@ use serde_json::{Value, json};
             assert_eq!(detail.len(), 3, "{name}: detail reaches volume, mesh and bricks");
             assert!(detail.iter().all(|b| b["offset"] == 1.0));
         }
-    }
-
-    #[cfg(feature = "gpu-proofs")]
-    #[test]
-    fn gpu_flip_surface_defaults_match_the_engine_on_both_dam_breaks() {
-        let registry = PrimitiveRegistry::with_cpu_flip_reference();
-        let native = manifold_nodes::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreak.json");
-        let native = manifold_node_engine::runtime::PresetRuntime::from_json_str(native, &registry).unwrap();
-        let gpu = manifold_node_engine::runtime::PresetRuntime::from_def(
-            render_def(WaterScene::dam_break(64)), &registry, None,
-        ).unwrap();
-        let param = |runtime: &manifold_node_engine::runtime::PresetRuntime, node: &str, name: &str| {
-            let id = runtime.graph.instance_by_node_id(&manifold_core::NodeId::new(node)).unwrap();
-            runtime.graph.get_node(id).unwrap().params.get(name).cloned().unwrap()
-        };
-        assert_eq!(param(&native, "fluid_surface", "surface_particle_scale"), ParamValue::Float(3.0));
-        assert_eq!(param(&native, "fluid_surface", "surface_subdivisions"), ParamValue::Float(0.0));
-        assert_eq!(param(&gpu, "liquid_blobs", "particle_scale"), param(&native, "fluid_surface", "surface_particle_scale"));
-        for node in ["liquid_volume", "liquid_mesh", "liquid_bricks"] {
-            assert_eq!(param(&gpu, node, "resolution_scale"), ParamValue::Float(1.0), "{node}");
-        }
-        assert_eq!(param(&gpu, "liquid_mesh_relaxation", "value"), param(&native, "fluid_surface", "surface_smoothing"));
-        assert_eq!(param(&gpu, "liquid_smooth_mesh", "iterations"), param(&native, "fluid_surface", "surface_smoothing_iterations"));
-        assert_eq!(param(&gpu, "liquid_blobs", "stretch"), ParamValue::Float(1.0));
-        assert_eq!(param(&gpu, "liquid_blobs", "smoothing"), ParamValue::Float(0.0));
-        assert_eq!(param(&gpu, "liquid_smoothing_passes", "value"), ParamValue::Float(0.0));
-        assert!(gpu.shadowed_def_params().next().is_none(), "fresh defaults agree with the authored graph");
     }
 
     /// Native layer 0's water_material in flipEngineVSGPUFLIP.manifold:
@@ -820,9 +788,9 @@ use serde_json::{Value, json};
         }
     }
 
-use manifold_node_engine::water::primitives::{gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS};
+use manifold_nodes_water::primitives::{gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS};
 use manifold_nodes::bundled_presets::bundled_preset_json;
-use manifold_node_engine::water::liquid::clock::INTERVAL_DURATION_INPUTS;
+use manifold_nodes_water::liquid::clock::INTERVAL_DURATION_INPUTS;
 
 fn shipped_preset() -> Value {
     let json = manifold_nodes::bundled_presets::bundled_preset_json(&PresetTypeId::new("WaterDamBreakGpuFlip")).expect("the GPU FLIP preset is bundled");

@@ -30,7 +30,7 @@
     },
     {
       "name": "generators-primitives",
-      "prefixes": ["crates/manifold-nodes-image/src/node_graph/primitives/", "crates/manifold-nodes-scene/src/node_graph/primitives/", "crates/manifold-node-engine/src/primitives/", "crates/manifold-node-engine/src/water/primitives/", "crates/manifold-core/src/generator.rs", "crates/manifold-core/src/generator_registration.rs", "crates/manifold-core/src/generator_metadata_submissions.rs"],
+      "prefixes": ["crates/manifold-nodes-image/src/node_graph/primitives/", "crates/manifold-nodes-scene/src/node_graph/primitives/", "crates/manifold-node-engine/src/primitives/", "crates/manifold-nodes-water/src/primitives/", "crates/manifold-core/src/generator.rs", "crates/manifold-core/src/generator_registration.rs", "crates/manifold-core/src/generator_metadata_submissions.rs"],
       "entry_points": ["crates/manifold-core/src/generator.rs"],
       "docs": ["docs/DECOMPOSING_GENERATORS.md", "docs/ADDING_PRIMITIVES.md"],
       "invariants": "Read DECOMPOSING_GENERATORS in full, then ADDING_PRIMITIVES. Audit existing primitives before adding one; preserve composability and required fusion proofs."

@@ -418,27 +418,6 @@ pub trait Primitive: PrimitiveSpec {
         false
     }
 
-    /// Current accepted setup state for native fluid-domain bounds.
-    fn fluid_domain_snapshot(
-        &self,
-    ) -> Option<crate::water::fluid::FluidDomainSnapshot> {
-        None
-    }
-
-    /// Resolved rigid inputs from the latest successful graph evaluation.
-    fn rigid_scene_observation(&self) -> Option<&crate::water::physics::RigidSceneObservation> {
-        None
-    }
-
-    fn set_coupled_physics(&mut self, _enabled: bool) {}
-
-    fn set_physics_project_tempo(&mut self, _tempo: Option<&crate::runtime::preset_context::ProjectTempo>) {}
-
-    /// See [`EffectNode::request_physics_samples`].
-    fn request_physics_samples(&mut self, _from: f64, _until: f64, _out: &mut Vec<f64>) {}
-
-    fn set_physics_source_identity(&mut self, _identity: Result<[u8; 32], String>) {}
-
     fn source_asset_paths(&self) -> &'static [&'static str] {
         &[]
     }
@@ -449,65 +428,6 @@ pub trait Primitive: PrimitiveSpec {
     ) -> crate::scene::source_asset::SourceAssetIdentity<'_> {
         crate::scene::source_asset::SourceAssetIdentity::Unsupported
     }
-
-    fn capture_coupled_rigid(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
-        Err("Primitive does not support coupled rigid input capture".into())
-    }
-
-    fn set_coupled_rigid_inputs(
-        &mut self,
-        _observation: Option<&crate::water::physics::RigidSceneObservation>,
-        _colliders: crate::water::physics::RigidImpulseTargets,
-        _error: Option<&str>,
-    ) {}
-
-    fn coupled_rigid_frame(&self) -> Option<&crate::water::fluid::CoupledRigidFrame> {
-        None
-    }
-
-    fn accept_coupled_rigid_frame(
-        &mut self,
-        _frame: Option<&crate::water::fluid::CoupledRigidFrame>,
-    ) {}
-
-    /// Mirror of the native impulse admission hooks on [`EffectNode`].
-    fn physics_impulse_epoch(&self) -> Option<u64> {
-        None
-    }
-
-    /// Timestamp an impulse against the exact native observation accepted at
-    /// the supplied transport value, if this primitive owns such a clock.
-    fn physics_impulse_stamp(
-        &self,
-        _transport: manifold_core::Seconds,
-        _sequence: u64,
-    ) -> Result<manifold_physics::input::EventStamp, String> {
-        Err("node does not expose a native impulse clock".into())
-    }
-
-    /// Queue one resolved impulse for a native fixed-tick simulation.
-    fn enqueue_physics_impulse(
-        &mut self,
-        _stamp: manifold_physics::input::EventStamp,
-        _impulse: crate::water::physics_events::ResolvedNodeImpulse,
-    ) -> Result<manifold_physics::TickStamp, String> {
-        Err("node does not accept physics impulses".into())
-    }
-
-    /// Drain native tick-start impulse receipts into the graph-owned sink.
-    fn drain_physics_impulses(
-        &mut self,
-        _consume: &mut dyn FnMut(
-            manifold_physics::input::AppliedEvent<
-                crate::water::physics_events::ResolvedNodeImpulse,
-            >,
-        ),
-    ) {
-    }
-
-    /// Drain the stamps of impulses discarded because the simulation's clock
-    /// was held (pause, Speed 0); they are never applied.
-    fn drain_discarded_impulses(&mut self, _consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {}
 
     /// Sampler address mode for this atom's `Gather` inputs in a fused region —
     /// mirror of
@@ -902,28 +822,6 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn runs_with_pending_inputs(&self) -> bool {
         Primitive::runs_with_pending_inputs(self)
     }
-    fn fluid_domain_snapshot(
-        &self,
-    ) -> Option<crate::water::fluid::FluidDomainSnapshot> {
-        Primitive::fluid_domain_snapshot(self)
-    }
-    fn rigid_scene_observation(&self) -> Option<&crate::water::physics::RigidSceneObservation> {
-        Primitive::rigid_scene_observation(self)
-    }
-    fn set_coupled_physics(&mut self, enabled: bool) {
-        Primitive::set_coupled_physics(self, enabled);
-    }
-
-    fn set_physics_project_tempo(&mut self, tempo: Option<&crate::runtime::preset_context::ProjectTempo>) {
-        Primitive::set_physics_project_tempo(self, tempo);
-    }
-    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
-        Primitive::request_physics_samples(self, from, until, out);
-    }
-    fn set_physics_source_identity(&mut self, identity: Result<[u8; 32], String>) {
-        Primitive::set_physics_source_identity(self, identity);
-    }
-
     fn source_asset_paths(&self) -> &'static [&'static str] {
         Primitive::source_asset_paths(self)
     }
@@ -933,56 +831,6 @@ impl<P: Primitive + 'static> EffectNode for P {
         params: &crate::exec::effect_node::ParamValues,
     ) -> crate::scene::source_asset::SourceAssetIdentity<'_> {
         Primitive::source_asset_identity(self, params)
-    }
-    fn capture_coupled_rigid(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
-        Primitive::capture_coupled_rigid(self, ctx)
-    }
-    fn set_coupled_rigid_inputs(
-        &mut self,
-        observation: Option<&crate::water::physics::RigidSceneObservation>,
-        colliders: crate::water::physics::RigidImpulseTargets,
-        error: Option<&str>,
-    ) {
-        Primitive::set_coupled_rigid_inputs(self, observation, colliders, error);
-    }
-    fn coupled_rigid_frame(&self) -> Option<&crate::water::fluid::CoupledRigidFrame> {
-        Primitive::coupled_rigid_frame(self)
-    }
-    fn accept_coupled_rigid_frame(
-        &mut self,
-        frame: Option<&crate::water::fluid::CoupledRigidFrame>,
-    ) {
-        Primitive::accept_coupled_rigid_frame(self, frame);
-    }
-    fn physics_impulse_epoch(&self) -> Option<u64> {
-        Primitive::physics_impulse_epoch(self)
-    }
-    fn physics_impulse_stamp(
-        &self,
-        transport: manifold_core::Seconds,
-        sequence: u64,
-    ) -> Result<manifold_physics::input::EventStamp, String> {
-        Primitive::physics_impulse_stamp(self, transport, sequence)
-    }
-    fn enqueue_physics_impulse(
-        &mut self,
-        stamp: manifold_physics::input::EventStamp,
-        impulse: crate::water::physics_events::ResolvedNodeImpulse,
-    ) -> Result<manifold_physics::TickStamp, String> {
-        Primitive::enqueue_physics_impulse(self, stamp, impulse)
-    }
-    fn drain_physics_impulses(
-        &mut self,
-        consume: &mut dyn FnMut(
-            manifold_physics::input::AppliedEvent<
-                crate::water::physics_events::ResolvedNodeImpulse,
-            >,
-        ),
-    ) {
-        Primitive::drain_physics_impulses(self, consume)
-    }
-    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {
-        Primitive::drain_discarded_impulses(self, consume)
     }
     fn fused_gather_sampler_mode(
         &self,

@@ -76,14 +76,14 @@ impl GeneratorRenderer {
             state.applied_param_version = version;
         }
         state.generator.apply_param_values(&params.params);
-        state.generator.set_physics_source_instance(Some(params));
+        state.generator.set_source_instance(Some(params));
         state.generator.set_project_tempo(project_tempo);
         state
             .generator
             .fire_scene_impulse(param, source, &mut self.next_physics_event)
     }
 
-    pub fn scene_impulse_diagnostics(&self) -> manifold_node_engine::water::runtime::scene_impulses::SceneImpulseDiagnostics {
+    pub fn scene_impulse_diagnostics(&self) -> manifold_core::scene_impulse::SceneImpulseDiagnostics {
         self.scene_impulse_diagnostics
     }
 }

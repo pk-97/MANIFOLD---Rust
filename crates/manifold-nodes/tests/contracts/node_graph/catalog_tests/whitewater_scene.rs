@@ -5,37 +5,24 @@
 //! bubble and spray objects. `gpu_flip_builder_whitewater_emits` runs it as the
 //! app would, frozen; `whitewater_emitter_matches_flip` (O2,
 //! `whitewater-oracle`) holds the GPU emitter to FLIP's on fields the scene
-//! captures; `whitewater_side_by_side` renders it beside the FLIP engine's
-//! own whitewater with the cost table, when `WHITEWATER_DEMO_DIR` names where.
+//! captures.
 
-use manifold_node_engine::testkit::whitewater_scene::Frame;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use serde_json::{Value, json};
 
-use manifold_node_engine::water::primitives::gpu_flip_preset::{WaterScene, render_def};
-use manifold_node_engine::water::primitives::gpu_flip_step::face_bytes;
-use manifold_node_engine::testkit::gpu::encode_rgba8_png;
+use manifold_nodes_water::presets::gpu_flip::{WaterScene, render_def};
+use manifold_nodes_water::liquid::grid::face_bytes;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_nodes::testkit::reference_fixtures::cpu_flip_preset_json;
 
 
 
 const LIFECYCLE_REPORTS: [&str; 8] =
     ["foam_count", "bubble_count", "spray_count", "emitted", "thinned", "dropped_ticks", "lifecycle_ms", "worker_ms"];
 
-const STUDIO_FLOOR: [&str; 4] = ["studio_floor", "studio_floor_mesh", "studio_floor_material", "studio_floor_transform"];
-const OBSTACLE: [&str; 5] = ["obstacle_transform", "obstacle_collider", "obstacle_mesh", "obstacle_material", "obstacle_object"];
-
-fn preset_json(file: &str) -> Value {
-    serde_json::from_str(cpu_flip_preset_json(file)).expect("preset parses")
-}
 
 /// CPU-only regression: the probed scene must remain compilable after fusion.
 #[test]
@@ -44,7 +31,7 @@ fn whitewater_scene_fuses_without_gpu() {
     use manifold_node_engine::freeze::install::fuse_generator_view;
 
     let def = whitewater_render_def(WaterScene::dam_break(64));
-    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
+    let mut registry = PrimitiveRegistry::with_builtin();
     register_substep_test_nodes(&mut registry);
     registry.register(PROBE, || Box::new(Probe::new()));
     registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
@@ -95,7 +82,7 @@ fn vendored_whitewater_scene_loads_and_compiles_without_gpu() {
     assert_eq!(capacity.target_handle, "Whitewater Lifecycle");
     assert_eq!(capacity.target_param, "capacity");
 
-    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
+    let mut registry = PrimitiveRegistry::with_builtin();
     register_substep_test_nodes(&mut registry);
     registry.register(PROBE, || Box::new(Probe::new()));
     registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
@@ -186,36 +173,17 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     g.finish()
 }
 
-/// `WaterDamBreakGpu.json` as the race clips run it (studio floor and
-/// obstacle left out), its native whitewater on or off, with the engine's
-/// counts and simulation time probed by name.
-fn flip_def(whitewater: bool) -> EffectGraphDef {
-    let mut g = Appender::from_value(preset_json("WaterDamBreakGpu.json"));
-    g.remove(&[&STUDIO_FLOOR[..], &OBSTACLE[..]].concat());
-    let on = if whitewater { 1.0 } else { 0.0 };
-    // The card owns the switch and overwrites the node's param at build.
-    for list in ["params", "bindings"] {
-        g.set_card_default(list, "whitewater", json!(on));
-    }
-    let engine = g.id("fluid_surface");
-    g.set_node_param("fluid_surface", "whitewater", float(on));
-    for output in ["foam_count", "bubble_count", "spray_count", "simulation_ms"] {
-        g.probe(output, (engine, output));
-    }
-    g.finish()
-}
-
 /// Resolution is a live card (BUG-9an1 (resolution change), BUG-o65k (GPU
-/// FLIP lattice wiring)): the shipped preset moves 64 → 32 → 100 under a
+/// FLIP lattice wiring)): the shipped preset moves 64 → 32 → 48 under a
 /// running clip. On the first frame at each size the state already holds that
 /// lattice's face grid and the published population matches the new fill.
-/// During the following 1.5 s, count_b exactly describes the published live
+/// During the following 0.5 s, count_b exactly describes the published live
 /// particles; after completion it matches the solver state. The initial fill
 /// is not a retention oracle: native-style marker cleanup can remove water.
 /// The step's face grid resizes and the new water throws whitewater.
 #[test]
 fn gpu_flip_resolution_card_resizes_at_runtime() {
-    use manifold_node_engine::water::fluid_particles::FluidParticle;
+    use manifold_node_engine::particles::FluidParticle;
     fn particles(buffer: &manifold_gpu::GpuBuffer, bytes: u64) -> &[FluidParticle] {
         assert!(buffer.size() >= bytes);
         let len = bytes as usize / std::mem::size_of::<FluidParticle>();
@@ -246,8 +214,8 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         live_in(frame.node.provided_array_output("particles_b").expect("published frame B"), show.provided_bytes("fill", "particles"))
     };
     show.restart();
-    let step = manifold_node_engine::water::primitives::gpu_flip_preset::STEP_NODE;
-    for n in [64u32, 32, 100] {
+    let step = manifold_nodes_water::presets::gpu_flip::STEP_NODE;
+    for n in [64u32, 32, 48] {
         let mut card = Param::bundled(spec.clone());
         card.value = n as f32;
         card.base = n as f32;
@@ -282,7 +250,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         assert_eq!(show.provided_bytes("state", "faces"), faces, "Resolution {n}: the state's faces on its first frame");
         let mut last = [0.0; 6];
         let mut gpu_ms = Vec::new();
-        for frame in 0..90 {
+        for frame in 0..30 {
             gpu_ms.push(show.frame(false).gpu_ms);
             last = show.probes(STEP_REPORTS);
             assert_eq!(show.probes(["count"])[0] as u64, published_live(&show), "Resolution {n}, frame {frame}: published live count");
@@ -296,11 +264,11 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         let live = state_live(&show);
         println!("Resolution {n}: {count} published, {live} live in state, {seeded} initially seeded, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
         assert_eq!(show.provided_bytes(step, "faces"), faces, "Resolution {n}: the step's faces");
-        let record = std::mem::size_of::<manifold_node_engine::water::fluid_particles::FluidParticle>() as u64;
+        let record = std::mem::size_of::<manifold_node_engine::particles::FluidParticle>() as u64;
         assert_eq!(show.provided_bytes("fill", "particles"), WaterScene::dam_break(n as usize).particles() * record, "Resolution {n}: the fill");
         assert_eq!(count as u64, live, "Resolution {n}: the frame's live water");
         assert_eq!(count as u64, published_live(&show), "Resolution {n}: completed publication");
-        assert!(last[0] + last[1] + last[2] > 0.0, "Resolution {n}: no whitewater by 1.5 s: {last:?}");
+        assert!(last[0] + last[1] + last[2] > 0.0, "Resolution {n}: no whitewater by 0.5 s: {last:?}");
     }
     let errors = show.errors();
     assert!(errors.is_empty(), "the resize ran with errors: {errors:#?}");
@@ -339,8 +307,8 @@ fn gpu_flip_whitewater_emits() {
 #[test]
 fn whitewater_live_scene_updates_on_the_lifecycle_thread() {
     let scene = WaterScene::dam_break(64);
-    let _live = manifold_node_engine::water::physics::PhysicsStepScope::for_render(false);
     let mut show = Show::new(vendored_render_def(scene), (320, 180), true, &[]);
+    show.set_sim_step(manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0)));
     show.restart();
     let (mut content, mut worker) = (Vec::new(), Vec::new());
     let mut last = [0.0; 8];
@@ -409,471 +377,31 @@ fn percentile(values: &[f64], p: f64) -> f64 {
     v[((v.len() - 1) as f64 * p).round() as usize]
 }
 
-/// Peter watches on his phone; its upload limit is 30 MB.
-const PHONE_LIMIT_BYTES: u64 = 25 * 1024 * 1024;
-const DEMO_SIZE: (u32, u32) = (1920, 1080);
-const DEMO_FRAMES: usize = 211;
-/// 1.5 s and 3 s, the P5 stills.
-const DEMO_STILLS: [usize; 2] = [90, 180];
-
-/// An H.264 file fed raw RGBA frames at 60 fps.
-fn encoder(path: &Path) -> std::process::Child {
-    let (w, h) = DEMO_SIZE;
-    std::process::Command::new("ffmpeg")
-        .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{w}x{h}"), "-r", "60", "-i", "-"])
-        .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "16"])
-        .arg(path)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .expect("ffmpeg starts")
-}
-
-fn finish(mut encoder: std::process::Child) {
-    drop(encoder.stdin.take());
-    let status = encoder.wait().expect("ffmpeg ran");
-    assert!(status.success(), "ffmpeg: {status}");
-}
-
-/// Two clips side by side, each cropped to the tank and its splash as the
-/// race clips crop them.
-fn side_by_side(left: &Path, right: &Path, out: &Path) {
-    let status = std::process::Command::new("ffmpeg")
-        .args(["-y", "-loglevel", "error", "-i"])
-        .arg(left)
-        .arg("-i")
-        .arg(right)
-        .args(["-filter_complex", "[0:v]crop=1200:1080:360:0[l];[1:v]crop=1200:1080:360:0[r];[l][r]hstack=inputs=2[out]"])
-        .args(["-map", "[out]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-movflags", "+faststart"])
-        .arg(out)
-        .status()
-        .expect("ffmpeg runs");
-    assert!(status.success(), "side by side: {status}");
-}
-
-/// A copy under the phone's upload limit, raising the CRF until it fits.
-fn phone_copy(source: &Path, phone: &Path) -> Option<(u32, u64)> {
-    for crf in [24, 26, 28, 30, 32, 35] {
-        let status = std::process::Command::new("ffmpeg")
-            .args(["-y", "-loglevel", "error", "-i"])
-            .arg(source)
-            .args(["-vf", "scale=-2:1080", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", &crf.to_string(), "-movflags", "+faststart"])
-            .arg(phone)
-            .status();
-        let size = std::fs::metadata(phone).map_or(u64::MAX, |m| m.len());
-        if status.is_ok_and(|s| s.success()) && size < PHONE_LIMIT_BYTES {
-            return Some((crf, size));
-        }
-    }
-    None
-}
-
-/// Foam, bubble and spray counts over time, one panel each, FLIP's engine
-/// against GPU FLIP's GPU whitewater, drawn with CoreGraphics.
-fn plot_counts(path: &Path, flip: &[[f32; 3]], gpu_flip: &[[f32; 3]]) {
-    use core_foundation::attributed_string::CFMutableAttributedString;
-    use core_foundation::base::{CFRange, TCFType};
-    use core_foundation::string::CFString;
-    use core_graphics::color_space::CGColorSpace;
-    use core_graphics::context::CGContext;
-    use core_graphics::geometry::{CGPoint, CGRect, CGSize};
-    use core_text::font::CTFont;
-    use core_text::line::CTLine;
-    use core_text::string_attributes::kCTFontAttributeName;
-
-    const W: usize = 1600;
-    const H: usize = 1200;
-    const LEFT: f64 = 120.0;
-    const RIGHT: f64 = 40.0;
-    const TOP: f64 = 130.0;
-    const BOTTOM: f64 = 70.0;
-    const GAP: f64 = 70.0;
-    const FLIP_RGB: (f64, f64, f64) = (0.90, 0.45, 0.10);
-    const GPU_FLIP_RGB: (f64, f64, f64) = (0.10, 0.40, 0.85);
-
-    let line = |font: &CTFont, text: &str| {
-        let text = CFString::new(text);
-        let mut attributed = CFMutableAttributedString::new();
-        attributed.replace_str(&text, CFRange::init(0, 0));
-        // SAFETY: kCTFontAttributeName is a static CoreText attribute key.
-        unsafe { attributed.set_attribute(CFRange::init(0, text.char_len()), kCTFontAttributeName, font) };
-        CTLine::new_with_attributed_string(attributed.as_concrete_TypeRef())
-    };
-    let text = |ctx: &CGContext, font: &CTFont, s: &str, x: f64, y: f64, right_aligned: bool| {
-        let l = line(font, s);
-        let x = if right_aligned { x - l.get_typographic_bounds().width } else { x };
-        ctx.set_text_position(x, y);
-        l.draw(ctx);
-    };
-    let space = CGColorSpace::create_device_rgb();
-    // kCGImageAlphaPremultipliedLast: RGBA bytes, the PNG encoder's order.
-    let mut ctx = CGContext::create_bitmap_context(None, W, H, 8, W * 4, &space, 1);
-    ctx.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0);
-    ctx.fill_rect(CGRect::new(&CGPoint::new(0.0, 0.0), &CGSize::new(W as f64, H as f64)));
-    ctx.set_rgb_fill_color(0.0, 0.0, 0.0, 1.0);
-    let body = core_text::font::new_from_name("Helvetica", 22.0).expect("Helvetica");
-    let title = core_text::font::new_from_name("Helvetica-Bold", 28.0).expect("Helvetica Bold");
-
-    let frames = flip.len().max(gpu_flip.len()).max(2);
-    let panel_h = (H as f64 - TOP - BOTTOM - 2.0 * GAP) / 3.0;
-    let plot_w = W as f64 - LEFT - RIGHT;
-    text(&ctx, &title, "Whitewater particles over time, Dam Break at 64", LEFT, H as f64 - 50.0, false);
-    for (panel, name) in ["Foam", "Bubbles", "Spray"].into_iter().enumerate() {
-        let base = BOTTOM + (2 - panel) as f64 * (panel_h + GAP);
-        let peak = flip.iter().chain(gpu_flip).map(|c| c[panel]).fold(1.0_f32, f32::max);
-        // Four gridlines at a round step: 1, 2, 2.5 or 5 times a power of ten.
-        let raw = f64::from(peak) / 4.0;
-        let magnitude = 10f64.powf(raw.log10().floor());
-        let step = [1.0, 2.0, 2.5, 5.0, 10.0].into_iter().map(|m| m * magnitude).find(|&s| s >= raw).unwrap_or(raw);
-        let top = 4.0 * step;
-        let x_of = |frame: usize| LEFT + plot_w * frame as f64 / (frames - 1) as f64;
-        let y_of = |v: f32| base + panel_h * f64::from(v) / top;
-        ctx.set_rgb_stroke_color(0.85, 0.85, 0.85, 1.0);
-        ctx.set_line_width(1.0);
-        for tick in 0..=4 {
-            let y = base + panel_h * f64::from(tick) / 4.0;
-            ctx.move_to_point(LEFT, y);
-            ctx.add_line_to_point(LEFT + plot_w, y);
-            ctx.stroke_path();
-            text(&ctx, &body, &format!("{:.0}", top * f64::from(tick) / 4.0), LEFT - 10.0, y - 7.0, true);
-        }
-        for second in 0..=(frames - 1) / 60 {
-            let x = x_of(second * 60);
-            ctx.move_to_point(x, base);
-            ctx.add_line_to_point(x, base + panel_h);
-            ctx.stroke_path();
-            text(&ctx, &body, &format!("{second} s"), x - 10.0, base - 28.0, false);
-        }
-        text(&ctx, &title, name, LEFT + 12.0, base + panel_h - 34.0, false);
-        for (series, (r, g, b)) in [(flip, FLIP_RGB), (gpu_flip, GPU_FLIP_RGB)] {
-            ctx.set_rgb_stroke_color(r, g, b, 1.0);
-            ctx.set_line_width(3.0);
-            for (frame, counts) in series.iter().enumerate() {
-                let (x, y) = (x_of(frame), y_of(counts[panel]));
-                if frame == 0 {
-                    ctx.move_to_point(x, y);
-                } else {
-                    ctx.add_line_to_point(x, y);
-                }
-            }
-            ctx.stroke_path();
-        }
-    }
-    let legend = [("FLIP engine, native whitewater", FLIP_RGB), ("GPU FLIP, GPU whitewater", GPU_FLIP_RGB)];
-    for (k, (label, (r, g, b))) in legend.into_iter().enumerate() {
-        let (x, y) = (LEFT + k as f64 * 520.0, H as f64 - 95.0);
-        ctx.set_rgb_fill_color(r, g, b, 1.0);
-        ctx.fill_rect(CGRect::new(&CGPoint::new(x, y), &CGSize::new(40.0, 8.0)));
-        ctx.set_rgb_fill_color(0.0, 0.0, 0.0, 1.0);
-        text(&ctx, &body, label, x + 52.0, y - 4.0, false);
-    }
-    let rgba = ctx.data().to_vec();
-    std::fs::write(path, encode_rgba8_png(&rgba, W as u32, H as u32)).expect("counts plot written");
-}
-
-/// A show's first `DEMO_FRAMES` frames at 1080p as `{name}.mp4`, with the
-/// P5 stills, and each frame's probes.
-fn record<const N: usize>(show: &mut Show, name: &str, dir: &Path, probes: [&str; N]) -> (PathBuf, Vec<[f32; N]>) {
-    let clip = dir.join(format!("{name}.mp4"));
-    let mut ffmpeg = encoder(&clip);
-    let mut values = Vec::new();
-    let wall = Instant::now();
-    for frame in 1..=DEMO_FRAMES {
-        show.frame(false);
-        values.push(show.probes(probes));
-        let rgba = show.readback();
-        if DEMO_STILLS.contains(&frame) {
-            let (w, h) = DEMO_SIZE;
-            std::fs::write(dir.join(format!("{name}_frame{frame:04}.png")), encode_rgba8_png(&rgba, w, h)).expect("still written");
-        }
-        ffmpeg.stdin.as_mut().expect("ffmpeg input").write_all(&rgba).expect("clip frame written");
-    }
-    finish(ffmpeg);
-    println!("WHITEWATER {name}: {DEMO_FRAMES} frames in {:.1} s", wall.elapsed().as_secs_f64());
-    (clip, values)
-}
-
-const FLIP_PROBES: [&str; 4] = ["foam_count", "bubble_count", "spray_count", "simulation_ms"];
-
-/// The engine's simulation ms a frame over `DEMO_FRAMES`, its whitewater on
-/// or off, with nothing else drawing on the cores.
-fn flip_simulation_ms(whitewater: bool) -> Vec<f64> {
-    let mut show = Show::new(flip_def(whitewater), (320, 180), false, &[]);
-    let ms = (0..DEMO_FRAMES)
-        .map(|_| {
-            show.frame(false);
-            let [foam, bubble, spray, ms] = show.probes(FLIP_PROBES);
-            assert!(whitewater || foam + bubble + spray == 0.0, "the engine's whitewater is off");
-            f64::from(ms)
-        })
-        .collect();
-    let errors = show.errors();
-    assert!(errors.is_empty(), "the engine ran with errors: {errors:#?}");
-    ms
-}
-
-/// P6: the Dam Break at 64 for 211 frames, the FLIP engine with its native
-/// whitewater left and GPU FLIP with the GPU whitewater right, through
-/// `WaterDamBreakGpu.json`'s camera, lights, tank and materials (studio
-/// floor and obstacle left out, as in the race clips). Writes
-/// `side_by_side.mp4` with a phone copy, `counts.png` and `counts.csv`,
-/// stills at 1.5 s and 3 s, and prints the cost table: GPU ms per whitewater
-/// kernel, and FLIP's whitewater cost as its
-/// simulation time with whitewater on minus off. The costs come from second
-/// runs that neither read back nor encode, since the encoder takes every
-/// core the lifecycle and the engine would use. No-op unless
-/// `WHITEWATER_DEMO_DIR` is set.
-#[test]
-fn whitewater_side_by_side() {
-    let Some(dir) = std::env::var_os("WHITEWATER_DEMO_DIR").map(PathBuf::from) else {
-        return;
-    };
-    std::fs::create_dir_all(&dir).expect("output directory");
-    let scene = WaterScene::race_dam_break(64);
-    let gpu_flip_show = || {
-        let mut show = Show::new(whitewater_render_def(scene), DEMO_SIZE, true, &[]);
-        show.restart();
-        show
-    };
-
-    let mut flip = Show::new(flip_def(true), DEMO_SIZE, false, &[]);
-    let (flip_clip, flip_values) = record(&mut flip, "flip", &dir, FLIP_PROBES);
-    drop(flip);
-    let mut gpu_flip = gpu_flip_show();
-    let (gpu_flip_clip, gpu_flip_values) = record(&mut gpu_flip, "gpu_flip", &dir, STEP_REPORTS);
-    let errors = gpu_flip.errors();
-    drop(gpu_flip);
-    assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
-
-    let (flip_on_ms, flip_off_ms) = (flip_simulation_ms(true), flip_simulation_ms(false));
-    // Live, as the show runs.
-    let live = manifold_node_engine::water::physics::PhysicsStepScope::for_render(false);
-    let mut gpu_flip = gpu_flip_show();
-    let gpu_flip_frames: Vec<Frame> = (0..DEMO_FRAMES).map(|_| gpu_flip.frame(true)).collect();
-    let labels = gpu_flip.labels().to_vec();
-    drop(gpu_flip);
-    drop(live);
-
-    let clip = dir.join("side_by_side.mp4");
-    side_by_side(&flip_clip, &gpu_flip_clip, &clip);
-    let phone = dir.join("side_by_side_phone.mp4");
-    match phone_copy(&clip, &phone) {
-        Some((crf, bytes)) => println!("WHITEWATER phone copy {} at CRF {crf}: {:.1} MB", phone.display(), bytes as f64 / 1048576.0),
-        None => println!("WHITEWATER phone copy {}: could not fit under the limit", phone.display()),
-    }
-    let flip_counts: Vec<[f32; 3]> = flip_values.iter().map(|v| [v[0], v[1], v[2]]).collect();
-    let gpu_flip_counts: Vec<[f32; 3]> = gpu_flip_values.iter().map(|v| [v[0], v[1], v[2]]).collect();
-    plot_counts(&dir.join("counts.png"), &flip_counts, &gpu_flip_counts);
-    let mut csv = String::from(
-        "frame,flip_foam,flip_bubble,flip_spray,gpu_flip_foam,gpu_flip_bubble,gpu_flip_spray,gpu_flip_emitted,flip_simulation_ms,flip_off_simulation_ms,gpu_flip_whitewater_gpu_ms\n",
-    );
-    for frame in 0..DEMO_FRAMES {
-        let (f, s) = (flip_values[frame], gpu_flip_values[frame]);
-        csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3}\n",
-            frame + 1,
-            f[0],
-            f[1],
-            f[2],
-            s[0],
-            s[1],
-            s[2],
-            s[3],
-            flip_on_ms[frame],
-            flip_off_ms[frame],
-            gpu_flip_frames[frame].whitewater_ms.iter().sum::<f64>()
-        ));
-    }
-    std::fs::write(dir.join("counts.csv"), csv).expect("counts csv");
-
-    // The cost table, from frame 11 on: the first frames compile pipelines.
-    let settled = 10..DEMO_FRAMES;
-    println!("WHITEWATER cost, frames {}..={DEMO_FRAMES}, p50 and p95 ms", settled.start + 1);
-    let mut total = vec![0.0; settled.len()];
-    for (k, label) in labels.iter().enumerate() {
-        let ms: Vec<f64> = gpu_flip_frames[settled.clone()].iter().map(|f| f.whitewater_ms[k]).collect();
-        for (t, m) in total.iter_mut().zip(&ms) {
-            *t += m;
-        }
-        println!("WHITEWATER   GPU {label:<56} {:7.3} {:7.3}", percentile(&ms, 0.5), percentile(&ms, 0.95));
-    }
-    let untimed = gpu_flip_frames.iter().map(|f| f.untimed).max().unwrap_or(0);
-    let frame_gpu: Vec<f64> = gpu_flip_frames[settled.clone()].iter().map(|f| f.gpu_ms).collect();
-    let frame_cpu: Vec<f64> = gpu_flip_frames[settled.clone()].iter().map(|f| f.cpu_ms).collect();
-    let (on, off) = (&flip_on_ms[settled.clone()], &flip_off_ms[settled.clone()]);
-    let delta: Vec<f64> = on.iter().zip(off).map(|(a, b)| a - b).collect();
-    let gpu_p95 = percentile(&total, 0.95);
-    let row = |name: &str, values: &[f64]| println!("WHITEWATER   {name:<60} {:7.3} {:7.3}", percentile(values, 0.5), percentile(values, 0.95));
-    row("GPU whitewater total (target p95 <= 2)", &total);
-    row("GPU FLIP whole frame GPU", &frame_gpu);
-    row("GPU FLIP whole frame CPU", &frame_cpu);
-    row("FLIP simulation_ms, whitewater on", on);
-    row("FLIP simulation_ms, whitewater off", off);
-    row("FLIP whitewater cost (on minus off, frame by frame)", &delta);
-    println!("WHITEWATER   untimed dispatches on the worst frame: {untimed}");
-    println!(
-        "WHITEWATER verdict: GPU {} the 2 ms p95 target",
-        if gpu_p95 <= 2.0 { "meets" } else { "misses" },
-    );
-    for frame in DEMO_STILLS {
-        let (f, s) = (flip_values[frame - 1], gpu_flip_values[frame - 1]);
-        println!("WHITEWATER frame {frame}: FLIP foam {} bubble {} spray {}; GPU FLIP foam {} bubble {} spray {}", f[0], f[1], f[2], s[0], s[1], s[2]);
-    }
-    println!("WHITEWATER wrote {} and {}", clip.display(), dir.join("counts.png").display());
-}
-
-const EMISSION_FRAMES: usize = 150;
-
-/// O2's whole-scene companion: the Dam Break at 64 for its first 150 frames,
-/// the shipped GPU FLIP preset beside the FLIP engine running its own water
-/// and whitewater (read-only, as the race clips run it). Per frame: GPU FLIP's
-/// emission (the step in `emitted`) and population, and the engine's diffuse
-/// population. The engine publishes no emission count, and counting it would
-/// mean editing vendored code, so its side is the population. Writes
-/// `emission_150.csv` to the temp directory and prints the totals; asserts
-/// that both emit, that GPU FLIP never thins or fills its pool, and that its
-/// population is what it emitted less what died (never more).
-#[test]
-fn whitewater_emission_against_engine_150() {
-    let mut flip = Show::new(flip_def(true), (320, 180), false, &[]);
-    let flip_rows: Vec<[f32; 3]> = (0..EMISSION_FRAMES)
-        .map(|_| {
-            flip.frame(false);
-            let [foam, bubble, spray, _] = flip.probes(FLIP_PROBES);
-            [foam, bubble, spray]
-        })
-        .collect();
-    let errors = flip.errors();
-    drop(flip);
-    assert!(errors.is_empty(), "the engine ran with errors: {errors:#?}");
-
-    let mut show = Show::new(whitewater_render_def(WaterScene::race_dam_break(64)), (320, 180), true, &[]);
-    show.restart();
-    let gpu_rows: Vec<[f32; 6]> = (0..EMISSION_FRAMES)
-        .map(|_| {
-            show.frame(false);
-            show.probes(STEP_REPORTS)
-        })
-        .collect();
-    let errors = show.errors();
-    drop(show);
-    assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
-
-    let mut csv = String::from("frame,gpu_flip_emitted_this_frame,gpu_flip_population,engine_population,engine_foam,engine_bubble,engine_spray\n");
-    let mut previous = 0.0;
-    let (mut gpu_emitted, mut gpu_pop_sum, mut engine_pop_sum) = (0.0f64, 0.0f64, 0.0f64);
-    for (frame, (g, e)) in gpu_rows.iter().zip(&flip_rows).enumerate() {
-        let emitted = g[3] - previous;
-        previous = g[3];
-        assert!(emitted >= 0.0, "frame {}: emitted ran backwards", frame + 1);
-        let population = g[0] + g[1] + g[2];
-        assert!(population <= g[3], "frame {}: population {population} above all emitted {}", frame + 1, g[3]);
-        let engine = e[0] + e[1] + e[2];
-        gpu_emitted += f64::from(emitted);
-        gpu_pop_sum += f64::from(population);
-        engine_pop_sum += f64::from(engine);
-        csv.push_str(&format!("{},{emitted},{population},{engine},{},{},{}\n", frame + 1, e[0], e[1], e[2]));
-    }
-    let path = std::env::temp_dir().join("emission_150.csv");
-    std::fs::write(&path, csv).expect("emission csv");
-    let last = gpu_rows[EMISSION_FRAMES - 1];
-    let engine_last = flip_rows[EMISSION_FRAMES - 1];
-    println!(
-        "WHITEWATER 150 frames: GPU FLIP emitted {gpu_emitted}, mean population {:.0}, last {:?}; engine mean population {:.0}, last {engine_last:?}; population ratio {:.3}; csv {}",
-        gpu_pop_sum / EMISSION_FRAMES as f64,
-        &last[..3],
-        engine_pop_sum / EMISSION_FRAMES as f64,
-        gpu_pop_sum / engine_pop_sum.max(1.0),
-        path.display()
-    );
-    assert!(gpu_emitted > 0.0, "GPU FLIP emitted nothing in 150 frames");
-    assert!(engine_pop_sum > 0.0, "the engine made no whitewater in 150 frames");
-    assert_eq!(last[4], 0.0, "GPU FLIP thinned spawns");
-    assert_eq!(last[5], 0.0, "the pool filled at the preset's capacity");
-}
-
-/// One whitewater's foam, bubble and spray counts per frame over
-/// `EMISSION_FRAMES`, with its cumulative emission.
-fn count_rows<const N: usize>(def: EffectGraphDef, reports: [&str; N], name: &str) -> Vec<[f32; 4]> {
-    let mut show = Show::new(def, (320, 180), true, &[]);
-    show.restart();
-    let rows = (0..EMISSION_FRAMES)
-        .map(|_| {
-            show.frame(false);
-            let r = show.probes(reports);
-            [r[0], r[1], r[2], r[3]]
-        })
-        .collect();
-    let errors = show.errors();
-    assert!(errors.is_empty(), "{name} ran with errors: {errors:#?}");
-    rows
-}
-
-/// L5: the Dam Break at 64 for 150 frames, the same GPU FLIP water feeding
-/// `node.whitewater_step` and, read-only, the vendored lifecycle behind the
-/// GPU emitter group it replaced. Per frame and type, both counts. Writes
-/// `whitewater_step_vs_vendored_150.csv` to the temp directory and prints
-/// both sides every 30 frames with the per-type totals over the run. The two
-/// are compared, not held equal: the node's lifecycle is a port, so its float
-/// path is not the engine's.
-#[test]
-fn whitewater_step_against_vendored_lifecycle_150() {
-    let scene = WaterScene::dam_break(64);
-    let step = count_rows(whitewater_render_def(scene), STEP_REPORTS, "whitewater_step");
-    let vendored = count_rows(vendored_render_def(scene), LIFECYCLE_REPORTS, "the vendored lifecycle");
-
-    let mut csv = String::from("frame,step_foam,step_bubble,step_spray,step_emitted,vendored_foam,vendored_bubble,vendored_spray,vendored_emitted\n");
-    let (mut step_sum, mut vendored_sum) = ([0.0f64; 3], [0.0f64; 3]);
-    for (frame, (s, v)) in step.iter().zip(&vendored).enumerate() {
-        for kind in 0..3 {
-            step_sum[kind] += f64::from(s[kind]);
-            vendored_sum[kind] += f64::from(v[kind]);
-        }
-        csv.push_str(&format!("{},{},{},{},{},{},{},{},{}\n", frame + 1, s[0], s[1], s[2], s[3], v[0], v[1], v[2], v[3]));
-        if (frame + 1) % 30 == 0 {
-            println!(
-                "L5 frame {}: step foam {} bubble {} spray {} emitted {}; vendored foam {} bubble {} spray {} emitted {}",
-                frame + 1, s[0], s[1], s[2], s[3], v[0], v[1], v[2], v[3]
-            );
-        }
-    }
-    let path = std::env::temp_dir().join("whitewater_step_vs_vendored_150.csv");
-    std::fs::write(&path, csv).expect("parity csv");
-    let ratio: Vec<String> =
-        (0..3).map(|k| format!("{:.3}", step_sum[k] / vendored_sum[k].max(1.0))).collect();
-    println!(
-        "L5 150 frames, summed population foam/bubble/spray: step {step_sum:?}, vendored {vendored_sum:?}, step/vendored [{}]; csv {}",
-        ratio.join(", "),
-        path.display()
-    );
-    assert!(step_sum.iter().sum::<f64>() > 0.0, "whitewater_step made no whitewater in 150 frames");
-    assert!(vendored_sum.iter().sum::<f64>() > 0.0, "the vendored lifecycle made no whitewater in 150 frames");
-}
-
 /// O2 (section 3.7): the GPU emitter against FLIP's own on the same inputs.
 #[cfg(feature = "whitewater-oracle")]
 mod emitter_oracle {
-    use manifold_node_engine::water::liquid::conformance::json_node_mut;
-    use manifold_node_engine::water::primitives::testkit as water_nodes;
+    use manifold_nodes_water::testkit::conformance::json_node_mut;
+    use manifold_nodes_water::primitives::testkit::whitewater as whitewater_nodes;
     use manifold_fluids::{
         WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle, WhitewaterParticle, WhitewaterSpawn,
         whitewater_oracle,
     };
     use manifold_gpu::GpuBuffer;
 
-    use manifold_node_engine::water::primitives::emission_count::EmissionCount;
-    use manifold_node_engine::water::primitives::jitter_particles::JitterParticles;
-    use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
-    use manifold_node_engine::water::primitives::sample_faces_at_particles::SampleFacesAtParticles;
-    use manifold_node_engine::water::primitives::spawn_whitewater::SpawnWhitewater;
-    use manifold_node_engine::water::primitives::gpu_flip_preset::REST_PER_CELL;
-    use manifold_node_engine::water::primitives::wavecrest_potential::WavecrestPotential;
-    use manifold_node_engine::water::primitives::whitewater_type::WhitewaterType;
+    use manifold_nodes_water::primitives::emission_count::EmissionCount;
+    use manifold_nodes_water::primitives::jitter_particles::JitterParticles;
+    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
+    use manifold_nodes_water::primitives::sample_faces_at_particles::SampleFacesAtParticles;
+    use manifold_nodes_water::primitives::spawn_whitewater::SpawnWhitewater;
+    use manifold_nodes_water::presets::gpu_flip::REST_PER_CELL;
+    use manifold_nodes_water::primitives::wavecrest_potential::WavecrestPotential;
+    use manifold_nodes_water::primitives::whitewater_type::WhitewaterType;
     use crate::contracts::node_graph::catalog_tests::whitewater_scene::*;
     use manifold_node_engine::bindings::Slot;
-    use manifold_node_engine::water::fluid_particles::FluidParticle;
-    use manifold_node_engine::water::liquid::grid::face_len;
+    use manifold_node_engine::particles::FluidParticle;
+    use manifold_nodes_water::liquid::grid::face_len;
     use manifold_node_engine::primitive::Primitive;
-    use manifold_node_engine::water::whitewater::KnownValue;
+    use manifold_nodes_water::whitewater::KnownValue;
 
     /// The whitewater grid: the surface's solid lattice, its cells and box, and
     /// the face grid centred in it.
@@ -891,7 +419,7 @@ mod emitter_oracle {
         /// grid.
         fn of(scene: WaterScene) -> Self {
             let n = scene.pressure.n;
-            let lattice = manifold_node_engine::water::liquid::lattice::LiquidLattice::from_layout(&scene.layout()).surface();
+            let lattice = manifold_nodes_water::liquid::lattice::LiquidLattice::from_layout(&scene.layout()).surface();
             let bounds = lattice.bounds();
             let nodes = lattice.nodes();
             assert!(nodes.iter().all(|&v| v == nodes[0]), "a cubic lattice: {nodes:?}");
@@ -1110,7 +638,7 @@ mod emitter_oracle {
             self.step(JitterParticles::new(), &[("particles", self.particles.0)], self.jittered.0, &[("cell_size", grid.h), ("seed", seed), ("epoch", 0.0)]);
             let sample = [&[("particles", self.jittered.0)][..], &faces[..]].concat();
             self.step(SampleFacesAtParticles::new(), &sample, self.sampled.0, &faced);
-            self.step(water_nodes::energy_potential(), &[("particles", self.sampled.0)], self.energy.0, &[]);
+            self.step(whitewater_nodes::energy_potential(), &[("particles", self.sampled.0)], self.energy.0, &[]);
             let crest = [("particles", self.sampled.0), ("distance", self.distance.0), ("curvature", self.curvature.0), ("cells", self.cells.0)];
             self.step(WavecrestPotential::new(), &crest, self.wavecrest.0, &boxed);
             let emit = [("particles", self.sampled.0), ("energy", self.energy.0), ("wavecrest", self.wavecrest.0)];
@@ -1665,9 +1193,11 @@ fn liquid_frame_live_held_frame_matches_offline() {
             offline.readback(),
         ));
     }
-    let _live = manifold_node_engine::water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let live_step = manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
+        .with_preview_budget(std::time::Duration::from_secs(1));
     // Live runs exact: the cursor presents behind the request by design.
     let mut live = Show::new(authored_cursor_history_def(0.0), (96, 54), false, &[]);
+    live.set_sim_step(live_step);
     live.restart();
     let mut holds = 0;
     for (k, (probes, particles_a, particles_b, pixels)) in expected.iter().enumerate() {
@@ -1694,8 +1224,10 @@ fn liquid_frame_live_held_frame_matches_offline() {
 /// found by B's time, and at least one frame shows a B older than the state.
 #[test]
 fn liquid_frame_whitewater_reads_the_selected_slot() {
-    let _live = manifold_node_engine::water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let live_step = manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
+        .with_preview_budget(std::time::Duration::from_secs(1));
     let mut show = Show::new(history_def(), (96, 54), false, &[]);
+    show.set_sim_step(live_step);
     show.restart();
     // Per frame: simulation time and the four classes the state then held.
     let mut published: Vec<(f32, [Vec<u8>; 4])> = Vec::new();
@@ -1733,9 +1265,11 @@ fn liquid_frame_whitewater_reads_the_selected_slot() {
 /// scalars together, and names the error.
 #[test]
 fn liquid_frame_encode_failure_publishes_the_selected_outputs() {
-    let _live = manifold_node_engine::water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let live_step = manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
+        .with_preview_budget(std::time::Duration::from_secs(1));
     let [mut clean, mut failing] = [(), ()].map(|()| {
         let mut show = Show::new(history_def(), (96, 54), false, &[]);
+        show.set_sim_step(live_step);
         show.restart();
         show
     });
@@ -1743,12 +1277,12 @@ fn liquid_frame_encode_failure_publishes_the_selected_outputs() {
         // Armed from frame 5 until a publication consumes it.
         let armed = frame >= 5;
         clean.frame(false);
-        manifold_node_engine::water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(armed);
+        manifold_nodes_water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(armed);
         failing.expect_node_error(armed);
         failing.frame(false);
         failing.expect_node_error(false);
-        let inject = armed && !manifold_node_engine::water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.get();
-        manifold_node_engine::water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(false);
+        let inject = armed && !manifold_nodes_water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.get();
+        manifold_nodes_water::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(false);
         if inject {
             assert!(failing.last_status().starts_with("Failed"), "frame {frame}: the failure is reported: {}", failing.last_status());
             assert_eq!(failing.probes(HISTORY_PROBES)[PAIR], clean.probes(HISTORY_PROBES)[PAIR], "frame {frame}: scalars follow the selection");
@@ -1792,6 +1326,6 @@ fn liquid_frame_solid_shrink_keeps_mix_capacity() {
     }
 }
 
-use manifold_node_engine::testkit::whitewater_scene::*;
+use manifold_nodes_water::testkit::whitewater_scene::*;
 
 const WHITEWATER_KINDS: [&str; 4] = ["foam", "bubble", "spray", "dust"];

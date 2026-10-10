@@ -15,6 +15,7 @@ members = [
     "crates/manifold-compositor",
     "crates/manifold-nodes-scene",
     "crates/manifold-nodes-image",
+    "crates/manifold-nodes-water",
     "crates/manifold-native",
     "crates/manifold-profiler",
     "crates/manifold-media",

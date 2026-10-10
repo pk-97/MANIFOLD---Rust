@@ -90,7 +90,7 @@ pub struct ContentThread {
     /// Physics metrics from the most recently completed live content render.
     /// Owned by the content thread so snapshot construction can read it after
     /// `tick_frame` finishes rendering.
-    pub physics_metrics: manifold_node_engine::water::physics_metrics::PhysicsMetrics,
+    pub physics_metrics: manifold_node_engine::exec::sim_metrics::SimMetrics,
 
     // ── Sync infrastructure ──
     /// Authority gatekeeper — only the active ClockAuthority can issue transport commands.
@@ -781,10 +781,10 @@ impl ContentThread {
         self.content_pipeline
             .set_node_preview_normalize(self.node_preview_normalize);
 
-        // Physics metrics are scoped to the live content render. Warmup runs
-        // outside this boundary, and nested parked-thumbnail work suspends the
-        // accumulator so the HUD reflects live render cost only.
-        manifold_node_engine::water::physics_metrics::begin_frame();
+        // Physics metrics cover the live content render only: anything
+        // recorded since the last frame (warmup) is dropped here, and
+        // thumbnails never reach the drained slots.
+        self.content_pipeline.take_sim_metrics(&mut self.engine);
         let render_work_start = std::time::Instant::now();
         self.content_pipeline.render_content(
             &self.gpu,
@@ -796,7 +796,7 @@ impl ContentThread {
             self.editing_service.data_version(),
             Some(self.audio_mod_runtime.visuals()),
         );
-        self.physics_metrics = manifold_node_engine::water::physics_metrics::take_frame();
+        self.physics_metrics = self.content_pipeline.take_sim_metrics(&mut self.engine);
         let render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
         self.content_pipeline.set_last_render_work_ms(render_work_ms);
 
@@ -1316,7 +1316,7 @@ impl ContentThread {
             content_fps: self.timer.current_fps() as f32,
             content_frame_time_ms: (self.timer.last_dt() * 1000.0) as f32,
             gpu_fence_wait_ms: self.content_pipeline.last_fence_wait_ms() as f32,
-            physics_cpu_ms: self.physics_metrics.physics_cpu_ms,
+            physics_cpu_ms: self.physics_metrics.cpu_ms,
             physics_body_count: self.physics_metrics.body_count,
             physics_backlog_seconds: self.physics_metrics.backlog_seconds,
             sim_step_cap_hit: self.physics_metrics.sim_step_cap_hit,

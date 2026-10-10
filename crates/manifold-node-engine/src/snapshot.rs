@@ -225,7 +225,7 @@ pub enum ParamSnapshotKind {
     Bool,
     Enum,
     /// Momentary "fire once" button. See [`ParamType::Trigger`] in
-    /// `manifold-nodes/.../parameters.rs` for the storage / cold-start
+    /// `parameters.rs` for the storage / cold-start
     /// contract; the outer-card click handler increments by one per press.
     Trigger,
     /// RGBA colour. Editable via a swatch + R/G/B/A channel sliders; its live

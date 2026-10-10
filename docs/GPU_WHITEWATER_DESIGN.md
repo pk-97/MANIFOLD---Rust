@@ -6,7 +6,7 @@
 **Prerequisites:** none — the seam's P1 and GPU FLIP's full step are on main. This design's P1 is the seam's P10 (Grid outputs).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
-**Reference boundary:** `WaterDamBreakGpu.json` below is the proof-only CPU fixture in `crates/manifold-nodes/tests/fixtures/cpu-flip/`; product water uses `WaterDamBreakGpuFlip`.
+**Reference boundary:** `WaterDamBreakGpu.json` below is the proof-only CPU fixture in (retired with CPU FLIP; in git history); product water uses `WaterDamBreakGpuFlip`.
 
 Peter, 2026-09-30, on BUG-imy3 (GPU whitewater, solver-agnostic): "move the spawn search to the GPU and reuse FLIP's own foam and bubble code."
 
@@ -37,12 +37,12 @@ Extend, don't redesign. `F/` is `crates/manifold-fluids/native/flip_engine/`, `R
 | Marker radius | `F/fluidsimulation.cpp:4517`: cbrt(3h³/(32π)) ≈ 0.31h | the emitter cylinder is 8× this |
 | Engine arrays | `F/macvelocityfield.h:92` (`getRawArrayU/V/W`), `F/particlelevelset.h:71` (`getPhiGrid`), `F/meshlevelset.h:101` (`constructMinimalLevelSet`), `:156` (`getPhiArray3d`), `F/array3d.h:391` (`getRawArray`) | whole-array copy targets (D6) |
 | Load path | `F/diffuseparticlesimulation.cpp:1480` (`loadDiffuseParticles`) never refreshes the cached size (`F/particlesystem.h:72`); `update` returns early on size 0 (`:95`) | trap: the glue calls `getDiffuseParticles()->update()` after every load |
-| FLIP-native path | `crates/manifold-fluids/native/bridge.cpp:1367` (options), `:665` (refresh); `R/primitives/fluid_surface.rs:123` (foam, bubbles, spray, counts) | the reference, unchanged |
-| Fade rule | `R/fluid.rs:319` (`WhitewaterFrame::fill`: scale √clamp(lifetime/0.2)) | one shared function (D7) |
+| FLIP-native path | `crates/manifold-fluids/native/bridge.cpp:1367` (options), `:665` (refresh); (retired with CPU FLIP; in git history) (foam, bubbles, spray, counts) | the reference, unchanged |
+| Fade rule | (retired with CPU FLIP; in git history) (`WhitewaterFrame::fill`: scale √clamp(lifetime/0.2)) | one shared function (D7) |
 | Output shape plan | GPU_FLUID_SURFACE_DESIGN.md P8 (Whitewater at 60 fps): `FluidParticle` per population, id 0, radius = fade | adopted (D7) |
 | Copies | `R/primitives/particles_to_copies.rs:26` (`live_count` holes) | exists |
 | Particle frame | `R/primitives/matter_frame.rs:80` (outputs), `R/liquid/frame_ring.rs:12` (3 slots) | read |
-| Clock | `R/liquid/clock.rs:10` (`ClockFrame { ticks, epoch }`); `R/primitives/matter_domain.rs:167-169` (`ticks`, `epoch` outputs); `R/fluid.rs:48` (`TICK` = 1/60) | read (D12) |
+| Clock | `R/liquid/clock.rs:10` (`ClockFrame { ticks, epoch }`); `R/primitives/matter_domain.rs:167-169` (`ticks`, `epoch` outputs); (retired with CPU FLIP; in git history) (`TICK` = 1/60) | read (D12) |
 | Level set | `R/primitives/particle_volume.rs:54`: nearest-blob distance, capped at 0.1 bin outside, bounded near −a inside | not a distance past the cap (D4) |
 | Surface group | `WaterDamBreakGpu.json` group `liquid_surface`: particle_volume → 3 × smooth_lattice → mesh | exports `level_set` in P1 |
 | Face contract | LIQUID_SOLVER_SEAM_DESIGN.md section 3.2 (Grid outputs), P10 (Grid outputs) | built here as P1 |
@@ -51,7 +51,7 @@ Extend, don't redesign. `F/` is `crates/manifold-fluids/native/flip_engine/`, `R
 | Scan | `R/primitives/running_total.rs:31` | exists |
 | Gather by running total | `R/primitives/select_flagged.rs:36` (binary search) | precedent for spawn |
 | GPU→CPU ring | `R/primitives/matter_state.rs:49` (`ReadbackSlot`), `:118` (poll), `:311` (capture; skip when all in flight) | precedent (D6) |
-| CPU→GPU ring | `R/fluid/particle_ring.rs:1` (read stamps, admission, growth) | precedent (D7) |
+| CPU→GPU ring | (retired with CPU FLIP; in git history) (read stamps, admission, growth) | precedent (D7) |
 | Frame clock | `crates/manifold-gpu/src/metal/retire.rs:159` (`stamp` `:176`, `is_complete` `:181`, `wait` `:189`) | used |
 | Instance upload | `R/instance_upload.rs:30` (64 instances per dispatch) | not used (D7) |
 | Record types | `R/fluid_particles.rs:126` (`FaceSample`, `KnownItem` `:141`) | precedent for `WhitewaterSpawn` |
@@ -226,8 +226,10 @@ Shared WGSL, via `wgsl_includes` (`R/liquid/bodies.rs` precedent): `liquid_faces
 ### 3.4 Committed types and ports
 
 ```rust
-// crates/manifold-fluids/src/whitewater.rs — one definition; the renderer
-// implements KnownItem for it (R/fluid_particles.rs, beside FaceSample).
+// Native ABI: crates/manifold-fluids/src/whitewater.rs.
+// The water graph owns its matching record and KnownItem implementation in
+// water/fluid_particles.rs, with compile-time size, alignment and field-offset
+// equality checks. The lifecycle reads the same mapped GPU bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct WhitewaterSpawn {
@@ -367,7 +369,7 @@ Cost is uncapped by resolution: the direct turbulence gather performs at most 64
 
 | # | Invariant | Enforcement |
 |---|---|---|
-| I1 | Whitewater reads only seam ports | negative gate: `rg -n -e matter_ -e gpu_flip_ -e fluid_surface -e "type_id ==" crates/manifold-node-engine/src/water/primitives/whitewater_*.rs crates/manifold-node-engine/src/water/primitives/*crossing*.rs` → 0 |
+| I1 | Whitewater reads only seam ports | negative gate: `rg -n -e matter_ -e gpu_flip_ -e fluid_surface -e "type_id ==" crates/manifold-nodes-water/src/primitives/whitewater_*.rs crates/manifold-nodes-water/src/primitives/*crossing*.rs` → 0 |
 | I2 | Grid placement is derived | `whitewater_refuses_misplaced_face_grid`, `whitewater_refuses_fractional_refinement`, `whitewater_refuses_unextended_faces` |
 | I3 | Live never waits on the GPU or the lifecycle's thread; offline waits for both | `whitewater_live_holds_until_fence`, `whitewater_live_never_waits_for_the_worker`, `whitewater_offline_waits_for_its_snapshot_and_the_worker` |
 | I4 | A snapshot is consumed once, in order, after its fence; a dropped one is counted | `whitewater_ring_overflow_counts_dropped_ticks` |
@@ -393,7 +395,7 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 - **Entry state:** this design approved; `origin/feat/fft-water` merged into the branch; anchors `swash_preset.rs:609`, `matter_state.rs:157`, `R/matter.rs:287` re-read.
 - **Read-back:** LIQUID_SOLVER_SEAM_DESIGN.md section 3.2 (Grid outputs) and P10 (Grid outputs); ADDING_PRIMITIVES.md; this doc's section 3.1 (Grids) and section 3.6 (Solver feeds). Restate D2, the seam's P10 forbidden list, and the entry findings.
 - **Deliverables:** `R/liquid/grid.rs` with `FACE_GRID_PORTS`; `node.face_sample_component`, `node.matter_face_component`; `matter_frame` inputs and outputs for the grid; group outputs `level_set`, `level_set_bounds`, `level_set_nodes_x/y/z` in every preset that embeds the Liquid Surface group (`rg -l '"liquid_surface"' crates/manifold-nodes/assets/generator-presets`), thumbnails regenerated; `face_grid_extent_tests.rs`; `liquid_face_grid_layout` (uniform and linear-shear fields, both producers, within 1e-5 of the seam positions).
-- **Gate:** `cargo nextest run -p manifold-nodes face_grid liquid_face_grid_layout`; `scripts/gpu_proofs_gate.py` green; `graph-tool validate` clean on every touched preset; every regenerated thumbnail pixel-identical to its previous PNG (new outputs must not change the render; any changed pixel stops the phase and is reported). Negative: `rg -n -e matter_ -e gpu_flip_ -e fluid_surface crates/manifold-node-engine/src/water/liquid/grid.rs` → 0, and `type_id ==` in the two new atoms → 0 (the atoms are the solver-specific producers, so I1 itself does not apply to them).
+- **Gate:** `cargo nextest run -p manifold-nodes face_grid liquid_face_grid_layout`; `scripts/gpu_proofs_gate.py` green; `graph-tool validate` clean on every touched preset; every regenerated thumbnail pixel-identical to its previous PNG (new outputs must not change the render; any changed pixel stops the phase and is reported). Negative: `rg -n -e matter_ -e gpu_flip_ -e fluid_surface crates/manifold-nodes-water/src/liquid/grid.rs` → 0, and `type_id ==` in the two new atoms → 0 (the atoms are the solver-specific producers, so I1 itself does not apply to them).
 - **Demo:** L2, the seam's P10 demo: a face-speed slice of SWASH and MPM Dam Break at the same tick, side by side, PNG (`face_grid_demo_swash_and_matter_side_by_side`, path in `FACE_GRID_DEMO_PNG`).
 - **Forbidden:** a consumer switching on solver; node velocities as the contract; publishing every tick; `liquid_frame` (P7a's).
 - **Test scope:** focused renderer; GPU proofs.

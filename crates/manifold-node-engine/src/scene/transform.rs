@@ -124,6 +124,18 @@ pub fn quat_to_render_scene_euler(q: [f32; 4]) -> [f32; 3] {
     [rx, ry, rz]
 }
 
+impl From<Transform> for manifold_core::fluid_domain::DomainBox {
+    fn from(t: Transform) -> Self {
+        Self { pos: t.pos, rot_euler: t.rot_euler, scale: t.scale, billboard: t.billboard }
+    }
+}
+
+impl From<manifold_core::fluid_domain::DomainBox> for Transform {
+    fn from(b: manifold_core::fluid_domain::DomainBox) -> Self {
+        Self { pos: b.pos, rot_euler: b.rot_euler, scale: b.scale, billboard: b.billboard }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// Numerically verifies [`quat_to_render_scene_euler`]'s derivation:

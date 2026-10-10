@@ -927,62 +927,7 @@ pub fn instantiate_def(
         }
     }
 
-    // Coupled physics is graph-owned runtime metadata. Resolve stable scene
-    // identities against this exact def and this instantiation's id_map;
-    // the graph-wide stable-id lookup is not valid for effect splices.
-    let has_fluid = def
-        .nodes
-        .iter()
-        .any(|node| manifold_core::liquid_domain::is_liquid_domain(&node.type_id));
-    let has_rigid = def.nodes.iter().any(|node| node.type_id == "node.physics_world");
-    if has_fluid && has_rigid {
-        let bindings = crate::load::expand::prepare_coupled_scenes(def, registry)
-            .map_err(GraphBuildError::SceneModifier)?;
-        for binding in bindings {
-            let fluid_doc = def
-                .nodes
-                .iter()
-                .find(|node| node.node_id == binding.fluid)
-                .ok_or_else(|| GraphBuildError::SceneModifier(
-                    crate::load::expand::SceneModifierExpandError::MissingTarget {
-                        path: binding.fluid.to_string(),
-                        detail: "prepared coupled fluid node is missing from the instantiated def".into(),
-                    },
-                ))?;
-            let rigid_doc = def
-                .nodes
-                .iter()
-                .find(|node| node.node_id == binding.rigid)
-                .ok_or_else(|| GraphBuildError::SceneModifier(
-                    crate::load::expand::SceneModifierExpandError::MissingTarget {
-                        path: binding.rigid.to_string(),
-                        detail: "prepared coupled rigid node is missing from the instantiated def".into(),
-                    },
-                ))?;
-            let fluid = *id_map.get(&fluid_doc.id).ok_or_else(|| {
-                GraphBuildError::SceneModifier(
-                    crate::load::expand::SceneModifierExpandError::MissingTarget {
-                        path: binding.fluid.to_string(),
-                        detail: "prepared coupled fluid node has no runtime mapping".into(),
-                    },
-                )
-            })?;
-            let rigid = *id_map.get(&rigid_doc.id).ok_or_else(|| {
-                GraphBuildError::SceneModifier(
-                    crate::load::expand::SceneModifierExpandError::MissingTarget {
-                        path: binding.rigid.to_string(),
-                        detail: "prepared coupled rigid node has no runtime mapping".into(),
-                    },
-                )
-            })?;
-            graph
-                .add_coupled_scene(fluid, rigid, binding.colliders)
-                .map_err(|error| GraphBuildError::InvalidWire {
-                    wire_index: usize::MAX,
-                    reason: format!("failed to register coupled scene: {error}"),
-                })?;
-        }
-    }
+    crate::load::instantiation::run(def, registry, &id_map, graph)?;
 
     // Prepared mesh-rule sidecar (design §3.3): after every node exists
     // and its params/sources are installed, forward the compiler-provided
@@ -2031,26 +1976,6 @@ mod tests {
             .expect("old id present, migration must produce Some");
         assert_eq!(migrated.nodes[0].type_id, "node.draw_particles_camera");
         assert!(migrated.nodes[0].params.is_empty());
-    }
-
-    #[test]
-    fn retired_params_saved_nondefault_values_load() {
-        let registry = registry();
-        for &(type_id, param) in manifold_core::type_id_migration::RETIRED_PARAMS {
-            let declared = registry.construct(type_id).expect("retired params belong to a live node type");
-            assert!(declared.parameters().iter().all(|p| p.name != param), "{type_id}.{param} is still declared");
-            let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
-                "version": 1, "nodes": [{"id": 1, "nodeId": "n", "typeId": type_id, "handle": "n",
-                    "params": {param: {"type": "Float", "value": 137.0}}}], "wires": []
-            })).unwrap();
-            assert!(has_retired_params(&def));
-            let mut graph = Graph::new();
-            instantiate_def(&mut graph, &def, &registry, HandleScope::Global,
-                BoundaryHandling::Standalone, &crate::scene::mesh_change::PreparedMeshRules::default())
-                .unwrap_or_else(|e| panic!("{type_id}.{param}: saved retired value must load: {e:?}"));
-            let node = graph.get_node(graph.node_id_by_handle("n").unwrap()).unwrap();
-            assert!(node.params.get(param).is_none(), "{type_id}.{param}");
-        }
     }
 
     #[test]

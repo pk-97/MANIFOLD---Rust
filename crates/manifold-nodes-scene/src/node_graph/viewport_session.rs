@@ -341,7 +341,7 @@ impl ViewportSession {
     /// Append bounds from the same runtime that produced the cached image.
     pub fn write_fluid_domains(
         &self,
-        output: &mut Vec<(NodeId, manifold_node_engine::water::fluid::FluidDomainSnapshot)>,
+        output: &mut Vec<(NodeId, manifold_core::fluid_domain::FluidDomainSnapshot)>,
     ) {
         self.runtime.write_fluid_domains_watched(output);
     }

@@ -1,8 +1,9 @@
-    use manifold_node_engine::water::liquid::extent::*;
-use manifold_node_engine::water::liquid::lattice::LiquidLattice;
+    use manifold_nodes_water::testkit::preset_extents::{check_preset_extents, LiquidPreset};
+use manifold_node_engine::exec::extent::*;
+use manifold_nodes_water::liquid::lattice::LiquidLattice;
 use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_nodes::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
-    use manifold_node_engine::water::fluid::domain_layout;
+    use manifold_core::fluid_domain::domain_layout;
 
 
     use manifold_core::preset_def::PresetKind;
@@ -94,12 +95,12 @@ use manifold_core::effect_graph_def::EffectGraphDef;
     #[test]
     fn particle_blend_mix_refuses_unequal_capacities() {
         let mut preset = LiquidPreset::build(&particle_blend_preset()).unwrap();
-        let rules: Vec<_> = LIQUID_EXTENT_RULES.iter().map(|rule| {
+        let rules: Vec<_> = EXTENT_RULES.iter().map(|rule| {
             if rule.type_id == "node.liquid_frame" {
-                ExtentRule { type_id: rule.type_id, check: manifold_node_engine::water::liquid::extent::testkit::malformed_frame }
+                ExtentRule { type_id: rule.type_id, check: manifold_node_engine::exec::extent::testkit::malformed_frame }
             } else { *rule }
         }).collect();
-        match manifold_node_engine::water::liquid::extent::testkit::check_with_rules(&mut preset, &rules) {
+        match manifold_nodes_water::testkit::preset_extents::testkit::check_with_rules(&mut preset, &rules) {
             Err(ExtentError::Refused { node, reason }) => {
                 assert!(node.contains("node.mix_arrays"), "{node}");
                 assert!(reason.contains("input capacities must match"), "{reason}");
@@ -205,8 +206,8 @@ use manifold_core::liquid_domain::is_liquid_domain;
         let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakMatter").expect("preset");
         let mut preset = LiquidPreset::build(def.as_ref()).expect("builds");
         let rules: Vec<ExtentRule> =
-            LIQUID_EXTENT_RULES.iter().filter(|rule| rule.type_id != "node.matter_to_grid").copied().collect();
-        match manifold_node_engine::water::liquid::extent::testkit::check_with_rules(&mut preset, &rules) {
+            EXTENT_RULES.iter().filter(|rule| rule.type_id != "node.matter_to_grid").copied().collect();
+        match manifold_nodes_water::testkit::preset_extents::testkit::check_with_rules(&mut preset, &rules) {
             Err(ExtentError::NoRule { type_id, .. }) => assert_eq!(type_id, "node.matter_to_grid"),
             other => panic!("expected a missing rule, got {other:?}"),
         }
@@ -251,7 +252,7 @@ use manifold_core::liquid_domain::is_liquid_domain;
         let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "OceanCliff").expect("preset");
         let preset = LiquidPreset::build(def.as_ref()).unwrap();
         for padding in [0, 4096] {
-            let (bound, held) = manifold_node_engine::water::liquid::extent::testkit::inverse_fft_rebind_bytes(&preset, padding);
+            let (bound, held) = manifold_nodes_water::testkit::preset_extents::testkit::inverse_fft_rebind_bytes(&preset, padding);
             // Four cached pairs plus a distinct incoming pair before eviction.
             assert_eq!(bound + held, 5 * bound);
         }
@@ -293,8 +294,6 @@ fn extent_rule_inventory_preserves_the_rule_table() {
         "node.push_out_of_solid",
         "node.mix_arrays",
         manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID,
-        #[cfg(feature = "gpu-proofs")]
-        manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,
         "node.matter_fill",
         "node.matter_state",
         "node.zero_array",
@@ -381,7 +380,7 @@ fn extent_rule_inventory_preserves_the_rule_table() {
         "node.particles_to_copies",
     ];
     expected.sort_unstable();
-    let registered: Vec<_> = LIQUID_EXTENT_RULES.iter().map(|rule| rule.type_id).collect();
+    let registered: Vec<_> = EXTENT_RULES.iter().map(|rule| rule.type_id).collect();
     assert_eq!(registered, expected);
     assert!(registered.windows(2).all(|pair| pair[0] < pair[1]), "duplicate extent rule");
 }

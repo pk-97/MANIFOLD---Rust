@@ -1,7 +1,7 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
 use manifold_node_engine::mesh::MeshVertex;
-use manifold_node_engine::water::liquid::extent::{AtomExtent, ExtentRule, Verdict, size_bounded, whole_param};
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict, size_bounded, whole_param};
 
 fn make_triangles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let cols = u64::from(whole_param(x, "src_cols", 256.0).max(2));

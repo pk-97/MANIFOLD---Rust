@@ -1,0 +1,12 @@
+//! Buffer extent rule owned by this node.
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use crate::liquid::extent::{KNOWN_VALUE, whitewater_grid};
+
+fn extend_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (_, cells) = whitewater_grid(x)?;
+    x.covers("values", cells * KNOWN_VALUE)?;
+    x.covers("out", cells * KNOWN_VALUE)
+}
+inventory::submit! {
+    ExtentRule { type_id: "node.extend_lattice", check: extend_lattice }
+}

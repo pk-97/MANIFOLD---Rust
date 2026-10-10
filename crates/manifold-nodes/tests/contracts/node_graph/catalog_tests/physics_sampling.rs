@@ -5,88 +5,6 @@ use manifold_node_engine::runtime::*;
 use manifold_core::{Beats, Seconds};
     use manifold_node_engine::persistence::PrimitiveRegistry;
 
-    #[cfg(feature = "gpu-proofs")]
-    #[test]
-    fn scene_physics_role_history_samples_live_controls_without_rendering() {
-        let mut def: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cpu-flip/WaterBasin.json")))
-        .unwrap();
-        def["nodes"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({
-                "id": 500, "nodeId": "pouring_mesh", "typeId": "node.fluid_role_source"
-            }));
-        def["nodes"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({
-                "id": 501, "nodeId": "visible_source", "typeId": "node.cube_mesh"
-            }));
-        def["wires"].as_array_mut().unwrap().extend([
-            serde_json::json!({"fromNode": 5, "fromPort": "transform", "toNode": 500, "toPort": "transform"}),
-            serde_json::json!({"fromNode": 501, "fromPort": "source", "toNode": 500, "toPort": "mesh_0"}),
-            serde_json::json!({"fromNode": 500, "fromPort": "role", "toNode": 4, "toPort": "role_0"}),
-        ]);
-        let runtime =
-            PresetRuntime::from_json_str(&def.to_string(), &PrimitiveRegistry::with_cpu_flip_reference())
-                .expect("typed fluid role ancestry loads");
-        let mut saw_source = false;
-        let mut saw_motion = false;
-        for (step, sampled) in runtime
-            .plan
-            .steps()
-            .iter()
-            .zip(manifold_node_engine::runtime::testkit::sampling_mask(&runtime).unwrap())
-        {
-            let kind = runtime.graph.get_node(step.node).unwrap().node.type_id();
-            match kind.as_str() {
-                "node.fluid_role_source" => {
-                    assert!(sampled);
-                    saw_source = true;
-                }
-                "node.lfo" => {
-                    assert!(sampled);
-                    saw_motion = true;
-                }
-                "node.scene_object" | "node.render_scene" | "node.cube_mesh" => assert!(!sampled),
-                _ => {}
-            }
-        }
-        assert!(saw_source && saw_motion);
-    }
-
-    #[cfg(feature = "gpu-proofs")]
-    #[test]
-    fn water_history_samples_fluid_controls_without_rendering() {
-        let runtime = PresetRuntime::from_json_str(
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cpu-flip/WaterBasin.json")),
-            &PrimitiveRegistry::with_cpu_flip_reference(),
-        )
-        .expect("WaterBasin loads");
-        let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime)
-            .expect("fluid ancestry");
-        let sampled: Vec<_> = runtime
-            .plan
-            .steps()
-            .iter()
-            .zip(mask)
-            .filter(|(_, enabled)| **enabled)
-            .map(|(step, _)| {
-                runtime
-                    .graph
-                    .get_node(step.node)
-                    .unwrap()
-                    .node
-                    .type_id()
-                    .as_str()
-                    .to_owned()
-            })
-            .collect();
-        assert!(sampled.iter().any(|kind| kind == FLIP_DOMAIN_TYPE_ID));
-        assert!(sampled.iter().any(|kind| kind == "node.lfo"));
-        assert!(!sampled.iter().any(|kind| kind == "node.scene_object"));
-        assert!(!sampled.iter().any(|kind| kind == "node.render_scene"));
-    }
 
     #[test]
     fn matter_liquid_samples_its_field_and_its_world_per_tick() {
@@ -95,12 +13,12 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("WaterFloatingBoxMatter loads");
-        let pairs = runtime.plan.coupled_scenes();
+        let pairs = runtime.plan.node_pairs();
         assert!(!pairs.is_empty(), "the box and the liquid are one coupled scene");
-        let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime).expect("the liquid samples its field per tick");
+        let mask = manifold_nodes_water::runtime::testkit::sampling_mask(&runtime).expect("the liquid samples its field per tick");
         for pair in pairs {
-            assert!(mask[pair.fluid_step_for_test()], "the liquid samples");
-            assert!(mask[pair.rigid_step_for_test()], "its owned world's scene samples per tick");
+            assert!(mask[pair.first_step], "the liquid samples");
+            assert!(mask[pair.second_step], "its owned world's scene samples per tick");
         }
     }
 
@@ -133,7 +51,7 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("PhysicsSolids with an LFO-authored body loads");
-        let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime)
+        let mask = manifold_nodes_water::runtime::testkit::sampling_mask(&runtime)
             .expect("physics ancestry");
         let sampled: Vec<_> = runtime
             .plan
@@ -181,7 +99,7 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("rigid body source graph loads");
-        let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime)
+        let mask = manifold_nodes_water::runtime::testkit::sampling_mask(&runtime)
             .expect("physics ancestry");
         let sampled: Vec<_> = runtime
             .plan
@@ -216,14 +134,14 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("PhysicsSolids loads");
-        manifold_node_engine::runtime::testkit::set_last_physics_frame_time(&mut runtime, Some(FrameTime {
+        manifold_nodes_water::runtime::testkit::set_last_physics_frame_time(&mut runtime, Some(FrameTime {
             beats: Beats(1.0),
             seconds: Seconds(1.0),
             delta: Seconds(1.0),
             frame_count: 1,
         }));
         runtime.reset_state(&manifold_gpu::testkit::test_device());
-        assert!(manifold_node_engine::runtime::testkit::last_physics_frame_time(&runtime).is_none());
+        assert!(manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).is_none());
     }
 
     #[test]
@@ -253,7 +171,7 @@ use manifold_core::{Beats, Seconds};
             .plan
             .steps()
             .iter()
-            .zip(manifold_node_engine::runtime::testkit::sampling_mask(&runtime).unwrap())
+            .zip(manifold_nodes_water::runtime::testkit::sampling_mask(&runtime).unwrap())
         {
             if step.node == event {
                 assert!(!sampled);
@@ -282,7 +200,7 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("OceanCliff loads");
-        let mask = manifold_node_engine::runtime::testkit::sampling_mask(&runtime).expect("the paddle is physics ancestry");
+        let mask = manifold_nodes_water::runtime::testkit::sampling_mask(&runtime).expect("the paddle is physics ancestry");
         let sampled = |node_id: &str| {
             let node = runtime
                 .graph
@@ -305,5 +223,3 @@ use manifold_core::{Beats, Seconds};
         }
     }
 
-#[cfg(feature = "gpu-proofs")]
-use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;

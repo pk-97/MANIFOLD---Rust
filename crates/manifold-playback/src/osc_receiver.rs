@@ -143,6 +143,10 @@ impl OscReceiver {
                 return;
             }
         };
+        // Port 0 asks the OS for a free port; report the one actually bound.
+        if let Ok(local) = socket.local_addr() {
+            self.listen_port = i32::from(local.port());
+        }
 
         // Short timeout so the thread checks shutdown_flag periodically.
         if let Err(e) = socket.set_read_timeout(Some(std::time::Duration::from_millis(100))) {

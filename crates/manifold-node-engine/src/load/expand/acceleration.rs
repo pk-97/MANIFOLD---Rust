@@ -8,6 +8,7 @@ use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 
 use crate::persistence::PrimitiveRegistry;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 
 use super::SceneModifierExpandError;
 
@@ -118,7 +119,10 @@ fn trace(
                 Some(("copies".to_string(), "copies_acceleration".to_string()))
             } else {
                 port.strip_prefix("pose_")
-                    .filter(|slot| slot.parse::<usize>().is_ok_and(|slot| slot < 64))
+                    .filter(|slot| {
+                        slot.parse::<usize>()
+                            .is_ok_and(|slot| slot < RigidImpulseTargets::BODY_CAPACITY)
+                    })
                     .map(|slot| (format!("body_{slot}"), format!("body_acceleration_{slot}")))
             };
             if let Some((input, port)) = input {
@@ -242,7 +246,7 @@ pub(super) fn recipient_key(
 /// Prepare the same physical selection for discrete hits. Several visible
 /// material parts may share one body; several bodies may share one world.
 /// Merge both cases before delivery so one hit reaches each body only once.
-pub(crate) fn impulse_recipients(
+pub fn impulse_recipients(
     owner: &EffectGraphDef,
     scene: &SceneNodeRef,
     selection: &SceneTargetSelection,
@@ -250,7 +254,7 @@ pub(crate) fn impulse_recipients(
 ) -> Result<
     Vec<(
         manifold_core::NodeId,
-        crate::water::physics_events::ImpulseTarget,
+        manifold_core::scene_impulse::ImpulseTarget,
     )>,
     SceneModifierExpandError,
 > {
@@ -258,7 +262,7 @@ pub(crate) fn impulse_recipients(
     impulse_recipients_with_index(&index, scene, selection, registry)
 }
 
-pub(super) fn impulse_recipients_with_index(
+pub fn impulse_recipients_with_index(
     index: &FlatSceneIndex,
     scene: &SceneNodeRef,
     selection: &SceneTargetSelection,
@@ -266,12 +270,11 @@ pub(super) fn impulse_recipients_with_index(
 ) -> Result<
     Vec<(
         manifold_core::NodeId,
-        crate::water::physics_events::ImpulseTarget,
+        manifold_core::scene_impulse::ImpulseTarget,
     )>,
     SceneModifierExpandError,
 > {
-    use crate::water::physics::RigidImpulseTargets;
-    use crate::water::physics_events::ImpulseTarget;
+    use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
     let mut worlds = std::collections::BTreeMap::new();
     for object in selected(index, selection, scene, registry)? {
         let Some(recipient) = resolve(index, &object, registry)? else {
@@ -289,7 +292,7 @@ pub(super) fn impulse_recipients_with_index(
                     .port
                     .strip_prefix("body_acceleration_")
                     .and_then(|slot| slot.parse::<usize>().ok())
-                    .filter(|&slot| slot < 64)
+                    .filter(|&slot| slot < RigidImpulseTargets::BODY_CAPACITY)
                     .ok_or_else(|| {
                         unsupported(&recipient.port, "invalid rigid impulse recipient")
                     })?;
