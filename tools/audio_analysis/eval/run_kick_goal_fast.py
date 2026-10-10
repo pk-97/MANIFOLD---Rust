@@ -58,6 +58,11 @@ TAG = INPUT_TAG + (f'_s{SEED}' if SEED else '') + (f'_e{NETS}' if NETS > 1 else 
 # KICK_GOAL_NN_SYNTH=1: the nets also train on the kick-swap clips that involve no held-out song.
 SYNTH_ON = os.environ.get('KICK_GOAL_NN_SYNTH') == '1'
 TAG += '_syn' if SYNTH_ON else ''
+# KICK_GOAL_NN_BUILDUP=eval: nets also score the held-out build-up clips (kick_goal_buildup, BUG-qy8q7) and the run
+# reports how many roll hits and other kicks in them pass p >= .5; =train: the nets also train on the clips whose
+# target and donor are both outside the held-out group.
+BUILDUP = os.environ.get('KICK_GOAL_NN_BUILDUP', '')
+TAG += '_bu' if BUILDUP == 'train' else ''
 # KICK_GOAL_MELODIC=1: project melodic note starts weigh as certain non-kicks (kick_goal_melodic).
 MELODIC_ON = os.environ.get('KICK_GOAL_MELODIC') == '1'
 TAG += '_mel' if MELODIC_ON else ''
@@ -110,13 +115,30 @@ def nets(g, folds):
     # labels, which counted delay echoes as kicks.
     clips = [c for c in (Song.synth(p).to(dev) for p in sorted((GOAL / 'synth').glob('*.npz')))
              if c.sources[1] != 'midnight_patience'] if SYNTH_ON else []
-    out = {}
+    build = []
+    if BUILDUP:
+        from tools.audio_analysis.eval.kick_goal_nn import AHEAD_MS, BANDS, CHANNELS
+        assert BANDS == 64 and CHANNELS == 2, 'build-up clips hold 64-band spectra and no extra channels'
+        for p in sorted((GOAL / 'buildup').glob('*.npz')):
+            with np.load(p) as z:
+                c = Song(z['spec'].astype(np.float32), z['onset_s'], z['emit_s'] + AHEAD_MS / 1000, z['mask'], z['y'], p.stem).to(dev)
+                c.sources, c.roll = (str(z['target']), str(z['donor'])), z['roll']
+            build.append(c)
+    out, readout = {}, np.zeros(4)
     for k, f in enumerate(folds):
         t0 = time.time()
-        usable = [c for c in clips if not set(c.sources) & set(f)]
+        usable = [c for c in clips + (build if BUILDUP == 'train' else []) if not set(c.sources) & set(f)]
         fitted = [train([data[u] for u in ALL if u not in f], 1000 * k + 7 * e + 100000 * SEED, usable) for e in range(NETS)]
         out[k] = {t: np.mean([predict(net, data[t]) for net in fitted], axis=0) for t in f}
+        for c in build:
+            if c.sources[0] in f:
+                p = np.mean([predict(net, c) for net in fitted], axis=0)
+                kick = c.mask & (c.y == 1)
+                readout += [np.sum(p[c.roll] >= .5), c.roll.sum(), np.sum(p[kick & ~c.roll] >= .5), np.sum(kick & ~c.roll)]
         print(f'nets group {k} ({time.time() - t0:.0f} s)', flush=True)
+    if BUILDUP:
+        print(f'build-up clips, held out, net p >= .5: roll hits {readout[0] / max(1, readout[1]):.3f} ({int(readout[0])}/{int(readout[1])}), '
+              f'other kicks {readout[2] / max(1, readout[3]):.3f} ({int(readout[2])}/{int(readout[3])})', flush=True)
     return out
 
 
