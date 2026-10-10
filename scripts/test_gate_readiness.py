@@ -185,9 +185,11 @@ class P1PlannerTests(unittest.TestCase):
                 patch.object(cpu_scope, "integration_rows", return_value={}):
             plan = cpu_scope.plan_for_paths(["scripts/gate_policy.py"], ROOT, self.workspace)
             other = cpu_scope.plan_for_paths(["scripts/other.py"], ROOT, self.workspace)
-        self.assertEqual(plan.packages, {"manifold-app", "manifold-ui"})
-        self.assertIn("(package(=manifold-app) & test(/^frame_time::/))", plan.filters)
-        self.assertEqual(other.packages, set())
+        # Resolution-only: nothing new runs, the ownership leg checks every row.
+        self.assertEqual((plan.packages, plan.filters), (set(), set()))
+        self.assertEqual(plan.check_packages, {"manifold-app", "manifold-ui"})
+        self.assertIn("(package(=manifold-app) & test(/^frame_time::/))", plan.check_filters)
+        self.assertEqual(other.check_packages, set())
         listing = {"rust-suites": {"app": {"binary-name": "manifold", "testcases": ["other::case"]}}}
         with self.assertRaisesRegex(ValueError, "ownership mapping resolves to no tests"):
             cpu_scope.validate_inventory(plan, "manifold-app", listing)

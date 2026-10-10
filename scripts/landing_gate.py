@@ -719,7 +719,7 @@ def _main(stack):
     # A leg whose compile failed is skipped by name (the build's red stands);
     # the hold still serves whatever else compiled.
     unbuilt = set()
-    if pending_tests:
+    if pending_tests or cpu_plan.check_packages:
         builds = {}
         for _, cmd, _ in pending_tests:
             builds.setdefault(cmd[cmd.index('-p') + 1], []).append(cmd[cmd.index('-E') + 1])
@@ -733,7 +733,8 @@ def _main(stack):
                 unbuilt.add(package)
                 if args.fail_fast:
                     return finish(repo, base_sha, results)
-        for package in sorted(builds.keys() - unbuilt):
+        # Packages that only carry a policy row to check (nothing runs there).
+        for package in sorted((builds.keys() - unbuilt) | (cpu_plan.check_packages - builds.keys())):
             command = ['cargo', 'nextest', 'list', '-p', package, '--message-format', 'json']
             code, out, err, duration = run_cmd(command, cwd=repo, timeout=600)
             try:

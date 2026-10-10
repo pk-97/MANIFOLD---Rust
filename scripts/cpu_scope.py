@@ -42,6 +42,11 @@ class Plan:
     gpu_filters: set = field(default_factory=set)
     path_filters: dict = field(default_factory=dict)
     widening_reasons: set = field(default_factory=set)
+    check_filters: set = field(default_factory=set)
+
+    @property
+    def check_packages(self):
+        return {m[1] for f in self.check_filters if (m := re.search(r'package\(=([^)]*)\)', f))}
 
     @property
     def filterset(self):
@@ -138,11 +143,17 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
     rows = integration_rows()
     explicit_filters = set()
 
-    def apply_row(package, modules, binaries):
+    def check_row(package, modules, binaries):
+        """Resolution-only: the ownership leg lists these, nothing runs them."""
         for module in modules:
             if module.endswith('::'):
                 raise ValueError(f'gate_policy row for {package}: filter {module!r} ends in "::"; '
                                  'write the module prefix without trailing colons')
+        plan.check_filters.update(f"(package(={package}) & test(/^{module}::/))" for module in modules)
+        plan.check_filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
+
+    def apply_row(package, modules, binaries):
+        check_row(package, modules, binaries)
         plan.packages.add(package)
         expressions = {f"(package(={package}) & test(/^{module}::/))" for module in modules}
         plan.filters.update(expressions)
@@ -153,10 +164,9 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
     # package, so an edit to the policy itself checks every row (BUG-k51c2).
     if 'scripts/gate_policy.py' in paths:
         for _prefix, _suffix, package, modules, binaries in PREFIX_ROWS:
-            apply_row(package, modules, binaries)
+            check_row(package, modules, binaries)
         for package, binaries in rows.values():
-            plan.packages.add(package)
-            plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
+            check_row(package, [], binaries)
     for path in sorted(set(paths)):
         if path in rows:
             package, binaries = rows[path]
@@ -321,6 +331,9 @@ def validate_inventory(plan, package, listing):
     selected = matches('')
     if not selected:
         raise ValueError(f'{package}: default-feature inventory contains no tests')
+    for expression in sorted(plan.check_filters):
+        if f'package(={package})' in expression and not matches(expression):
+            raise ValueError(f'{package}: ownership mapping resolves to no tests: {expression}')
     if package not in plan.whole:
         missing_paths = set()
         missing_binaries = set()
