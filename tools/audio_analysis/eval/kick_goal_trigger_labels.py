@@ -13,12 +13,15 @@ Peter, 2026-10-10: his kick trigger MIDI track ("DS Kick") marks the kicks. The
   of the differences within 30 ms of it.
 - A trigger note with a hit within HIT_MS is a kick. One without is dropped and
   its spot is not scored.
-- Every other strong low hit is not scored (a kick, tom or break the trigger
-  does not mark), unless a snare trigger note sits on it: snares stay non-kicks.
+- A kick-shaped drum hit (kick_goal_labels.drum_kicks: at least 25% of its
+  first 40 ms below 140 Hz) with no trigger note within KICK_NEAR_MS is not
+  scored: a break or loop kick the trigger does not mark. A snare trigger note
+  on it overrides: snares stay non-kicks. Every other drum hit is a non-kick.
+  (Masking every strong low hit instead hid 42-70% of the break-heavy songs;
+  most of those hits are snares and toms with low body.)
 - Mix: the drums premaster plus the no-drums premaster.
 - A song whose unscored spots would cover more than MASK_MAX of it is rejected:
-  its drums carry too many kicks the trigger does not mark (Head Noise's breaks,
-  25%).
+  its drums carry too many kicks the trigger does not mark.
 """
 from __future__ import annotations
 
@@ -32,10 +35,11 @@ import numpy as np  # noqa: E402
 from scipy.signal import butter, sosfilt  # noqa: E402
 
 from tools.audio_analysis.eval.als_extract import extract  # noqa: E402
-from tools.audio_analysis.eval.kick_goal_labels import ABL, GOAL, load, sha  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_labels import ABL, GOAL, drum_kicks, load, sha  # noqa: E402
 
 SR = 48000
 HIT_MS = 20
+KICK_NEAR_MS = 70
 RISE_DB = 12
 RANGE_DB = 30
 GAP_MS = 80
@@ -113,7 +117,8 @@ def labels(name, cfg):
     on_hit = nearest(notes, hits) <= hit_ms
     inside = (notes >= 1.0) & (notes <= dur - 1.0)
     kicks, dropped = notes[on_hit & inside], notes[~on_hit & inside]
-    other = hits[(nearest(hits, notes) > hit_ms) & (nearest(hits, snares) > hit_ms)]
+    shaped = np.sort(drum_kicks(drums[:n], SR))
+    other = shaped[(nearest(shaped, notes) > KICK_NEAR_MS / 1000) & (nearest(shaped, snares) > hit_ms)]
     uncertain = np.sort(np.concatenate([dropped, other]))
     spans = sorted((max(0.0, u + MASK[0]), min(dur, u + MASK[1])) for u in uncertain)
     masked, end = 0.0, 0.0
@@ -126,10 +131,10 @@ def labels(name, cfg):
                als=res['source'], kick_track=cfg['kick'], snare_tracks=list(cfg['snare']), kick_stem=None, kick_lag_ms=0.0,
                kick_lag_z=None, export_offset_s=round(off, 4), export_offset_beats=round(off * bpm / 60, 2),
                trigger_notes=int(inside.sum()), kicks_on_hit=len(kicks), dropped_notes=len(dropped), strong_low_hits=len(hits),
-               unmarked_hits=len(other), masked_share=round(masked / dur, 3), rejected=masked / dur > MASK_MAX,
+               kick_shaped_hits=len(shaped), unmarked_kick_shaped=len(other), masked_share=round(masked / dur, 3), rejected=masked / dur > MASK_MAX,
                labels=[round(float(t), 4) for t in kicks], uncertain=[round(float(t), 4) for t in uncertain])
     print(f'{name}: offset {off:+.3f} s ({row["export_offset_beats"]:+.2f} beats); notes {row["trigger_notes"]} on a hit '
-          f'{len(kicks)} dropped {len(dropped)}; strong low hits {len(hits)}, unmarked {len(other)}; '
+          f'{len(kicks)} dropped {len(dropped)}; kick-shaped drum hits {len(shaped)}, unmarked {len(other)}; '
           f'unscored {100 * row["masked_share"]:.0f}% of {dur:.0f} s{"  REJECTED" if row["rejected"] else ""}', flush=True)
     if not row['rejected']:
         np.save(GOAL / f'{name}_mix.npy', mix.astype(np.float32))
