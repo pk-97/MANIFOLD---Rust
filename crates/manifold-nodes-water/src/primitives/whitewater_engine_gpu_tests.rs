@@ -1,12 +1,10 @@
 //! BUG-g75v.7: engine value and fusion proofs, 8³ CPU-proven extents only.
 use manifold_node_engine::testkit::array_harness::{params, read, Harness};
-use crate::testkit::water_codegen::{fused, member};
-use crate::testkit::water_codegen::run;
-use super::{
-    advect_whitewater::AdvectWhitewater, offset_lattice::OffsetLattice,
-    upwind_distance::UpwindDistance,
-};
-use {manifold_node_engine::exec::effect_node::NodeInstanceId, manifold_node_engine::freeze::codegen::InputSource, crate::whitewater::WhitewaterParticle};
+use manifold_water_liquid::testkit::codegen::{fused, member};
+use manifold_water_liquid::testkit::codegen::run;
+use super::advect_whitewater::AdvectWhitewater;
+use manifold_water_liquid::primitives::{offset_lattice::OffsetLattice, upwind_distance::UpwindDistance};
+use {manifold_node_engine::exec::effect_node::NodeInstanceId, manifold_node_engine::freeze::codegen::InputSource, manifold_water_liquid::whitewater::WhitewaterParticle};
 
 #[test]
 fn whitewater_engine_distance_values_and_fusion() {
@@ -52,7 +50,7 @@ fn whitewater_engine_distance_values_and_fusion() {
         &values,
     );
     assert_eq!(combined, standalone);
-    let mut stage = super::whitewater_distance::SurfaceDistance::default();
+    let mut stage = manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
     stage.prepare(&h.device);
     stage.reserve(&h.device, [8; 3]).unwrap();
     let mut corner = vec![8.0; 512];
@@ -243,7 +241,7 @@ fn whitewater_engine_substep_force_hit_values_and_fusion() {
 #[test]
 fn whitewater_engine_outflow_values_and_fusion() {
     use super::keep_whitewater::KeepWhitewater;
-    use crate::{fluid_particles::CellRange, liquid::bodies::pack_distance_atlas, liquid::bodies::LiquidBody, liquid::bodies::LiquidShape};
+    use manifold_water_liquid::{fluid_particles::CellRange, bodies::pack_distance_atlas, bodies::LiquidBody, bodies::LiquidShape};
     let mut h = Harness::new();
     let pool: Vec<_> = [0, 1, 2, 4]
         .into_iter()
@@ -319,7 +317,7 @@ fn whitewater_engine_outflow_values_and_fusion() {
 
 #[test]
 fn whitewater_engine_seam_publishes_accepted_substeps() {
-    use crate::{fluid_particles::FaceSample, liquid::substep_history::SubstepHistory};
+    use manifold_water_liquid::{fluid_particles::FaceSample, substep_history::SubstepHistory};
     let mut h = Harness::new();
     let faces: Vec<_> = (0..729)
         .map(|i| FaceSample {
@@ -382,7 +380,7 @@ fn whitewater_engine_seam_publishes_accepted_substeps() {
 
 #[test]
 fn whitewater_engine_seam_skips_inactive_grids_and_resumes_capture() {
-    use crate::{fluid_particles::FaceSample, liquid::substep_history::SubstepHistory};
+    use manifold_water_liquid::{fluid_particles::FaceSample, substep_history::SubstepHistory};
     let mut h = Harness::new();
     let faces = |velocity| vec![FaceSample { velocity, weight: [1.0; 4] }; 729];
     let first = h.array(&faces([1.0, 2.0, 3.0, 0.0]), 729);
@@ -426,7 +424,7 @@ fn whitewater_engine_seam_skips_inactive_grids_and_resumes_capture() {
 }
 
 /// Runs the surface distance stage on `phi` and returns its output.
-fn surface_on_gpu(h: &mut Harness, stage: &super::whitewater_distance::SurfaceDistance, phi: &[f32], cell: f32, plan: Option<&manifold_gpu::GpuBuffer>) -> Vec<f32> {
+fn surface_on_gpu(h: &mut Harness, stage: &manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance, phi: &[f32], cell: f32, plan: Option<&manifold_gpu::GpuBuffer>) -> Vec<f32> {
     let n = phi.len();
     let source = h.array(phi, n);
     let mut enc = h.device.create_encoder("whitewater-surface-distance");
@@ -450,7 +448,7 @@ fn live_plan(h: &mut Harness, step_dt: f32) -> manifold_gpu::GpuBuffer {
 }
 
 /// Every scratch buffer of the stage except its sweep grid, as words.
-fn scratch_words(h: &mut Harness, stage: &super::whitewater_distance::SurfaceDistance) -> Vec<Vec<u32>> {
+fn scratch_words(h: &mut Harness, stage: &manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance) -> Vec<Vec<u32>> {
     let buffers = stage.scratch();
     let mut enc = h.device.create_encoder("whitewater-surface-distance-scratch");
     let staged: Vec<_> = buffers[..5]
@@ -484,7 +482,7 @@ fn sphere_phi(centre: f32) -> Vec<f32> {
 #[test]
 fn whitewater_surface_distance_clock_gate() {
     let mut h = Harness::new();
-    let mut stage = super::whitewater_distance::SurfaceDistance::default();
+    let mut stage = manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
     stage.prepare(&h.device);
     stage.reserve(&h.device, [24; 3]).unwrap();
     let a = sphere_phi(3.0);
@@ -549,7 +547,7 @@ fn whitewater_surface_distance_matches_engine_on_a_splash() {
     let mut h = Harness::new();
     let (markers, analytic, cells, dx) = sheeter::fixtures::splash();
     let cell = dx as f32;
-    let mut stage = super::whitewater_distance::SurfaceDistance::default();
+    let mut stage = manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
     stage.prepare(&h.device);
     stage.reserve(&h.device, cells).unwrap();
     for (name, input) in [("analytic", analytic), ("markers", marker_phi(&markers, cells, cell))] {
@@ -593,7 +591,7 @@ fn whitewater_surface_distance_replay_matches_direct() {
     use manifold_gpu::GpuReplayCache;
     let device = manifold_gpu::testkit::test_device();
     let make = || {
-        let mut stage = super::whitewater_distance::SurfaceDistance::default();
+        let mut stage = manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance::default();
         stage.prepare(&device);
         stage.reserve(&device, [24; 3]).unwrap();
         let plan = device.create_buffer_shared(48);
@@ -605,7 +603,7 @@ fn whitewater_surface_distance_replay_matches_direct() {
     let mut cache = Some(GpuReplayCache::default());
     let inputs = [sphere_phi(3.0), sphere_phi(2.5), sphere_phi(2.75)];
     let slots = [(0.01f32, 0), (0.0, 1), (0.01, 1), (0.01, 0), (0.0, 2), (0.0, 0), (0.01, 2), (0.01, 0)];
-    let words = |stage: &super::whitewater_distance::SurfaceDistance| -> Vec<Vec<u32>> {
+    let words = |stage: &manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance| -> Vec<Vec<u32>> {
         let mut enc = device.create_encoder("surface replay readback");
         let staged: Vec<_> = stage.scratch()[..6]
             .iter()

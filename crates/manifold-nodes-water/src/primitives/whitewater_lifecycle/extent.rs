@@ -1,15 +1,15 @@
 //! Buffer extent rule owned by this node.
 use crate::primitives::whitewater_lifecycle::DEFAULT_CAPACITY;
 use crate::primitives::whitewater_lifecycle::MAX_CAPACITY;
-use crate::whitewater::face_offset;
-use crate::whitewater::grid_box;
-use crate::whitewater::require_extended_faces;
+use manifold_water_liquid::whitewater::face_offset;
+use manifold_water_liquid::whitewater::grid_box;
+use manifold_water_liquid::whitewater::require_extended_faces;
 use crate::whitewater_handoff::OUTPUT_SLOTS;
 use crate::whitewater_handoff::SNAPSHOT_SLOTS;
 use crate::whitewater_handoff::SnapshotShape;
 use manifold_fluids::WhitewaterGrid;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{PARTICLE, whitewater_lattice, whole};
+use manifold_water_liquid::extent::{PARTICLE, whitewater_lattice, whole};
 
 fn whitewater_lifecycle(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let capacity = whole(x, "capacity", DEFAULT_CAPACITY as f32).clamp(1, MAX_CAPACITY);

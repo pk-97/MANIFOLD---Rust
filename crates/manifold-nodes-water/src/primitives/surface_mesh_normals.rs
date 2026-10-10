@@ -1,8 +1,8 @@
 //! Area-weighted normals, matching manifold-fluids decode_surface.
 use crate::primitives::count_surface_triangles::MARCHING_CUBES_COMMON;
-use crate::primitives::liquid_bricks;
+use manifold_water_liquid::primitives::liquid_bricks;
 use crate::primitives::relax_surface_mesh::SurfaceMeshPass;
-use crate::float_param;
+use manifold_water_liquid::float_param;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};

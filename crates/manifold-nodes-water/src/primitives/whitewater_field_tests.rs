@@ -10,10 +10,10 @@ use manifold_node_engine::testkit::array_harness::{Harness, params};
 use super::nearest_crossing::NearestCrossing;
 use super::surface_crossings::SurfaceCrossings;
 use super::whitewater_cpu::Grid;
-use crate::testkit::water_codegen::run;
+use manifold_water_liquid::testkit::codegen::run;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
-use crate::whitewater::{SPREAD_STEPS, SurfaceCrossing};
+use manifold_water_liquid::whitewater::{SPREAD_STEPS, SurfaceCrossing};
 
 const NODES: [u32; 3] = [71; 3];
 /// The cell at 64: the 4 m tank over 64 cells.
@@ -227,7 +227,7 @@ const R4_CURVATURE_MISS: f32 = 0.2555;
 fn whitewater_curvature_matches_flip() {
     use super::extend_lattice::ExtendLattice;
     use super::lattice_curvature::LatticeCurvature;
-    use crate::whitewater::KnownValue;
+    use manifold_water_liquid::whitewater::KnownValue;
 
     let grid = Grid::new(NODES);
     let total = grid.total();

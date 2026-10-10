@@ -3,8 +3,8 @@
 use super::gpu_flip_sheeting_cpu_tests::bucket_fixture;
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs};
 use manifold_node_engine::testkit::array_harness::read;
-use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels};
-use super::prefix_scan::ScanLabels;
+use manifold_water_liquid::primitives::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels};
+use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use super::whitewater_engine_gpu_tests::marker_phi;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_fluids::sheeter;
@@ -513,8 +513,8 @@ fn gpu_flip_sheeting_odd_grid_rows_match_old_gpu_under_replay_and_fractional_rat
 
 fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
     use super::gpu_flip_sheeting::StepBirths;
-    use super::particle_identity::{BirthReservation, ParticleIdentity};
-    use crate::fluid_particles::FaceSample;
+    use manifold_water_liquid::primitives::particle_identity::{BirthReservation, ParticleIdentity};
+    use manifold_water_liquid::fluid_particles::FaceSample;
     use manifold_gpu::GpuReplayCache;
 
     let device = manifold_gpu::testkit::test_device();

@@ -78,11 +78,11 @@ const SAMPLE_FACE_COMMON: &str =
 /// `node.gpu_flip_step`'s prelude: pose, collider sampling and the force
 /// field, in its `step_source` order.
 const GPU_FLIP_STEP_PRELUDE: &str = concat!(
-    include_str!("../../manifold-nodes-water/src/primitives/shaders/liquid_pose.wgsl"),
+    include_str!("../../manifold-water-liquid/src/primitives/shaders/liquid_pose.wgsl"),
     "\n",
-    include_str!("../../manifold-nodes-water/src/primitives/shaders/liquid_collider.wgsl"),
+    include_str!("../../manifold-water-liquid/src/primitives/shaders/liquid_collider.wgsl"),
     "\n",
-    include_str!("../../manifold-nodes-water/src/primitives/shaders/liquid_field.wgsl"),
+    include_str!("../../manifold-water-liquid/src/primitives/shaders/liquid_field.wgsl"),
 );
 
 /// Shaders whose pipeline prepends a shared helper file at creation time.
@@ -100,9 +100,9 @@ const COMPOSED_SHADERS: &[(&str, &str)] = &[
     ("ibl_brdf_lut.wgsl", PBR_BRDF),
     ("gpu_flip_step.wgsl", GPU_FLIP_STEP_PRELUDE),
     ("whitewater_fused.wgsl", concat!(
-        include_str!("../../manifold-nodes-water/src/primitives/shaders/whitewater_common.wgsl"), "\n",
-        include_str!("../../manifold-nodes-water/src/primitives/shaders/liquid_faces.wgsl"), "\n",
-        include_str!("../../manifold-nodes-water/src/primitives/shaders/liquid_field.wgsl"),
+        include_str!("../../manifold-water-liquid/src/primitives/shaders/whitewater_common.wgsl"), "\n",
+        include_str!("../../manifold-water-liquid/src/primitives/shaders/liquid_faces.wgsl"), "\n",
+        include_str!("../../manifold-water-liquid/src/primitives/shaders/liquid_field.wgsl"),
     )),
 ];
 
@@ -168,7 +168,7 @@ fn all_wgsl_shaders_validate() {
             ["gpu_flip_step.wgsl", "liquid_stats.wgsl", "particle_publication.wgsl", "liquid_frame_faces.wgsl"]
                 .iter().any(|shader| name == *shader)
         }) {
-            manifold_nodes_water::primitives::liquid_stats::with_stats_layout(&source)
+            manifold_water_liquid::primitives::liquid_stats::with_stats_layout(&source)
         } else {
             source
         };

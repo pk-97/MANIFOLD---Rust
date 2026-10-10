@@ -17,9 +17,9 @@ use manifold_nodes_water::primitives::gpu_flip_bodies::{BodyPasses, Bodies};
 use manifold_nodes_water::primitives::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
 use manifold_nodes_water::primitives::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison};
 use manifold_node_engine::testkit::array_harness::read;
-use manifold_nodes_water::liquid::bodies::LiquidBody;
-use manifold_nodes_water::liquid::coupling::coupled_start;
-use manifold_nodes_water::primitives::liquid_stats::SOLVER_WORDS;
+use manifold_water_liquid::bodies::LiquidBody;
+use manifold_water_liquid::coupling::coupled_start;
+use manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS;
 
 /// Tail index of stats word 16 (active-tile share): the tail starts at stats word 10 (liquid_stats.rs `SOLVER_WORDS`).
 const TILE_SHARE: usize = 16 - 10;

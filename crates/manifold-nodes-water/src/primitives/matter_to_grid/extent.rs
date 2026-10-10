@@ -1,12 +1,12 @@
 //! Buffer extent rule owned by this node.
-use crate::liquid::extent::liquid_lattice;
+use manifold_water_liquid::extent::liquid_lattice;
 use std::mem::size_of;
-use crate::fluid_particles::CellRange;
-use crate::fluid_particles::bin_total;
+use manifold_water_liquid::fluid_particles::CellRange;
+use manifold_water_liquid::fluid_particles::bin_total;
 use crate::matter::grid_accum_bytes;
 use crate::matter::lattice_blocks;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{whole};
+use manifold_water_liquid::extent::{whole};
 use crate::matter::node_extent;
 
 fn matter_to_grid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

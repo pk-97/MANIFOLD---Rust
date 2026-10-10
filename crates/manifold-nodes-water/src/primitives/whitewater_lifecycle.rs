@@ -13,12 +13,12 @@ use manifold_fluids::WhitewaterGrid;
 use manifold_gpu::GpuBuffer;
 
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use crate::fluid_particles::WhitewaterSpawn;
+use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use crate::whitewater::{face_offset, grid_box, grid_cells, require_extended_faces};
+use manifold_water_liquid::whitewater::{face_offset, grid_box, grid_cells, require_extended_faces};
 use crate::whitewater_handoff::{CaptureInputs, Fence, OutputRing, Reply, Request, Reset, Retired, SNAPSHOT_SLOTS, Snapshot, SnapshotRing, SnapshotShape, Worker};
 
 /// FLIP's own default whitewater budget.

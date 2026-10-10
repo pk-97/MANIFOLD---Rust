@@ -7,7 +7,7 @@
 // The GPU proofs (`whitewater_grid_tests`, feature gpu-proofs) call every
 // item here; a default test build compiles only the extrapolation check.
 
-use crate::whitewater::{CELL_AIR, CELL_LIQUID, CELL_SOLID, KnownValue, NO_CROSSING, SurfaceCrossing};
+use manifold_water_liquid::whitewater::{CELL_AIR, CELL_LIQUID, CELL_SOLID, KnownValue, NO_CROSSING, SurfaceCrossing};
 
 /// A whitewater grid over a solid lattice of `nodes`.
 #[derive(Clone, Copy, Debug)]

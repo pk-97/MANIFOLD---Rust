@@ -1,7 +1,7 @@
 //! Small value proofs for the reference emitters. Run only through gpu_queue.
 //! The turbulence reference is independently checked against the vendored C++ engine.
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use crate::testkit::water_codegen::run;
+use manifold_water_liquid::testkit::codegen::run;
 use {crate::primitives::whitewater_particle_cpu as cpu, super::whitewater_particle_cpu::Box3};
 use super::{
     dust_potential::DustPotential,
@@ -291,7 +291,7 @@ fn whitewater_emitter_speed_values_and_fusion() {
 
 #[test]
 fn whitewater_obstacle_source_closed_and_open_domain() {
-    use crate::liquid::bodies::{LiquidBody, LiquidShape};
+    use manifold_water_liquid::bodies::{LiquidBody, LiquidShape};
     let mut h = Harness::new();
     let bodies = h.array::<LiquidBody>(&[], 1);
     let shapes = h.array::<LiquidShape>(&[], 1);
@@ -433,7 +433,7 @@ fn whitewater_dust_lifecycle_values_and_fusion() {
         advect_whitewater::AdvectWhitewater, age_whitewater::AgeWhitewater,
         whitewater_pool_cpu as pool,
     };
-    use crate::whitewater::WhitewaterParticle;
+    use manifold_water_liquid::whitewater::WhitewaterParticle;
     let grid = Box3 {
         cells: [8; 3],
         center: [4.0; 3],
@@ -508,7 +508,7 @@ fn whitewater_dust_lifecycle_values_and_fusion() {
 #[test]
 fn whitewater_fresh_spray_speed_and_dust_typing() {
     use super::whitewater_type::WhitewaterType;
-    use crate::fluid_particles::WhitewaterSpawn;
+    use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
     let mut h = Harness::new();
     let spawns = vec![
         WhitewaterSpawn {
@@ -552,7 +552,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
     use super::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
     use manifold_node_engine::scene::transform::Transform;
-    use crate::whitewater::WhitewaterParticle;
+    use manifold_water_liquid::whitewater::WhitewaterParticle;
     let mut h = Harness::new();
     let particles = h.array(
         &vec![
@@ -683,4 +683,4 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
     }
 }
 
-use crate::testkit::water_codegen::{member, fused};
+use manifold_water_liquid::testkit::codegen::{member, fused};

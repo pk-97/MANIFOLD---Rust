@@ -2,7 +2,7 @@
 //! schedule; spatial bins never impose a radius or quality limit.
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::fluid_particles::FluidBlob;
+use manifold_water_liquid::fluid_particles::FluidBlob;
 use manifold_node_engine::primitive::Primitive;
 
 const SHADER: &str = include_str!("shaders/blob_bounds.wgsl");

@@ -4,12 +4,10 @@ mod clamp_liquid_to_solids;
 mod count_surface_edges;
 pub mod count_surface_triangles;
 mod crossing_distance;
-manifold_core::testkit_visible! { pub(crate) mod dot_products; }
 mod dust_potential;
 manifold_core::testkit_visible! { pub(crate) mod emission_count; }
 manifold_core::testkit_visible! { pub(crate) mod energy_potential; }
 mod extend_lattice;
-manifold_core::testkit_visible! { pub(crate) mod face_sample_component; }
 #[cfg(feature = "gpu-proofs")]
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_atom_tests;
@@ -47,13 +45,10 @@ manifold_core::testkit_visible! { pub(crate) mod lattice_bricks; }
 #[cfg(test)]
 mod lattice_closing_tests;
 mod lattice_curvature;
-pub mod liquid_bricks;
-mod liquid_cells;
 pub(crate) mod liquid_fill;
 manifold_core::testkit_visible! { pub(crate) mod liquid_frame; }
 mod liquid_solid_distance;
 pub(crate) mod liquid_state;
-pub mod liquid_stats;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod liquid_surface_tests;
 mod matter_body_reaction;
@@ -68,26 +63,14 @@ mod matter_state;
 mod matter_stats;
 mod matter_to_grid;
 mod nearest_crossing;
-pub mod offset_lattice;
 mod pad_distance_lattice;
-manifold_core::testkit_visible! { pub(crate) mod particle_identity; }
-manifold_core::testkit_visible! { pub(crate) mod particle_publication; }
 manifold_core::testkit_visible! { pub(crate) mod particle_volume; }
-pub(crate) mod prefix_scan;
 mod preserve_foam;
 manifold_core::testkit_visible! { pub(crate) mod push_out_of_solid; }
-pub mod redistance_lattice;
 pub mod relax_surface_mesh;
 mod retype_whitewater;
-mod running_total;
 manifold_core::testkit_visible! { pub(crate) mod sample_faces_at_particles; }
 mod shape_particle_blobs;
-mod smooth_lattice;
-// Keep this declaration outside a macro: the module exports float_param!.
-#[cfg(any(test, feature = "testkit"))]
-pub mod sort_particles_into_cells;
-#[cfg(not(any(test, feature = "testkit")))]
-pub(crate) mod sort_particles_into_cells;
 manifold_core::testkit_visible! { pub(crate) mod spawn_whitewater; }
 mod surface_crossings;
 #[cfg(any(test, feature = "testkit"))]
@@ -97,12 +80,10 @@ pub mod surface_mesh_parity;
 pub mod testkit;
 mod turbulence_emission_count;
 mod turbulence_field;
-pub mod upwind_distance;
 manifold_core::testkit_visible! { pub(crate) mod volume_surface_mesh; }
 manifold_core::testkit_visible! { pub(crate) mod wavecrest_potential; }
 #[cfg(test)]
 mod whitewater_cpu;
-pub(crate) mod whitewater_distance;
 #[cfg(any(test, all(feature = "testkit", feature = "gpu-proofs")))]
 mod whitewater_emitter_cpu;
 mod whitewater_emitter_dispatch;
@@ -142,7 +123,6 @@ manifold_core::testkit_visible! { pub(crate) mod blob_bounds; }
 mod face_grid_extent_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_tests;
-manifold_core::testkit_visible! { pub(crate) mod fluid_role_source; }
 mod grid_to_matter;
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -162,3 +142,10 @@ mod smooth_surface_mesh;
 pub mod surface_mesh_normals;
 #[cfg(not(any(test, feature = "testkit")))]
 mod surface_mesh_normals;
+#[cfg(test)]
+mod liquid_bricks_consumer_tests;
+// The counting-sort proofs cover matter records, so they link from here (D8).
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod sort_particles_into_cells {
+    mod gpu_tests;
+}

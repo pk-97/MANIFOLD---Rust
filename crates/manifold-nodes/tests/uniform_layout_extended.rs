@@ -434,6 +434,7 @@ mod custom {
         for root in abi_source_roots().expect("ABI case source roots") {
             source_files(&root, &mut files);
         }
+        files.extend(support::uniform_abi::abi_source_files().expect("ABI case source files"));
         for file in files {
             let file_key = file.display().to_string();
             for (name, dispatch_count) in host_structs(&file).unwrap() {

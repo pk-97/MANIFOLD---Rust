@@ -1,8 +1,8 @@
 //! Buffer extent rule owned by this node.
-use crate::liquid::grid::face_len;
-use crate::whitewater::cell_total;
+use manifold_water_liquid::grid::face_len;
+use manifold_water_liquid::whitewater::cell_total;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{field_reads, whitewater_faces, whitewater_lattice, whole};
+use manifold_water_liquid::extent::{field_reads, whitewater_faces, whitewater_lattice, whole};
 
 fn advect_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (nodes, _) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;

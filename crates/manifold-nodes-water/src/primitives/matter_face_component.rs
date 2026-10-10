@@ -7,11 +7,11 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::face_sample_component::{AXES, axis_param};
+use manifold_water_liquid::primitives::face_sample_component::{AXES, axis_param};
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::liquid::grid::face_len;
-use crate::liquid::lattice::PADDING_NODES;
+use manifold_water_liquid::grid::face_len;
+use manifold_water_liquid::lattice::PADDING_NODES;
 use crate::matter::{MatterGridNode, grid_bytes};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;

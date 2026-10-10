@@ -1,9 +1,9 @@
-use crate::primitives::sort_particles_into_cells::SortParticlesIntoCells;
+use manifold_water_liquid::primitives::sort_particles_into_cells::SortParticlesIntoCells;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use crate::fluid_particles::{CellRange, FluidBlob, bin_counts};
+use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob, bin_counts};
 
 /// Deterministic pseudo-random stream (xorshift) for fixtures.
 pub struct Rng(u64);

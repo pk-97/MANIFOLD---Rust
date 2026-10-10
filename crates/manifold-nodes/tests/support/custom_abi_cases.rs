@@ -19,7 +19,7 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "../liquid/grid.rs",
+        source: "grid.rs",
         rust_struct: "FaceParams",
         shader: "shaders/liquid_frame_faces.wgsl",
         shader_struct: "FaceParams",
@@ -40,7 +40,7 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "../liquid/body_buffers.rs",
+        source: "body_buffers.rs",
         rust_struct: "UploadParams",
         shader: "shaders/liquid_body_upload.wgsl",
         shader_struct: "UploadParams",
@@ -514,7 +514,7 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "../liquid/bodies.rs",
+        source: "bodies.rs",
         rust_struct: "GpuFlipBodyVertex",
         shader: "shaders/gpu_flip_clock.wgsl",
         shader_struct: "BodyVertex",

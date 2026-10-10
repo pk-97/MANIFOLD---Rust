@@ -57,7 +57,7 @@ mod cpu_tests {
 
     use super::{NbParams, SHADER};
     use manifold_node_engine::particles::FluidParticle;
-    use crate::liquid::lattice::{FlipSolverGrid, LiquidLattice};
+    use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 
     pub(super) const STEP_CELLS: [usize; 3] = [16, 16, 16];
     const POOL_TOP: usize = 12;
@@ -515,15 +515,15 @@ mod gpu_tests {
 
     use super::super::gpu_flip_step::{GpuFlipStep, StepParams, dispatch_pass};
     use manifold_node_engine::testkit::array_harness::{Harness, params as effect_params, read};
-    use super::super::prefix_scan::PrefixScan;
-    use super::super::liquid_stats::{SOLVER_WORDS, NARROW_BAND_SHORTAGE_TAIL};
+    use manifold_water_liquid::primitives::prefix_scan::PrefixScan;
+    use manifold_water_liquid::primitives::liquid_stats::{SOLVER_WORDS, NARROW_BAND_SHORTAGE_TAIL};
     use super::cpu_tests::{
         STEP_CELLS, cells, coords, quarter_pool, runtime_grid, runtime_expected_retained, runtime_pool_initial_phi, runtime_seeded_pool,
         stationary_pool_particle_phi,
     };
     use super::{NbFace, NbParams, NbParticle, NbRange, SHADER};
     use manifold_node_engine::particles::FluidParticle;
-use crate::fluid_particles::FaceSample;
+use manifold_water_liquid::fluid_particles::FaceSample;
     use manifold_node_engine::primitive::Primitive;
     use manifold_gpu::{GpuBinding, GpuBuffer};
 

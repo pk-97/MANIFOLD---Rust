@@ -1,6 +1,6 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{KNOWN_VALUE, particle_values, whitewater_grid};
+use manifold_water_liquid::extent::{KNOWN_VALUE, particle_values, whitewater_grid};
 
 fn wavecrest_potential(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (_, cells) = whitewater_grid(x)?;

@@ -1,10 +1,11 @@
 //! Buffer extent rule owned by this node.
 use crate::primitives::particle_volume::volume_scale;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{nodes_total, required_blob_bounds, searched};
+use manifold_water_liquid::extent::{nodes_total, required_blob_bounds, searched};
 
 fn lattice_bricks(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    use crate::primitives::{lattice_bricks::brick_layout, prefix_scan::storage_words};
+    use crate::primitives::lattice_bricks::brick_layout;
+    use manifold_water_liquid::primitives::prefix_scan::storage_words;
     let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));

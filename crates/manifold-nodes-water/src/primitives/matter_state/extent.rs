@@ -5,7 +5,7 @@ use crate::matter::STATS_WORDS;
 use crate::matter::grid_accum_bytes;
 use crate::matter::grid_bytes;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::whole;
+use manifold_water_liquid::extent::whole;
 
 fn matter_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| whole(x, name, 71.0));

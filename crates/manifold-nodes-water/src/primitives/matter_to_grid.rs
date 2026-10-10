@@ -11,8 +11,8 @@ use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
 use manifold_node_engine::primitives::standalone_pipeline::active_elements;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use crate::fluid_particles::CellRange;
-use crate::liquid::lattice::LiquidLattice;
+use manifold_water_liquid::fluid_particles::CellRange;
+use manifold_water_liquid::lattice::LiquidLattice;
 use crate::matter::{MatterPoint, grid_accum_bytes, lattice_nodes, momentum_unit_fits};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;

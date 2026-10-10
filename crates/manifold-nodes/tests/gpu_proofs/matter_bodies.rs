@@ -8,9 +8,9 @@ use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_physics::sdf::signed_distance_lattice;
 use manifold_core::fluid_domain::{domain_layout};
 use manifold_physics::clock::TICK;
-use manifold_nodes_water::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
-use manifold_nodes_water::liquid::fields::FieldLattice;
-use manifold_nodes_water::liquid::lattice::LiquidLattice;
+use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
+use manifold_water_liquid::fields::FieldLattice;
+use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_nodes_water::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, momentum_unit};
 use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 

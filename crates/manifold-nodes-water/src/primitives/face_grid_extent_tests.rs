@@ -4,14 +4,14 @@
 //! allow. No GPU: every size comes from the functions the atoms size and
 //! dispatch with.
 
-use crate::primitives::face_sample_component::FaceSampleComponent;
-use crate::liquid::grid::face_bytes;
+use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
+use manifold_water_liquid::grid::face_bytes;
 use crate::primitives::matter_face_component::{MatterFaceComponent, matter_cells};
 use manifold_node_engine::exec::effect_node::ParamValues;
-use crate::fluid_particles::FaceSample;
+use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_core::fluid_domain::domain_layout;
-use crate::liquid::grid::{face_dims, face_len};
-use crate::liquid::lattice::{LiquidLattice, PADDING_NODES};
+use manifold_water_liquid::grid::{face_dims, face_len};
+use manifold_water_liquid::lattice::{LiquidLattice, PADDING_NODES};
 use crate::matter::lattice_nodes;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
@@ -87,7 +87,7 @@ fn face_grid_extents_at_64() {
 /// face grid is refused by name (GPU_WHITEWATER_DESIGN.md section 3.6).
 #[test]
 fn whitewater_refuses_unextended_faces() {
-    use crate::whitewater::require_extended_faces;
+    use manifold_water_liquid::whitewater::require_extended_faces;
     assert!(require_extended_faces(crate::primitives::gpu_flip_step::FACE_VALID_LAYERS as f32).is_ok());
     assert!(require_extended_faces(1.0).is_ok());
     let layers = crate::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS as f32;

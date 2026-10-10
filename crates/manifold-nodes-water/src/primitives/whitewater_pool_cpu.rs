@@ -11,8 +11,8 @@
 // near-solid proof.
 
 use super::whitewater_particle_cpu::{Box3, face_index};
-use crate::whitewater::{WHITEWATER_ID_LIMIT, WhitewaterParticle};
-use crate::fluid_particles::WhitewaterSpawn;
+use manifold_water_liquid::whitewater::{WHITEWATER_ID_LIMIT, WhitewaterParticle};
+use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 
 const BOX_INSET: f32 = 1.625;
 const BOX_EPSILON: f32 = 0.5e-6;
@@ -589,8 +589,8 @@ pub(super) fn append(pool: &mut [WhitewaterParticle], spawns: &[WhitewaterSpawn]
 pub(super) mod fixture {
     use super::super::whitewater_cpu::Rng;
     use super::*;
-    use crate::liquid::grid::face_len;
-    use crate::whitewater::{WHITEWATER_EMPTY, WHITEWATER_ID_LIMIT};
+    use manifold_water_liquid::grid::face_len;
+    use manifold_water_liquid::whitewater::{WHITEWATER_EMPTY, WHITEWATER_ID_LIMIT};
 
     /// Large enough that near-solid cells clear of the walls and the ball
     /// exist, so the early-out has somewhere to fire.

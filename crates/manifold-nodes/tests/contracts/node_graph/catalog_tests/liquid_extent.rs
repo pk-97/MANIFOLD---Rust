@@ -1,6 +1,6 @@
     use manifold_nodes_water::testkit::preset_extents::{check_preset_extents, LiquidPreset};
 use manifold_node_engine::exec::extent::*;
-use manifold_nodes_water::liquid::lattice::LiquidLattice;
+use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_nodes::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
     use manifold_core::fluid_domain::domain_layout;

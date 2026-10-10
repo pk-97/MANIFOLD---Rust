@@ -8,17 +8,18 @@
 
 #[cfg(any(test, feature = "testkit"))]
 use serde_json::Value;
+use manifold_water_liquid::testkit::CUBE_EDGE_PER_SCALE;
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
 use manifold_core::id::NodeId;
 
-use crate::fluid_particles::FaceSample;
-use crate::liquid::grid::{face_coords, face_len};
-use crate::liquid::WATER_DENSITY;
-use crate::liquid::lattice::PADDING_NODES;
+use manifold_water_liquid::fluid_particles::FaceSample;
+use manifold_water_liquid::grid::{face_coords, face_len};
+use manifold_water_liquid::WATER_DENSITY;
+use manifold_water_liquid::lattice::PADDING_NODES;
 use crate::matter::{MatterGridNode, MatterTickStats};
-use crate::primitives::liquid_stats::LiquidTickStats;
+use manifold_water_liquid::primitives::liquid_stats::LiquidTickStats;
 
 /// A scene the checks run on.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -423,9 +424,6 @@ const STACK_EDGE: f32 = 0.25;
 
 /// Every fixture's liquid is water, kg/m³.
 pub const FIXTURE_DENSITY: f32 = WATER_DENSITY;
-
-/// The rigid body's cube edge per unit of transform scale.
-pub const CUBE_EDGE_PER_SCALE: f32 = 1.154_700_5;
 
 impl BoxScene {
     pub fn of(fixture: Fixture) -> Option<Self> {

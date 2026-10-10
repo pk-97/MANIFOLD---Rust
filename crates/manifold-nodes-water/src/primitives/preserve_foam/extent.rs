@@ -1,6 +1,6 @@
 //! Buffer extent rule owned by this node.
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::searched;
+use manifold_water_liquid::extent::searched;
 
 fn preserve_foam(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     searched(x)?;

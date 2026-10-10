@@ -237,6 +237,7 @@ impl RigidBody {
 }
 
 /// Shared scene Rz * Ry * Rx convention, with quaternion stored xyzw.
+#[inline]
 pub fn pose_from_transform(transform: Transform) -> manifold_physics::BodyPose {
     let [x, y, z] = transform.rot_euler;
     let (sx, cx) = (x * 0.5).sin_cos();

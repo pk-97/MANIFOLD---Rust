@@ -8,7 +8,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use super::{MatterPoint, VELOCITY_CLAMP_CFL};
-use crate::liquid::lattice::{LiquidLattice, PADDING_NODES};
+use manifold_water_liquid::lattice::{LiquidLattice, PADDING_NODES};
 
 /// A point's stencil: base node, per-axis weights, per-axis fraction.
 pub type Stencil = ([i64; 3], [[f64; 3]; 3], [f64; 3]);

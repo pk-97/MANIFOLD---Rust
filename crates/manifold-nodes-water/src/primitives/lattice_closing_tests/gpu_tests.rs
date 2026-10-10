@@ -1,6 +1,6 @@
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use super::super::offset_lattice::OffsetLattice;
-use super::super::redistance_lattice::RedistanceLattice;
+use manifold_water_liquid::primitives::offset_lattice::OffsetLattice;
+use manifold_water_liquid::primitives::redistance_lattice::RedistanceLattice;
 use super::*;
 
 #[test]
