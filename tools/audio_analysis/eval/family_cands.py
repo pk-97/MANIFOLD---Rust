@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Candidate recall for a family's labels: what share of its prominent events has a candidate within 35 ms, and how
+"""Candidate recall for a family's labels: what share of its events (overall and per kind) has a candidate within 35 ms, and how
 many candidates per second it costs. Two causal finders (detector_cands): 'rise' (band energy rises over the last
 4 hops' minimum) and 'change' (net bands in the family range rise over their own last-20 ms mean: catches pitch
 changes too), plus their union.
@@ -33,7 +33,7 @@ def main():
     fam = importlib.import_module(f'tools.audio_analysis.eval.{sys.argv[1]}_labels').FAMILY
     lab = json.loads((GOAL / f'{fam.name}_labels.json').read_text())
     g = Goal(mode='v3')
-    rows = {}
+    rows, by_kind = {}, {}
     dur = 0.0
     for t, s in lab.items():
         if not s['positives']:
@@ -50,15 +50,22 @@ def main():
         for c in CHANGES:
             found[f'change {c}'] = peak_candidates(v, c, 6, 8)[0]
         found['union rise 4.5 + change 1.5'] = union(found['rise 4.5'], found['change 1.5'])
+        found['union rise 3 + change 1.5'] = union(found['rise 3.0'], found['change 1.5'])
+        kind = np.array(s.get('kinds') or ['all'] * len(pos))
         for k, cand in found.items():
             on = (cand + 1) * HOP / sr
-            hit = int(np.sum(nearest(pos, on) <= LAB_TOL)) if len(on) else 0
+            got = nearest(pos, on) <= LAB_TOL if len(on) else np.zeros(len(pos), bool)
             a = rows.setdefault(k, [0, 0, 0])
-            a[0], a[1], a[2] = a[0] + hit, a[1] + len(pos), a[2] + len(cand)
+            a[0], a[1], a[2] = a[0] + int(got.sum()), a[1] + len(pos), a[2] + len(cand)
+            for kk in np.unique(kind):
+                b = by_kind.setdefault(k, {}).setdefault(kk, [0, 0])
+                b[0], b[1] = b[0] + int(got[kind == kk].sum()), b[1] + int((kind == kk).sum())
         print(f"{t:18s} {len(pos):5d} events | " + ' '.join(f"{k.split()[0][0]}{k.split()[-1]}:{int(np.sum(nearest(pos, (c + 1) * HOP / sr) <= LAB_TOL)) / len(pos):.2f}"
                                                           for k, c in found.items() if len(c)), flush=True)
     for k, (h, n, c) in rows.items():
-        print(f'{fam.name} {k:28s}: recall {h / n:.3f} ({h}/{n}), {c / dur:.1f} candidates/s', flush=True)
+        kinds = ' '.join(f'{kk} {a / max(1, b):.2f}' for kk, (a, b) in sorted(by_kind[k].items()))
+        chance = 1 - np.exp(-c / dur * 2 * LAB_TOL)  # recall of the same number of candidates placed at random
+        print(f'{fam.name} {k:28s}: recall {h / n:.3f} ({h}/{n}), {c / dur:.1f} candidates/s, random {chance:.2f} | {kinds}', flush=True)
 
 
 if __name__ == '__main__':
