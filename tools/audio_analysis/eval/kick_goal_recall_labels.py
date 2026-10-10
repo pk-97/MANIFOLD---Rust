@@ -4,10 +4,11 @@ but whose break loops carry kicks no project track marks.
 
 Usage: kick_goal_recall_labels.py   (writes GOAL/labels_recall.json and GOAL/{song}_mix.npy)
 
-Not in training yet: the offsets are unproven. The mix's 40-150 Hz rise at the
-notes is as high at quarter- and half-beat shifts (breaks and bass hit every 16th),
-so neither this check nor the survey's grid fit tells the true offset from a shifted
-one. Needs a proof that separates them before KICK_GOAL_RECALL=1 is used.
+The offset is not proven from the audio: breaks and bass hit every 16th, so the
+mix fits quarter-beat shifts as well, and the projects' only unwarped clips are
+muted references. It rests on Ableton's MP3 exports: every proven WIP starts on a
+whole bar with a 48-54 ms lag, and these three fit beat 64 with 50-52 ms. A
+kick-solo bounce from each project would prove it.
 
 Peter, 2026-10-10: these projects have usable timing and audio. The 2026 survey
 (~/.cache/manifold/ableton/wip_labels/) dropped them because breaks play under the

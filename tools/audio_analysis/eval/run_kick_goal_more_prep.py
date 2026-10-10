@@ -16,17 +16,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import numpy as np  # noqa: E402
 
-from tools.audio_analysis.eval.kick_goal_eval import GOAL, MORE_SONGS, TRIGGER_SONGS, TRUTH, WIP_SONGS, Goal  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_eval import GOAL, MORE_SONGS, RECALL_SONGS, TRIGGER_SONGS, TRUTH, WIP_SONGS, Goal  # noqa: E402
 from tools.audio_analysis.eval.kick_goal_templates import band_spec, patches, template_features  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_tail_component import mix_audio, tail_cache  # noqa: E402
 
 
 def main():
-    if not MORE_SONGS + TRIGGER_SONGS + WIP_SONGS:
-        sys.exit('set KICK_GOAL_MORE=1, KICK_GOAL_TRIGGER=1 or KICK_GOAL_WIP=1')
+    if not MORE_SONGS + TRIGGER_SONGS + WIP_SONGS + RECALL_SONGS:
+        sys.exit('set KICK_GOAL_MORE=1, KICK_GOAL_TRIGGER=1, KICK_GOAL_WIP=1 or KICK_GOAL_RECALL=1')
     g = Goal(mode=TRUTH)
     t_dev = np.load(GOAL / 'templates_from_dev.npy')
-    for t in MORE_SONGS + TRIGGER_SONGS + WIP_SONGS:
+    for t in MORE_SONGS + TRIGGER_SONGS + WIP_SONGS + RECALL_SONGS:
         r = g.records[t]
         tail_cache(g, t)
         path = GOAL / f'tmpl_{t}.npy'

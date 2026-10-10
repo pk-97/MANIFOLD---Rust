@@ -76,7 +76,8 @@ class Song:
     @classmethod
     def real(cls, g, t):
         r = g.records[t]
-        return cls(spectrum_cache(g, t), r['onset_s'], r['emit_s'], r['train_mask'], r['train_y'], t)
+        mask = r['train_mask'] & (r['train_y'] == 1) if r.get('positives_only') else r['train_mask']
+        return cls(spectrum_cache(g, t), r['onset_s'], r['emit_s'], mask, r['train_y'], t)
 
     @classmethod
     def synth(cls, path):

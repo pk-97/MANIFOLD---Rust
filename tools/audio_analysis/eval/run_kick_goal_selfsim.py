@@ -45,7 +45,7 @@ def fit2(g, feats_by_song, songs, cols):
     xs, ys, ws = [], [], []
     for u in songs:
         r = g.records[u]
-        m = r['train_mask']
+        m = r['train_mask'] & (r['train_y'] == 1) if r.get('positives_only') else r['train_mask']
         y = r['train_y'][m]
         xs.append(feats_by_song[u][m][:, cols]); ys.append(y)
         ws.append(np.where(y == 1, .5 / max(1, y.sum()), .5 / max(1, (1 - y).sum())))
