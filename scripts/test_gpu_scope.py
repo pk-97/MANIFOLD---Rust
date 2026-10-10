@@ -22,6 +22,8 @@ FT = "crates/manifold-water-gpu-flip/src/"
 FW = FT + "primitives/"
 MT = "crates/manifold-water-gpu-mpm/src/"
 MW = MT + "primitives/"
+WWT = "crates/manifold-water-whitewater/src/"
+WWW = WWT + "primitives/"
 P = E + "primitives/"
 
 
@@ -47,6 +49,7 @@ def fixture_workspace(repo):
         "manifold-water-liquid": ("crates/manifold-water-liquid", True, []),
         "manifold-water-gpu-flip": ("crates/manifold-water-gpu-flip", True, []),
         "manifold-water-gpu-mpm": ("crates/manifold-water-gpu-mpm", True, []),
+        "manifold-water-whitewater": ("crates/manifold-water-whitewater", True, []),
         "manifold-ui-paint": ("crates/manifold-ui-paint", True, ["main"]),
         "manifold-gpu": ("crates/manifold-gpu", False, []),
     }
@@ -136,7 +139,7 @@ class ScopeTests(unittest.TestCase):
         result = g.Plan(paths=["synthetic"], workspace=workspace,
                         filters=set(g.SMOKE_FILTERS) | {"future::filter"})
         runs = result.runs()
-        self.assertEqual(len(runs), 18)
+        self.assertEqual(len(runs), 19)
         self.assertTrue(all(run["filters"] == result.final_filters() for run in runs))
 
     def test_whole_package_override_survives_filter_pruning(self):
@@ -514,7 +517,7 @@ class ScopeTests(unittest.TestCase):
         repo = Path(__file__).resolve().parent.parent
         # Reviewed allowances are a timing sample, not a complete test inventory.
         names = set()
-        for source in [*(repo / W).rglob("*.rs"), *(repo / FW).rglob("*.rs"), *(repo / MW).rglob("*.rs")]:
+        for source in [*(repo / W).rglob("*.rs"), *(repo / FW).rglob("*.rs"), *(repo / MW).rglob("*.rs"), *(repo / WWW).rglob("*.rs")]:
             lines = len(source.read_text().splitlines())
             names.update(g.changed_test_filters(source.relative_to(repo).as_posix(), repo,
                          "HEAD", patch=f"@@ -0,0 +1,{lines} @@"))
@@ -642,8 +645,8 @@ class ScopeTests(unittest.TestCase):
             self.assertFalse(result.unmapped)
         for name in ("emission_count.rs", "spawn_whitewater.rs",
                      "shaders/emission_count_body.wgsl", "shaders/spawn_whitewater_body.wgsl"):
-            result = plan([W + name], users=lambda _: [W + 'emission_count.rs'],
-                          repo=self._repo_with(W + name))
+            result = plan([WWW + name], users=lambda _: [WWW + "emission_count.rs"],
+                          repo=self._repo_with(WWW + name))
             self.assertIn("whitewater_particle_tests::", result.filters)
             self.assertFalse(result.unmapped)
 
@@ -672,8 +675,8 @@ class ScopeTests(unittest.TestCase):
         for atom in ("turbulence_field", "inside_turbulence_potential",
                      "turbulence_emission_count", "whitewater_emitter_velocity",
                      "whitewater_obstacle_source", "whitewater_influence", "dust_potential"):
-            source = W + atom + ".rs"
-            shader = W + "shaders/" + atom + "_body.wgsl"
+            source = WWW + atom + ".rs"
+            shader = WWW + "shaders/" + atom + "_body.wgsl"
             for path in (source, shader):
                 result = plan([path], users=lambda _: [source], repo=self._repo_with(path))
                 self.assertIn(expected, result.filters)
@@ -681,8 +684,8 @@ class ScopeTests(unittest.TestCase):
                 self.assertFalse(result.broad)
 
     def test_whitewater_step_and_its_fused_shader_run_the_golden_fingerprints(self):
-        step = W + 'whitewater_step.rs'
-        shader = W + 'shaders/whitewater_fused.wgsl'
+        step = WWW + "whitewater_step.rs"
+        shader = WWW + "shaders/whitewater_fused.wgsl"
         for path in (step, shader):
             result = plan([path], users=lambda _: [step], repo=self._repo_with(path))
             self.assertIn("contracts::water::primitives::whitewater_golden_tests::", result.filters)

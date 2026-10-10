@@ -6,12 +6,12 @@ use manifold_water_gpu_flip as _;
 use manifold_water_gpu_mpm as _;
 use manifold_water_liquid as _;
 use manifold_water_rigid as _;
+use manifold_water_whitewater as _;
 
 pub mod graph_install;
 pub(crate) mod physics_scene;
 pub(crate) mod migration;
 pub mod presets;
-pub(crate) mod whitewater_handoff;
 pub mod primitives;
 pub mod runtime;
 #[cfg(test)]

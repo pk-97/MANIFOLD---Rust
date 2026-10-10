@@ -1,7 +1,7 @@
 mod fused_tests {
 use manifold_node_engine::exec::effect_node::{EffectNodeContext,ParamValues};
 use manifold_node_engine::primitive::Primitive;
-use manifold_nodes_water::primitives::whitewater_step::WhitewaterStep;
+use manifold_water_whitewater::primitives::whitewater_step::WhitewaterStep;
 #[test]
 fn whitewater_unpack_extent_matches_adapter_storage() {
     use manifold_nodes_water::presets::gpu_flip::{render_def, with_whitewater_axes, WaterScene};
@@ -94,11 +94,11 @@ fn whitewater_legacy_refuses_packed_faces() {
 mod gpu {
 use manifold_node_engine::scene::transform::Transform;
 use manifold_node_engine::particles::FluidParticle;
-use manifold_nodes_water::primitives::whitewater_step::fused_tests::synthetic_shape;
+use manifold_water_whitewater::primitives::whitewater_step::fused_tests::synthetic_shape;
 use manifold_water_liquid::fields::FieldBinding;
 use manifold_water_liquid::whitewater::WhitewaterParticle;
-use manifold_nodes_water::primitives::whitewater_step::*;
-use manifold_nodes_water::primitives::whitewater_step::fused_tests::gpu::*;
+use manifold_water_whitewater::primitives::whitewater_step::*;
+use manifold_water_whitewater::primitives::whitewater_step::fused_tests::gpu::*;
 use manifold_node_engine::testkit::array_harness::read;
 use manifold_nodes_water::testkit::whitewater_scene::{Show, whitewater_render_def, with_tick_probe};
 use manifold_nodes_water::presets::gpu_flip::{WaterScene, with_whitewater_axes};

@@ -1,7 +1,7 @@
 //! Whitewater node constructors and spec observations for family proofs.
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::freeze::codegen::{InputSource, RegionNode};
-#[cfg(feature = "whitewater-oracle")]
+
 pub fn energy_potential() -> impl Primitive { crate::primitives::energy_potential::EnergyPotential::new() }
 pub fn turbulence_field() -> impl Primitive { crate::primitives::turbulence_field::TurbulenceField::new() }
 pub fn whitewater_influence() -> impl Primitive { crate::primitives::whitewater_influence::WhitewaterInfluence::new() }

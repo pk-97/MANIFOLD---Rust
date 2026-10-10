@@ -19,7 +19,7 @@ use manifold_water_liquid::whitewater::{CELL_AIR, KnownValue};
 
 /// A whitewater grid as the particle atoms read it.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Box3 {
+pub struct Box3 {
     pub cells: [u32; 3],
     #[cfg(test)]
     pub center: [f32; 3],
@@ -41,7 +41,7 @@ impl Box3 {
         (0..3).all(|a| c[a] >= 0 && c[a] < self.cells[a] as i32)
     }
 
-    pub(super) fn index(&self, c: [i32; 3]) -> usize {
+    pub fn index(&self, c: [i32; 3]) -> usize {
         let [nx, ny, _] = self.cells.map(|n| n as usize);
         c[0] as usize + nx * (c[1] as usize + ny * c[2] as usize)
     }
@@ -97,7 +97,7 @@ pub(super) fn jitter(p: FluidParticle, idx: u32, cell_size: f32, seed: f32, epoc
 
 /// The seam index of the `axis` face at whitewater face coordinates `f`, or
 /// None where FLIP's padded array holds 0.
-pub(super) fn face_index(f: [i32; 3], axis: usize, pad: i32, face_cells: [u32; 3]) -> Option<usize> {
+pub fn face_index(f: [i32; 3], axis: usize, pad: i32, face_cells: [u32; 3]) -> Option<usize> {
     let dims = face_dims(face_cells, axis);
     let g: [i32; 3] = std::array::from_fn(|a| f[a] - pad);
     (0..3).all(|a| g[a] >= 0 && g[a] < dims[a] as i32).then(|| {

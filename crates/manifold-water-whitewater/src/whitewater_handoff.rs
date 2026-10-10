@@ -71,7 +71,7 @@ const OUTPUT_ROUNDING: usize = 4096;
 
 /// What a snapshot slot is sized for.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct SnapshotShape {
+pub struct SnapshotShape {
     pub grid: WhitewaterGrid,
     pub face_cells: [u32; 3],
     pub face_offset: [u32; 3],
