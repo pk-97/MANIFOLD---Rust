@@ -39,13 +39,13 @@ pub(crate) fn prepare_stage(def: &mut EffectGraphDef, stage: MigrationStage) -> 
     changed
 }
 
+/// One clone per stage, not per migration: a callback that returns `false`
+/// must leave the document untouched, the same contract `prepare_stage` holds.
 pub(crate) fn run_stage(def: &EffectGraphDef, stage: MigrationStage) -> Cow<'_, EffectGraphDef> {
-    let mut current = Cow::Borrowed(def);
-    for migration in ordered(stage) {
-        let mut candidate = current.as_ref().clone();
-        if (migration.apply)(&mut candidate) {
-            current = Cow::Owned(candidate);
-        }
+    let mut candidate = def.clone();
+    if prepare_stage(&mut candidate, stage) {
+        Cow::Owned(candidate)
+    } else {
+        Cow::Borrowed(def)
     }
-    current
 }
