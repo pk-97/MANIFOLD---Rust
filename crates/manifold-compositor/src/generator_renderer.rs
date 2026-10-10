@@ -15,7 +15,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
-use manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot;
+use manifold_core::fluid_domain::FluidDomainSnapshot;
 use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportHostError};
 use manifold_node_engine::runtime::ModifierPreviewContext;
 
@@ -59,7 +59,7 @@ const WARMUP_FRAMES: usize = 45;
 
 pub struct GeneratorRenderer {
     next_physics_event: u64,
-    scene_impulse_diagnostics: manifold_node_engine::scene::impulse::SceneImpulseDiagnostics,
+    scene_impulse_diagnostics: manifold_core::scene_impulse::SceneImpulseDiagnostics,
     /// Shared handle to the GpuDevice owned by ContentPipeline. An `Arc`
     /// clone instead of a cached raw pointer means this survives any future
     /// move of `ContentPipeline`/`ContentThread` (BUG-054).

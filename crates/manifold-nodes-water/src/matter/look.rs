@@ -4,7 +4,7 @@
 //! live when its radius is positive and its position finite (FLIP frames carry
 //! no ids).
 
-use manifold_node_engine::scene::fluid_domain::FluidDomainLayout;
+use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_node_engine::particles::FluidParticle;
 
 /// The authored cell grid of a domain.

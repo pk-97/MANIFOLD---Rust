@@ -24,7 +24,7 @@ use super::{Request, Setup};
 use super::CoupledRigidFrame;
 use crate::physics::{MAX_BODIES, RigidSceneInputs, RigidSimulation};
 #[cfg(feature = "gpu-proofs")]
-use manifold_node_engine::scene::fluid_domain::FluidDomainLayout;
+use manifold_core::fluid_domain::FluidDomainLayout;
 #[cfg(feature = "gpu-proofs")]
 use crate::fluid::{FluidDomainNative, FluidRuntime, Sample, TICK};
 

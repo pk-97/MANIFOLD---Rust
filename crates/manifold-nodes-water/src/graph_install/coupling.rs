@@ -9,7 +9,7 @@ use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
+use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
 
 use manifold_node_engine::load::expand::SceneModifierExpandError;
 use manifold_node_engine::load::expand::impulse_recipients_with_index;

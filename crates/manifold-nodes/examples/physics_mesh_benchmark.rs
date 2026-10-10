@@ -1,7 +1,7 @@
 //! Bounded measurement of imported objects through the production RigidSimulation.
 //! Usage: physics_mesh_benchmark model.glb [pieces=1]
 use manifold_core::Seconds;
-use {manifold_nodes_water::physics::MAX_BODIES, manifold_nodes_water::physics::RigidBody, manifold_nodes_water::physics::RigidSimulation, manifold_node_engine::scene::physics_mesh::MeshSelection, manifold_nodes_water::physics_mesh::prepare_colliders, manifold_node_engine::scene::physics_mesh::select_fragment, manifold_node_engine::scene::transform::Transform};
+use {manifold_nodes_water::physics::MAX_BODIES, manifold_nodes_water::physics::RigidBody, manifold_nodes_water::physics::RigidSimulation, manifold_node_engine::scene::mesh_selection::MeshSelection, manifold_nodes_water::physics_mesh::prepare_colliders, manifold_node_engine::scene::mesh_selection::select_fragment, manifold_node_engine::scene::transform::Transform};
 use std::{path::Path, sync::Arc, time::Instant};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

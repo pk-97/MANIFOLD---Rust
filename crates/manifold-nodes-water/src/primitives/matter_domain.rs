@@ -18,9 +18,9 @@ use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::FieldValue;
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::scene::fluid_domain::{FluidDomainLayout, domain_layout};
+use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use crate::fluid::{CoupledRigidFrame, CoupledRigidInputs, TICK};
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::FluidRole;
 use crate::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::liquid::body_buffers::LiquidBodyBuffers;
@@ -32,7 +32,7 @@ use crate::liquid::tick_samples::TickSamples;
 use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use crate::physics::{RigidSceneInputs, RigidSceneObservation, offline_simulation};
 use crate::physics_events::ResolvedNodeImpulse;
 use crate::node::{PhysicsNode, PhysicsNodeRegistration};
@@ -148,7 +148,7 @@ pub(crate) fn matter_geometry(
     initial_volume: Option<Transform>,
 ) -> Result<MatterGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
-    let layout = domain_layout(domain, read("domain_size", 4.0), resolution)?;
+    let layout = domain_layout(domain.map(Into::into), read("domain_size", 4.0), resolution)?;
     let lattice = LiquidLattice::from_layout(&layout);
     let budget = match params.get("grid_budget_mcells") {
         Some(ParamValue::Float(budget)) => *budget,

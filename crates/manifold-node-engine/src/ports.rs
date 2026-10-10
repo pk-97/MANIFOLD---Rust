@@ -79,6 +79,10 @@ pub enum PortType {
     /// `Transform` / `Atmosphere`; unwired = Rendered = byte-identical to
     /// no render_mode.
     RenderMode,
+    // RigidBody and FluidRole are water payloads named here because primitive!
+    // port declarations resolve types by ident. They leave once
+    // CpuWireRegistration (exec/cpu_values.rs) also keys a declared port name,
+    // so a name-keyed CPU variant can reject unregistered names.
     /// CPU-only rigid-body description; native world state never travels on wires.
     RigidBody,
     /// CPU-only prepared geometry and authored controls for a fluid role.

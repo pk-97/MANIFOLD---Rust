@@ -26,7 +26,7 @@ mod scene_contract;
 pub mod tick_samples;
 
 use manifold_node_engine::bindings::NodeInputs;
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::FluidRole;
 
 /// Read every wired role port into its slot; true when a wired role is not

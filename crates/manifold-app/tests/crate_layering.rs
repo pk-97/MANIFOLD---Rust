@@ -131,7 +131,7 @@ fn workspace_dependencies_obey_layering() {
 /// Water vocabulary leaving the engine is a ratchet: this count may only go
 /// down. Lower it when a move lands; never raise it. Obsolete when the engine
 /// names no water words at all.
-const ENGINE_WATER_WORD_FILES: usize = 59;
+const ENGINE_WATER_WORD_FILES: usize = 54;
 const ENGINE_WATER_WORD_EXEMPT: &[&str] = &["atomic/fluid_sim_2d", "param_tooltips", "trigger_shadow_lint"];
 
 fn engine_water_word_files(dir: &Path, root: &Path, hits: &mut Vec<String>) {

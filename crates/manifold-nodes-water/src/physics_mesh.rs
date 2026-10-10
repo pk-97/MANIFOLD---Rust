@@ -5,7 +5,7 @@ use std::path::Path;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::ParamValue;
-use manifold_node_engine::scene::physics_mesh::{MeshSelection, fragments, transform_vertices};
+use manifold_node_engine::scene::mesh_selection::{MeshSelection, fragments};
 use manifold_node_engine::scene::transform::Transform;
 use crate::physics::ColliderGeometry;
 
@@ -137,7 +137,7 @@ pub fn prepare_colliders(vertices: &[MeshVertex], count: u32) -> Result<Collider
 mod tests {
     use super::prepare_colliders;
     use manifold_node_engine::mesh::MeshVertex;
-    use manifold_node_engine::scene::physics_mesh::select_fragment;
+    use manifold_node_engine::scene::mesh_selection::select_fragment;
     use bytemuck::Zeroable;
 
     #[test]
@@ -175,4 +175,93 @@ mod tests {
         assert_eq!(colliders.hulls.len(), 4);
         assert!(colliders.hulls.iter().all(|h| h.len() >= 4));
     }
+}
+
+/// Apply a fixed authored transform to source vertices before native cooking.
+/// Billboard transforms are camera-relative and therefore invalid for static
+/// collider geometry.
+pub fn transform_vertices(vertices: &mut [MeshVertex], transform: Transform) -> Result<(), String> {
+    validate_transform(transform)?;
+    let (cx, sx) = (transform.rot_euler[0].cos(), transform.rot_euler[0].sin());
+    let (cy, sy) = (transform.rot_euler[1].cos(), transform.rot_euler[1].sin());
+    let (cz, sz) = (transform.rot_euler[2].cos(), transform.rot_euler[2].sin());
+    // Column-major Rz * Ry * Rx, matching render_scene's model_matrix.
+    let r = [
+        [cz * cy, sz * cy, -sy],
+        [cz * sy * sx - sz * cx, sz * sy * sx + cz * cx, cy * sx],
+        [cz * sy * cx + sz * sx, sz * sy * cx - cz * sx, cy * cx],
+    ];
+    for vertex in vertices {
+        let p = vertex.position;
+        let scaled = [
+            p[0] * transform.scale[0],
+            p[1] * transform.scale[1],
+            p[2] * transform.scale[2],
+        ];
+        vertex.position = [
+            transform.pos[0] + r[0][0] * scaled[0] + r[1][0] * scaled[1] + r[2][0] * scaled[2],
+            transform.pos[1] + r[0][1] * scaled[0] + r[1][1] * scaled[1] + r[2][1] * scaled[2],
+            transform.pos[2] + r[0][2] * scaled[0] + r[1][2] * scaled[1] + r[2][2] * scaled[2],
+        ];
+    }
+    Ok(())
+}
+
+pub fn validate_transform(transform: Transform) -> Result<(), String> {
+    if transform.billboard {
+        return Err("Physics source and compound part transforms cannot use billboard mode".into());
+    }
+    let finite = transform
+        .pos
+        .into_iter()
+        .chain(transform.rot_euler)
+        .chain(transform.scale)
+        .all(f32::is_finite);
+    if !finite {
+        return Err("Physics source and compound part transforms must be finite".into());
+    }
+    Ok(())
+}
+
+
+#[cfg(test)]
+mod transform_tests {
+    use super::*;
+    use bytemuck::Zeroable;
+
+    #[test]
+    fn transform_vertices_applies_trs_before_cooking() {
+        let mut vertices = vec![MeshVertex {
+            position: [1.0, 0.0, 0.0],
+            ..MeshVertex::zeroed()
+        }];
+        transform_vertices(
+            &mut vertices,
+            Transform {
+                pos: [2.0, 3.0, 4.0],
+                rot_euler: [0.0, 0.0, std::f32::consts::FRAC_PI_2],
+                scale: [2.0, 1.0, 1.0],
+                billboard: false,
+            },
+        )
+        .unwrap();
+        assert!((vertices[0].position[0] - 2.0).abs() < 1e-6);
+        assert!((vertices[0].position[1] - 5.0).abs() < 1e-6);
+        assert!((vertices[0].position[2] - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn invalid_collider_transform_is_rejected() {
+        assert!(validate_transform(Transform {
+            scale: [f32::NAN, 1.0, 1.0],
+            ..Transform::default()
+        })
+        .is_err());
+        assert!(validate_transform(Transform {
+            billboard: true,
+            ..Transform::default()
+        })
+        .is_err());
+    }
+
 }

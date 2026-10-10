@@ -1,6 +1,6 @@
 use super::*;
 
-use manifold_node_engine::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 use crate::physics_events::ResolvedNodeImpulse;
 
 const VORTEX_SEQUENCE: u64 = 1;

@@ -7,7 +7,7 @@ use manifold_physics::input::{AppliedEvent, EventQueue, EventStamp};
 use manifold_physics::{FieldValue, TickStamp, VectorField};
 
 use super::{FluidRuntime, TICK};
-use manifold_node_engine::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 use crate::physics_events::ResolvedNodeImpulse;
 use manifold_core::Seconds;
 

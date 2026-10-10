@@ -7,7 +7,7 @@ mod tests {
     use manifold_node_engine::load::expand::SceneModifierExpandError;
     use manifold_nodes_water::graph_install::coupling::{prepare_coupled_scenes, CoupledSceneBinding};
     use manifold_node_engine::persistence::PrimitiveRegistry;
-    use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+    use manifold_core::scene_impulse::RigidImpulseTargets;
 
     struct GraphBuilder {
         next_id: u32,

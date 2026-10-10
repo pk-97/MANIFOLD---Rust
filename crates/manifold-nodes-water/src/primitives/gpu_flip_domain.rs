@@ -24,9 +24,9 @@ use super::gpu_flip_step::{read_max_iterations, read_sheet_fill_rate, read_solve
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use super::matter_domain::closed_faces;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::scene::fluid_domain::{FluidDomainLayout, domain_layout};
+use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use crate::fluid::{CoupledRigidFrame, CoupledRigidInputs};
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::FluidRole;
 use crate::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::liquid::body_buffers::LiquidBodyBuffers;
@@ -38,7 +38,7 @@ use crate::liquid::tick_samples::TickSamples;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use crate::liquid::{ROLE_PORTS, WATER_DENSITY};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use crate::physics::{RigidSceneInputs, RigidSceneObservation, offline_simulation};
 use crate::physics_events::ResolvedNodeImpulse;
 use crate::node::{PhysicsNode, PhysicsNodeRegistration};
@@ -162,7 +162,7 @@ pub(crate) fn gpu_flip_geometry(
     initial_volume: Option<Transform>,
 ) -> Result<GpuFlipGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
-    let layout = domain_layout(domain, read("domain_size", 4.0), resolution)?;
+    let layout = domain_layout(domain.map(Into::into), read("domain_size", 4.0), resolution)?;
     let solver = FlipSolverGrid::from_lattice(LiquidLattice::from_layout(&layout));
     if let Some(reason) = lattice_refusal(solver.cells()) {
         return Err(format!("GPU FLIP: {reason}. Lower Resolution."));

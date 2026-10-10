@@ -1,7 +1,7 @@
 //! Small value proofs for the reference emitters. Run only through gpu_queue.
 //! The turbulence reference is independently checked against the vendored C++ engine.
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use manifold_node_engine::testkit::water_codegen::run;
+use crate::testkit::water_codegen::run;
 use {crate::primitives::whitewater_particle_cpu as cpu, super::whitewater_particle_cpu::Box3};
 use super::{
     dust_potential::DustPotential,
@@ -683,4 +683,4 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
     }
 }
 
-use manifold_node_engine::testkit::water_codegen::{member, fused};
+use crate::testkit::water_codegen::{member, fused};

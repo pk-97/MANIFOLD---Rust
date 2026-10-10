@@ -16,7 +16,7 @@ use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use sha2::{Digest, Sha256};
 
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
+use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
 use manifold_node_engine::load::expand::SceneModifierImpulseRoute;
 use manifold_node_engine::load::expand::impulse_recipients;
 use crate::graph_install::coupling::prepare_coupled_scenes;

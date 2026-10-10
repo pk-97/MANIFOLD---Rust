@@ -8,7 +8,7 @@ use manifold_node_engine::runtime::PresetRuntime;
 use manifold_nodes_water::runtime::WaterRuntimeExt;
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_nodes_water::node;
-use manifold_node_engine::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 use manifold_nodes_water::physics_events::ResolvedNodeImpulse;
 use manifold_node_engine::{parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry};
 
@@ -469,7 +469,7 @@ fn scene_impulse_rejects_stateful_ancestry_and_inactive_selections() {
 
 #[test]
 fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
-    use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+    use manifold_core::scene_impulse::RigidImpulseTargets;
     let mut def = fixture();
     let mut control = runtime(&def);
     control.execute_frame(time(0.0));
@@ -586,7 +586,7 @@ fn scene_impulse_captures_spatial_shape_before_center_edits() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn scene_impulse_selection_combines_body_slots_copies_and_fluid_domain() {
-    use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+    use manifold_core::scene_impulse::RigidImpulseTargets;
     let mut def = fixture();
     def.nodes.push(
         serde_json::from_value(serde_json::json!({

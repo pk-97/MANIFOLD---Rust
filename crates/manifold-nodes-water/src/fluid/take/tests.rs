@@ -7,7 +7,7 @@ use manifold_physics::{FieldValue, TickStamp, input::EventStamp};
 use super::*;
 use crate::fluid::{CoupledRigidInputs, FluidRuntime, Transform, Worker};
 use crate::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
-use manifold_node_engine::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
+use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
 use crate::physics::{ColliderGeometry, RigidBody, RigidSceneInputs};
 use manifold_node_engine::runtime::preset_context::ProjectTempo;
 

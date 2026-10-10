@@ -15,7 +15,7 @@ use manifold_fluids::{CaptureError, ParticleRecord, SurfaceOptions, SurfaceVerte
 
 use manifold_nodes_water::fluid::{domain::FluidDomainNative, native::seeded_world, FluidSettings};
 use manifold_node_engine::scene::transform::Transform;
-use manifold_node_engine::scene::fluid_domain::FluidDomainLayout;
+use manifold_core::fluid_domain::FluidDomainLayout;
 use super::primitives::gpu_flip_race_tests::{Breakup, Motion, Packing, Splash, breakup, motion, packing, print_height, print_lid_layer, print_side_sheet, print_splash, report_breakup, report_motion, report_water, splash};
 use manifold_nodes_water::primitives::gpu_flip_still::write_still;
 use manifold_nodes_water::primitives::gpu_flip_volume::{VolumeDrift, volume_and_area};

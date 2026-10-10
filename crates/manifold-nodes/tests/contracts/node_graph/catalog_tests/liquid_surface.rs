@@ -52,7 +52,7 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
 
     const OPEN_TOP: u32 = 63 & !(1 << 3);
     let mut harness = Harness::new();
-    let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, 1.0, 8).expect("layout");
+    let layout = manifold_core::fluid_domain::domain_layout(None, 1.0, 8).expect("layout");
     let domain = LiquidLattice::from_layout(&layout);
     let (cell, solid_nodes, cells) = (domain.cell_size(), domain.nodes(), domain.cells());
     let bounds = domain.bounds();
@@ -165,7 +165,7 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
 
 #[test]
 fn fluid_mesh_grid_native_particle_field_matches_reference() {
-    let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
+    let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
     let mesh = manifold_nodes_water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
     // Odd cell count, even node count and native half-cell origin, including
     // sparse blob bounds and the expanded closing band at subdivision two.
