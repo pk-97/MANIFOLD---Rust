@@ -1,0 +1,1812 @@
+{
+  "hypotheses": [
+    "Representation: retain eight ordered low/body/upper power observations relative to pre-candidate background, alongside the frozen15 features; keep regularised linear scorer unchanged.",
+    "Decision rule: on the exact same39 values and candidate windows, compare class-conditional rank2 weightedSVD reconstruction residuals against linear fusion."
+  ],
+  "fixed": "Same candidates,40ms horizon rounded up to hop boundary,60ms refractory, labels, song/class/event weighting, nested song exclusions and coarse-plus-one-refinement cutoff protocol. One configuration per hypothesis; no additional search.",
+  "acceptance": "At least166/174 matched within70ms and no more than8 unmatched on the reference pack, >=90% recall each track, allfourkickfreecoreszero; expandedlocalcorpus and reservedvalidation ALSO required. Neither this reference result nor its absence proves generalisation.",
+  "feature_names": [
+    "low_log_rise",
+    "body_log_rise",
+    "upper_log_rise",
+    "relative_flux",
+    "centroid_drop",
+    "upper_log_decay",
+    "body_low_log_balance",
+    "low_log_evolution",
+    "peak_lag",
+    "low_relative_flux",
+    "low_centroid_drop",
+    "body_relative_flux",
+    "body_centroid_drop",
+    "upper_relative_flux",
+    "upper_centroid_drop",
+    "low_trajectory_1",
+    "low_trajectory_2",
+    "low_trajectory_3",
+    "low_trajectory_4",
+    "low_trajectory_5",
+    "low_trajectory_6",
+    "low_trajectory_7",
+    "low_trajectory_8",
+    "body_trajectory_1",
+    "body_trajectory_2",
+    "body_trajectory_3",
+    "body_trajectory_4",
+    "body_trajectory_5",
+    "body_trajectory_6",
+    "body_trajectory_7",
+    "body_trajectory_8",
+    "upper_trajectory_1",
+    "upper_trajectory_2",
+    "upper_trajectory_3",
+    "upper_trajectory_4",
+    "upper_trajectory_5",
+    "upper_trajectory_6",
+    "upper_trajectory_7",
+    "upper_trajectory_8"
+  ],
+  "source_sha256": {
+    "run_kick_trajectory_trial.py": "19db0b7115baed354bb20e49c371f6f35a31943b9a39b1b2b47abbc3a3b9ef73",
+    "kick_trajectory_features.py": "0adf56e709cd696304288f2b1d9180d55c6a803c93912682628085b8a53d6804",
+    "kick_subspace_score.py": "539cf63570e8bab5c11e3f5861d74f49d06fc06352be7ebf507dc71b2bb2e908",
+    "kick_fusion_calibration.py": "b6c9db225f6629c0f12820763bd58269b23a5ecc645d2951c6dfe0088ac4abc6",
+    "kick_fusion_fine_calibration.py": "4e9a95ae0afd02c9bd70436a1f163fd8abbd2f39d567816bf541f5019b6c25bf",
+    "run_kick_fusion_trial.py": "90084cbb0ddeeb5227188c68a1cc53f6370f183c282a1ccff9423b4fe85d42a2",
+    "run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615",
+    "run_kick_fusion_calibration.py": "e2634d9ae28460fd2d6e9291d0e12a0250f2b01bc6069c13af5ce6216a1754bc",
+    "live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2",
+    "master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145"
+  },
+  "baseline_sha256": "e348ed170ce59bd7017185669609b871c772ef1a7b21bd3fce7105fb1b3b1028",
+  "reference_sha256": "ff6b10759f81c3ca8f7c84ce90258b09371a387773a17860e9a0b29f83ebeead",
+  "label_sha256": {
+    "inhale_exhale_145bpm.csv": "a29b9892456588294efbf6f506da912d4f2d996fc105f9551b1b9d6db4077f4e",
+    "bad_guy_128bpm.csv": "d657d298ad98bee09e048922b465de4b4a69386a1482d8327be3207a37444ef7",
+    "attack_review.csv": "b29e872c8a8ec9d05902c7f76bc68b5a16399fc9cf0fd1ef669c598c8711a9ae",
+    "heldout_passages_2026-10-09.json": "00a6865a1c60795bb7e74a4ffe9fe207bbe8d84d5ceb7b62aad9d4b64d627fab",
+    "feel_the_vibration_174bpm.csv": "922be87c9a6a9eb03002b68ce5f87915e1fec4652921795c20cf6975a2bc21e8",
+    "apricots_128bpm.csv": "fa38b535e88b55580df3f90956935420070d95fb89441b30e625b1cdce45b163",
+    "tears_140bpm.csv": "f3ce02e72f191bd53bc86c611fce2efe56a55db4cb19b6f1434bdba80ce28576",
+    "bad_guy_128bpm.repair.json": "0d9f007d02da46f93dff1168ff321379a57310ab97397626812080389d955f11",
+    "master_passages_2026-10-09.json": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c"
+  },
+  "frozen_base_replay_exact": true,
+  "limitations": "Exploratory nine-song development only. Provisional labels, no reserved validation yet. SVD residuals and logistic scores are not calibrated probabilities. Possible duplicates are temporal associations, not source identifications. CPU timings are offline throughput, not native callback guarantees. No extra observation delay, GPU or live integration. Possible-duplicate counts use core-matched labels and may undercount master-boundary duplicates.",
+  "decision": "Neither fixed hypothesis improves the best reference tradeoff. Currentgoal targets not achieved; expand local development evidence before next hypothesis. Two materially different hypotheses tested in this goal run, both unsuccessful; plateau stop threshold is three.",
+  "raw_report": "/Users/peterkiemann/.cache/manifold/kick-trajectory-2026-10-09/trial.json",
+  "raw_report_sha256": "5da7bc060583fd1cc18bd70d6ba5979190dcb12ae7d41a30ab5e6330e70bab52",
+  "validation": "16 focused tests pass:5 trajectory/cache,2 runner,9 subspace. Includes prefix causality, unchanged15columns/hops, cache reuse/corruption, subspace weighting/covariance/heldout exclusions, end-to-end nested scoring. Lead also verified exact15feature output replay, allhashes/folds/refinementchoices/refractory/totals. No native runtime test.",
+  "variants": [
+    {
+      "variant": "linear_39",
+      "totals": {
+        "baseline": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 103,
+              "missed": 71,
+              "extra": 67
+            },
+            "50": {
+              "matched": 116,
+              "missed": 58,
+              "extra": 54
+            },
+            "70": {
+              "matched": 118,
+              "missed": 56,
+              "extra": 52
+            }
+          },
+          "association": {
+            "matched": 118,
+            "missed": 56,
+            "extra": 52
+          },
+          "association_delay": {
+            "median_ms": 18.84,
+            "p90_ms": 38.0
+          }
+        },
+        "fixed_05": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 77,
+              "missed": 97,
+              "extra": 301
+            },
+            "50": {
+              "matched": 138,
+              "missed": 36,
+              "extra": 240
+            },
+            "70": {
+              "matched": 165,
+              "missed": 9,
+              "extra": 214
+            }
+          },
+          "association": {
+            "matched": 166,
+            "missed": 8,
+            "extra": 213
+          },
+          "association_delay": {
+            "median_ms": 36.75,
+            "p90_ms": 54.0
+          }
+        },
+        "calibrated": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 25,
+              "missed": 149,
+              "extra": 101
+            },
+            "50": {
+              "matched": 62,
+              "missed": 112,
+              "extra": 64
+            },
+            "70": {
+              "matched": 86,
+              "missed": 88,
+              "extra": 40
+            }
+          },
+          "association": {
+            "matched": 86,
+            "missed": 88,
+            "extra": 40
+          },
+          "association_delay": {
+            "median_ms": 43.68,
+            "p90_ms": 55.67
+          }
+        },
+        "refined": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 26,
+              "missed": 148,
+              "extra": 109
+            },
+            "50": {
+              "matched": 65,
+              "missed": 109,
+              "extra": 70
+            },
+            "70": {
+              "matched": 94,
+              "missed": 80,
+              "extra": 41
+            }
+          },
+          "association": {
+            "matched": 94,
+            "missed": 80,
+            "extra": 41
+          },
+          "association_delay": {
+            "median_ms": 44.0,
+            "p90_ms": 56.33
+          }
+        }
+      },
+      "kick_free_minutes": 0.8,
+      "kick_free_extras": 0,
+      "kick_free_false_triggers_per_minute": 0.0,
+      "possible_duplicate_triggers": 1,
+      "per_track": [
+        {
+          "track": "apricots_128bpm",
+          "threshold": 0.9346153846153846,
+          "scores": {
+            "50": {
+              "matched": 3,
+              "missed": 11,
+              "extra": 2
+            },
+            "70": {
+              "matched": 5,
+              "missed": 9,
+              "extra": 0
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 54.8,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "bad_guy_128bpm",
+          "threshold": 0.9451923076923077,
+          "scores": {
+            "50": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 26
+            },
+            "70": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 26
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 48.5217,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "feel_the_vibration_174bpm",
+          "threshold": 0.94375,
+          "scores": {
+            "50": {
+              "matched": 5,
+              "missed": 10,
+              "extra": 10
+            },
+            "70": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 0
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 57.93319999999999,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "inhale_exhale_145bpm",
+          "threshold": 0.9653846153846154,
+          "scores": {
+            "50": {
+              "matched": 9,
+              "missed": 3,
+              "extra": 6
+            },
+            "70": {
+              "matched": 10,
+              "missed": 2,
+              "extra": 5
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 50.050149999999995,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "tears_140bpm",
+          "threshold": 0.9624999999999999,
+          "scores": {
+            "50": {
+              "matched": 9,
+              "missed": 1,
+              "extra": 4
+            },
+            "70": {
+              "matched": 9,
+              "missed": 1,
+              "extra": 4
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 46.8668,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "late_night",
+          "threshold": 0.9442307692307692,
+          "scores": {
+            "50": {
+              "matched": 1,
+              "missed": 28,
+              "extra": 11
+            },
+            "70": {
+              "matched": 12,
+              "missed": 17,
+              "extra": 0
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 61.45,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "midnight_patience",
+          "threshold": 0.875,
+          "scores": {
+            "50": {
+              "matched": 17,
+              "missed": 18,
+              "extra": 8
+            },
+            "70": {
+              "matched": 20,
+              "missed": 15,
+              "extra": 5
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 1,
+            "p95_associated_delay_ms": 56.900299999999994,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "miracle",
+          "threshold": 0.9403846153846154,
+          "scores": {
+            "50": {
+              "matched": 6,
+              "missed": 6,
+              "extra": 0
+            },
+            "70": {
+              "matched": 6,
+              "missed": 6,
+              "extra": 0
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 46.213,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "heavy_on_mind",
+          "threshold": 0.914423076923077,
+          "scores": {
+            "50": {
+              "matched": 0,
+              "missed": 32,
+              "extra": 3
+            },
+            "70": {
+              "matched": 2,
+              "missed": 30,
+              "extra": 1
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 72.2095,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "variant": "svd_39_rank2",
+      "totals": {
+        "baseline": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 103,
+              "missed": 71,
+              "extra": 67
+            },
+            "50": {
+              "matched": 116,
+              "missed": 58,
+              "extra": 54
+            },
+            "70": {
+              "matched": 118,
+              "missed": 56,
+              "extra": 52
+            }
+          },
+          "association": {
+            "matched": 118,
+            "missed": 56,
+            "extra": 52
+          },
+          "association_delay": {
+            "median_ms": 18.84,
+            "p90_ms": 38.0
+          }
+        },
+        "fixed_05": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 69,
+              "missed": 105,
+              "extra": 445
+            },
+            "50": {
+              "matched": 122,
+              "missed": 52,
+              "extra": 392
+            },
+            "70": {
+              "matched": 157,
+              "missed": 17,
+              "extra": 357
+            }
+          },
+          "association": {
+            "matched": 163,
+            "missed": 11,
+            "extra": 351
+          },
+          "association_delay": {
+            "median_ms": 39.33,
+            "p90_ms": 62.0
+          }
+        },
+        "calibrated": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 10,
+              "missed": 164,
+              "extra": 104
+            },
+            "50": {
+              "matched": 41,
+              "missed": 133,
+              "extra": 73
+            },
+            "70": {
+              "matched": 65,
+              "missed": 109,
+              "extra": 49
+            }
+          },
+          "association": {
+            "matched": 74,
+            "missed": 100,
+            "extra": 40
+          },
+          "association_delay": {
+            "median_ms": 48.12,
+            "p90_ms": 73.67
+          }
+        },
+        "refined": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 12,
+              "missed": 162,
+              "extra": 137
+            },
+            "50": {
+              "matched": 47,
+              "missed": 127,
+              "extra": 102
+            },
+            "70": {
+              "matched": 82,
+              "missed": 92,
+              "extra": 67
+            }
+          },
+          "association": {
+            "matched": 96,
+            "missed": 78,
+            "extra": 53
+          },
+          "association_delay": {
+            "median_ms": 50.83,
+            "p90_ms": 73.67
+          }
+        }
+      },
+      "kick_free_minutes": 0.8,
+      "kick_free_extras": 0,
+      "kick_free_false_triggers_per_minute": 0.0,
+      "possible_duplicate_triggers": 4,
+      "per_track": [
+        {
+          "track": "apricots_128bpm",
+          "threshold": 0.6086538461538461,
+          "scores": {
+            "50": {
+              "matched": 0,
+              "missed": 14,
+              "extra": 2
+            },
+            "70": {
+              "matched": 0,
+              "missed": 14,
+              "extra": 2
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": null,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "bad_guy_128bpm",
+          "threshold": 0.6096153846153846,
+          "scores": {
+            "50": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 26
+            },
+            "70": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 26
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 48.5217,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "feel_the_vibration_174bpm",
+          "threshold": 0.60625,
+          "scores": {
+            "50": {
+              "matched": 2,
+              "missed": 13,
+              "extra": 4
+            },
+            "70": {
+              "matched": 5,
+              "missed": 10,
+              "extra": 1
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 72.58324999999999,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "inhale_exhale_145bpm",
+          "threshold": 0.6274038461538461,
+          "scores": {
+            "50": {
+              "matched": 7,
+              "missed": 5,
+              "extra": 5
+            },
+            "70": {
+              "matched": 10,
+              "missed": 2,
+              "extra": 2
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 52.91685,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "tears_140bpm",
+          "threshold": 0.6033653846153846,
+          "scores": {
+            "50": {
+              "matched": 6,
+              "missed": 4,
+              "extra": 8
+            },
+            "70": {
+              "matched": 9,
+              "missed": 1,
+              "extra": 5
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 1,
+            "p95_associated_delay_ms": 58.9334,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "late_night",
+          "threshold": 0.6014423076923077,
+          "scores": {
+            "50": {
+              "matched": 1,
+              "missed": 28,
+              "extra": 22
+            },
+            "70": {
+              "matched": 10,
+              "missed": 19,
+              "extra": 13
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 1,
+            "p95_associated_delay_ms": 197.2001,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "midnight_patience",
+          "threshold": 0.5884615384615385,
+          "scores": {
+            "50": {
+              "matched": 14,
+              "missed": 21,
+              "extra": 12
+            },
+            "70": {
+              "matched": 17,
+              "missed": 18,
+              "extra": 9
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 1,
+            "p95_associated_delay_ms": 80.0,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "miracle",
+          "threshold": 0.6120192307692307,
+          "scores": {
+            "50": {
+              "matched": 1,
+              "missed": 11,
+              "extra": 5
+            },
+            "70": {
+              "matched": 2,
+              "missed": 10,
+              "extra": 4
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 61.41655,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "heavy_on_mind",
+          "threshold": 0.6072115384615384,
+          "scores": {
+            "50": {
+              "matched": 1,
+              "missed": 31,
+              "extra": 18
+            },
+            "70": {
+              "matched": 14,
+              "missed": 18,
+              "extra": 5
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 1,
+            "p95_associated_delay_ms": 89.60919999999986,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        }
+      ]
+    }
+  ],
+  "score_complementarity": {
+    "method": "Diagnostic union of independently matched label identities at70ms from two fixed nested threshold outputs. Not a runnable combined detector or a bound for rematching their combined event streams. No new scores, labels or fitting; continuous subthreshold scores retain additional information.",
+    "totals": {
+      "labels": 174,
+      "linear": 94,
+      "svd": 82,
+      "both": 62,
+      "either": 114,
+      "linear_only": 32,
+      "svd_only": 20
+    },
+    "tracks": [
+      {
+        "track": "apricots_128bpm",
+        "labels": 14,
+        "linear": 5,
+        "svd": 0,
+        "both": 0,
+        "either": 5,
+        "linear_only": 5,
+        "svd_only": 0
+      },
+      {
+        "track": "bad_guy_128bpm",
+        "labels": 15,
+        "linear": 15,
+        "svd": 15,
+        "both": 15,
+        "either": 15,
+        "linear_only": 0,
+        "svd_only": 0
+      },
+      {
+        "track": "feel_the_vibration_174bpm",
+        "labels": 15,
+        "linear": 15,
+        "svd": 5,
+        "both": 5,
+        "either": 15,
+        "linear_only": 10,
+        "svd_only": 0
+      },
+      {
+        "track": "inhale_exhale_145bpm",
+        "labels": 12,
+        "linear": 10,
+        "svd": 10,
+        "both": 8,
+        "either": 12,
+        "linear_only": 2,
+        "svd_only": 2
+      },
+      {
+        "track": "tears_140bpm",
+        "labels": 10,
+        "linear": 9,
+        "svd": 9,
+        "both": 8,
+        "either": 10,
+        "linear_only": 1,
+        "svd_only": 1
+      },
+      {
+        "track": "late_night",
+        "labels": 29,
+        "linear": 12,
+        "svd": 10,
+        "both": 7,
+        "either": 15,
+        "linear_only": 5,
+        "svd_only": 3
+      },
+      {
+        "track": "midnight_patience",
+        "labels": 35,
+        "linear": 20,
+        "svd": 17,
+        "both": 15,
+        "either": 22,
+        "linear_only": 5,
+        "svd_only": 2
+      },
+      {
+        "track": "miracle",
+        "labels": 12,
+        "linear": 6,
+        "svd": 2,
+        "both": 2,
+        "either": 6,
+        "linear_only": 4,
+        "svd_only": 0
+      },
+      {
+        "track": "heavy_on_mind",
+        "labels": 32,
+        "linear": 2,
+        "svd": 14,
+        "both": 2,
+        "either": 14,
+        "linear_only": 0,
+        "svd_only": 12
+      }
+    ]
+  },
+  "failure_diagnosis": {
+    "raw_report": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-trajectory-2026-10-09/diagnosis.json",
+      "sha256": "5f2b7c24cba19e5a0da52ceffc301a33cad430c5957cefc8c24a8bfb918ddd6a"
+    },
+    "supported_findings": [
+      "All174 labelled events have a raw available candidate within70ms; Midnight116.96s has only excluded timely availability. This does not assert a174-event one-to-one ceiling.",
+      "Primary missed-label attribution: linear79 cutoff rejections+1 uncertainty exclusion; SVD90 cutoff rejections+1 uncertainty exclusion+1 one-to-one competition. Zero genuine missing-candidate or primary refractory-suppression misses.",
+      "Linear Bad Guy:26 wide-unmatched emitted triggers; median score0.999778 versus0.999219 median best-score labelled event. Merely increasing its cutoff cannot separate these overlapping rankings.",
+      "SVD rank2 explains57.2\u201360.7% of weighted positive training variance and46.7\u201353.7% negative variance. Basis overlap statistic spans0.594\u20130.697; this measures shared directions, not class separability.",
+      "SVD Miracle: median positive-basis reconstruction fraction is0.185 for labelled-event best candidates versus0.773 for emitted wide extras. Corresponding median scores0.582 versus0.648; the learned low-rank geometry favours these unmatched events.",
+      "Pooled reviewed-candidate trajectory adjacent median correlation:low0.598,body0.829,upper0.911. No pooled trajectory/trajectory or trajectory/base15 pair exceeds|r|=.95; trajectory/base maximum=.760. Broad feature redundancy is not established.",
+      "These are diagnostic associations against provisional labels. They do not identify acoustic sources of unmatched triggers or prove why a particular timbre differs."
+    ],
+    "miss_reasons": {
+      "linear_39": {
+        "no_available_candidate": 0,
+        "uncertainty_exclusion": 1,
+        "all_candidates_below_cutoff": 79,
+        "above_cutoff_suppressed_by_refractory": 0,
+        "matching_competition": 0
+      },
+      "svd_39_rank2": {
+        "no_available_candidate": 0,
+        "uncertainty_exclusion": 1,
+        "all_candidates_below_cutoff": 90,
+        "above_cutoff_suppressed_by_refractory": 0,
+        "matching_competition": 1
+      }
+    },
+    "qualification": "Diagnosis of the original frozen models, before the training-exclusion repair. Candidate coverage means temporal availability, not proof that a kick caused the candidate. High candidate AUC does not establish event precision at high recall."
+  },
+  "training_target_audit": {
+    "raw_report": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-trajectory-2026-10-09/training_timing_audit.json",
+      "sha256": "bea5c0c141460b88e789e03d354fe2d507805e3d91bec8be85e6ce36142fe219"
+    },
+    "totals": {
+      "positive_candidates": 630,
+      "represented_positive_events": 175,
+      "positive_buckets": {
+        "below_10ms": {
+          "candidates": 24,
+          "equal_song_mean_positive_event_weight_fraction": 0.031902656270215796
+        },
+        "below_20ms": {
+          "candidates": 87,
+          "equal_song_mean_positive_event_weight_fraction": 0.11908740053829339
+        },
+        "above_70ms": {
+          "candidates": 42,
+          "equal_song_mean_positive_event_weight_fraction": 0.04538179016601636
+        },
+        "20_to_70ms": {
+          "candidates": 501,
+          "equal_song_mean_positive_event_weight_fraction": 0.8355308092956903
+        }
+      },
+      "excluded_labels_used_as_positive_targets": 3,
+      "positive_candidates_assigned_excluded_labels": 3,
+      "negative_straddling_candidates": 59,
+      "labels_touched_by_negative_straddles": 58,
+      "negative_straddles_removed_by_uncertainty": 0,
+      "negative_straddles_outside_training_core": 0
+    },
+    "interpretation": "These targets supervise candidate-start proximity, not whether a kick is observable by the deadline or whether an emission meets70ms. Late positives and early negative straddles demonstrate a mismatch in target semantics; early positives also have unequal evidence ages. The audit cannot establish that correcting it improves detection, excluded candidate windows were never fitted as negatives, but excluded truth labels can still assign positives after an excluded region because truth itself is not filtered. No target, label, or model was changed.",
+    "correction": "Ignore candidates within35ms of excluded/out-of-core truth instead of retaining them as positive targets or relabelling them negative. Stored labels, scoring and old model results remain unchanged. Early/late target timing is diagnosed, not changed by this repair."
+  },
+  "expanded_review_preparation": {
+    "raw_report": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/expanded_review_proposals.json",
+      "sha256": "bf7df367bb40d6dcc168ac3228d866005de991fd03b86e5e5730c74ee44fb89c"
+    },
+    "source_proposal_audit": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-expanded-review-2026-10-09/source_proposal_audit.json",
+      "sha256": "3a7a75926d03e9236acabad94cfe1053557270d9bd48b57b40449ca01c6d5af8"
+    },
+    "selected_cores": 20,
+    "core_seconds": 240,
+    "source_proposals": 370,
+    "accepted_new_labels": 0,
+    "status": "Source proposals require individual review: inspected cases include decay-tail recrossings and near-stationary weak source noise. Five exactly silent source cores are not automatically negative master labels.",
+    "track_counts": {
+      "late_night": {
+        "cores": 5,
+        "proposals": 159
+      },
+      "midnight_patience": {
+        "cores": 4,
+        "proposals": 31
+      },
+      "miracle": {
+        "cores": 6,
+        "proposals": 35
+      },
+      "heavy_on_mind": {
+        "cores": 5,
+        "proposals": 145
+      }
+    },
+    "existing_label_sha256": {
+      "tests/fixtures/audio_labels/master_passages_2026-10-09.json": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c",
+      "tests/fixtures/audio_labels/heldout_passages_2026-10-09.json": "00a6865a1c60795bb7e74a4ffe9fe207bbe8d84d5ceb7b62aad9d4b64d627fab"
+    },
+    "source_sha256": {
+      "registry": "9a2521d96f82c615fb650b521a9a088911f5e5b9b5d57899200b255b767424bb",
+      "script": "7870b94325022e8868f2f904d9191fc3a4c76122715972e03016898aded09793",
+      "helper": "8b9229e4e4910842d0a78754169f3323cbe9bd748183a319ba63231f12dca03d"
+    }
+  },
+  "measurement_followup": {
+    "conclusion": "No raw-signal information limit demonstrated. Fix target consistency and complete independent annotation before choosing another measurement or score.",
+    "prior_local_evidence": "Steady RMS/quadrature, complex-domain novelty and timbre-template trials already exist; do not repeat them as new hypotheses. SVD reconstruction of dominant variance does not guarantee kick/non-kick discrimination.",
+    "research": [
+      {
+        "url": "https://www.dafx.de/paper-archive/2003/pdfs/dafx81.pdf",
+        "lesson": "Phase/magnitude prediction error measures onset novelty; source identity requires additional evidence. Existing local complex-domain audit already tested this direction."
+      },
+      {
+        "url": "https://www.dafx.de/paper-archive/2014/dafx14_christian_dittmar_real_time_transcription_a.pdf",
+        "lesson": "Time-dynamic spectral templates support real-time drum decomposition, but this paper uses drum recordings and expected-instrument training. It does not establish generalisation to arbitrary mastered mixes."
+      },
+      {
+        "url": "https://www2.eecs.berkeley.edu/Pubs/TechRpts/2012/EECS-2012-250.html",
+        "lesson": "Separate attack and tail modelling is relevant to duplicate/renewal confusion. Reported improvements are on its own drum system, not a prediction for MANIFOLD."
+      }
+    ]
+  },
+  "training_exclusion_repair": {
+    "raw_report": "/Users/peterkiemann/.cache/manifold/kick-training-exclusion-2026-10-09/trial.json",
+    "raw_report_sha256": "fc0c797af54b7563e7004c7923ae38b98fea3d37169fc7a265a983b728c8b1bc",
+    "reproduce": "OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 python3 -B /Users/peterkiemann/.cache/manifold/kick-training-exclusion-2026-10-09/replay.py --repo '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-9' --output /Users/peterkiemann/.cache/manifold/kick-training-exclusion-2026-10-09",
+    "source_sha256": {
+      "kick_attack_rejection.py": "cb5e8ad261f64ae5b6e3bafce2f232e14ec99bb3fc54c0599f113dcfaed6a144",
+      "kick_fusion_bandwise.py": "d7ae7da4c039da7c86e3d1eb7ffd0c215d77d68e3f56eb8be5944dac8c3f29d8",
+      "kick_fusion_calibration.py": "b6c9db225f6629c0f12820763bd58269b23a5ecc645d2951c6dfe0088ac4abc6",
+      "kick_fusion_features.py": "52455fa1b27feff2ade4b71a7772fb3598638ba4cb723f396d72f78061fac736",
+      "kick_fusion_fine_calibration.py": "4e9a95ae0afd02c9bd70436a1f163fd8abbd2f39d567816bf541f5019b6c25bf",
+      "kick_subspace_score.py": "539cf63570e8bab5c11e3f5861d74f49d06fc06352be7ebf507dc71b2bb2e908",
+      "kick_tonal_experiment.py": "ae6a66426616273ed9f33a460d5e5b8407f91b82681133108e235b01967d76f7",
+      "kick_trajectory_features.py": "0adf56e709cd696304288f2b1d9180d55c6a803c93912682628085b8a53d6804",
+      "kick_upper_cue.py": "3fa6c9e64ad8cc0a1a0dbe761a5ba6e5f59b4563c77882d3cbe1a0a77ac7830f",
+      "live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2",
+      "master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145",
+      "run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615",
+      "run_kick_fusion_calibration.py": "e2634d9ae28460fd2d6e9291d0e12a0250f2b01bc6069c13af5ce6216a1754bc",
+      "run_kick_fusion_trial.py": "cd104a5185c06e62c33aaaacbb5aaba8c646dcdea9442820b3831db7f6226712",
+      "run_kick_trajectory_trial.py": "19db0b7115baed354bb20e49c371f6f35a31943b9a39b1b2b47abbc3a3b9ef73"
+    },
+    "training_target_diff": [
+      {
+        "track": "midnight_patience",
+        "candidate_index": 4610,
+        "candidate_hop": 21995,
+        "available_hop": 22003,
+        "label_s": 117.3,
+        "old": {
+          "mask": true,
+          "label": 1,
+          "event_id": 5
+        },
+        "corrected": {
+          "mask": false,
+          "label": 0,
+          "event_id": -1
+        }
+      },
+      {
+        "track": "midnight_patience",
+        "candidate_index": 4857,
+        "candidate_hop": 23359,
+        "available_hop": 23367,
+        "label_s": 124.57,
+        "old": {
+          "mask": true,
+          "label": 1,
+          "event_id": 30
+        },
+        "corrected": {
+          "mask": false,
+          "label": 0,
+          "event_id": -1
+        }
+      },
+      {
+        "track": "midnight_patience",
+        "candidate_index": 4972,
+        "candidate_hop": 23999,
+        "available_hop": 24007,
+        "label_s": 127.99,
+        "old": {
+          "mask": true,
+          "label": 1,
+          "event_id": 42
+        },
+        "corrected": {
+          "mask": false,
+          "label": 0,
+          "event_id": -1
+        }
+      }
+    ],
+    "cache_only": {
+      "cache_hits": 9,
+      "feature_build_and_decode_forbidden": true,
+      "raw_audio_sha_verified_by_cache_loader": true
+    },
+    "stored_15_model_replay": {
+      "fixed_05_and_coarse_exact": true,
+      "refined_exact": {
+        "apricots_128bpm": true,
+        "bad_guy_128bpm": true,
+        "feel_the_vibration_174bpm": true,
+        "inhale_exhale_145bpm": true,
+        "tears_140bpm": true,
+        "late_night": true,
+        "midnight_patience": true,
+        "miracle": true,
+        "heavy_on_mind": true
+      }
+    },
+    "validation": "Eight focused fusion tests and two runner integration tests pass. Lead reviewed patch, reproduction script, source hashes and aggregate summaries.",
+    "variants": [
+      {
+        "variant": "linear_15",
+        "totals": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 18,
+              "missed": 156,
+              "extra": 130
+            },
+            "50": {
+              "matched": 68,
+              "missed": 106,
+              "extra": 80
+            },
+            "70": {
+              "matched": 103,
+              "missed": 71,
+              "extra": 45
+            }
+          },
+          "association": {
+            "matched": 102,
+            "missed": 72,
+            "extra": 46
+          },
+          "association_delay": {
+            "median_ms": 45.67,
+            "p90_ms": 55.0
+          }
+        },
+        "kick_free_minutes": 0.8,
+        "kick_free_extras": 0,
+        "possible_duplicate_triggers": 3,
+        "tracks": [
+          {
+            "track": "apricots_128bpm",
+            "labels": 14,
+            "tolerance_ms": {
+              "50": {
+                "matched": 3,
+                "missed": 11,
+                "extra": 4
+              },
+              "70": {
+                "matched": 7,
+                "missed": 7,
+                "extra": 0
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 54.7,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "bad_guy_128bpm",
+            "labels": 15,
+            "tolerance_ms": {
+              "50": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 30
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 30
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 48.5217,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "feel_the_vibration_174bpm",
+            "labels": 15,
+            "tolerance_ms": {
+              "50": {
+                "matched": 5,
+                "missed": 10,
+                "extra": 10
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 0
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 57.93319999999999,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "inhale_exhale_145bpm",
+            "labels": 12,
+            "tolerance_ms": {
+              "50": {
+                "matched": 8,
+                "missed": 4,
+                "extra": 3
+              },
+              "70": {
+                "matched": 8,
+                "missed": 4,
+                "extra": 3
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 48.967,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "tears_140bpm",
+            "labels": 10,
+            "tolerance_ms": {
+              "50": {
+                "matched": 7,
+                "missed": 3,
+                "extra": 1
+              },
+              "70": {
+                "matched": 7,
+                "missed": 3,
+                "extra": 1
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 44.6001,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "late_night",
+            "labels": 29,
+            "tolerance_ms": {
+              "50": {
+                "matched": 7,
+                "missed": 22,
+                "extra": 7
+              },
+              "70": {
+                "matched": 14,
+                "missed": 15,
+                "extra": 0
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 57.633449999999996,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          },
+          {
+            "track": "midnight_patience",
+            "labels": 35,
+            "tolerance_ms": {
+              "50": {
+                "matched": 19,
+                "missed": 16,
+                "extra": 14
+              },
+              "70": {
+                "matched": 22,
+                "missed": 13,
+                "extra": 11
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 3,
+              "p95_associated_delay_ms": 56.667,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          },
+          {
+            "track": "miracle",
+            "labels": 12,
+            "tolerance_ms": {
+              "50": {
+                "matched": 4,
+                "missed": 8,
+                "extra": 4
+              },
+              "70": {
+                "matched": 8,
+                "missed": 4,
+                "extra": 0
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 57.62625,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          },
+          {
+            "track": "heavy_on_mind",
+            "labels": 32,
+            "tolerance_ms": {
+              "50": {
+                "matched": 0,
+                "missed": 32,
+                "extra": 7
+              },
+              "70": {
+                "matched": 7,
+                "missed": 25,
+                "extra": 0
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 55.254,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          }
+        ]
+      },
+      {
+        "variant": "linear_39",
+        "totals": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 26,
+              "missed": 148,
+              "extra": 105
+            },
+            "50": {
+              "matched": 64,
+              "missed": 110,
+              "extra": 67
+            },
+            "70": {
+              "matched": 91,
+              "missed": 83,
+              "extra": 40
+            }
+          },
+          "association": {
+            "matched": 91,
+            "missed": 83,
+            "extra": 40
+          },
+          "association_delay": {
+            "median_ms": 43.7,
+            "p90_ms": 55.53
+          }
+        },
+        "kick_free_minutes": 0.8,
+        "kick_free_extras": 0,
+        "possible_duplicate_triggers": 1,
+        "tracks": [
+          {
+            "track": "apricots_128bpm",
+            "labels": 14,
+            "tolerance_ms": {
+              "50": {
+                "matched": 3,
+                "missed": 11,
+                "extra": 3
+              },
+              "70": {
+                "matched": 6,
+                "missed": 8,
+                "extra": 0
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 54.75,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "bad_guy_128bpm",
+            "labels": 15,
+            "tolerance_ms": {
+              "50": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 25
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 25
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 48.5217,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "feel_the_vibration_174bpm",
+            "labels": 15,
+            "tolerance_ms": {
+              "50": {
+                "matched": 5,
+                "missed": 10,
+                "extra": 10
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 0
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 57.93319999999999,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "inhale_exhale_145bpm",
+            "labels": 12,
+            "tolerance_ms": {
+              "50": {
+                "matched": 9,
+                "missed": 3,
+                "extra": 6
+              },
+              "70": {
+                "matched": 10,
+                "missed": 2,
+                "extra": 5
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 50.050149999999995,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "tears_140bpm",
+            "labels": 10,
+            "tolerance_ms": {
+              "50": {
+                "matched": 8,
+                "missed": 2,
+                "extra": 4
+              },
+              "70": {
+                "matched": 8,
+                "missed": 2,
+                "extra": 4
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 43.433550000000004,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "late_night",
+            "labels": 29,
+            "tolerance_ms": {
+              "50": {
+                "matched": 1,
+                "missed": 28,
+                "extra": 7
+              },
+              "70": {
+                "matched": 8,
+                "missed": 21,
+                "extra": 0
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 59.500099999999996,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          },
+          {
+            "track": "midnight_patience",
+            "labels": 35,
+            "tolerance_ms": {
+              "50": {
+                "matched": 17,
+                "missed": 18,
+                "extra": 8
+              },
+              "70": {
+                "matched": 20,
+                "missed": 15,
+                "extra": 5
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 1,
+              "p95_associated_delay_ms": 56.900299999999994,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          },
+          {
+            "track": "miracle",
+            "labels": 12,
+            "tolerance_ms": {
+              "50": {
+                "matched": 6,
+                "missed": 6,
+                "extra": 0
+              },
+              "70": {
+                "matched": 6,
+                "missed": 6,
+                "extra": 0
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 46.213,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          },
+          {
+            "track": "heavy_on_mind",
+            "labels": 32,
+            "tolerance_ms": {
+              "50": {
+                "matched": 0,
+                "missed": 32,
+                "extra": 4
+              },
+              "70": {
+                "matched": 3,
+                "missed": 29,
+                "extra": 1
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 71.36425,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          }
+        ]
+      },
+      {
+        "variant": "svd_39_rank2",
+        "totals": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 14,
+              "missed": 160,
+              "extra": 138
+            },
+            "50": {
+              "matched": 48,
+              "missed": 126,
+              "extra": 104
+            },
+            "70": {
+              "matched": 86,
+              "missed": 88,
+              "extra": 66
+            }
+          },
+          "association": {
+            "matched": 99,
+            "missed": 75,
+            "extra": 53
+          },
+          "association_delay": {
+            "median_ms": 51.33,
+            "p90_ms": 73.67
+          }
+        },
+        "kick_free_minutes": 0.8,
+        "kick_free_extras": 0,
+        "possible_duplicate_triggers": 4,
+        "tracks": [
+          {
+            "track": "apricots_128bpm",
+            "labels": 14,
+            "tolerance_ms": {
+              "50": {
+                "matched": 1,
+                "missed": 13,
+                "extra": 2
+              },
+              "70": {
+                "matched": 1,
+                "missed": 13,
+                "extra": 2
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 9.667,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "bad_guy_128bpm",
+            "labels": 15,
+            "tolerance_ms": {
+              "50": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 26
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 26
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 48.5217,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "feel_the_vibration_174bpm",
+            "labels": 15,
+            "tolerance_ms": {
+              "50": {
+                "matched": 2,
+                "missed": 13,
+                "extra": 4
+              },
+              "70": {
+                "matched": 5,
+                "missed": 10,
+                "extra": 1
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 72.58324999999999,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "inhale_exhale_145bpm",
+            "labels": 12,
+            "tolerance_ms": {
+              "50": {
+                "matched": 7,
+                "missed": 5,
+                "extra": 5
+              },
+              "70": {
+                "matched": 10,
+                "missed": 2,
+                "extra": 2
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 52.91685,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "tears_140bpm",
+            "labels": 10,
+            "tolerance_ms": {
+              "50": {
+                "matched": 6,
+                "missed": 4,
+                "extra": 8
+              },
+              "70": {
+                "matched": 9,
+                "missed": 1,
+                "extra": 5
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 1,
+              "p95_associated_delay_ms": 58.9334,
+              "kick_free_minutes": 0.0,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": null
+            }
+          },
+          {
+            "track": "late_night",
+            "labels": 29,
+            "tolerance_ms": {
+              "50": {
+                "matched": 0,
+                "missed": 29,
+                "extra": 23
+              },
+              "70": {
+                "matched": 9,
+                "missed": 20,
+                "extra": 14
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 1,
+              "p95_associated_delay_ms": 197.2001,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          },
+          {
+            "track": "midnight_patience",
+            "labels": 35,
+            "tolerance_ms": {
+              "50": {
+                "matched": 14,
+                "missed": 21,
+                "extra": 12
+              },
+              "70": {
+                "matched": 17,
+                "missed": 18,
+                "extra": 9
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 1,
+              "p95_associated_delay_ms": 80.0,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          },
+          {
+            "track": "miracle",
+            "labels": 12,
+            "tolerance_ms": {
+              "50": {
+                "matched": 1,
+                "missed": 11,
+                "extra": 6
+              },
+              "70": {
+                "matched": 3,
+                "missed": 9,
+                "extra": 4
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 0,
+              "p95_associated_delay_ms": 62.751,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          },
+          {
+            "track": "heavy_on_mind",
+            "labels": 32,
+            "tolerance_ms": {
+              "50": {
+                "matched": 2,
+                "missed": 30,
+                "extra": 18
+              },
+              "70": {
+                "matched": 17,
+                "missed": 15,
+                "extra": 3
+              }
+            },
+            "diagnostics": {
+              "possible_duplicate_triggers": 1,
+              "p95_associated_delay_ms": 84.37279999999978,
+              "kick_free_minutes": 0.2,
+              "kick_free_extras": 0,
+              "kick_free_false_triggers_per_minute": 0.0
+            }
+          }
+        ]
+      }
+    ],
+    "decision": "Correctness repair preserved; neither tested hypothesis improves the prototype sufficiently. Two failed research hypotheses remain; this repair is not a third hypothesis. No live change or success claim."
+  }
+}

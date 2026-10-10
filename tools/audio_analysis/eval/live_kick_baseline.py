@@ -1,4 +1,4 @@
-"""Run the unchanged Rust mod_harness on the five corrected full-mix fixtures.
+"""Score the live harness or experimental attack probe on five full-mix fixtures.
 
 Requires a freshly built --harness. No model, beat grid, calibration, deduplication,
 or per-song tuning. Report audio-sample availability, not wall-clock/app latency.
@@ -114,6 +114,7 @@ def sha(path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--harness", required=True, type=Path)
+    ap.add_argument("--detector", choices=("live", "attack-probe"), default="live")
     ap.add_argument("--audio-root", required=True, type=Path)
     ap.add_argument("--out-dir", required=True, type=Path)
     ap.add_argument("--report", required=True, type=Path)
@@ -135,8 +136,9 @@ def main():
             raise ValueError(f"{track}: labels differ from accepted visual estimates")
         with wave.open(str(audio)) as wav:
             sr, frames = wav.getframerate(), wav.getnframes()
-        cmd = [str(args.harness.resolve()), str(audio.resolve()), "--out",
-               str((args.out_dir / f"{track}.png").resolve())]
+        cmd = [str(args.harness.resolve()), str(audio.resolve())]
+        if args.detector == "live":
+            cmd += ["--out", str((args.out_dir / f"{track}.png").resolve())]
         print(f"Running {track} full mix", flush=True)
         run = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
         (args.out_dir / f"{track}.log").write_text(run.stdout + run.stderr)
@@ -155,13 +157,21 @@ def main():
     totals = {str(ms): {k: sum(r["accuracy_by_tolerance_ms"][str(ms)][k] for r in results)
                        for k in ("matched", "missed", "extra")} for ms in (35, 50, 70)}
     all_pairs = [p for r in results for p in r["association_early_35_late_200_ms"]["pairs"]]
+    source_paths = (["crates/manifold-audio/src/analysis.rs",
+                     "crates/manifold-audio/examples/mod_harness.rs"]
+                    if args.detector == "live" else
+                    ["crates/manifold-audio/examples/kick_attack_probe.rs"])
     report = {
         "date": datetime.now(ZoneInfo("Australia/Sydney")).date().isoformat(),
         "detector_revision": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "harness_sha256": sha(args.harness), "review_sha256": sha(review_path),
+        "working_tree_sources_sha256": {p: sha(ROOT / p) for p in source_paths},
         "method": {
-            "detector": "Unchanged StreamingSendAnalyzer via mod_harness; Low Kick > 0.999",
+            "detector": ("Unchanged StreamingSendAnalyzer via mod_harness; Low Kick > 0.999"
+                         if args.detector == "live" else
+                         "Experimental causal multiband kick_attack_probe; fixed v5 settings; "
+                         "development clips used during tuning, not held-out validation"),
             "input": "Native-rate stereo mean; defaults; continuous full file; no tail padding",
             "time": "(zero-based kick_hop + 1) * hop_samples / sample_rate; no calibration",
             "primary_tolerance_ms": 50, "matching": "one-to-one maximum count then minimum error",

@@ -1,0 +1,258 @@
+{
+  "method": "Existing SciPy causal band/follower reference plus unchanged v5 state machine exactly reproduced native Rust kick hop lists on both complete masters. For each 70ms missed visual midpoint, inspect hops from onset-20ms to onset+70ms. This identifies candidate gating failure, not musical instrument identity.",
+  "script": "/Users/peterkiemann/.cache/manifold/master-kick-comparison-2026-10-09/diagnose_misses.py",
+  "tracks": [
+    {
+      "track": "late_night",
+      "native_rust_event_replay_exact": true,
+      "missed": [
+        {
+          "onset_s": 204.45,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [
+            "combined_fast_slow_gt_1_8"
+          ],
+          "max_body_fast_slow": 3.53,
+          "max_combined_fast_slow": 1.477,
+          "max_body_low": 2.271
+        },
+        {
+          "onset_s": 204.59,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [
+            "combined_fast_slow_gt_1_8"
+          ],
+          "max_body_fast_slow": 2.797,
+          "max_combined_fast_slow": 1.55,
+          "max_body_low": 4.234
+        },
+        {
+          "onset_s": 204.725,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 4.114,
+          "max_combined_fast_slow": 1.982,
+          "max_body_low": 5.09
+        },
+        {
+          "onset_s": 207.78,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [
+            "combined_fast_slow_gt_1_8"
+          ],
+          "max_body_fast_slow": 4.231,
+          "max_combined_fast_slow": 1.779,
+          "max_body_low": 1.366
+        },
+        {
+          "onset_s": 210.28,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 3.796,
+          "max_combined_fast_slow": 2.255,
+          "max_body_low": 4.579
+        },
+        {
+          "onset_s": 210.975,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 3.38,
+          "max_combined_fast_slow": 2.623,
+          "max_body_low": 1.093
+        }
+      ]
+    },
+    {
+      "track": "midnight_patience",
+      "native_rust_event_replay_exact": true,
+      "missed": [
+        {
+          "onset_s": 116.96,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 2.746,
+          "max_combined_fast_slow": 2.152,
+          "max_body_low": 0.49
+        },
+        {
+          "onset_s": 117.87,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 2.066,
+          "max_combined_fast_slow": 2.08,
+          "max_body_low": 0.48
+        },
+        {
+          "onset_s": 118.21,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 4.309,
+          "max_combined_fast_slow": 2.405,
+          "max_body_low": 2.605
+        },
+        {
+          "onset_s": 118.55,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 2.757,
+          "max_combined_fast_slow": 1.943,
+          "max_body_low": 1.025
+        },
+        {
+          "onset_s": 118.89,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 2.499,
+          "max_combined_fast_slow": 2.248,
+          "max_body_low": 1.815
+        },
+        {
+          "onset_s": 119.69,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 2.028,
+          "max_combined_fast_slow": 2.594,
+          "max_body_low": 1.19
+        },
+        {
+          "onset_s": 121.505,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [
+            "body_fast_slow_gt_2"
+          ],
+          "max_body_fast_slow": 1.588,
+          "max_combined_fast_slow": 2.147,
+          "max_body_low": 1.298
+        },
+        {
+          "onset_s": 121.845,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 3.705,
+          "max_combined_fast_slow": 2.48,
+          "max_body_low": 2.223
+        },
+        {
+          "onset_s": 122.19,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [
+            "body_fast_slow_gt_2",
+            "combined_fast_slow_gt_1_8"
+          ],
+          "max_body_fast_slow": 1.258,
+          "max_combined_fast_slow": 1.537,
+          "max_body_low": 1.856
+        },
+        {
+          "onset_s": 122.53,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 2.233,
+          "max_combined_fast_slow": 2.426,
+          "max_body_low": 1.41
+        },
+        {
+          "onset_s": 123.32,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [
+            "body_fast_slow_gt_2"
+          ],
+          "max_body_fast_slow": 1.953,
+          "max_combined_fast_slow": 2.545,
+          "max_body_low": 0.975
+        },
+        {
+          "onset_s": 124.0,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 4.775,
+          "max_combined_fast_slow": 1.97,
+          "max_body_low": 3.485
+        },
+        {
+          "onset_s": 124.91,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [],
+          "max_body_fast_slow": 5.78,
+          "max_combined_fast_slow": 2.249,
+          "max_body_low": 7.766
+        },
+        {
+          "onset_s": 125.14,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [
+            "combined_fast_slow_gt_1_8"
+          ],
+          "max_body_fast_slow": 2.509,
+          "max_combined_fast_slow": 1.28,
+          "max_body_low": 1.067
+        },
+        {
+          "onset_s": 125.48,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [
+            "combined_fast_slow_gt_1_8"
+          ],
+          "max_body_fast_slow": 2.136,
+          "max_combined_fast_slow": 1.432,
+          "max_body_low": 6.154
+        },
+        {
+          "onset_s": 125.83,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [
+            "body_fast_slow_gt_2",
+            "combined_fast_slow_gt_1_8"
+          ],
+          "max_body_fast_slow": 1.958,
+          "max_combined_fast_slow": 1.551,
+          "max_body_low": 1.497
+        },
+        {
+          "onset_s": 126.17,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [
+            "combined_fast_slow_gt_1_8"
+          ],
+          "max_body_fast_slow": 2.558,
+          "max_combined_fast_slow": 1.551,
+          "max_body_low": 8.74
+        },
+        {
+          "onset_s": 126.96,
+          "any_eligible": false,
+          "any_candidate": false,
+          "never_passed": [
+            "combined_fast_slow_gt_1_8"
+          ],
+          "max_body_fast_slow": 2.702,
+          "max_combined_fast_slow": 1.313,
+          "max_body_low": 1.302
+        }
+      ]
+    }
+  ]
+}
