@@ -1,11 +1,11 @@
 # Water Crates — one crate per water subsystem, the compiler holds the lines
-
+**Status:** ACCEPTED · 2026-10-10 · Peter approved D1–D13 with the GPU MPM crate named manifold-water-gpu-mpm · five stages, none started · Section 9 (Phasing).
 **Status:** PROPOSED · 2026-10-10 · Fable · five stages, none started · Section 9 (Phasing).
 **Prerequisites:** BUG-hkbdp.6.6 (CPU FLIP removal), BUG-hkbdp.6.2 (coupled-scene preparation out of the engine), BUG-hkbdp.6.3 (scene types out of the engine) and BUG-hkbdp.6.4 (seam review) landed on main; BUG-hkbdp.6.8 (explicit step context) landed before stage 2.
 **Work items:** BUG-hkbdp.6.12 (water subsystem boundaries the compiler enforces), under the epic BUG-hkbdp (renderer crate split epic). Stage beads are drafted beside this doc and created by the lead.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before any stage. Lead: Opus. Lanes make one commit then stop; the lead lands with `scripts/land_branch.py`.
 
-<!-- index: Split manifold-nodes-water into rigid, liquid, gpu-flip, matter, whitewater and surface crates under a thin registration crate, so a water edit runs its own tests plus the contract suite at its seam. -->
+<!-- index: Split manifold-nodes-water into rigid, liquid, gpu-flip, gpu-mpm, whitewater and surface crates under a thin registration crate, so a water edit runs its own tests plus the contract suite at its seam. -->
 
 **The governing insight: the water crate already has a layering, it just is not enforced.** Every solver (GPU FLIP, Matter, whitewater, the mesher) reaches down into one shared contract, the liquid seam (`crates/manifold-nodes-water/src/liquid/`, `docs/LIQUID_SOLVER_SEAM_DESIGN.md`), and the seam reaches down into the Box3D rigid adapter (`physics.rs`). The cycles the lead's census found are not architecture; they are eleven misplaced items listed in section 1.2 (the coupling census), plus test harnesses and migrations that know every solver sitting inside the shared module. Move those and the layering is a tree. Cargo then refuses the next upward reach at compile time, and the landing gate's crate-to-test mapping scopes a water landing for free.
 
@@ -79,7 +79,7 @@ Negative claims, checked: no serialized value names a Rust module or crate (`rg 
 | `manifold-water-rigid` | The Box3D graph adapter and the native pair contract: `physics.rs` tree, `physics_mesh`, `physics_events`, `physics_metrics` (until 6.8 moves the record types), `vector_field`, `node.rs` (`PhysicsNode`), `node.physics_world`, `node.rigid_body`, the vector-field source nodes, `CoupledRigidFrame`/`CoupledRigidLayout` (re-homed from the deleted `fluid/coupled.rs`) | core, foundation, gpu, node-engine, physics |
 | `manifold-water-liquid` | The liquid seam: clock, lattice, grid, bodies, body buffers, coupling, fields, frame ring and history, display cursor, tick samples, substep history, roles (`fluid_role`, `fluid_particles`, `node.fluid_role_source`), the whitewater grid vocabulary (`whitewater.rs`), the shared atoms of section 1.1, `liquid::extent` production helpers | rigid + its set, fluids (reference oracles only, behind `testkit`) |
 | `manifold-water-gpu-flip` | `gpu_flip_*`, `liquid_state`, `liquid_fill`, `liquid_solid_distance`, `clamp_liquid_to_solids`, `push_out_of_solid`, `euler_step_particles(_3d)`, `apply_radial_burst(_3d)_to_particles` | liquid + its set |
-| `manifold-water-matter` | `matter.rs` tree, every `matter_*` node, `grid_to_matter` | liquid + its set |
+| `manifold-water-gpu-mpm` | `matter.rs` tree, every `matter_*` node, `grid_to_matter` | liquid + its set |
 | `manifold-water-whitewater` | `whitewater_step` and its lifecycle, type, handoff, emitters, potentials, `nearest_crossing`, `surface_crossings`, `crossing_distance`, `keep/advect/age/retype/spawn_whitewater`, `preserve_foam`, `jitter_particles`, `sample_faces_at_particles`, `extend_lattice`, `lattice_curvature`, `pad_distance_lattice` | liquid + its set |
 | `manifold-water-surface` | The mesher: `lattice_bricks`, `liquid_frame`, `particle_volume`, `volume_surface_mesh`, `count_surface_edges/triangles`, `relax/smooth_surface_mesh`, `surface_mesh_normals`, `surface_mesh_parity`, `lattice_closing_tests`, `shape_particle_blobs`, `blob_bounds` | liquid + its set |
 | `manifold-nodes-water` (kept) | Registration and runtime: `lib.rs` linking every crate, `graph_install`, `physics_scene`, `migration/`, `runtime/`, `presets/` (the Dam Break builders), the cross-solver testkit and conformance harness | every crate above |
@@ -128,7 +128,7 @@ Paths relative to `crates/manifold-nodes-water/src/` before the move. Every file
 
 `primitives/{gpu_flip_bodies, gpu_flip_clock, gpu_flip_domain (+ /), gpu_flip_extension_tests, gpu_flip_lentine, gpu_flip_narrow_band, gpu_flip_narrow_band_tests, gpu_flip_pressure, gpu_flip_pressure_tests, gpu_flip_sheeting, gpu_flip_sheeting_*_tests, gpu_flip_step (+ /), gpu_flip_step_tests, gpu_flip_atom_tests, gpu_flip_tile_tests, gpu_flip_still, gpu_flip_volume, liquid_state (+ /), liquid_fill (+ /), liquid_solid_distance (+ /), clamp_liquid_to_solids (+ /), push_out_of_solid (+ /), euler_step_particles, euler_step_particles_3d, apply_radial_burst_to_particles, apply_radial_burst_3d_to_particles, liquid_surface_tests}`; `tests/fixtures/{dambreak_pressure_problems.bin.zst, deep_pool_*.bin.zst, gpu_flip_pressure_golden.txt}` → `crates/manifold-water-gpu-flip/tests/fixtures/`. ⚠ VERIFY-AT-IMPL: `liquid_surface_tests.rs` (2059 lines) exercises the surface group from gpu-flip particles; by D8 it belongs in the lowest crate that links both, which is the registration crate, unless it instantiates only gpu-flip nodes (`rg -n 'node\.(volume_surface_mesh|lattice_bricks|liquid_frame|particle_volume)' …/liquid_surface_tests.rs`).
 
-### 3.4 `manifold-water-matter`
+### 3.4 `manifold-water-gpu-mpm`
 
 `matter.rs` + `matter/` (coupling, look, reference) → `src/`; `primitives/{matter_body_reaction, matter_common, matter_domain, matter_face_component, matter_fill, matter_frame, matter_grid_update, matter_move_bodies, matter_state, matter_stats, matter_to_grid, grid_to_matter}` with their `/extent.rs`.
 
@@ -233,7 +233,7 @@ A leaf exposes its node types (`primitive!` already makes them `pub` structs), t
 //! extension, graph installation, migrations and the cross-solver testkit.
 //! Never depends on UI, editing, IO, the app, compositor, UI paint or another node family.
 use manifold_water_gpu_flip as _;
-use manifold_water_matter as _;
+use manifold_water_gpu_mpm as _;
 use manifold_water_whitewater as _;
 use manifold_water_surface as _;
 use manifold_water_liquid as _;
@@ -273,7 +273,7 @@ The compiler stops a signature change from rippling. A behaviour change behind a
 | `manifold-water-rigid` (CS-rigid) | CPU: `manifold-water-liquid` `coupling::`, `manifold-nodes-water` `runtime::physics_`, catalog `catalog_tests::physics_{impulses,sources,carry,sampling}`, `physics_scene`, app `catalog_tests::physics_impulses`; GPU: `water_basin::authored_coupling`, `liquid_conformance::liquid_coupled_`, `physics_boxes::`, `physics_solids::` | The rigid owner inside the seam, the pair scheduler, authored impulses and recorded sampling are the four consumers of the adapter |
 | `manifold-water-liquid` (CS-liquid) | Every leaf's seam proofs: `liquid_conformance::` (all solvers), `contracts::water::`, `face_grid_tests::`, `matter_scene::`, `matter_coupling::`, `whitewater_golden_tests::`, `liquid_surface_tests::`, `fluid_indexed_`, `liquid_indexed::`, plus CS-rigid | Every solver implements this contract; a seam change is a change to all of them. Honest cost: a liquid edit is the broad water run, by design |
 | `manifold-water-gpu-flip` | Own module filters (automatic) + `gpu_flip_` rows, `liquid_conformance::gpu_flip_`, `liquid_conformance::liquid_live_flip`, `gpu_flip_scene_tests::`, `catalog_tests::gpu_flip_body::` | The solver's seam conformance |
-| `manifold-water-matter` | Own filters + `matter_`, `substeps_`, the `liquid_conformance::` members that build Matter (⚠ VERIFY-AT-IMPL: `rg -n 'matter' crates/manifold-app/tests/renderer_contracts/gpu_proofs/liquid_conformance.rs`) | Same |
+| `manifold-water-gpu-mpm` | Own filters + `matter_`, `substeps_`, the `liquid_conformance::` members that build Matter (⚠ VERIFY-AT-IMPL: `rg -n 'matter' crates/manifold-app/tests/renderer_contracts/gpu_proofs/liquid_conformance.rs`) | Same |
 | `manifold-water-whitewater` | Own filters + `whitewater_` rows, `whitewater_golden_tests::`, `catalog_tests::whitewater_scene::`, `catalog_tests::whitewater_emitters::` | Same |
 | `manifold-water-surface` | Own filters + `liquid_surface_tests::`, `surface_mesh_freeze_tests::gpu_tests::`, `volume_surface_mesh::gpu_tests::`, `fluid_indexed_`, `liquid_indexed::`, `catalog_tests::{liquid_surface,liquid_bricks_gpu,particle_volume,surface_mesh_normals,blob_bounds}::` | The particle-frame seam and the mesh contract |
 | `manifold-nodes-water` | `runtime::`, `migration_order_matches_table`, the LiveSchool round-trip (`manifold-io` `load_project`), `catalog_tests::gpu_flip_preset::`, `catalog_tests::liquid_prepare::`, `gpu_flip_render_smoke::`, the CS-rigid runtime rows | Registration, migration and runtime glue |
@@ -284,7 +284,7 @@ Re-derivation command for the member list before each stage: `rg -n 'fn [a-z_]+\
 
 `scripts/gate_policy.py`:
 
-- `WATER_SRC` becomes `WATER_SRCS = ("crates/manifold-water-rigid/src/", "crates/manifold-water-liquid/src/", "crates/manifold-water-gpu-flip/src/", "crates/manifold-water-matter/src/", "crates/manifold-water-whitewater/src/", "crates/manifold-water-surface/src/", "crates/manifold-nodes-water/src/")`; every `WATER_SRC + "…"` row is re-keyed to the crate that now owns the file (mechanical: the section 3 table is the map). `gpu_scope.py::SOURCE_ROOTS` and `is_gpu_path` take the tuple.
+- `WATER_SRC` becomes `WATER_SRCS = ("crates/manifold-water-rigid/src/", "crates/manifold-water-liquid/src/", "crates/manifold-water-gpu-flip/src/", "crates/manifold-water-gpu-mpm/src/", "crates/manifold-water-whitewater/src/", "crates/manifold-water-surface/src/", "crates/manifold-nodes-water/src/")`; every `WATER_SRC + "…"` row is re-keyed to the crate that now owns the file (mechanical: the section 3 table is the map). `gpu_scope.py::SOURCE_ROOTS` and `is_gpu_path` take the tuple.
 - `PRIMITIVE_PATHS` gains each water crate's `src/primitives/`; `PREFIX_ROWS` WGSL rows (`uniform_layout_extended`, `wgsl_validation`) per crate; `GPU_DEFAULT_CPU_ONLY` one line per crate with the same reason text as today's water row.
 - `BROAD_PATHS`: `manifold-water-liquid/src/lib.rs` and `manifold-water-rigid/src/lib.rs` map to a new `WATER_BROAD_FILTERS` (the CS-liquid suite), not to `BROAD_FILTERS`; each leaf's `lib.rs` maps to that leaf's rows; `manifold-nodes-water/src/lib.rs` maps to the registration rows. A crate root is never "everything".
 - Contract suites as `PREFIX_ROWS` entries keyed by crate root: `(root, ".rs", package, modules, binaries)` per section 6.3 row, so `cpu_scope.py` selects the suite whenever any file under the root changes. GPU members go in `EXPLICIT_ROWS` keyed by the same roots.
