@@ -75,7 +75,7 @@ impl EffectNode for Fixture {
         }
     }
 }
-pub(crate) fn register(registry: &mut PrimitiveRegistry) {
+pub fn register(registry: &mut PrimitiveRegistry) {
     for (id, kind) in [("test.physics_transform", Kind::Transform), ("test.physics_body", Kind::Body),
         ("test.physics_field", Kind::Field), ("test.physics_wave", Kind::Wave)] {
         registry.register(id, move || Box::new(Fixture { kind, id: EffectNodeType::new(id) }));

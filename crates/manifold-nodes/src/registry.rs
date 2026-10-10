@@ -71,7 +71,7 @@ impl GeneratorRegistry {
         // `node.gltf_texture_source` uses a hand-written runtime blit, so the
         // atom sweep skips it.
         GltfTextureSource::prewarm_pipeline(device);
-        manifold_nodes_water::primitives::physics_world::PhysicsWorldNode::prewarm_pipeline(device);
+        manifold_nodes_water::prewarm_pipelines(device);
         manifold_nodes_image::node_graph::primitives::terminal_analysis::prewarm_pipeline(device);
         // These multi-pass nodes use specialized hooks rather than the generic
         // standalone codegen path.

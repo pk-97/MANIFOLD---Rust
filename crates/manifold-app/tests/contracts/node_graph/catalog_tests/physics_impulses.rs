@@ -7,9 +7,9 @@ use manifold_physics::FieldValue;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_nodes_water::runtime::WaterRuntimeExt;
 use manifold_node_engine::exec::effect_node::FrameTime;
-use manifold_nodes_water::node;
+use manifold_water_rigid::node;
 use manifold_core::scene_impulse::ImpulseTarget;
-use manifold_nodes_water::physics_events::ResolvedNodeImpulse;
+use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
 use manifold_node_engine::{parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry};
 
 use manifold_nodes_water::runtime::physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};

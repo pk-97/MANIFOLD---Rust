@@ -73,7 +73,6 @@ mod pad_distance_lattice;
 manifold_core::testkit_visible! { pub(crate) mod particle_identity; }
 manifold_core::testkit_visible! { pub(crate) mod particle_publication; }
 manifold_core::testkit_visible! { pub(crate) mod particle_volume; }
-pub mod physics_world;
 pub(crate) mod prefix_scan;
 mod preserve_foam;
 manifold_core::testkit_visible! { pub(crate) mod push_out_of_solid; }
@@ -145,7 +144,6 @@ mod face_grid_extent_tests;
 mod face_grid_tests;
 manifold_core::testkit_visible! { pub(crate) mod fluid_role_source; }
 mod grid_to_matter;
-mod rigid_body;
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 mod gpu_flip_tile_tests;
@@ -156,7 +154,6 @@ pub mod euler_step_particles;
 #[cfg(not(any(test, feature = "testkit")))]
 mod euler_step_particles;
 mod euler_step_particles_3d;
-mod vector_fields;
 #[cfg(any(test, feature = "testkit"))]
 pub mod smooth_surface_mesh;
 #[cfg(not(any(test, feature = "testkit")))]

@@ -77,7 +77,7 @@ impl EffectNode for TickedLiquid {
     }
 }
 
-impl manifold_nodes_water::node::PhysicsNode for TickedLiquid {
+impl manifold_water_rigid::node::PhysicsNode for TickedLiquid {
     /// Like the liquid's field history: request each tick start in
     /// `(from, until]`; the first sample at or after it records that tick.
     fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
@@ -91,7 +91,7 @@ impl manifold_nodes_water::node::PhysicsNode for TickedLiquid {
 }
 
 inventory::submit! {
-    manifold_nodes_water::node::PhysicsNodeRegistration::new::<TickedLiquid>()
+    manifold_water_rigid::node::PhysicsNodeRegistration::new::<TickedLiquid>()
 }
 
 const LIQUID: &str = manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;

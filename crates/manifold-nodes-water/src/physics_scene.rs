@@ -4,7 +4,7 @@ use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, Nod
 use manifold_node_engine::exec::node_pairs::NodePairBehavior;
 use manifold_node_engine::graph::Graph;
 use manifold_node_engine::validation::GraphError;
-use crate::node;
+use manifold_water_rigid::node;
 use manifold_core::scene_impulse::RigidImpulseTargets;
 
 pub(crate) struct PhysicsPair {

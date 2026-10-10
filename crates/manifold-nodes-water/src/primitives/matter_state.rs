@@ -11,7 +11,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::matter::{MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes, grid_bytes, substep_duration};
 use manifold_node_engine::parameters::ParamValue;
-use crate::physics_metrics::DroppedTimeTracker;
+use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::exec::substeps::{SubstepBoundaryPorts, SubstepInterval, SubstepResultPorts};
 

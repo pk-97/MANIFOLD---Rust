@@ -20,7 +20,7 @@ use manifold_physics::FieldValue;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_physics::clock::TICK;
-use crate::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
+use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::FluidRole;
 use crate::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
@@ -35,9 +35,9 @@ use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_core::scene_impulse::RigidImpulseTargets;
-use crate::physics::{RigidSceneInputs, RigidSceneObservation};
-use crate::physics_events::ResolvedNodeImpulse;
-use crate::node::{PhysicsNode, PhysicsNodeRegistration};
+use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
+use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
+use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::exec::substeps::{SubstepClockOutput, SubstepInterval};
 use manifold_node_engine::scene::transform::Transform;
@@ -365,7 +365,7 @@ pub struct Coupling {
     /// This frame's domain box and closed faces: the bodies' walls.
     walls: DomainWalls,
     /// This frame's simulation step, handed to the rigid owner.
-    step: crate::physics::SimStep,
+    step: manifold_water_rigid::physics::SimStep,
     /// How the owner's pending tick's reaction words decode.
     scale: Option<ReactionScale>,
     /// The owner was built since the clock last restarted: the next frame
@@ -577,7 +577,7 @@ impl Primitive for MatterDomain {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        self.clock.set_live_load(crate::physics::live_load(ctx.sim_step));
+        self.clock.set_live_load(manifold_water_rigid::physics::live_load(ctx.sim_step));
         self.coupled.step = ctx.sim_step;
         if let Some(owner) = self.coupled.owner.as_mut() {
             owner.set_step(ctx.sim_step);
@@ -723,13 +723,13 @@ impl PhysicsNode for MatterDomain {
         &self,
         transport: manifold_core::Seconds,
         sequence: u64,
-        step: crate::physics::SimStep,
+        step: manifold_water_rigid::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         if self.role_pending || self.coupled.failed {
             return Err("Matter impulses: cannot capture an impulse while the liquid is pending or failed".into());
         }
         let mut stamp = self.impulses.stamp(transport.0, sequence)?;
-        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, crate::physics::live_load(step)));
+        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, manifold_water_rigid::physics::live_load(step)));
         Ok(stamp)
     }
 
@@ -1150,7 +1150,7 @@ mod sim_rate_tests {
 
     #[test]
     fn matter_interval_reaction_scale_keeps_previous_decode_and_next_unit() {
-        use crate::physics::RigidBody;
+        use manifold_water_rigid::physics::RigidBody;
         let previous = ReactionScale { unit: 64.0, cell_size: 0.0625, offset: 3 };
         let record = MatterInterval {
             timing: SubstepInterval {

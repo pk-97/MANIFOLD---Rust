@@ -2296,6 +2296,7 @@ dependencies = [
  "manifold-spectral",
  "manifold-ui",
  "manifold-ui-paint",
+ "manifold-water-rigid",
  "mimalloc",
  "muda",
  "objc2 0.6.4",
@@ -2518,6 +2519,7 @@ dependencies = [
  "manifold-nodes-water",
  "manifold-physics",
  "manifold-playback",
+ "manifold-water-rigid",
  "naga",
  "objc2 0.6.4",
  "parking_lot",
@@ -2596,6 +2598,7 @@ dependencies = [
  "manifold-node-engine",
  "manifold-physics",
  "manifold-playback",
+ "manifold-water-rigid",
  "naga",
  "objc2 0.6.4",
  "serde",
@@ -2692,6 +2695,23 @@ dependencies = [
  "manifold-foundation",
  "manifold-gpu",
  "manifold-ui",
+]
+
+[[package]]
+name = "manifold-water-rigid"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "bytemuck",
+ "inventory",
+ "log",
+ "manifold-core",
+ "manifold-fluids",
+ "manifold-gpu",
+ "manifold-node-engine",
+ "manifold-physics",
+ "manifold-water-rigid",
+ "serde",
 ]
 
 [[package]]

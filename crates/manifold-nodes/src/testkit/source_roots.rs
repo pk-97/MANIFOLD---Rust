@@ -8,6 +8,7 @@ pub const PRIMITIVE_SOURCE_ROOTS: &[&str] = &[
     "../manifold-nodes-image/src/node_graph/primitives",
     "../manifold-node-engine/src/primitives",
     "../manifold-nodes-water/src/primitives",
+    "../manifold-water-rigid/src/primitives",
 ];
 
 /// Every crate `src` root that currently owns WGSL. A new WGSL-owning crate

@@ -25,7 +25,7 @@ use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use crate::liquid::lattice::closed_faces;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
-use crate::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
+use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::FluidRole;
 use crate::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
@@ -39,9 +39,9 @@ use manifold_node_engine::ports::EXACT_F32_COUNT;
 use crate::liquid::{ROLE_PORTS, WATER_DENSITY};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_core::scene_impulse::RigidImpulseTargets;
-use crate::physics::{RigidSceneInputs, RigidSceneObservation};
-use crate::physics_events::ResolvedNodeImpulse;
-use crate::node::{PhysicsNode, PhysicsNodeRegistration};
+use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
+use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
+use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::Transform;
 
@@ -239,7 +239,7 @@ pub struct Coupling {
     /// This frame's domain box and closed faces: the bodies' walls.
     walls: DomainWalls,
     /// This frame's simulation step, handed to the rigid owner.
-    step: crate::physics::SimStep,
+    step: manifold_water_rigid::physics::SimStep,
     /// Rows before the pending tick's first coupled body's (its Collider
     /// roles'), so its reaction decodes against the bodies it ran with.
     offset: Option<usize>,
@@ -553,7 +553,7 @@ impl Primitive for GpuFlipDomain {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        self.clock.set_live_load(crate::physics::live_load(ctx.sim_step));
+        self.clock.set_live_load(manifold_water_rigid::physics::live_load(ctx.sim_step));
         self.coupled.step = ctx.sim_step;
         if let Some(owner) = self.coupled.owner.as_mut() {
             owner.set_step(ctx.sim_step);
@@ -706,13 +706,13 @@ impl PhysicsNode for GpuFlipDomain {
         &self,
         transport: manifold_core::Seconds,
         sequence: u64,
-        step: crate::physics::SimStep,
+        step: manifold_water_rigid::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         if self.holding {
             return Err("GPU FLIP impulses: cannot capture an impulse while the liquid is pending or failed".into());
         }
         let mut stamp = self.impulses.stamp(transport.0, sequence)?;
-        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, crate::physics::live_load(step)));
+        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, manifold_water_rigid::physics::live_load(step)));
         Ok(stamp)
     }
 
@@ -827,7 +827,7 @@ impl GpuFlipDomain {
         // After reconciliation, so a restart never reports the old owner's completion.
         let completed = self.coupled.owner.as_ref().map(LiquidRigidOwner::completed);
         ctx.sim_metrics
-            .record(|metrics| crate::physics_metrics::record_clock(metrics, &self.clock, &frame, completed));
+            .record(|metrics| manifold_water_rigid::physics_metrics::record_clock(metrics, &self.clock, &frame, completed));
         if let Some(owner) = &self.coupled.owner {
             let scene = self.coupled.observation.as_ref().map(|observation| &observation.inputs);
             self.coupled.scenes.settle(&self.clock, &frame, scene);

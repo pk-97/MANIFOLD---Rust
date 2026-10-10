@@ -82,7 +82,7 @@ impl EffectNode for ObservedPhysics {
 fn runtime() -> PresetRuntime {
     OBSERVATIONS.with_borrow_mut(Vec::clear);
     let mut registry = PrimitiveRegistry::with_builtin();
-    crate::testkit::physics_fixtures::register(&mut registry);
+    manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
     registry.register("node.physics_world", || {
         Box::new(ObservedPhysics(EffectNodeType::new("node.physics_world")))
     });
@@ -314,7 +314,7 @@ fn source_observation_uses_project_tempo_and_closes_history_once() {
     assert_tempo_samples(&samples, &tempo);
     assert_eq!(samples.last().unwrap().time.seconds, source.seconds);
     assert!(samples.iter().all(|sample| !sample.draining));
-    runtime.set_sim_step(crate::physics::SimStep::live(manifold_core::Seconds(manifold_physics::clock::TICK)));
+    runtime.set_sim_step(manifold_water_rigid::physics::SimStep::live(manifold_core::Seconds(manifold_physics::clock::TICK)));
     let next = frame(&mut runtime, 1.0 / 30.0, 9.0, 1.0);
     assert_tempo_samples(&next, &tempo);
     assert!(
@@ -409,7 +409,7 @@ fn offline_history_drain_keeps_old_controls_and_bounds_input_batches() {
         assert_eq!(sample.values[0], 1.0);
         assert_eq!(sample.values[3], 0.0);
         batch += 1;
-        assert!(batch <= crate::physics::AUTHORED_HISTORY_CAPACITY / 4);
+        assert!(batch <= manifold_water_rigid::physics::AUTHORED_HISTORY_CAPACITY / 4);
         if sample.draining {
             batch = 0;
         }
@@ -418,13 +418,13 @@ fn offline_history_drain_keeps_old_controls_and_bounds_input_batches() {
         batch, 0,
         "close and drain the old interval before applying edits"
     );
-    assert!(historical.len() > crate::physics::AUTHORED_HISTORY_CAPACITY);
+    assert!(historical.len() > manifold_water_rigid::physics::AUTHORED_HISTORY_CAPACITY);
 }
 
 #[test]
 fn offline_history_drain_is_never_requested_by_preview_sampling() {
     let mut runtime = runtime();
-    runtime.set_sim_step(crate::physics::SimStep::live(manifold_core::Seconds(manifold_physics::clock::TICK)));
+    runtime.set_sim_step(manifold_water_rigid::physics::SimStep::live(manifold_core::Seconds(manifold_physics::clock::TICK)));
     frame(&mut runtime, 0.0, 1.0, 0.0);
     let observations = frame(&mut runtime, 3.0, 9.0, 3.0);
     assert!(observations.iter().all(|sample| !sample.draining));
