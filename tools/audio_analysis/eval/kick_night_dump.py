@@ -38,13 +38,26 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+REPO = Path(__file__).resolve().parents[3]
+
+
+def checkout_path(path):
+    """A frozen path inside some worktree, read from this checkout instead: worktree
+    slots get reclaimed, and the sha256 check still pins the content."""
+    parts = Path(path).parts
+    if '.claude' in parts and parts[parts.index('.claude') + 1:][:1] == ('worktrees',):
+        return REPO.joinpath(*parts[parts.index('.claude') + 3:])
+    return Path(path)
+
+
 def load_inputs():
     rule = json.loads((EVENING / 'h18/rule.json').read_text())
     inputs = {}
     for name, item in rule['inputs'].items():
-        if sha(item['path']) != item['sha256']:
+        path = checkout_path(item['path'])
+        if sha(path) != item['sha256']:
             raise ValueError(f'frozen input changed: {name}')
-        inputs[name] = json.loads(Path(item['path']).read_text())
+        inputs[name] = json.loads(path.read_text())
     return inputs
 
 
