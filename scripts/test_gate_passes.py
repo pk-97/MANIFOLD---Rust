@@ -293,6 +293,39 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(self.run_landing()[0], 0)
         self.assertEqual(seen, [base])
 
+    def test_parse_failed_tests_reads_nextest_and_cargo_test(self):
+        out = ('        FAIL [   0.5s] (1/9) manifold-nodes tests::a\n'
+               '\x1b[31m        FAIL\x1b[0m [   0.5s] manifold-core x::y\n'
+               'test gpu::b ... FAILED\ntest gpu::c ... ok\n')
+        self.assertEqual(cache.parse_failed_tests(out),
+                         ['gpu::b', 'manifold-core x::y', 'manifold-nodes tests::a'])
+
+    def test_failure_then_pass_on_one_key_is_flaky_and_never_reused(self):
+        cmd = ['cargo', 'nextest', 'run', '-p', 'a']
+        with cache.session():
+            first = cache.command_pass(self.repo, 'nextest/a', cmd)
+            first.save(1, failed=['a t::x'])
+            self.assertFalse(cache.command_pass(self.repo, 'nextest/a', cmd).reused())
+            self.assertEqual(cache.flaky_lines(), [])
+            second = cache.command_pass(self.repo, 'nextest/a', cmd)
+            second.save(0)
+            lines = cache.flaky_lines()
+        self.assertEqual(lines, [cache.flaky_line('a t::x', 'nextest/a', second.key)])
+        self.assertIn(lines[0], self.output.getvalue())
+        self.assertTrue(cache.command_pass(self.repo, 'nextest/a', cmd).reused())
+        self.assertEqual([t for t, _, _ in cache.flaky_records(self.repo)], ['a t::x'])
+
+    def test_pass_without_recorded_failure_is_not_flaky_and_failures_are_bounded(self):
+        cmd = ['cargo', 'nextest', 'run', '-p', 'b']
+        with cache.session():
+            cache.command_pass(self.repo, 'nextest/b', cmd).save(0)
+            self.assertEqual(cache.flaky_lines(), [])
+            failing = cache.command_pass(self.repo, 'nextest/b', cmd)
+            failing.save(1, failed=[f't{i}' for i in range(cache.MAX_FAILURES + 20)])
+        record = json.loads(failing.path.read_text())
+        self.assertFalse(record['pass'])
+        self.assertLessEqual(len(record['failures']), cache.MAX_FAILURES)
+
     def test_pinned_flow_merge_base_ignores_remote_ref_movement(self):
         base = self.git('merge-base', 'origin/main', 'HEAD')
         cmd = ['python3', 'scripts/run_ui_flows.py', '--touched', f'{base}...HEAD']

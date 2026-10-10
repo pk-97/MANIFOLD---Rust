@@ -353,7 +353,8 @@ def run_check(label, cmd, cwd, timeout, passed=None):
             err += '\ndocs index was stale — commit the regenerated index'
             result = exit_, out, err, seconds
     if passed and not timed_out:
-        if passed.save(exit_, seconds) is False:
+        failed = gate_passes.parse_failed_tests(out + '\n' + err) if exit_ else None
+        if passed.save(exit_, seconds, failed=failed) is False:
             RAN_EVERY_CHECK.set(False)
             exit_ = 1
             err += '\ninputs changed during receipt publication; rerun the gate'
@@ -987,6 +988,8 @@ def finish(repo, base_sha, results):
         for line in tail:
             if line.startswith('GPU-PROOFS DEFERRED:') or (status == 'FAIL' and line.startswith('rerun: ')):
                 print(line)
+    for line in gate_passes.flaky_lines():
+        print(line)
     if GPU_WAIT.get() is not None:
         print(f"gpu-queue wait: {GPU_WAIT.get():.0f}s")
     print(f"landing gate: {passed} passed, {failed} failed, {skipped} skipped")
