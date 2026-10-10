@@ -2298,6 +2298,7 @@ impl EffectNode for WgslCompute {
                             crate::freeze::derived_uniform_registry::DerivedUniformContext {
                                 frame: &ctx.time,
                                 sim_step: ctx.sim_step,
+                                sim_metrics: ctx.sim_metrics,
                                 camera: camera.as_ref(),
                                 // Fused kernels rename inputs to `src_<k>`, so
                                 // resolve the member port through the marker's

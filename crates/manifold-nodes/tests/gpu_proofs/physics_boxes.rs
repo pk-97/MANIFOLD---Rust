@@ -5,7 +5,7 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_to_srgb_png};
 use manifold_nodes_water::physics::{SimStep, native_ticks_on_this_thread};
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_water::physics_metrics};
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::exec::sim_metrics::SimMetrics};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -65,7 +65,6 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
             anim_progress: 0.0,
             trigger_count: 0,
         };
-        physics_metrics::begin_frame();
         runtime.set_sim_step(step.get());
         let mut encoder = device.create_encoder("physics-boxes-proof");
         runtime.render(
@@ -75,7 +74,9 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
             params,
         );
         encoder.commit_and_wait_completed();
-        physics_metrics::take_frame()
+        let mut metrics = SimMetrics::default();
+        runtime.drain_sim_metrics(&mut metrics);
+        metrics
     };
     let first = render(0, &params);
     assert_eq!(
@@ -91,7 +92,7 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
     for frame in 1..=180 {
         let metrics = render(frame, &params);
         assert_eq!(metrics.body_count, 259);
-        assert!(metrics.physics_cpu_ms.is_finite() && metrics.physics_cpu_ms >= 0.0);
+        assert!(metrics.cpu_ms.is_finite() && metrics.cpu_ms >= 0.0);
     }
     let dropped = readback_raw_halves(device, &target.texture, width, height);
     std::fs::write(

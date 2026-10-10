@@ -2117,6 +2117,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         }
     }
 
+    /// The simulation metrics every effect chain and live generator recorded
+    /// since the last call, merged; clears them. Read back along the path
+    /// [`Self::apply_sim_step`] hands the step down.
+    pub(crate) fn take_sim_metrics(
+        &mut self,
+        engine: &mut PlaybackEngine,
+    ) -> manifold_node_engine::exec::sim_metrics::SimMetrics {
+        let mut metrics = self.compositor.take_sim_metrics();
+        let (renderers, _) = engine.split_renderer_project();
+        for renderer in renderers.iter_mut() {
+            if let Some(generator) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+                metrics.merge(&generator.take_sim_metrics());
+            }
+        }
+        metrics
+    }
+
     /// Apply project quality before rendering, including load-time warmup.
     pub(crate) fn apply_rt_quality(&mut self, engine: &mut PlaybackEngine, export_mode: bool) {
         // RT_QUALITY_SETTINGS_DESIGN.md D2/D5: resolve the active quality
@@ -2988,11 +3005,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             // A valid cold-start attempt consumes the existing
                             // one-per-frame budget even when async runtime/GPU
                             // readiness withholds the texture this frame.
-                            // Parked clip thumbnails are offscreen preview work;
-                            // keep their physics evaluations out of the live HUD
-                            // metrics accumulated around render_content().
-                            let _physics_metrics_guard =
-                                manifold_nodes_water::physics_metrics::suspend_recording();
                             let _ = gen_r.render_clip_thumbnail(
                                 &mut gpu_cold,
                                 cid_str,

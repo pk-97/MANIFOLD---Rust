@@ -220,6 +220,8 @@ pub struct Executor {
     rt_quality: crate::exec::effect_node::RtQuality,
     /// Set per frame via [`Self::set_sim_step`]; copied into every context.
     sim_step: crate::exec::effect_node::SimStep,
+    /// Metrics this executor's nodes recorded since the host last drained it.
+    sim_metrics: std::cell::Cell<crate::exec::sim_metrics::SimMetrics>,
     /// SCENE_FX P4a — borrowed pointer to the compositor's layer-skin registry,
     /// set each frame before the executor runs. A raw pointer is used because
     /// the executor's lifetime is independent of the registry; the content
@@ -594,6 +596,7 @@ impl Executor {
             scene_viewport_captured: false,
             rt_quality: crate::exec::effect_node::RtQuality::default(),
             sim_step: crate::exec::effect_node::SimStep::default(),
+            sim_metrics: Default::default(),
             preview_resource: None,
             preview_scalar_inputs: Vec::new(),
             preview_scalar_outputs: Vec::new(),
@@ -975,6 +978,11 @@ impl Executor {
 
     pub fn sim_step(&self) -> crate::exec::effect_node::SimStep {
         self.sim_step
+    }
+
+    /// The metrics recorded since the last call; leaves the slot cleared.
+    pub fn take_sim_metrics(&mut self) -> crate::exec::sim_metrics::SimMetrics {
+        self.sim_metrics.take()
     }
 
     /// SCENE_FX P4a — set the borrowed layer-skin registry for the next frame.
@@ -2415,7 +2423,8 @@ impl Executor {
                         )
                         .with_errors(&mut self.error_scratch)
                         .with_outputs_retained(outputs_retained)
-                        .with_sim_step(self.sim_step);
+                        .with_sim_step(self.sim_step)
+                .with_sim_metrics(crate::exec::sim_metrics::SimMetricsSink::new(&self.sim_metrics));
                         let has_gpu_binding = ctx.gpu.is_some();
                         inst.node.evaluate(&mut ctx);
                         // Borrow the same resolved resources before their last
@@ -2860,7 +2869,8 @@ impl Executor {
                 )
                 .with_errors(&mut self.error_scratch)
                 .with_outputs_retained(capture_outputs_retained)
-                .with_sim_step(self.sim_step);
+                .with_sim_step(self.sim_step)
+                .with_sim_metrics(crate::exec::sim_metrics::SimMetricsSink::new(&self.sim_metrics));
                 inst.node.late_capture(&mut ctx);
                 let swap_request = ctx.texture_swap_request.take();
                 for (slot, value) in self.scalar_write_scratch.drain(..) {

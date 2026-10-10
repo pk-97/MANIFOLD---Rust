@@ -51,6 +51,8 @@ pub struct DerivedUniformContext<'a> {
     pub frame: &'a FrameTime,
     /// The frame's simulation step, for members derived from it.
     pub sim_step: crate::exec::effect_node::SimStep,
+    /// The evaluating node's metrics sink.
+    pub sim_metrics: crate::exec::sim_metrics::SimMetricsSink<'a>,
     pub camera: Option<&'a Camera>,
     /// Live element count of the named array input port (`array<f32>`
     /// length in elements), when the member derives a uniform from a
@@ -140,6 +142,7 @@ mod tests {
         let ctx = DerivedUniformContext {
             frame: &frame,
             sim_step: Default::default(),
+            sim_metrics: Default::default(),
             camera: None,
             array_len: &|_| None,
         };

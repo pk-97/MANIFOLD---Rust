@@ -159,6 +159,7 @@ pub fn dispatch_chain<'a>(
     profiling: bool,
     rt_quality: crate::exec::effect_node::RtQuality,
     sim_step: crate::exec::effect_node::SimStep,
+    sim_metrics: &mut crate::exec::sim_metrics::SimMetrics,
     layer_sources: &crate::runtime::layer_skin::LayerSkinRegistry,
     project_tempo: Option<&ProjectTempo>,
 ) -> Option<&'a GpuTexture> {
@@ -175,6 +176,7 @@ pub fn dispatch_chain<'a>(
         profiling,
         rt_quality,
         sim_step,
+        sim_metrics,
         layer_sources,
         None,
         &mut viewport_error,
@@ -199,6 +201,7 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
     profiling: bool,
     rt_quality: crate::exec::effect_node::RtQuality,
     sim_step: crate::exec::effect_node::SimStep,
+    sim_metrics: &mut crate::exec::sim_metrics::SimMetrics,
     layer_sources: &crate::runtime::layer_skin::LayerSkinRegistry,
     scene_viewport: Option<(
         &EffectId,
@@ -307,6 +310,7 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
     }
     let t0 = std::time::Instant::now();
     let ran = cg.run(gpu, input_texture, effects, groups, ctx).is_some();
+    cg.drain_sim_metrics(sim_metrics);
     if ran {
         CHAIN_GRAPH_RUN_COUNT.fetch_add(1, Ordering::Relaxed);
         CHAIN_GRAPH_RUN_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);

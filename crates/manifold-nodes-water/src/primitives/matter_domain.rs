@@ -732,12 +732,13 @@ impl PhysicsNode for MatterDomain {
         &self,
         transport: manifold_core::Seconds,
         sequence: u64,
+        step: crate::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         if self.role_pending || self.coupled.failed {
             return Err("Matter impulses: cannot capture an impulse while the liquid is pending or failed".into());
         }
         let mut stamp = self.impulses.stamp(transport.0, sequence)?;
-        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0));
+        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, crate::physics::live_load(step)));
         Ok(stamp)
     }
 
@@ -859,12 +860,15 @@ impl MatterDomain {
             offline,
         );
         if frame.numerical_error {
-            crate::physics_metrics::record_simulation(0.0, 0.0, false, true);
+            ctx.sim_metrics.record_simulation(0.0, 0.0, false, true);
         }
         if frame.restarted && self.coupled.owner.is_some() && !self.coupled.owner_fresh {
             self.rebuild_owner()?;
         }
         self.coupled.owner_fresh = false;
+        if let Some(owner) = self.coupled.owner.as_mut() {
+            ctx.sim_metrics.merge(&owner.rigid_mut().take_metrics());
+        }
         if let Some(owner) = &self.coupled.owner {
             let scene = self.coupled.observation.as_ref().map(|observation| &observation.inputs);
             self.coupled.scenes.settle(&self.clock, &frame, scene);

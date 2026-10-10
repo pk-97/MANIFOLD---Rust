@@ -127,6 +127,8 @@ pub struct GeneratorRenderer {
     /// This frame's simulation step, set by the host before render_all and
     /// applied to each generator's runtime at render time like rt_quality.
     sim_step: manifold_node_engine::exec::effect_node::SimStep,
+    /// Metrics the live layer generators recorded this frame.
+    sim_metrics: manifold_node_engine::exec::sim_metrics::SimMetrics,
     /// SCENE_FX P4a — borrowed pointer to the compositor's layer-skin registry
     /// for this frame. Set by the host before `render_all`; a raw pointer is
     /// used because the renderer's lifetime is independent of the registry.
@@ -193,6 +195,7 @@ impl GeneratorRenderer {
             profiling_enabled: false,
             rt_quality: manifold_node_engine::exec::effect_node::RtQuality::default(),
             sim_step: manifold_node_engine::exec::effect_node::SimStep::default(),
+            sim_metrics: Default::default(),
             layer_skin_registry: None,
             scene_viewport_request: None,
             scene_viewport_modifier: None,
@@ -398,6 +401,12 @@ impl GeneratorRenderer {
     /// `None` clears the pointer.
     pub fn set_sim_step(&mut self, step: manifold_node_engine::exec::effect_node::SimStep) {
         self.sim_step = step;
+    }
+
+    /// The metrics live layer generators recorded since the last call;
+    /// thumbnails and warmup never contribute.
+    pub fn take_sim_metrics(&mut self) -> manifold_node_engine::exec::sim_metrics::SimMetrics {
+        self.sim_metrics.take()
     }
 
     pub fn set_layer_skin_registry(&mut self, registry: Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry>) {
@@ -1008,6 +1017,7 @@ impl GeneratorRenderer {
                     params,
                 );
                 active.anim_progress = new_progress;
+                layer_state.generator.drain_sim_metrics(&mut self.sim_metrics);
                 // Acknowledge native tick-start receipts every rendered frame;
                 // otherwise completed clicks would fill the bounded event queue.
                 layer_state.generator.drain_scene_impulse_diagnostics(
@@ -1391,6 +1401,7 @@ impl GeneratorRenderer {
             };
             t.runtime.render(gpu, &t.rt.texture, &ctx, &gp.params);
         }
+        t.runtime.drain_sim_metrics(&mut Default::default());
         t.last_frame_status = gpu.frame_status();
         t.ready = !t.runtime.warmup_pending()
             && t.last_frame_status.presentable();
@@ -1688,6 +1699,7 @@ impl ClipRenderer for GeneratorRenderer {
                     };
                     gpu.clear_texture(&scratch.texture, 0.0, 0.0, 0.0, 0.0);
                     ls.generator.render(&mut gpu, &scratch.texture, &ctx, params);
+                    ls.generator.drain_sim_metrics(&mut Default::default());
                 }
                 // §5.4: pending geometry is incomplete preparation — the
                 // wrapper's status gates quiescence below.

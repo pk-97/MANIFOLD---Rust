@@ -665,13 +665,15 @@ impl Primitive for LiquidState {
         }
         self.identity_reset = false;
         if let Some(target) = target_time {
-            self.dropped_time.record(
+            let dropped_time = &mut self.dropped_time;
+            ctx.sim_metrics.record(|metrics| dropped_time.record(
+                metrics,
                 target,
                 self.completed_time,
                 dropped_seconds,
                 self.cap_hit,
                 self.faulted || self.clock_nonfinite,
-            );
+            ));
         }
 
         self.pending = if refused.is_some() || self.capacity_faulted || (self.faulted && !live_recovery) { 0 } else { ticks };

@@ -488,7 +488,7 @@ impl PhysicsWorldNode {
             .rigid_scene_observation
             .as_ref()
             .map_or(0, |observation| observation.inputs.bodies.iter().flatten().count());
-        crate::physics_metrics::record_frame(
+        ctx.sim_metrics.record_frame(
             0.0,
             (body_count + copies.len()) as u32,
             0.0,
@@ -585,6 +585,7 @@ impl Primitive for PhysicsWorldNode {
             observation.inputs.acceleration_field.clone(),
             &observation.inputs.targeted_fields,
         );
+        ctx.sim_metrics.merge(&self.simulation.take_metrics());
         if result.is_ok()
             && self
                 .simulation
@@ -603,7 +604,7 @@ impl Primitive for PhysicsWorldNode {
             ctx.error(error);
             ctx.outputs.set_scalar("physics_ms", ParamValue::Float(0.0));
         } else {
-            crate::physics_metrics::record_frame(
+            ctx.sim_metrics.record_frame(
                 self.simulation.physics_ms,
                 (body_count + self.simulation.active_copy_count) as u32,
                 self.simulation.pending_time.0 as f32,
@@ -684,6 +685,7 @@ impl PhysicsNode for PhysicsWorldNode {
         &self,
         transport: manifold_core::Seconds,
         sequence: u64,
+        _step: crate::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         if self.coupled_mode {
             return Err("Physics World coupled mode has no private impulse clock".into());
@@ -1191,7 +1193,7 @@ mod tests {
             .expect("PhysicsWorldNode has a native PhysicsNode registration");
         assert!(native.physics_impulse_epoch().is_none());
         assert!(native
-            .physics_impulse_stamp(Seconds::ZERO, 0)
+            .physics_impulse_stamp(Seconds::ZERO, 0, Default::default())
             .is_err());
 
         assert!(evaluate_mock_world(

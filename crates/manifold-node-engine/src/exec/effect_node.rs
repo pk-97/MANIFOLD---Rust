@@ -419,6 +419,8 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     pub layer_skin_registry: Option<&'ctx LayerSkinRegistry>,
     /// This frame's simulation step; the executor copies its own in.
     pub sim_step: SimStep,
+    /// The executor's metrics slot for this frame; discards when unset.
+    pub sim_metrics: crate::exec::sim_metrics::SimMetricsSink<'ctx>,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -449,6 +451,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             rt_quality: RtQuality::default(),
             layer_skin_registry: None,
             sim_step: SimStep::default(),
+            sim_metrics: crate::exec::sim_metrics::SimMetricsSink::DISCARD,
         }
     }
 
@@ -488,11 +491,17 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             rt_quality,
             layer_skin_registry,
             sim_step: SimStep::default(),
+            sim_metrics: crate::exec::sim_metrics::SimMetricsSink::DISCARD,
         }
     }
 
     pub fn with_sim_step(mut self, step: SimStep) -> Self {
         self.sim_step = step;
+        self
+    }
+
+    pub fn with_sim_metrics(mut self, sink: crate::exec::sim_metrics::SimMetricsSink<'ctx>) -> Self {
+        self.sim_metrics = sink;
         self
     }
 

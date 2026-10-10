@@ -300,13 +300,15 @@ impl Primitive for MatterState {
             gpu.native_enc
                 .copy_buffer_to_buffer(seed, out, seed.size.min(out.size));
         }
-        self.dropped_time.record(
+        let dropped_time = &mut self.dropped_time;
+        ctx.sim_metrics.record(|metrics| dropped_time.record(
+            metrics,
             target,
             self.completed_time,
             dropped_seconds,
             self.completed_cap,
             self.faulted,
-        );
+        ));
 
         self.substeps = substeps;
         self.step_dt = substep_duration(interval_duration, substeps);

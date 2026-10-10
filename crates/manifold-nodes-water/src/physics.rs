@@ -28,12 +28,13 @@ use targeted_fields::{TargetedFieldHistory, TARGET_SLOTS};
 pub use worker::{RigidSceneInputs, RigidSceneObservation};
 
 pub use manifold_node_engine::exec::effect_node::SimStep;
+use manifold_node_engine::exec::sim_metrics::SimMetricsSink;
 
 /// Shared particle duration with the same advisory HUD path as other live sims.
-pub fn particle_frame_duration(delta: Seconds, step: SimStep) -> f32 {
+pub fn particle_frame_duration(delta: Seconds, step: SimStep, metrics: SimMetricsSink<'_>) -> f32 {
     let outcome = manifold_physics::particle_duration::scaled(delta, step.offline());
     if outcome.diagnostic.is_some() {
-        crate::physics_metrics::record_simulation(0.0, 0.0, false, true);
+        metrics.record_simulation(0.0, 0.0, false, true);
     }
     outcome.value
 }
@@ -400,6 +401,8 @@ pub struct RigidSimulation {
     accepted_observation: Option<(f64, f64)>,
     held: HeldClock,
     dropped_time: super::physics_metrics::DroppedTimeTracker,
+    /// Completion telemetry since the owner last drained it.
+    metrics: manifold_node_engine::exec::sim_metrics::SimMetrics,
     worker_epoch: Option<u64>,
     advancement_policy: AdvancementPolicy,
     /// The owner's simulation step for the next advance; see [`Self::set_step`].
@@ -452,6 +455,7 @@ impl Default for RigidSimulation {
             clock: Default::default(),
             held: HeldClock::default(),
             dropped_time: Default::default(),
+            metrics: Default::default(),
             worker_epoch: None,
             advancement_policy: AdvancementPolicy::Preview,
             step: SimStep::default(),
@@ -475,6 +479,12 @@ impl RigidSimulation {
 
     pub fn step(&self) -> SimStep {
         self.step
+    }
+
+    /// The completion telemetry recorded since the last call; the owning
+    /// node folds it into its frame's metrics slot.
+    pub fn take_metrics(&mut self) -> manifold_node_engine::exec::sim_metrics::SimMetrics {
+        self.metrics.take()
     }
 
     /// Hold the transport clock while an upstream collider is still being
@@ -726,7 +736,7 @@ impl RigidSimulation {
             || gravity.iter().any(|v| !v.is_finite())
         {
             if !self.step.offline() {
-                crate::physics_metrics::record_simulation(
+                self.metrics.record_simulation(
                     self.authored_time, self.physics_time, false, true,
                 );
                 return Ok(());
@@ -740,11 +750,11 @@ impl RigidSimulation {
                 || !duration.is_finite()
                 || duration <= 0.0
             {
-                crate::physics_metrics::record_simulation(self.physics_time, self.physics_time, false, true);
+                self.metrics.record_simulation(self.physics_time, self.physics_time, false, true);
                 return Ok(());
             }
             if (interval.start.0 - self.physics_time).abs() > 1e-9 {
-                crate::physics_metrics::record_simulation(interval.end.0, self.physics_time, false, true);
+                self.metrics.record_simulation(interval.end.0, self.physics_time, false, true);
                 return Ok(());
             }
         }
@@ -1012,7 +1022,7 @@ impl RigidSimulation {
         let authored_time = if self.advancement_policy.is_worker() {
             now.0
         } else {
-            self.clock.simulation_at(now.0)
+            self.clock.simulation_at(now.0, live_load(self.step))
         };
         let elapsed_simulation = authored_time - self.authored_time;
         let stationary_edit = elapsed_simulation == 0.0;
@@ -1444,10 +1454,10 @@ impl RigidSimulation {
         self.physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
         if !self.step.offline() {
             if let Some(frame) = &clock_frame {
-                self.dropped_time.record(self.authored_time, self.physics_time,
+                self.dropped_time.record(&mut self.metrics, self.authored_time, self.physics_time,
                     frame.dropped_seconds, false, frame.numerical_error);
             } else {
-                crate::physics_metrics::record_simulation(self.authored_time, self.physics_time, false, false);
+                self.metrics.record_simulation(self.authored_time, self.physics_time, false, false);
             }
         }
         self.accepted_observation = Some((now.0, self.authored_time));
