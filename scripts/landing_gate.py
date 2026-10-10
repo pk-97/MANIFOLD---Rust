@@ -331,8 +331,10 @@ def run_check(label, cmd, cwd, timeout, passed=None):
     timed_out = exit_ == -1
     proof_refusal = (exit_ == PROOF_INPUTS_CHANGED and len(cmd) > 1
                      and Path(cmd[1]).name == 'gpu_proofs_gate.py')
-    if exit_ == -1 or proof_refusal or any(marker in out + err for marker in (
-            'GPU-PROOFS GATE: HUNG', 'GPU-PROOFS TIMING: FAIL')):
+    # A timing-only red (every test passed, rerun done) is a check that ran.
+    timing_fail = ('GPU-PROOFS TIMING: FAIL' in out + err
+                   and 'GPU-PROOFS TIMING: ONLY' not in out + err)
+    if exit_ == -1 or proof_refusal or timing_fail or 'GPU-PROOFS GATE: HUNG' in out + err:
         # Keep collecting runtime reds, but missing coverage cannot be waived
         # through the named-red landing path.
         RAN_EVERY_CHECK.set(False)
@@ -703,6 +705,12 @@ def _main(stack):
     pending_tests = [(label, cmd, p) for label, cmd, p in test_legs if not p.record]
     proof_passes = [gate_passes.proof_pass(repo, run) for run in plan.runs()] if run_gpu else []
     proof_cached = bool(proof_passes) and all(p.record for p in proof_passes)
+    if proof_cached:
+        # A saved timing red is not a pass: the proof gate reruns just those tests.
+        import gpu_proofs_gate
+        proof_cached = not gpu_proofs_gate.unmeasured_heavy(
+            [row for passed, run in zip(proof_passes, plan.runs())
+             for row in gpu_proofs_gate.receipt_timings(passed, run)])
 
     # Compile every test binary the hold will run before taking it, so the
     # hold covers test time only (BUG-w0hh (landing gate speed)). The legs

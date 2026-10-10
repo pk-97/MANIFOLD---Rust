@@ -137,6 +137,26 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
     mounts = {}
     rows = integration_rows()
     explicit_filters = set()
+
+    def apply_row(package, modules, binaries):
+        for module in modules:
+            if module.endswith('::'):
+                raise ValueError(f'gate_policy row for {package}: filter {module!r} ends in "::"; '
+                                 'write the module prefix without trailing colons')
+        plan.packages.add(package)
+        expressions = {f"(package(={package}) & test(/^{module}::/))" for module in modules}
+        plan.filters.update(expressions)
+        explicit_filters.update(expressions)
+        plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
+
+    # Rows are only resolved against a package's test list when a landing selects that
+    # package, so an edit to the policy itself checks every row (BUG-k51c2).
+    if 'scripts/gate_policy.py' in paths:
+        for _prefix, _suffix, package, modules, binaries in PREFIX_ROWS:
+            apply_row(package, modules, binaries)
+        for package, binaries in rows.values():
+            plan.packages.add(package)
+            plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
     for path in sorted(set(paths)):
         if path in rows:
             package, binaries = rows[path]
@@ -144,11 +164,7 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
             plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
         for prefix, suffix, package, modules, binaries in PREFIX_ROWS:
             if path.startswith(prefix) and path.endswith(suffix):
-                plan.packages.add(package)
-                expressions = {f"(package(={package}) & test(/^{module}::/))" for module in modules}
-                plan.filters.update(expressions)
-                explicit_filters.update(expressions)
-                plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
+                apply_row(package, modules, binaries)
         package = workspace.owner(path)
         if package and path == workspace.roots[package] + '/Cargo.toml':
             plan.packages.add(package)

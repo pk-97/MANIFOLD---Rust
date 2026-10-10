@@ -178,6 +178,27 @@ class P1PlannerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ownership mapping resolves to no tests"):
             cpu_scope.validate_inventory(plan, "manifold-app", listing)
 
+    def test_gate_policy_change_checks_every_row_package(self):
+        rows = [("crates/a/", ".rs", "manifold-app", ["frame_time"], []),
+                ("crates/b/", ".rs", "manifold-ui", [], ["no_bespoke_row_infra"])]
+        with patch.object(cpu_scope, "PREFIX_ROWS", rows), \
+                patch.object(cpu_scope, "integration_rows", return_value={}):
+            plan = cpu_scope.plan_for_paths(["scripts/gate_policy.py"], ROOT, self.workspace)
+            other = cpu_scope.plan_for_paths(["scripts/other.py"], ROOT, self.workspace)
+        self.assertEqual(plan.packages, {"manifold-app", "manifold-ui"})
+        self.assertIn("(package(=manifold-app) & test(/^frame_time::/))", plan.filters)
+        self.assertEqual(other.packages, set())
+        listing = {"rust-suites": {"app": {"binary-name": "manifold", "testcases": ["other::case"]}}}
+        with self.assertRaisesRegex(ValueError, "ownership mapping resolves to no tests"):
+            cpu_scope.validate_inventory(plan, "manifold-app", listing)
+
+    def test_row_filter_ending_in_colons_is_rejected(self):
+        row = ("crates/manifold-app/src/frame_time.rs", ".rs", "manifold-app", ["coupling::"], [])
+        with patch.object(cpu_scope, "PREFIX_ROWS", [row]):
+            for paths in (["scripts/gate_policy.py"], ["crates/manifold-app/src/frame_time.rs"]):
+                with self.assertRaisesRegex(ValueError, 'ends in "::"'):
+                    cpu_scope.plan_for_paths(paths, ROOT, self.workspace)
+
     def test_metadata_failure_is_red_without_a_build_plan(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)

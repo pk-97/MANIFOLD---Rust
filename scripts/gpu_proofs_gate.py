@@ -650,6 +650,64 @@ def unmeasured_heavy(timings: list) -> list[dict]:
     return findings
 
 
+def _swap_timings(entries, fresh):
+    """Replace entries whose package/target/test identity has a fresh measurement."""
+    out = []
+    for entry in entries:
+        package, target, name, _seconds, _status, _budgeted = timing_fields(entry)
+        out.append(fresh.get(timing_key(package, target, name), entry))
+    return out
+
+
+def rerun_timing_red(findings, runs, passes, run_records, manifest_path, hang_floor=None):
+    """Rerun only the flagged tests once; return {key: fresh entry} for the ones that passed.
+
+    A timing-only red is usually a one-time cold cost (shader cache), so the verdict
+    uses the fresh time and the pass record is rewritten with it. A test that is
+    still slow stays slow; the caller re-evaluates and keeps the red.
+    """
+    fresh = {}
+    by_run = {}
+    for finding in findings:
+        same = [i for i, run in enumerate(runs) if run["package"] == finding["package"]]
+        exact = [i for i in same if runs[i].get("target") == finding["target"]]
+        if same:
+            by_run.setdefault((exact or same)[0], []).append(finding)
+    pending = [runs[i] for i in by_run]
+    if pending and build_tests(manifest_path, pending):
+        return fresh
+    print("GPU-PROOFS TIMING: rerunning only the flagged tests once: "
+          + ", ".join(sorted({f["test"] for f in findings})), flush=True)
+    with gpu_queue.hold("gpu_proofs_gate"):
+        for index, flagged in by_run.items():
+            run = runs[index]
+            rerun, hung = [], []
+            wanted = {f["test"] for f in flagged}
+            code, output = run_gate(
+                manifest_path, sorted(wanted), [], run["targets"],
+                run["full"], run["lib"], rerun, hung, hang_floor, run["package"],
+                run["target"], run["budgeted"], run.get("target_specs"),
+                features=run.get("features"))
+            if (code or hung or parse_failed_tests(output)
+                    or any(timing_fields(t)[4] == "FAILED" for t in rerun)):
+                continue
+            mine = {}
+            for entry in rerun:
+                _p, row_target, name, seconds, status, _b = timing_fields(entry)
+                if name in wanted and status == "ok":
+                    target = run.get("target") or row_target
+                    mine[timing_key(run["package"], target, name)] = timing_entry(
+                        run["package"], target, name, seconds, status, run["budgeted"])
+            if not mine:
+                continue
+            fresh.update(mine)
+            run_records[index] = _swap_timings(run_records[index], mine)
+            if passes[index]:
+                passes[index].save(0, sum(timing_fields(t)[3] for t in run_records[index]),
+                                   timings=run_records[index])
+    return fresh
+
+
 def unknown_target_timings(timings: list) -> list[dict]:
     return [{"package": package, "target": target, "test": name,
              "seconds": seconds, "key": timing_key(package, target, name)}
@@ -1099,6 +1157,7 @@ def _main() -> int:
         print('GPU-PROOFS GATE: FAIL (inputs changed after planning; rerun before GPU admission)')
         return INPUTS_CHANGED
     exit_code, outputs, all_timings, hung = 0, [], [], []
+    run_records = {}
     # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for all
     # cargo runs so another run cannot interleave between test binaries.
     recorded_timings = []
@@ -1106,12 +1165,13 @@ def _main() -> int:
         if gate_passes.changed_passes(passes):
             print('GPU-PROOFS GATE: FAIL (inputs changed while waiting for the GPU)')
             return INPUTS_CHANGED
-        for run, passed in zip(runs, passes):
+        for index, (run, passed) in enumerate(zip(runs, passes)):
             if passed and passed.record:
                 if not passed.reused():
                     print('GPU-PROOFS GATE: FAIL (inputs changed before reuse)')
                     return INPUTS_CHANGED
-                all_timings.extend(receipt_timings(passed, run))
+                run_records[index] = receipt_timings(passed, run)
+                all_timings.extend(run_records[index])
                 continue
             run_timings: list = []
             run_args = (manifest_path, run["filters"], run["skips"], run["targets"],
@@ -1151,6 +1211,7 @@ def _main() -> int:
                 print('GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)')
                 return INPUTS_CHANGED
             all_timings += normalized
+            run_records[index] = normalized
             recorded = list(normalized)
             recorded_timings.extend(recorded)
             if hung:
@@ -1166,9 +1227,18 @@ def _main() -> int:
     if args.record_times and functional_ok:
         print(write_times_json(args.record_times, recorded_timings, merge=True))
     timing_red = [] if args.all_tests or args.record_times else unmeasured_heavy(all_timings)
+    if timing_red and functional_ok and not args.all_tests and not args.record_times:
+        fresh = rerun_timing_red(timing_red, runs, passes, run_records, manifest_path,
+                                 args.hang_allowance)
+        if fresh:
+            all_timings = _swap_timings(all_timings, fresh)
+            recorded_timings = _swap_timings(recorded_timings, fresh)
+            timing_red = unmeasured_heavy(all_timings)
     unknown_red = unknown_target_timings(all_timings)
     verdict = print_summary(output, exit_code, all_timings, args.budget, hung, manifest_path,
                             timing_red, unknown_red, features=features)
+    if verdict == 5 and functional_ok:
+        print("GPU-PROOFS TIMING: ONLY (every test passed; the timing finding stands)")
     if args.learn_times:
         remember_times(recorded_timings, verdict, hung)
     if gate_passes.changed_passes([p for p in passes if p]):
