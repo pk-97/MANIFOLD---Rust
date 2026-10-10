@@ -19,7 +19,7 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::{GpuDevice, GpuTextureFormat, GpuTimestampSampler};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use manifold_node_engine::{persistence::PrimitiveRegistry, water::physics::PhysicsStepScope};
+use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_water::physics::PhysicsStepScope};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -171,31 +171,13 @@ fn render(
     Some((profile.total_ms, per_atom))
 }
 
-/// The Liquid Surface mesh's vertex capacity, as the preset sets it.
-fn mesh_capacity(json: &Value) -> f64 {
-    let mut found = None;
-    visit_nodes(json, &mut |node| {
-        // The group also names the node in its port map, without params.
-        if node["nodeId"] == "liquid_mesh"
-            && let Some(capacity) = node["params"]["max_capacity"]["value"].as_f64()
-        {
-            found = Some(capacity);
-        }
-    });
-    found.expect("liquid_mesh max_capacity")
-}
-
-fn visit_nodes(value: &Value, visit: &mut dyn FnMut(&Value)) {
-    match value {
-        Value::Object(map) => {
-            if map.contains_key("nodeId") {
-                visit(value);
-            }
-            map.values().for_each(|child| visit_nodes(child, visit));
-        }
-        Value::Array(items) => items.iter().for_each(|child| visit_nodes(child, visit)),
-        _ => {}
-    }
+/// Actual storage after automatic mesh growth, in whole triangle vertices.
+fn mesh_capacity(runtime: &PresetRuntime) -> f64 {
+    let id = runtime.graph.instance_by_node_id(&manifold_core::NodeId::from("liquid_mesh"))
+        .expect("liquid_mesh node");
+    let node = runtime.graph.get_node(id).expect("liquid_mesh instance");
+    let buffer = node.node.provided_array_output("vertices").expect("liquid_mesh vertex buffer");
+    (buffer.size / std::mem::size_of::<manifold_node_engine::mesh::MeshVertex>() as u64 / 3 * 3) as f64
 }
 
 /// Triangles the surface needs this frame: the running total's `total`,
@@ -320,7 +302,7 @@ fn fluid_surface_perf() {
             frame += 1;
             let vertices = 3.0
                 * surface_triangles(&mut runtime, device, &target, &context(frame, TICKS), &params);
-            let capacity = mesh_capacity(&json);
+            let capacity = mesh_capacity(&runtime);
             println!(
                 "res {resolution:>2} scale {scale}{look}: surface p50 {:.3} ms p95 {p95:.3} ms | 1080p frame p50 {:.3} ms p95 {:.3} ms | {vertices:.0} of {capacity:.0} vertices{}",
                 percentile(&surface, 0.5),
@@ -342,7 +324,7 @@ fn fluid_surface_perf() {
             if resolution == 64 && scale == 2 && run.group.is_empty() && run.blobs.is_empty() {
                 assert!(
                     vertices <= capacity,
-                    "res 64 scale 2 needs {vertices:.0} vertices; the preset's Mesh Capacity is {capacity:.0}, so the gate would time an empty mesh"
+                    "res 64 scale 2 needs {vertices:.0} vertices; the mesh buffer holds {capacity:.0}, so the gate would time an empty mesh"
                 );
                 gated = Some(p95);
             }

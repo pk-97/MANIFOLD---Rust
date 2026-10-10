@@ -7,6 +7,7 @@ autotests = false
 
 [dependencies]
 manifold-nodes-scene = { path = "../manifold-nodes-scene" }
+manifold-nodes-water = { path = "../manifold-nodes-water" }
 manifold-nodes-image = { path = "../manifold-nodes-image" }
 manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-core = { path = "../manifold-core" }
@@ -20,6 +21,7 @@ inventory = "0.3"
 [dev-dependencies]
 manifold-nodes = { path = ".", features = ["testkit"] }
 manifold-nodes-scene = { path = "../manifold-nodes-scene", features = ["testkit"] }
+manifold-nodes-water = { path = "../manifold-nodes-water", features = ["testkit"] }
 manifold-nodes-image = { path = "../manifold-nodes-image", features = ["testkit"] }
 manifold-gpu = { path = "../manifold-gpu", features = ["testkit"] }
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
@@ -91,26 +93,26 @@ required-features = ["gpu-proofs"]
 # glTF conformance is a module of gpu_proofs; select glb_conformance::.
 
 [features]
-testkit = ["manifold-node-engine/testkit", "manifold-nodes-image/testkit", "manifold-nodes-scene/testkit"]
+testkit = ["manifold-node-engine/testkit", "manifold-nodes-image/testkit", "manifold-nodes-scene/testkit", "manifold-nodes-water/testkit"]
 # GPU-proof tests: slow, flaky, and need a real Metal device with synchronous
 # readback. Off by default so the workspace test sweep stays fast and
 # deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,
 # every `mod gpu_tests`, the `gpu_proofs` integration binary above, and the
 # counters and error tap the liquid conformance suite reads.
-gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-gpu/gpu-proofs"]
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-nodes-water/gpu-proofs"]
 # Bounded dynamic-RT timing is opt-in, separate from correctness gates.
-rt-perf-proofs = ["manifold-nodes-scene/rt-perf-proofs", "manifold-node-engine/rt-perf-proofs", "gpu-proofs"]
+rt-perf-proofs = ["manifold-nodes-scene/rt-perf-proofs", "gpu-proofs"]
 # GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.
-fluid-perf-proofs = ["manifold-node-engine/fluid-perf-proofs", "gpu-proofs"]
+fluid-perf-proofs = ["manifold-nodes-water/fluid-perf-proofs", "manifold-nodes-scene/fluid-perf-proofs", "gpu-proofs"]
 # GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.
-matter-perf-proofs = ["manifold-node-engine/matter-perf-proofs", "gpu-proofs"]
+matter-perf-proofs = ["manifold-nodes-water/matter-perf-proofs", "gpu-proofs"]
 # Water race probes (GPU_FLIP_PRESSURE_SOLVE.md): minutes-long Dam Break
 # runs of GPU FLIP and the FLIP Fluids engine, opt-in. The frame probe reads
 # render_scene::water_perf.
-water-race-probes = ["manifold-node-engine/water-race-probes", "gpu-proofs", "fluid-perf-proofs"]
+water-race-probes = ["manifold-nodes-water/water-race-probes", "gpu-proofs", "fluid-perf-proofs"]
 # The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),
 # opt-in: builds FLIP's oracle entries into manifold-fluids.
-whitewater-oracle = ["manifold-node-engine/whitewater-oracle", "gpu-proofs"]
+whitewater-oracle = ["manifold-nodes-water/whitewater-oracle", "gpu-proofs"]
 [lints]
 workspace = true
 

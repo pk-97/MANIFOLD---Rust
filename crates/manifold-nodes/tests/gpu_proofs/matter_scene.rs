@@ -6,10 +6,12 @@
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuFrameProfile, GpuTextureFormat, GpuTimestampSampler};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::water::fluid::{TICK, domain_layout};
-use manifold_node_engine::water::fluid_particles::{CellRange, FluidParticle};
-use manifold_node_engine::water::liquid::lattice::LiquidLattice;
-use manifold_node_engine::water::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
+use manifold_node_engine::scene::fluid_domain::{domain_layout};
+use manifold_nodes_water::fluid::TICK;
+use manifold_node_engine::particles::{FluidParticle};
+use manifold_nodes_water::fluid_particles::CellRange;
+use manifold_nodes_water::liquid::lattice::LiquidLattice;
+use manifold_nodes_water::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
 use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, scene::transform::Transform, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
 
@@ -566,8 +568,8 @@ fn matter_deterministic_under_seed() {
 /// fixed-point unit when export groups both into one display frame.
 #[test]
 fn matter_variable_speed_export_grouping_matches_raw_points() {
-    use manifold_node_engine::water::matter::{MAX_SUBSTEPS, WATER_DENSITY, free_fall_speed, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
-    use manifold_node_engine::water::physics::PhysicsStepScope;
+    use manifold_nodes_water::matter::{MAX_SUBSTEPS, WATER_DENSITY, free_fall_speed, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
+    use manifold_nodes_water::physics::PhysicsStepScope;
 
     let _offline = PhysicsStepScope::for_render(true);
     let settings = SceneSettings { resolution: 16, domain_size: 1.0, stiffness: 1.0, ..SceneSettings::default() };
@@ -601,7 +603,8 @@ fn matter_variable_speed_export_grouping_matches_raw_points() {
         params[domain_step] = Some(scene.graph.get_node(scene.domain).unwrap().params.clone());
         // Observe the edit at TICK without accepting work, including in the
         // grouped run whose next full render is at 2*TICK.
-        scene.executor.execute_physics_sample_frame(
+        manifold_nodes_water::runtime::physics_sampling::execute_physics_sample_frame(
+            &mut scene.executor,
             &mut scene.graph, &scene.plan,
             FrameTime { beats: Beats(0.0), seconds: Seconds(TICK), delta: Seconds(0.0), frame_count: 1 },
             &mask, &params,
@@ -756,7 +759,7 @@ fn matter_fixed_point_headroom() {
 /// discards excess elapsed time, so the next frame owes only its own tick.
 #[test]
 fn matter_domain_holds_on_nonfinite_gravity() {
-    let _live = manifold_node_engine::water::physics::PhysicsStepScope::for_render(false);
+    let _live = manifold_nodes_water::physics::PhysicsStepScope::for_render(false);
     let mut scene = MatterScene::new(&small_dam_break());
     for _ in 0..5 {
         scene.tick();

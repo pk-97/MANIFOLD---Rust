@@ -71,9 +71,9 @@ use manifold_node_engine::graph::Graph;
         assert_ne!(first_rigid, second_rigid);
         assert_eq!(
             graph
-                .coupled_scenes()
+                .node_pairs()
                 .iter()
-                .map(|pair| (pair.fluid_for_test(), pair.rigid_for_test()))
+                .map(|pair| (pair.first, pair.second))
                 .collect::<Vec<_>>(),
             vec![(first_fluid, first_rigid), (second_fluid, second_rigid)]
         );

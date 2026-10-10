@@ -103,8 +103,6 @@ mod triangulate_grid;
 mod tube_from_path;
 mod twist_mesh;
 mod transform_3d;
-manifold_core::testkit_visible! { mod smooth_surface_mesh; }
-manifold_core::testkit_visible! { mod surface_mesh_normals; }
 mod transform_shake;
 manifold_core::testkit_visible! { mod scene_object; }
 mod revolve_curve;

@@ -3087,7 +3087,7 @@ impl Compositor for LayerCompositor {
         &self,
         output: &mut Vec<(
             NodeId,
-            manifold_node_engine::water::fluid::FluidDomainSnapshot,
+            manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot,
         )>,
     ) {
         if self.scene_viewport_error.is_some() {

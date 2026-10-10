@@ -1,5 +1,5 @@
 //! Authored preset fixtures for the liquid conformance suite.
-use manifold_node_engine::water::liquid::conformance::testkit::{G, liquid_totals, matter_totals, matter_faces, set_source_param};
+use manifold_nodes_water::liquid::conformance::testkit::{G, liquid_totals, matter_totals, matter_faces, set_source_param};
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
@@ -8,16 +8,16 @@ use manifold_core::id::NodeId;
 use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID};
 
 use crate::bundled_presets::bundled_preset_def;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
-use manifold_node_engine::water::matter::{MatterPoint, STATS_WORDS};
-use manifold_node_engine::water::primitives::face_grid_scenes::matter_dam_break_faces;
-use manifold_node_engine::water::primitives::liquid_stats::LIQUID_STATS_WORDS;
-use manifold_node_engine::water::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
-use manifold_node_engine::water::primitives::gpu_flip_preset::{SHIPPED_PRESET, WaterScene, render_def};
-use manifold_node_engine::water::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
+use manifold_node_engine::particles::FluidParticle;
+use manifold_nodes_water::matter::{MatterPoint, STATS_WORDS};
+use manifold_nodes_water::primitives::face_grid_scenes::matter_dam_break_faces;
+use manifold_nodes_water::primitives::liquid_stats::LIQUID_STATS_WORDS;
+use manifold_nodes_water::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
+use manifold_nodes_water::primitives::gpu_flip_preset::{SHIPPED_PRESET, WaterScene, render_def};
+use manifold_nodes_water::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
 use crate::testkit::reference_fixtures::cpu_flip_preset_json;
 
-use manifold_node_engine::water::liquid::conformance::*;
+use manifold_nodes_water::liquid::conformance::*;
 
 const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its bodies inside its native solve and \
      takes them from the scene layer's roles, so it has no rigid owner to count, no host sync between coupled \
@@ -440,7 +440,8 @@ const BOX_NODES: [&str; 6] = ["box_world", "box_start", "box_body", "box_mesh", 
 mod tests {
 
     use super::*;
-    use manifold_node_engine::water::liquid::extent::{ExtentError, LiquidPreset};
+    use manifold_node_engine::exec::extent::{ExtentError};
+use manifold_nodes_water::liquid::extent::LiquidPreset;
     use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain};
 

@@ -17,7 +17,7 @@ use manifold_core::effect_graph_def::ParamSpecDef;
 use manifold_core::layer::Layer;
 use manifold_core::params::Param;
 use manifold_core::project::Project;
-use manifold_physics::VectorField;
+use manifold_physics::{FieldValue, VectorField};
 use std::{borrow::Cow, cell::RefCell};
 
 const TICK_RATE: f64 = 120.0;
@@ -58,6 +58,26 @@ impl EffectNode for TickedLiquid {
     fn parameters(&self) -> &[ParamDef] {
         &[]
     }
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        if !manifold_nodes_water::physics::authored_sample_only() {
+            return;
+        }
+        let now = ctx.time.seconds.0;
+        let reached = self.1.partition_point(|&tick| tick <= now);
+        if reached == 0 {
+            return;
+        }
+        let force = ctx
+            .inputs
+            .cpu_value::<FieldValue>("acceleration_field")
+            .map_or(f32::NAN, |field| field.sample([0.0; 3])[1]);
+        TICKS.with_borrow_mut(|ticks| {
+            ticks.extend(self.1.drain(..reached).map(|tick| (tick, force)));
+        });
+    }
+}
+
+impl manifold_nodes_water::node::PhysicsNode for TickedLiquid {
     /// Like the liquid's field history: request each tick start in
     /// `(from, until]`; the first sample at or after it records that tick.
     fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
@@ -68,23 +88,10 @@ impl EffectNode for TickedLiquid {
             tick += 1.0;
         }
     }
-    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if !manifold_node_engine::water::physics::authored_sample_only() {
-            return;
-        }
-        let now = ctx.time.seconds.0;
-        let reached = self.1.partition_point(|&tick| tick <= now);
-        if reached == 0 {
-            return;
-        }
-        let force = ctx
-            .inputs
-            .vector_field("acceleration_field")
-            .map_or(f32::NAN, |field| field.sample([0.0; 3])[1]);
-        TICKS.with_borrow_mut(|ticks| {
-            ticks.extend(self.1.drain(..reached).map(|tick| (tick, force)));
-        });
-    }
+}
+
+inventory::submit! {
+    manifold_nodes_water::node::PhysicsNodeRegistration::new::<TickedLiquid>()
 }
 
 const LIQUID: &str = manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
@@ -295,7 +302,7 @@ fn run<S: AsRef<str>>(
             &mut FireMeterCapture::default(),
         );
         let generator = project.timeline.layers[0].gen_params().unwrap();
-        runtime.set_physics_source_instance(Some(generator));
+        runtime.set_source_instance(Some(generator));
         runtime.apply_param_values(&generator.params);
         runtime.execute_frame(FrameTime {
             seconds: Seconds(seconds),
@@ -371,7 +378,7 @@ fn modifier_card_kick_is_sampled_at_each_tick_inside_one_frame() {
         );
         let generator = project.timeline.layers[0].gen_params().unwrap();
         hops.extend_from_slice(&generator.audio_mods.as_deref().unwrap()[0].hop_timeline.values);
-        runtime.set_physics_source_instance(Some(generator));
+        runtime.set_source_instance(Some(generator));
         runtime.apply_param_values(&generator.params);
         runtime.execute_frame(FrameTime {
             seconds: Seconds(seconds),

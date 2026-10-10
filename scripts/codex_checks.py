@@ -114,10 +114,10 @@ def build_plan(repo: Path, paths=None):
     for package, filterset in cpu_plan.selections().items():
         if package in cpu_plan.whole or not filterset or filterset == "none()":
             continue
-        common = ["--manifest-path", str(repo / "Cargo.toml"), "--no-fail-fast", "-p", package, "-E", filterset]
+        common = ["--manifest-path", str(repo / "Cargo.toml"), "-p", package, "-E", filterset]
         check(f"tests-build/{package}", ["cargo", "nextest", "run", "--no-run", *common])
         check(f"tests/{package}", ["python3", str(repo / "scripts/gpu_queue.py"), "--",
-                                   "cargo", "nextest", "run", *common])
+                                   "cargo", "nextest", "run", "--no-fail-fast", *common])
     if flows:
         check("ui-flows", ["python3", str(repo / "scripts/run_ui_flows.py"), *flows])
     if scope.active:

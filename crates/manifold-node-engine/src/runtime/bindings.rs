@@ -129,7 +129,7 @@ impl PresetRuntime {
     ) {
         let Some(values) = values else {
             #[cfg(feature = "gpu-proofs")]
-            self.observe_physics_source_strings();
+            self.for_each_extension(|extension, context| extension.observe_strings(context.graph));
             return;
         };
         for binding in &self.string_bindings {
@@ -155,7 +155,7 @@ impl PresetRuntime {
             );
         }
         #[cfg(feature = "gpu-proofs")]
-        self.observe_physics_source_strings();
+        self.for_each_extension(|extension, context| extension.observe_strings(context.graph));
     }
 
     /// Seed every string binding's value once at construction, before the
@@ -178,7 +178,7 @@ impl PresetRuntime {
             );
         }
         #[cfg(feature = "gpu-proofs")]
-        self.observe_physics_source_strings();
+        self.for_each_extension(|extension, context| extension.observe_strings(context.graph));
     }
 
     pub fn set_string_params(

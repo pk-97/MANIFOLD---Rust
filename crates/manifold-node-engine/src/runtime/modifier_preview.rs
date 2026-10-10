@@ -68,32 +68,6 @@ impl super::PresetRuntime {
             .map_err(crate::scene::scene_viewport::SceneViewportHostError::InvalidTarget)
     }
 
-    /// Append fluid snapshots from the selected generated modifier copy and
-    /// translate each generated node id back to its authored address in place.
-    pub fn write_modifier_fluid_domains(
-        &self,
-        context: &ModifierPreviewContext,
-        output: &mut Vec<(
-            manifold_core::NodeId,
-            crate::water::fluid::FluidDomainSnapshot,
-        )>,
-    ) {
-        let start = output.len();
-        self.write_fluid_domains_watched(output);
-        let mut write = start;
-        for read in start..output.len() {
-            let authored = self
-                .modifier_preview_local_node(context, output[read].0.as_str())
-                .cloned();
-            if let Some(authored) = authored {
-                let snapshot = output[read].1;
-                output[write] = (authored, snapshot);
-                write += 1;
-            }
-        }
-        output.truncate(write);
-    }
-
     pub fn modifier_preview_local_node<'a>(
         &'a self,
         context: &ModifierPreviewContext,

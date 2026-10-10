@@ -357,7 +357,10 @@ manifold_core::testkit_visible! {
         let group_preview_map = manifold_core::flatten::group_output_producer_map(&doc);
         let mut flat_doc = manifold_core::flatten::flatten_groups(&doc).ok();
         if let Some(flat) = flat_doc.as_mut()
-            && crate::water::liquid::migration::wire_gpu_flip_grid(flat)
+            && crate::load::migration::prepare_stage(
+                flat,
+                crate::load::migration::MigrationStage::BeforeBindingCapture,
+            )
         {
             doc = flat.clone();
         }
@@ -578,7 +581,7 @@ manifold_core::testkit_visible! {
                 }
             }
         }
-        crate::water::runtime::physics_sampling::retain_physics_setup_outputs(&mut graph)?;
+        super::extensions::before_compile(&mut graph)?;
         let plan = compile(&graph)?;
         // Walk the plan for the FinalOutput step, pull its `in` input resource —
         // that's what the host pre-binds the target texture to.
@@ -620,8 +623,6 @@ manifold_core::testkit_visible! {
         // rehydrate — its host rebuilds on structure change); the live ones are
         // `bound`, `node_map`, `generator_input_node`, and the preview maps.
         let segment = EffectSlot {
-            #[cfg(feature = "gpu-proofs")]
-            physics_sources: Default::default(),
             effect_id: EffectId::default(),
             effect_type: type_id.clone(),
             legacy_index: 0,
@@ -643,20 +644,16 @@ manifold_core::testkit_visible! {
         };
 
         let seeded_forced_epoch = graph.forced_outputs_epoch();
-        let physics_sample_steps = super::core::physics_sample_steps(&graph, &plan)
+        let extensions = super::extensions::create(
+            &graph,
+            &plan,
+            1,
+        )
             .map_err(JsonGeneratorLoadError::PhysicsSamplingUnsupported)?;
-        let physics_input_snapshot = physics_sample_steps.as_ref().map(|steps| {
-            crate::water::runtime::physics_sampling::PhysicsInputSnapshot::prepare(&graph, &plan, steps)
-        });
         let mut g = Self {
             graph,
             plan,
-            physics_sample_steps,
-            physics_input_snapshot,
-            last_physics_frame_time: None,
-            physics_project_tempo: None,
-            impulse_identity: std::sync::Arc::new(()),
-            scene_impulses: Default::default(),
+            extensions,
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::with_mock(),

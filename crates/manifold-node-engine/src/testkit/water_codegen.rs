@@ -1,4 +1,4 @@
-use crate::testkit::liquid_surface::{Harness, read};
+use crate::testkit::array_harness::{Harness, read};
 use crate::{exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues, primitive::Primitive, primitive::PrimitiveSpec, parameters::ParamValue, ports::KnownItem};
 use crate::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::RegionNode, codegen::generate_fused};
 use manifold_gpu::{GpuBinding, GpuBuffer};

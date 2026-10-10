@@ -153,7 +153,7 @@ fn already_cut(def: &EffectGraphDef, fragment: &EffectGraphNode) -> bool {
 }
 
 /// Also covers frozen legacy graphs whose fragment atoms remain inside groups.
-pub(crate) fn contains_fragments(def: &EffectGraphDef) -> bool {
+pub fn contains_fragments(def: &EffectGraphDef) -> bool {
     fn nodes_contain(nodes: &[EffectGraphNode]) -> bool {
         nodes.iter().any(|node| {
             is_fragment(&node.type_id)

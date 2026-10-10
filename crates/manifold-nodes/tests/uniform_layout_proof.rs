@@ -466,7 +466,7 @@ fn generated_fields(registry: &PrimitiveRegistry, type_id: &str, raw: &[Field]) 
 #[test]
 fn surface_mesh_pass_uniforms_match_every_kernel_it_dispatches() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../manifold-node-engine/src/water/primitives/relax_surface_mesh.rs");
+        .join("../manifold-nodes-water/src/primitives/relax_surface_mesh.rs");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let (_, structs) = parse_source(&text);

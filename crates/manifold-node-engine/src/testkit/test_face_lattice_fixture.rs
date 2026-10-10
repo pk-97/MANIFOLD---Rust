@@ -7,7 +7,8 @@
 //! Hand-rolled `PrimitiveSpec`, not `crate::primitive!`, for the reason
 //! `test_camera_pointwise_fixture` gives: the macro auto-registers into the
 //! global inventories the catalog freshness tests walk. Compile-level only:
-//! nothing dispatches it.
+//! nothing dispatches it. Uses the shared Particle record; the proof concerns
+//! lattice capacity expressions, not the native face-grid layout.
 
 #![cfg(test)]
 
@@ -15,7 +16,7 @@ use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use crate::exec::effect_node::{EffectNodeContext, EffectNodeType, ParamValues};
-use crate::water::fluid_particles::FaceSample;
+use crate::particles::Particle;
 use crate::freeze::classify::{FusedOutputCapacity, FusionKind, InputAccess};
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
@@ -29,7 +30,7 @@ pub struct TestFaceLattice;
 const INPUTS: &[NodeInput] = &[
     NodePort {
         name: Cow::Borrowed("faces"),
-        ty: PortType::Array(ArrayType::of_known::<FaceSample>()),
+        ty: PortType::Array(ArrayType::of_known::<Particle>()),
         kind: PortKind::Input,
         required: true,
     },
@@ -42,7 +43,7 @@ const INPUTS: &[NodeInput] = &[
 ];
 const OUTPUTS: &[NodeOutput] = &[NodePort {
     name: Cow::Borrowed("out"),
-    ty: PortType::Array(ArrayType::of_known::<FaceSample>()),
+    ty: PortType::Array(ArrayType::of_known::<Particle>()),
     kind: PortKind::Output,
     required: false,
 }];

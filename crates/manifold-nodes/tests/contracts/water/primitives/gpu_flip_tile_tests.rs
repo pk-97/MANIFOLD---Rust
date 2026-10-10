@@ -7,20 +7,18 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
-use manifold_node_engine::water::primitives::gpu_flip_preset::WaterScene;
+use manifold_nodes_water::primitives::gpu_flip_preset::WaterScene;
 use crate::contracts::water::primitives::gpu_flip_scene_tests::Run;
-use manifold_node_engine::water::primitives::gpu_flip_step::{
-    CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass,
-    ring_max, set_all_tiles, set_poison, tile_counts, tile_total,
-};
-use manifold_node_engine::water::primitives::liquid_stats::with_stats_layout;
-use manifold_node_engine::testkit::liquid_surface::read;
-use manifold_node_engine::water::fluid_particles::{CellRange, FluidParticle};
-use manifold_node_engine::water::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE};
-use manifold_node_engine::water::liquid::fields::LIQUID_FIELD;
+use manifold_nodes_water::primitives::gpu_flip_step::{CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass, ring_max, set_all_tiles, set_poison, tile_counts, tile_total};
+use manifold_nodes_water::primitives::liquid_stats::with_stats_layout;
+use manifold_node_engine::testkit::array_harness::read;
+use manifold_node_engine::particles::{FluidParticle};
+use manifold_nodes_water::fluid_particles::CellRange;
+use manifold_nodes_water::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE};
+use manifold_nodes_water::liquid::fields::LIQUID_FIELD;
 
 fn gather_sources() -> [String; 2] {
-    let source = include_str!("../../../../../manifold-node-engine/src/water/primitives/shaders/gpu_flip_step.wgsl");
+    let source = include_str!("../../../../../manifold-nodes-water/src/primitives/shaders/gpu_flip_step.wgsl");
     // Restore the original dynamic-axis gather only in the test oracle.
     // Keep its support decisions and floating-point accumulation verbatim.
     let inner = r#"                    for (var a = 0; a < 3; a = a + 1) {
@@ -679,8 +677,8 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
     let device = manifold_gpu::testkit::test_device();
     let layout = scene.layout();
     // The step classifies tiles on the native solver grid.
-    let grid = manifold_node_engine::water::liquid::lattice::FlipSolverGrid::from_lattice(
-        manifold_node_engine::water::liquid::lattice::LiquidLattice::from_layout(&layout));
+    let grid = manifold_nodes_water::liquid::lattice::FlipSolverGrid::from_lattice(
+        manifold_nodes_water::liquid::lattice::LiquidLattice::from_layout(&layout));
     let (n, min, h) = (grid.cells(), grid.min(), layout.cell_size as f32);
     let r = ring_max(band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS));
     let total = tile_total(n) as usize;

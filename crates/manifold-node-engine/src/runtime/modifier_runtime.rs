@@ -88,7 +88,10 @@ impl PresetRuntime {
         if crate::load::graph_loader::has_retired_params(&doc) {
             crate::load::graph_loader::retire_params(&mut doc);
         }
-        crate::water::runtime::gpu_flip_surface::prepare(&mut doc);
+        crate::load::migration::prepare_stage(
+            &mut doc,
+            crate::load::migration::MigrationStage::BeforeSceneModifiers,
+        );
         let (render_def, authoring) =
             if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc)
                 || crate::load::expand::contains_fragments(&doc)
@@ -128,7 +131,7 @@ impl PresetRuntime {
         // Compare the effective unfused definition when carrying physics state.
         let content_key = crate::freeze::install::def_content_key(&render_def);
         #[cfg(feature = "gpu-proofs")]
-        let physics_sources = crate::water::runtime::physics_sources::prepare(
+        let prepared_extensions = super::extensions::prepare(
             &render_def,
             authoring.as_ref().map_or(&render_def, |(owner, ..)| owner),
             authoring.as_ref().map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice()),
@@ -156,13 +159,16 @@ impl PresetRuntime {
         let impulse_routes = authoring.as_ref().map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice());
         let mut runtime = Self::from_render_def(render_def, registry, manifest, &mesh_rules, impulse_routes)?;
         #[cfg(feature = "gpu-proofs")]
-        runtime.apply_physics_source_graphs(physics_sources);
+        for install in prepared_extensions { install(&mut runtime); }
         runtime.effect_nodes[0].def_content_key = content_key;
         if let Some(view) = &fused {
             runtime.effect_nodes[0].bound.fused_retarget = view.retarget.clone();
         }
         if let Some((canonical, routes, sources, guards, event_routes, impulse_routes)) = authoring {
-            runtime.prepare_modifier_impulses(&canonical, &impulse_routes, registry)?;
+            let (extensions, mut context) = runtime.extension_context();
+            for extension in extensions {
+                extension.prepare_modifiers(&mut context, &canonical, &impulse_routes, registry)?;
+            }
             crate::load::expand::validate_modifier_runtime(
                 &canonical,
                 &runtime.graph,

@@ -58,7 +58,7 @@ fn physics_carry_matches_owners_across_actual_fused_topology() {
     };
     let native_owner = owner(&prior);
     assert_ne!(owner(&fused), native_owner);
-    manifold_node_engine::runtime::testkit::set_last_physics_frame_time(&mut prior, Some(FrameTime {
+    manifold_nodes_water::runtime::testkit::set_last_physics_frame_time(&mut prior, Some(FrameTime {
         seconds: Seconds(0.5),
         beats: Beats(1.0),
         delta: Seconds(1.0 / 30.0),
@@ -66,7 +66,7 @@ fn physics_carry_matches_owners_across_actual_fused_topology() {
     }));
     fused.carry_generator_state_from(&mut prior);
     assert_eq!(owner(&fused), native_owner);
-    assert_eq!(manifold_node_engine::runtime::testkit::last_physics_frame_time(&fused).unwrap().seconds, Seconds(0.5));
+    assert_eq!(manifold_nodes_water::runtime::testkit::last_physics_frame_time(&fused).unwrap().seconds, Seconds(0.5));
 }
 
 use manifold_core::NodeId;

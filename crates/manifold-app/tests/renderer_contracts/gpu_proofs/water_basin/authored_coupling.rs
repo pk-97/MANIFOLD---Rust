@@ -7,8 +7,9 @@ use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 use manifold_core::{project::Project, Beats, GraphTarget, NodeId, Seconds};
 use manifold_editing::command::Command;
 use manifold_editing::commands::graph::{InsertSceneModifierCommand, SetGraphNodeParamCommand};
-use manifold_node_engine::water::physics_events::ImpulseTarget;
+use manifold_node_engine::scene::impulse::ImpulseTarget;
 use manifold_node_engine::exec::effect_node::FrameTime;
+use manifold_nodes_water::runtime::WaterRuntimeExt;
 
 fn set_param(
     project: &mut Project,
@@ -285,6 +286,7 @@ fn scene_physics_authored_liquid_only_vortex_rotates_immersed_object_after_reloa
             render_frame(&mut runtime, &target, &harness.device, 1);
             if fired {
                 runtime
+                    .water()
                     .fire_scene_impulse(
                         &fire,
                         FrameTime {
@@ -316,7 +318,7 @@ fn scene_physics_authored_liquid_only_vortex_rotates_immersed_object_after_reloa
             assert!((0.0..=2.4).contains(&accepted.y), "{accepted:?}");
             assert_finite_and_nonempty(&pixels, 13);
             let mut receipts = 0;
-            runtime.drain_scene_impulses(|_, event| {
+            runtime.water().drain_scene_impulses(|_, event| {
                 assert_eq!(event.value.target, ImpulseTarget::Fluid);
                 receipts += 1;
             });
@@ -330,7 +332,7 @@ fn scene_physics_authored_liquid_only_vortex_rotates_immersed_object_after_reloa
                 let held = render_frame(&mut runtime, &target, &harness.device, 13);
                 assert_pixels_close(&pixels, &held, 1e-3);
                 assert_eq!(SAMPLE.get().roll, accepted.roll);
-                runtime.drain_scene_impulses(|_, _| panic!("paused input must not fire again"));
+                runtime.water().drain_scene_impulses(|_, _| panic!("paused input must not fire again"));
                 std::fs::write(
                     format!("/tmp/manifold_authored_vortex_{viscosity:.0}.png"),
                     readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT),
@@ -369,7 +371,7 @@ fn scene_physics_authored_liquid_only_vortex_rotates_immersed_object_after_reloa
             assert_eq!(held_sample.time, final_sample.time);
             assert_eq!(held_sample.y, final_sample.y);
             assert_eq!(held_sample.roll, final_sample.roll);
-            runtime.drain_scene_impulses(|_, _| panic!("final repeated frame must not fire again"));
+            runtime.water().drain_scene_impulses(|_, _| panic!("final repeated frame must not fire again"));
             if fired {
                 std::fs::write(
                     format!(

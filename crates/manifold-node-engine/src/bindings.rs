@@ -13,10 +13,10 @@
 //!   return `None`, which is fine for tests that don't dispatch GPU work.
 
 use ahash::AHashMap;
-use manifold_physics::FieldValue;
 use manifold_gpu::{GpuBuffer, GpuTexture};
 
 use crate::exec::backend::Backend;
+use crate::exec::cpu_values::CpuWireWrites;
 use crate::scene::camera::Camera;
 use crate::content_revision::{ContentVersion, StorageRevision};
 use crate::scene::light::Light;
@@ -25,10 +25,8 @@ use crate::parameters::ParamValue;
 use crate::ports::ArrayType;
 use crate::scene::atmosphere::Atmosphere;
 use crate::scene::render_mode::RenderMode;
-use crate::water::physics::RigidBody;
 use crate::scene::scene_object::SceneObject;
 use crate::scene::transform::Transform;
-use crate::water::fluid_role::FluidRole;
 use crate::scene::mesh_source::MeshSource;
 
 /// Opaque physical-buffer index handed out by the runtime's resource pool.
@@ -302,27 +300,15 @@ impl<'a> NodeInputs<'a> {
         self.backend.render_mode(self.slot(port)?)
     }
 
-    pub fn rigid_body(&self, port: &str) -> Option<RigidBody> {
-        self.backend.rigid_body(self.slot(port)?)
-    }
-
-    /// [`FluidRole`] bound to the named [`PortType::FluidRole`] input port.
-    /// `None` if unwired. The prepared geometry remains shared through its
-    /// `Arc`; field access does not clone mesh data.
-    pub fn fluid_role(&self, port: &str) -> Option<FluidRole> {
-        self.backend.fluid_role(self.slot(port)?)
+    /// A registered CPU payload, cloned from the named port's current value.
+    pub fn cpu_value<T: Clone + Send + 'static>(&self, port: &str) -> Option<T> {
+        self.cpu_value_slot(self.slot(port)?)
     }
 
     /// [`MeshSource`] bound to the named [`PortType::MeshSource`] input port.
     /// `None` if unwired. Source descriptions contain no prepared or GPU data.
     pub fn mesh_source(&self, port: &str) -> Option<MeshSource> {
         self.backend.mesh_source(self.slot(port)?)
-    }
-
-    /// [`FieldValue`] bound to the named [`PortType::VectorField`] input.
-    /// The payload is an owned CPU evaluator used by native physics solvers.
-    pub fn vector_field(&self, port: &str) -> Option<FieldValue> {
-        self.backend.vector_field(self.slot(port)?)
     }
 
     /// [`SceneObject`] bound to the named [`PortType::Object`] input port.
@@ -441,9 +427,9 @@ impl<'a> NodeInputs<'a> {
         self.backend.object(slot)
     }
 
-    /// [`FluidRole`] bound to an already-resolved [`Slot`] — no name scan.
-    pub fn fluid_role_slot(&self, slot: Slot) -> Option<FluidRole> {
-        self.backend.fluid_role(slot)
+    /// A registered CPU payload from an already-resolved slot.
+    pub fn cpu_value_slot<T: Clone + Send + 'static>(&self, slot: Slot) -> Option<T> {
+        self.backend.cpu_values().get(slot)
     }
 
     /// [`MeshSource`] bound to an already-resolved [`Slot`] — no name scan.
@@ -460,11 +446,6 @@ impl<'a> NodeInputs<'a> {
     /// [`Self::live_extent`] for an already-resolved [`Slot`].
     pub fn live_extent_slot(&self, slot: Slot) -> Option<crate::scene::live_extent::LiveExtent> {
         self.backend.live_extent(slot)
-    }
-
-    /// [`FieldValue`] bound to an already-resolved [`Slot`] — no name scan.
-    pub fn vector_field_slot(&self, slot: Slot) -> Option<FieldValue> {
-        self.backend.vector_field(slot)
     }
 }
 
@@ -497,12 +478,10 @@ pub struct NodeOutputs<'a> {
     pending_transform_writes: &'a mut Vec<(Slot, Transform)>,
     /// Sibling scratch for `Atmosphere` writes — same shape as transforms.
     pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
-    /// Sibling scratch for `RenderMode` writes — same shape as atmospheres.
-    pending_rigid_body_writes: Option<&'a mut Vec<(Slot, RigidBody)>>,
-    pending_fluid_role_writes: Option<&'a mut Vec<(Slot, FluidRole)>>,
+    /// Reusable typed write buffers for registered family payloads.
+    pending_cpu_value_writes: Option<&'a mut CpuWireWrites>,
     pending_mesh_source_writes: Option<&'a mut Vec<(Slot, MeshSource)>>,
     pending_live_extent_writes: Option<&'a mut Vec<(Slot, crate::scene::live_extent::LiveExtent)>>,
-    pending_vector_field_writes: Option<&'a mut Vec<(Slot, FieldValue)>>,
     pending_render_mode_writes: &'a mut Vec<(Slot, RenderMode)>,
     /// Sibling scratch for `SceneObject` writes — same shape as atmospheres.
     pending_object_writes: &'a mut Vec<(Slot, SceneObject)>,
@@ -533,48 +512,28 @@ impl<'a> NodeOutputs<'a> {
             pending_transform_writes,
             pending_atmosphere_writes,
             pending_render_mode_writes,
-            pending_rigid_body_writes: None,
-            pending_fluid_role_writes: None,
+            pending_cpu_value_writes: None,
             pending_mesh_source_writes: None,
             pending_live_extent_writes: None,
-            pending_vector_field_writes: None,
             pending_object_writes,
         }
     }
     }
 
     manifold_core::testkit_visible! {
-    pub(crate) fn with_rigid_body_writes(mut self, writes: &'a mut Vec<(Slot, RigidBody)>) -> Self {
-        self.pending_rigid_body_writes = Some(writes);
+    pub(crate) fn with_cpu_value_writes(mut self, writes: &'a mut CpuWireWrites) -> Self {
+        self.pending_cpu_value_writes = Some(writes);
         self
     }
     }
 
-    pub fn set_rigid_body(&mut self, port: &str, value: RigidBody) {
+    /// Queue a registered CPU payload for publication after this node evaluates.
+    pub fn set_cpu_value<T: Clone + Send + 'static>(&mut self, port: &str, value: T) {
         if let Some(slot) = self.slot(port) {
-            self.pending_rigid_body_writes.as_mut()
-                .expect("executor must provide rigid-body output scratch").push((slot, value));
-        }
-    }
-
-    manifold_core::testkit_visible! {
-    pub(crate) fn with_fluid_role_writes(
-        mut self,
-        writes: &'a mut Vec<(Slot, FluidRole)>,
-    ) -> Self {
-        self.pending_fluid_role_writes = Some(writes);
-        self
-    }
-    }
-
-    /// Queue a [`FluidRole`] write to the named output port. Drained by the
-    /// executor into the backend after `evaluate` returns.
-    pub fn set_fluid_role(&mut self, port: &str, value: FluidRole) {
-        if let Some(slot) = self.slot(port) {
-            self.pending_fluid_role_writes
+            self.pending_cpu_value_writes
                 .as_mut()
-                .expect("executor must provide fluid-role output scratch")
-                .push((slot, value));
+                .expect("executor must provide CPU value output scratch")
+                .push(slot, value);
         }
     }
 
@@ -614,27 +573,6 @@ impl<'a> NodeOutputs<'a> {
             self.pending_live_extent_writes
                 .as_mut()
                 .expect("executor must provide live-extent output scratch")
-                .push((slot, value));
-        }
-    }
-
-    manifold_core::testkit_visible! {
-    pub(crate) fn with_vector_field_writes(
-        mut self,
-        writes: &'a mut Vec<(Slot, FieldValue)>,
-    ) -> Self {
-        self.pending_vector_field_writes = Some(writes);
-        self
-    }
-    }
-
-    /// Queue a [`FieldValue`] write to the named output port. Drained by the
-    /// executor into the backend after `evaluate` returns.
-    pub fn set_vector_field(&mut self, port: &str, value: FieldValue) {
-        if let Some(slot) = self.slot(port) {
-            self.pending_vector_field_writes
-                .as_mut()
-                .expect("executor must provide vector-field output scratch")
                 .push((slot, value));
         }
     }

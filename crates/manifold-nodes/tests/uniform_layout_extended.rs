@@ -380,9 +380,7 @@ mod custom {
                 "GlyphQuad".into(),
             ),
             (
-                resolve_source_path(
-                    "../../../../manifold-node-engine/src/water/primitives/whitewater_obstacle_source.rs",
-                )
+                resolve_source_path("whitewater_obstacle_source.rs")
                 .expect("whitewater obstacle source")
                 .display()
                 .to_string(),

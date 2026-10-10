@@ -152,51 +152,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hidden_whitewater_atoms_still_register() {
-        let registry = crate::persistence::PrimitiveRegistry::with_builtin();
-        let atoms = palette_atoms();
-        for type_id in [
-            "node.surface_crossings",
-            "node.nearest_crossing",
-            "node.crossing_distance",
-            "node.liquid_cells",
-            "node.lattice_curvature",
-            "node.extend_lattice",
-            "node.turbulence_field",
-            "node.whitewater_influence",
-            "node.dust_potential",
-            "node.jitter_particles",
-            "node.sample_faces_at_particles",
-            "node.whitewater_emitter_velocity",
-            "node.energy_potential",
-            "node.wavecrest_potential",
-            "node.inside_turbulence_potential",
-            "node.turbulence_emission_count",
-            "node.spawn_whitewater",
-            "node.whitewater_type",
-            "node.advect_whitewater",
-            "node.retype_whitewater",
-            "node.age_whitewater",
-            "node.preserve_foam",
-            "node.keep_whitewater",
-            "node.upwind_distance",
-            "node.emission_count",
-        ] {
-            assert!(registry.contains(type_id), "{type_id} must remain registered");
-            assert!(
-                !atoms.iter().any(|atom| atom.type_id == type_id),
-                "{type_id} must stay hidden from the palette",
-            );
-        }
-    }
-
-
-
-
-
-
-
-    #[test]
     fn catalog_default_returns_none_for_unregistered_effects() {
         // PresetTypeId::UNKNOWN is the placeholder for forward-version
         // ids that didn't exist when this binary was built.

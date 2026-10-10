@@ -9,7 +9,7 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 use serde_json::json;
 
-use crate::testkit::liquid_surface::{Harness, read};
+use crate::testkit::array_harness::{Harness, read};
 use crate::gpu::gpu_encoder::GpuEncoder;
 use crate::exec::backend::Backend;
 use crate::bindings::{NodeInputs, NodeOutputs, Slot};

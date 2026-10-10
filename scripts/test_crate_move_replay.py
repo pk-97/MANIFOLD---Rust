@@ -693,6 +693,49 @@ class ReplayTests(unittest.TestCase):
         actual = self.moved()
         self.assertEqual(actual[new+'foo.rs'][1], item.encode())
 
+    def test_derived_comoved_parent_and_child_preserves_testkit_mount(self):
+        old = 'crates/manifold-nodes/src/'
+        new = 'crates/manifold-node-engine/src/'
+        item = ('manifold_core::testkit_visible! {\n'
+                '    testkit { pub(crate) mod child; }\n'
+                '    production { pub(crate) mod child; }\n'
+                '}\n')
+        self.original[old+'foo.rs'] = ('100644', item.encode())
+        self.original[old+'foo/child.rs'] = ('100644', b'pub const X: u8 = 1;\n')
+        with (self.plan/'moves.tsv').open('a') as f:
+            f.write(old+'foo/child.rs\t'+new+'foo/child.rs\n')
+        self.pin()
+        actual = self.moved()
+        self.assertEqual(actual[new+'foo.rs'][1], item.encode())
+        self.assertEqual(actual[new+'foo/child.rs'][1], self.original[old+'foo/child.rs'][1])
+        self.assertEqual(self.run_tool('verify', self.commit(actual, self.base)), 0, self.output)
+
+    def test_derived_comoved_parent_missing_mount_is_rejected(self):
+        old = 'crates/manifold-nodes/src/'
+        new = 'crates/manifold-node-engine/src/'
+        self.original[old+'foo.rs'] = ('100644', b'fn keep() {}\n')
+        self.original[old+'foo/child.rs'] = ('100644', b'pub const X: u8 = 1;\n')
+        with (self.plan/'moves.tsv').open('a') as f:
+            f.write(old+'foo/child.rs\t'+new+'foo/child.rs\n')
+        self.pin()
+        self.rejects_replay()
+        self.assertIn('module mount must exist exactly once or as a complementary pair', self.output)
+
+    def test_child_only_testkit_mount_move_is_rejected(self):
+        old = 'crates/manifold-nodes/src/'
+        new = 'crates/manifold-node-engine/src/'
+        item = ('manifold_core::testkit_visible! {\n'
+                '    testkit { pub(crate) mod child; }\n'
+                '    production { pub(crate) mod child; }\n'
+                '}\n')
+        self.original[old+'foo.rs'] = ('100644', item.encode())
+        self.original[old+'foo/child.rs'] = ('100644', b'pub const X: u8 = 1;\n')
+        self.template(new+'foo.rs', item)
+        (self.plan/'moves.tsv').write_text(old+'foo/child.rs\t'+new+'foo/child.rs\n')
+        self.pin()
+        self.rejects_replay()
+        self.assertIn('testkit_visible! module mounts require a separate reviewed fix', self.output)
+
     def test_derived_identifier_rename_preserves_attribute_literal(self):
         old = 'crates/manifold-nodes/src/'
         new = 'crates/manifold-node-engine/src/'

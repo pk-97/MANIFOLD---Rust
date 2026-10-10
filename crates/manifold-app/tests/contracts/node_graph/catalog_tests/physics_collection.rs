@@ -2,7 +2,7 @@
 
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_node_engine::runtime::*;
-use manifold_node_engine::testkit::physics_history::*;
+use manifold_nodes_water::testkit::physics_history::*;
 
 use manifold_node_engine::scene::source_asset::SourceAssetIdentity;
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -39,7 +39,7 @@ fn published_identity(runtime: &PresetRuntime) -> Option<Result<[u8; 32], String
         .graph
         .instance_by_node_id(&NodeId::new("fluid"))
         .expect("fluid node");
-    manifold_node_engine::runtime::testkit::published_identity(runtime, fluid)
+    manifold_nodes_water::runtime::testkit::published_identity(runtime, fluid)
 }
 
 fn settle_source_at(runtime: &mut PresetRuntime, seconds: f64) -> [u8; 32] {

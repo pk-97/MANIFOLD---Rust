@@ -1,5 +1,5 @@
 //! Buffer extent rule owned by this node.
-use manifold_node_engine::water::liquid::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn divide_by_value(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("divisor", 4)?;

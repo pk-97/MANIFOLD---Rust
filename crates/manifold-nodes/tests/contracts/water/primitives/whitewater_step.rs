@@ -1,11 +1,11 @@
 mod fused_tests {
 use manifold_node_engine::exec::effect_node::{EffectNodeContext,ParamValues};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::water::primitives::whitewater_step::WhitewaterStep;
+use manifold_nodes_water::primitives::whitewater_step::WhitewaterStep;
 #[test]
 fn whitewater_unpack_extent_matches_adapter_storage() {
-    use manifold_node_engine::water::primitives::gpu_flip_preset::{render_def, with_whitewater_axes, WaterScene};
-    use manifold_node_engine::water::liquid::extent::check_preset_extents;
+    use manifold_nodes_water::primitives::gpu_flip_preset::{render_def, with_whitewater_axes, WaterScene};
+    use manifold_nodes_water::liquid::extent::check_preset_extents;
     let packed = render_def(WaterScene::dam_break(64));
     let axes = with_whitewater_axes(packed.clone());
     assert_eq!(check_preset_extents(&packed, 64).unwrap().scene_bytes,
@@ -15,9 +15,10 @@ fn whitewater_unpack_extent_matches_adapter_storage() {
 
 fn face_refusal(packed: bool, axes: [bool; 3], tick: bool, phrase: &str) {
     use manifold_node_engine::{exec::effect_node::FrameTime, exec::backend::MockBackend, bindings::NodeInputs, bindings::NodeOutputs, bindings::Slot};
-    use manifold_node_engine::water::primitives::gpu_flip_preset::{render_def, WaterScene};
-    use manifold_node_engine::water::primitives::gpu_flip_preset::with_whitewater_axes;
-    use manifold_node_engine::water::liquid::extent::{check_preset_extents, ExtentError};
+    use manifold_nodes_water::primitives::gpu_flip_preset::{render_def, WaterScene};
+    use manifold_nodes_water::primitives::gpu_flip_preset::with_whitewater_axes;
+    use manifold_node_engine::exec::extent::{ExtentError};
+use manifold_nodes_water::liquid::extent::check_preset_extents;
     let backend = MockBackend::new();
     let mut inputs = Vec::new();
     if tick { inputs.push(("distance", Slot(0))); }
@@ -92,17 +93,17 @@ fn whitewater_legacy_refuses_packed_faces() {
 #[cfg(feature = "gpu-proofs")]
 mod gpu {
 use manifold_node_engine::scene::transform::Transform;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
-use manifold_node_engine::water::primitives::whitewater_step::fused_tests::synthetic_shape;
-use manifold_node_engine::water::liquid::fields::FieldBinding;
-use manifold_node_engine::water::whitewater::WhitewaterParticle;
-use manifold_node_engine::water::primitives::whitewater_step::*;
-use manifold_node_engine::water::primitives::whitewater_step::fused_tests::gpu::*;
-use manifold_node_engine::testkit::liquid_surface::read;
-use manifold_node_engine::testkit::whitewater_scene::{Show, whitewater_render_def, with_tick_probe};
-use manifold_node_engine::water::primitives::gpu_flip_preset::{WaterScene, with_whitewater_axes};
-use manifold_node_engine::water::liquid::grid::face_len;
-use manifold_node_engine::water::whitewater::face_offset;
+use manifold_node_engine::particles::FluidParticle;
+use manifold_nodes_water::primitives::whitewater_step::fused_tests::synthetic_shape;
+use manifold_nodes_water::liquid::fields::FieldBinding;
+use manifold_nodes_water::whitewater::WhitewaterParticle;
+use manifold_nodes_water::primitives::whitewater_step::*;
+use manifold_nodes_water::primitives::whitewater_step::fused_tests::gpu::*;
+use manifold_node_engine::testkit::array_harness::read;
+use manifold_nodes_water::testkit::whitewater_scene::{Show, whitewater_render_def, with_tick_probe};
+use manifold_nodes_water::primitives::gpu_flip_preset::{WaterScene, with_whitewater_axes};
+use manifold_nodes_water::liquid::grid::face_len;
+use manifold_nodes_water::whitewater::face_offset;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_gpu::GpuBuffer;
 const PORTS: [&str; 6] = ["proof_sampled", "proof_unscaled", "proof_energy", "proof_counts", "proof_dust_energy", "proof_dust_counts"];

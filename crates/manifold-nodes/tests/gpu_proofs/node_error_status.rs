@@ -10,7 +10,7 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::water::physics::PhysicsStepScope;
+use manifold_nodes_water::physics::PhysicsStepScope;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;

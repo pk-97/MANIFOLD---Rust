@@ -20,12 +20,12 @@ holder PID. Each acquisition writes a fresh nonce and exports the token until
 release. Changed records and dead holders invalidate tokens. Without a valid
 token, the ancestor PID walk remains a fallback for unwrapped processes.
 
-When this wrapper is given `cargo test` or `cargo run`, Cargo compilation is
-completed before the GPU lock is acquired. `cargo test` receives `--no-run`
-before its libtest `--` separator; `cargo run` is prebuilt with the matching
-`cargo build` command. A direct `cargo build` is also completed without taking
-the lock. Unsupported or ambiguous Cargo invocations fail before any lock is
-taken.
+When this wrapper is given `cargo test`, `cargo nextest run`, or `cargo run`,
+Cargo compilation is completed before the GPU lock is acquired. `cargo test`
+and `cargo nextest run` receive `--no-run` before their runtime `--` separator;
+`cargo run` is prebuilt with the matching `cargo build` command. A direct
+`cargo build` is also completed without taking the lock. Unsupported or
+ambiguous Cargo invocations fail before any lock is taken.
 
 Importable: `with gpu_queue.hold("label"): ...` for scripts that take the lock
 for a whole multi-process run. Waiting is poll-based, not first-come
@@ -655,6 +655,10 @@ def _cargo_subcommand_index(command):
             raise UnsupportedCargoInvocation(f"cannot identify Cargo subcommand after {arg}")
         if arg in {"test", "run", "build"}:
             return index + 1  # ``args`` starts after the executable.
+        if arg == "nextest":
+            if index + 1 >= len(args) or args[index + 1] != "run":
+                raise UnsupportedCargoInvocation("only `cargo nextest run` is supported")
+            return index + 2  # ``args`` starts after the executable.
         raise UnsupportedCargoInvocation(f"unsupported Cargo subcommand: {arg}")
     raise UnsupportedCargoInvocation("cannot identify Cargo subcommand")
 
@@ -662,14 +666,21 @@ def _cargo_subcommand_index(command):
 def _cargo_kind(command):
     """Return the supported Cargo subcommand, or None for a non-Cargo command."""
     index = _cargo_subcommand_index(command)
-    return command[index] if index is not None else None
+    if index is None:
+        return None
+    if index > 1 and command[index - 1] == "nextest":
+        return "nextest-run"
+    return command[index]
 
 
-def _cargo_build_command(command, kind):
+def cargo_build_command(command, kind):
     """Derive the lock-free Cargo build for a supported invocation."""
     separator = next((index for index, arg in enumerate(command) if arg == "--"), None)
-    if kind == "test":
+    if kind in {"test", "nextest-run"}:
         head = list(command if separator is None else command[:separator])
+        if kind == "nextest-run":
+            # Nextest rejects this execution policy in compile-only mode.
+            head = [arg for arg in head if arg != "--no-fail-fast"]
         if "--no-run" not in head:
             head.append("--no-run")
         if separator is None:
@@ -758,7 +769,7 @@ def run_queued(command, label=None, **kwargs):
     label = label or " ".join(command)
     try:
         kind = _cargo_kind(command)
-        build_command = _cargo_build_command(command, kind) if kind else None
+        build_command = cargo_build_command(command, kind) if kind else None
     except UnsupportedCargoInvocation as err:
         print(f"gpu_queue: {err}", file=sys.stderr)
         return 2
@@ -777,7 +788,7 @@ def run_queued(command, label=None, **kwargs):
         build_code = _run_build(build_command)
         if build_code:
             return build_code
-        if kind == "build" or (kind == "test" and _cargo_has_no_run(command)):
+        if kind == "build" or (kind in {"test", "nextest-run"} and _cargo_has_no_run(command)):
             return 0
     if passed and gate_passes.changed_passes([passed]):
         # The binary was planned and built against an earlier content

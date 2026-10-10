@@ -97,7 +97,7 @@ fn scene_impulse_routes_capture_each_click_with_selected_body_and_edited_strengt
         );
         assert_eq!(positions[1], 5.0);
         let mut receipts = Vec::new();
-        runtime.drain_scene_impulses(|_, event| receipts.push(event));
+        runtime.water().drain_scene_impulses(|_, event| receipts.push(event));
         assert_eq!(receipts.len(), 2);
         for (event, (sequence, strength)) in receipts.iter().zip([(41, 2.0), (42, 7.0)]) {
             assert_eq!(event.source.sequence, sequence);
@@ -124,7 +124,7 @@ fn scene_impulse_routes_reload_does_not_replay_saved_counter_and_empty_targets_s
                 .unwrap();
         runtime.execute_frame(time(0.0));
         runtime.execute_frame(time(DT));
-        runtime.drain_scene_impulses(|_, _| panic!("saved counters must not generate events"));
+        runtime.water().drain_scene_impulses(|_, _| panic!("saved counters must not generate events"));
         let result = runtime.fire_scene_impulse(&fire, time(DT), &mut 0);
         if targets.is_empty() {
             assert!(result.unwrap_err().contains("select a simulated object"));
@@ -142,16 +142,21 @@ fn scene_impulse_routes_acknowledged_receipts_allow_more_than_queue_capacity() {
             .unwrap();
     let fire = alias(&def, "fire");
     runtime.execute_frame(time(0.0));
+    assert!(runtime.is_scene_impulse_param(&fire));
+    assert!(!runtime.is_scene_impulse_param("ordinary-trigger"));
     let mut sequence = 0;
-    let mut receipts = 0;
+    let mut diagnostics = manifold_node_engine::scene::impulse::SceneImpulseDiagnostics::default();
     for frame in 0..300 {
         runtime
             .fire_scene_impulse(&fire, time(frame as f64 * DT), &mut sequence)
             .unwrap();
         runtime.execute_frame(time((frame + 1) as f64 * DT));
-        runtime.drain_scene_impulses(|_, _| receipts += 1);
+        runtime.drain_scene_impulse_diagnostics(&mut diagnostics);
     }
-    assert_eq!(receipts, 300);
+    runtime.drain_scene_impulse_diagnostics(&mut diagnostics);
+    assert_eq!(diagnostics.started, 300);
+    assert_eq!(diagnostics.late, 0);
+    assert_eq!(diagnostics.discarded, 0);
 }
 
 #[test]
@@ -166,7 +171,7 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
         .fire_scene_impulse(&fire, time(0.0), &mut 0)
         .unwrap();
     // CPU equivalent of reset_state's identity and native reset; no GPU device needed.
-    manifold_node_engine::runtime::testkit::reset_impulse_routes(&mut runtime);
+    manifold_nodes_water::runtime::testkit::reset_impulse_routes(&mut runtime);
     for node in runtime.graph.nodes_mut() {
         node.node.clear_state();
     }
@@ -181,7 +186,7 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
         .unwrap();
     runtime.execute_frame(time(DT));
     let mut receipts = 0;
-    runtime.drain_scene_impulses(|_, event| {
+    runtime.water().drain_scene_impulses(|_, event| {
         receipts += 1;
         assert_eq!(event.source.sequence, 1);
     });
@@ -219,13 +224,18 @@ fn scene_impulse_routes_share_rigid_and_fluid_targets_and_wait_for_domain_edits(
         .unwrap();
     runtime.execute_frame(time(DT));
     let mut recipients = Vec::new();
-    runtime.drain_scene_impulses(|id, event| {
+    runtime.water().drain_scene_impulses(|id, event| {
         assert_eq!(event.value.field.sample([0.0; 3]), [2.0, 0.0, 0.0]);
         assert!(matches!(event.value.target, ImpulseTarget::FluidAndRigid(_)));
         recipients.push(id.to_string());
     });
     recipients.sort();
     assert_eq!(recipients, ["fluid"], "one shared owner admits the source hit once");
+    let mut domains = Vec::new();
+    runtime.write_fluid_domains_watched(&mut domains);
+    assert_eq!(domains.len(), 1);
+    assert_eq!(domains[0].0.as_str(), "fluid");
+    assert_eq!(domains[0].1.accepted_layout.unwrap().cells, [8; 3]);
     edit(&mut runtime, "domain", "pos_x", 2.0);
     assert!(
         runtime
@@ -274,7 +284,7 @@ fn scene_impulse_routes_report_exhaustion_and_recover_after_native_reset() {
         .unwrap();
     runtime.execute_frame(time(DT));
     let mut receipts = 0;
-    runtime.drain_scene_impulses(|_, _| receipts += 1);
+    runtime.water().drain_scene_impulses(|_, _| receipts += 1);
     assert_eq!(receipts, 1, "the reset cancels the exhausted epoch");
 }
 
@@ -307,7 +317,7 @@ fn scene_impulse_routes_accept_audio_hits_stamped_ahead_of_the_last_render() {
         runtime.execute_frame(time(2.0 * DT));
         runtime.execute_frame(time(3.0 * DT));
         let mut sequences = Vec::new();
-        runtime.drain_scene_impulses(|_, event| sequences.push(event.source.sequence));
+        runtime.water().drain_scene_impulses(|_, event| sequences.push(event.source.sequence));
         sequences.sort();
         assert_eq!(sequences, [0, 1], "fluid {with_fluid}: each hit applies once");
         // Older than the latest observation: stale, refused.

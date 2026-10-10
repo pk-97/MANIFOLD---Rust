@@ -25,7 +25,6 @@ use crate::scene::mesh_change::{MeshAspect, MeshRevision};
 use crate::graph::Graph;
 use crate::parameters::ParamValue;
 use crate::ports::{ArrayType, PortType};
-use crate::water::physics::PhysicsAuthoredSampleScope;
 use crate::state_store::{OwnerKey, StateStore};
 
 
@@ -87,7 +86,7 @@ pub(crate) fn resolve_dims(
 type MeshDepSnapshot = (ResourceId, crate::scene::mesh_change::MeshAspect, u64);
 
 #[derive(Clone, Copy)]
-struct PhysicsSample<'a> {
+struct CpuSample<'a> {
     steps: &'a [bool],
     params: &'a [Option<ParamValues>],
 }
@@ -97,7 +96,7 @@ struct PhysicsSample<'a> {
 struct StepEnv<'a> {
     time: FrameTime,
     owner_key: OwnerKey,
-    sample: Option<PhysicsSample<'a>>,
+    sample: Option<CpuSample<'a>>,
     canvas_dims: (u32, u32),
     layer_skin_registry: Option<&'a LayerSkinRegistry>,
 }
@@ -138,7 +137,7 @@ enum StepFlow {
     Abort,
 }
 
-mod coupled_physics;
+mod node_pairs;
 mod array_growth;
 mod substep_region;
 
@@ -170,17 +169,12 @@ pub struct Executor {
     material_write_scratch: Vec<(Slot, crate::scene::material::Material)>,
     /// Sibling scratch for [`PortType::Transform`] writes — same drain pattern.
     transform_write_scratch: Vec<(Slot, crate::scene::transform::Transform)>,
-    /// Sibling scratch for [`PortType::Atmosphere`] writes — same drain pattern.
-    /// Sibling scratch for [`PortType::RenderMode`] writes — same drain pattern.
-    rigid_body_write_scratch: Vec<(Slot, crate::water::physics::RigidBody)>,
-    /// Sibling scratch for [`PortType::FluidRole`] writes — same drain pattern.
-    fluid_role_write_scratch: Vec<(Slot, crate::water::fluid_role::FluidRole)>,
+    /// Family-owned CPU payloads, published after each node evaluates.
+    cpu_value_write_scratch: crate::exec::cpu_values::CpuWireWrites,
     /// Sibling scratch for [`PortType::MeshSource`] writes — same drain pattern.
     mesh_source_write_scratch: Vec<(Slot, crate::scene::mesh_source::MeshSource)>,
     /// Sibling scratch for published array live extents — same drain pattern.
     live_extent_write_scratch: Vec<(Slot, crate::scene::live_extent::LiveExtent)>,
-    /// Sibling scratch for [`PortType::VectorField`] writes — same drain pattern.
-    vector_field_write_scratch: Vec<(Slot, manifold_physics::FieldValue)>,
     render_mode_write_scratch: Vec<(Slot, crate::scene::render_mode::RenderMode)>,
     atmosphere_write_scratch: Vec<(Slot, crate::scene::atmosphere::Atmosphere)>,
     /// Sibling scratch for [`PortType::Object`] writes — same drain pattern.
@@ -585,11 +579,9 @@ impl Executor {
             transform_write_scratch: Vec::new(),
             atmosphere_write_scratch: Vec::new(),
             render_mode_write_scratch: Vec::new(),
-            rigid_body_write_scratch: Vec::new(),
-            fluid_role_write_scratch: Vec::new(),
+            cpu_value_write_scratch: crate::exec::cpu_values::CpuWireWrites::default(),
             mesh_source_write_scratch: Vec::new(),
             live_extent_write_scratch: Vec::new(),
-            vector_field_write_scratch: Vec::new(),
             object_write_scratch: Vec::new(),
             error_scratch: Vec::new(),
             initialized_persistent: ahash::AHashSet::default(),
@@ -1057,7 +1049,7 @@ impl Executor {
 
     /// Logical resource availability, including upstream pending inputs.
     /// Rebuild handoff must not publish a pending CPU value as ready.
-    pub(crate) fn mesh_pending_of(&self, res: ResourceId) -> bool {
+    pub fn mesh_pending_of(&self, res: ResourceId) -> bool {
         self.mesh_pending.get(res.0 as usize).copied().unwrap_or(false)
     }
 
@@ -1147,17 +1139,17 @@ impl Executor {
         self.execute_frame_inner(graph, plan, time, Some(gpu), Some(state), owner_key, None);
     }
 
-    /// Evaluate only the caller-supplied physics input ancestry at a
+    /// Evaluate only the caller-supplied CPU input ancestry at a
     /// historical frame time. This pass is deliberately CPU-only: it does
     /// not provide a GPU encoder or state store, does not run late captures,
     /// and leaves acquired resources bound for the following full frame.
     ///
     /// `sample_steps` and `sample_params` slices are indexed exactly like
     /// [`ExecutionPlan::steps`]. The
-    /// caller owns ancestry analysis because physics sampling must follow the
+    /// caller owns ancestry analysis: sampling must follow the
     /// graph's scalar/transform inputs without making the executor infer a
     /// second liveness policy.
-    pub fn execute_physics_sample_frame(
+    pub fn execute_cpu_sample_frame(
         &mut self,
         graph: &mut Graph,
         plan: &ExecutionPlan,
@@ -1168,29 +1160,27 @@ impl Executor {
         assert_eq!(
             sample_steps.len(),
             plan.steps().len(),
-            "physics sample mask must align with execution plan steps",
+            "CPU sample mask must align with execution plan steps",
         );
         assert_eq!(
             sample_params.len(),
             plan.steps().len(),
-            "physics sample params must align with execution plan steps",
+            "CPU sample params must align with execution plan steps",
         );
         assert!(
             sample_steps
                 .iter()
                 .zip(sample_params)
                 .all(|(&selected, params)| !selected || params.is_some()),
-            "physics sample params must be present for every selected step",
+            "CPU sample params must be present for every selected step",
         );
-        // A world's scene sample is captured for its liquid, so a world never
-        // samples without its liquid.
+        // A pair's second node receives the first node's observation.
         assert!(
-            plan.coupled_scenes().iter().all(|pair| {
-                !sample_steps[pair.rigid_step] || sample_steps[pair.fluid_step]
+            plan.node_pairs().iter().all(|pair| {
+                !sample_steps[pair.second_step] || sample_steps[pair.first_step]
             }),
-            "a coupled scene's world must not sample without its liquid",
+            "a paired second node must not sample without its first node",
         );
-        let _scope = PhysicsAuthoredSampleScope::new();
         self.execute_frame_inner(
             graph,
             plan,
@@ -1198,7 +1188,7 @@ impl Executor {
             None,
             None,
             0,
-            Some(PhysicsSample {
+            Some(CpuSample {
                 steps: sample_steps,
                 params: sample_params,
             }),
@@ -1288,11 +1278,11 @@ impl Executor {
             let step = &steps[idx];
             // A physical pair is one simulation dependency even when a mux
             // currently displays only one participant's outputs.
-            for pair in plan.coupled_scenes() {
-                let partner = if idx == pair.fluid_step {
-                    Some(pair.rigid_step)
-                } else if idx == pair.rigid_step {
-                    Some(pair.fluid_step)
+            for pair in plan.node_pairs() {
+                let partner = if idx == pair.first_step {
+                    Some(pair.second_step)
+                } else if idx == pair.second_step {
+                    Some(pair.first_step)
                 } else {
                     None
                 };
@@ -1602,7 +1592,7 @@ impl Executor {
         mut gpu: Option<&mut GpuEncoder<'_>>,
         mut state: Option<&mut StateStore>,
         owner_key: OwnerKey,
-        sample: Option<PhysicsSample<'_>>,
+        sample: Option<CpuSample<'_>>,
     ) {
         let partial_sample = sample.is_some();
         if let Some(sample) = sample {
@@ -1909,8 +1899,8 @@ impl Executor {
                 return StepFlow::Next;
             }
 
-            if let Some(pair) = plan.coupled_scenes().iter().find(|pair| pair.fluid_step == idx) {
-                self.capture_coupled_scene(graph, plan, *pair, time, sample);
+            if let Some(pair) = plan.node_pairs().iter().find(|pair| pair.first_step == idx) {
+                self.prepare_node_pair(graph, plan, *pair, time, sample);
             }
 
             // Memoized-dataflow skip (constant-subgraph hoisting): a PURE
@@ -2354,11 +2344,9 @@ impl Executor {
                     self.transform_write_scratch.clear();
                     self.atmosphere_write_scratch.clear();
                     self.render_mode_write_scratch.clear();
-                    self.rigid_body_write_scratch.clear();
-                    self.fluid_role_write_scratch.clear();
+                    self.cpu_value_write_scratch.clear();
                     self.mesh_source_write_scratch.clear();
                     self.live_extent_write_scratch.clear();
-                    self.vector_field_write_scratch.clear();
                     self.object_write_scratch.clear();
                     self.error_scratch.clear();
                     {
@@ -2380,11 +2368,9 @@ impl Executor {
                             &mut self.render_mode_write_scratch,
                             &mut self.object_write_scratch,
                         )
-                        .with_rigid_body_writes(&mut self.rigid_body_write_scratch)
-                        .with_fluid_role_writes(&mut self.fluid_role_write_scratch)
+                        .with_cpu_value_writes(&mut self.cpu_value_write_scratch)
                         .with_mesh_source_writes(&mut self.mesh_source_write_scratch)
-                        .with_live_extent_writes(&mut self.live_extent_write_scratch)
-                        .with_vector_field_writes(&mut self.vector_field_write_scratch);
+                        .with_live_extent_writes(&mut self.live_extent_write_scratch);
                         // Canvas dims are no longer hung off the
                         // context as a side-channel. Primitives that
                         // need them (`scatter_particles` and friends)
@@ -2536,20 +2522,12 @@ impl Executor {
                     for (slot, value) in self.render_mode_write_scratch.drain(..) {
                         self.backend.set_render_mode(slot, value);
                     }
-                    for (slot, value) in self.rigid_body_write_scratch.drain(..) {
-                        self.backend.set_rigid_body(slot, value);
-                    }
-                    for (slot, value) in self.fluid_role_write_scratch.drain(..) {
-                        self.backend.set_fluid_role(slot, value);
-                    }
+                    self.cpu_value_write_scratch.commit(self.backend.cpu_values_mut());
                     for (slot, value) in self.mesh_source_write_scratch.drain(..) {
                         self.backend.set_mesh_source(slot, value);
                     }
                     for (slot, value) in self.live_extent_write_scratch.drain(..) {
                         self.backend.set_live_extent(slot, value);
-                    }
-                    for (slot, value) in self.vector_field_write_scratch.drain(..) {
-                        self.backend.set_vector_field(slot, value);
                     }
                     // Object writes use the same drain shape.
                     for (slot, value) in self.object_write_scratch.drain(..) {
@@ -2590,14 +2568,13 @@ impl Executor {
                 }
             }
 
-            // The plan makes the rigid publication step adjacent to the
-            // liquid step. No consumer can observe either output until this
-            // accepted pair has been latched.
-            if let Some(pair) = plan.coupled_scenes().iter().find(|pair| pair.fluid_step == idx) {
-                let (fluid, rigid) = graph
-                    .node_pair_mut(step.node, plan.steps()[pair.rigid_step].node)
-                    .expect("compiled coupled participants exist");
-                rigid.node.accept_coupled_rigid_frame(fluid.node.coupled_rigid_frame());
+            // Publish the first result to its paired second step before any
+            // consumer can observe either output.
+            if let Some(pair) = plan.node_pairs().iter().find(|pair| pair.first_step == idx) {
+                let (behavior, first, second) = graph
+                    .pair_nodes_mut(pair.pair_index)
+                    .expect("compiled pair participants exist");
+                behavior.after_first(first.node.as_ref(), second.node.as_mut());
             }
 
             // Storage freshness advances independently of semantic content:
@@ -3107,76 +3084,6 @@ mod tests {
             kind: PortKind::Output,
             required: false,
         }
-    }
-
-    struct ExternalFieldNode {
-        type_id: EffectNodeType,
-        outputs: Vec<NodeOutput>,
-    }
-
-    impl ExternalFieldNode {
-        fn new() -> Self {
-            Self {
-                type_id: EffectNodeType::new("test.external_field"),
-                outputs: vec![output("field", PortType::VectorField)],
-            }
-        }
-    }
-
-    impl EffectNode for ExternalFieldNode {
-        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
-            crate::scene::depth_rule::DepthRule::Terminal
-        }
-
-        fn type_id(&self) -> &EffectNodeType {
-            &self.type_id
-        }
-
-        fn inputs(&self) -> &[NodeInput] {
-            &[]
-        }
-
-        fn outputs(&self) -> &[NodeOutput] {
-            &self.outputs
-        }
-
-        fn parameters(&self) -> &[ParamDef] {
-            &[]
-        }
-
-        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-            ctx.outputs.set_vector_field(
-                "field",
-                manifold_physics::FieldValue::uniform([1.0, -2.0, 3.0]).expect("finite uniform field"),
-            );
-        }
-    }
-
-    #[test]
-    fn external_field_output_survives_cpu_execute_frame() {
-        use manifold_physics::VectorField;
-        let mut graph = Graph::new();
-        let image = graph.add_node(Box::new(crate::scene::boundary_nodes::Source::new()));
-        let out = graph.add_node(Box::new(crate::scene::boundary_nodes::FinalOutput::new()));
-        graph.connect((image, "out"), (out, "in")).unwrap();
-        let source = graph.add_node(Box::new(ExternalFieldNode::new()));
-        assert!(compile(&graph).unwrap().steps().iter().all(|step| step.node != source));
-        graph.add_external_output(source, "field").unwrap();
-        let plan = compile(&graph).unwrap();
-        let resource = plan.steps().iter().find(|step| step.node == source).unwrap().outputs[0].1;
-
-        let mut executor = Executor::with_mock();
-        executor.execute_frame(&mut graph, &plan, frame_time());
-
-        let slot = executor
-            .backend()
-            .slot_for(resource)
-            .expect("external output slot remains bound after frame");
-        let field = executor
-            .backend()
-            .vector_field(slot)
-            .expect("external field was published by execute_frame");
-        assert_eq!(field.sample([0.0, 0.0, 0.0]), [1.0, -2.0, 3.0]);
     }
 
     /// Misbehaving test node: declares `aliased_array_io` claiming
@@ -4220,7 +4127,7 @@ mod tests {
         let params = vec![Some(ParamValues::default()); plan.steps().len()];
 
         let mut exec = Executor::with_mock();
-        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &params);
+        exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &mask, &params);
         assert_eq!(*first_evals.lock().unwrap(), 1);
         assert_eq!(*second_evals.lock().unwrap(), 0);
 
@@ -4232,24 +4139,24 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "physics sample mask must align")]
+    #[should_panic(expected = "CPU sample mask must align")]
     fn physics_sample_rejects_misaligned_mask() {
         let mut g = Graph::new();
         g.add_node(Box::new(PureCountingNode::new(false, Arc::new(Mutex::new(0)))));
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
-        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &[], &[]);
+        exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &[], &[]);
     }
 
     #[test]
-    #[should_panic(expected = "physics sample params must align")]
+    #[should_panic(expected = "CPU sample params must align")]
     fn physics_sample_rejects_misaligned_params() {
         let mut g = Graph::new();
         g.add_node(Box::new(crate::primitives::value::Value::new()));
         let plan = compile(&g).unwrap();
         let mask = vec![true; plan.steps().len()];
         let mut exec = Executor::with_mock();
-        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &[]);
+        exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &mask, &[]);
     }
 
     #[test]
@@ -4261,7 +4168,7 @@ mod tests {
         let params = vec![None; plan.steps().len()];
         let mut exec = Executor::with_mock();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &params);
+            exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &mask, &params);
         }));
         assert!(result.is_err());
         assert_eq!(exec.backend().slot_count(), 0, "validation must precede resource acquisition");
@@ -4341,7 +4248,7 @@ mod tests {
         let mask = vec![true; plan.steps().len()];
 
         let mut exec = Executor::with_mock();
-        exec.execute_physics_sample_frame(&mut g, &plan, frame_time(), &mask, &sample_params);
+        exec.execute_cpu_sample_frame(&mut g, &plan, frame_time(), &mask, &sample_params);
         let sampled = PHYSICS_SAMPLE_SCALAR_VALUES.with(|values| values.borrow().clone());
         assert_eq!(sampled.as_slice(), &[1.25]);
         assert_eq!(g.get_node(value).unwrap().params, live_params);

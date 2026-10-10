@@ -119,7 +119,8 @@ class CacheTests(unittest.TestCase):
                     ('manifold-ui-paint', '[dependencies]\na = {path="../a"}\n')]
         gpu_packages = {'manifold-nodes', 'manifold-node-engine', 'manifold-ui-paint'}
         for name, deps in packages:
-            features = '[features]\ngpu-proofs = []\n' if name in gpu_packages else ''
+            features = ('[features]\ngpu-proofs = []\nfluid-perf-proofs = []\ntestkit = []\n'
+                         if name in gpu_packages else '')
             targets = ''
             if name == 'manifold-nodes':
                 targets = ('\n[[test]]\nname = "gpu_proofs"\npath = "tests/gpu_proofs.rs"\n'
@@ -367,7 +368,7 @@ class CacheTests(unittest.TestCase):
         table = self.repo / 'scripts/gpu_test_times.json'
         self.write('scripts/gpu_test_times.json', '{"tests": {}}')
 
-        def measured(manifest, filters, skips, targets, full, lib, timings, *rest):
+        def measured(manifest, filters, skips, targets, full, lib, timings, *rest, **kwargs):
             timings.append(('slow', 80, 'gpu_proofs', 'ok'))
             return 0, ''
 
@@ -400,7 +401,7 @@ class CacheTests(unittest.TestCase):
                 '--path', 'crates/manifold-nodes/src/registry.rs']
         count = 0
 
-        def execute(*args):
+        def execute(*args, **kwargs):
             nonlocal count
             count += 1
             if count == 2:
@@ -717,6 +718,33 @@ class CacheTests(unittest.TestCase):
                 for extra in ('--ignored', '--exact', '--list'):
                     self.assertIsNone(cache.queued_proof(command + [extra], self.repo))
 
+    def test_proof_feature_identity_separates_extra_and_default_receipts(self):
+        default = self.run_spec()
+        extra = dict(default, features=["gpu-proofs", "fluid-perf-proofs"])
+        default_pass = cache.proof_pass(self.repo, default)
+        extra_pass = cache.proof_pass(self.repo, extra)
+        self.assertNotEqual(default_pass.key, extra_pass.key)
+        default_pass.save(0, 2)
+        self.assertIsNotNone(cache.proof_pass(self.repo, default).record)
+        self.assertIsNone(cache.proof_pass(self.repo, extra).record)
+        extra_pass.save(0, 2)
+        self.assertIsNotNone(cache.proof_pass(self.repo, extra).record)
+        self.assertIsNotNone(cache.proof_pass(self.repo, default).record)
+
+    def test_queue_rejects_raw_command_without_mandatory_gpu_feature(self):
+        command = ['cargo', 'test', '-p', 'manifold-nodes', '--features', 'testkit',
+                   '--test', 'gpu_proofs', '--manifest-path', str(self.repo / 'Cargo.toml'),
+                   '--no-fail-fast', '--', '--test-threads=1']
+        self.assertIsNone(cache.queued_proof(command, self.repo))
+
+    def test_queue_rejects_unsupported_extra_feature(self):
+        run = self.run_spec()
+        command = proofs.cargo_test_cmd(self.repo / 'Cargo.toml', run['targets'],
+                                        lib=run['lib'], package=run['package'],
+                                        features=['matter-perf-proofs'])
+        command += ['--', '--test-threads=1']
+        self.assertIsNone(cache.queued_proof(command, self.repo))
+
     def test_proof_package_identity_and_dependency_closure(self):
         renderer = dict(self.run_spec(), targets=[], lib=True, filters=['shared::test'])
         paint = dict(renderer, package='manifold-ui-paint')
@@ -917,7 +945,7 @@ class CacheTests(unittest.TestCase):
                 '--path', 'crates/manifold-nodes/src/registry.rs',
                 '--budget', '360']
 
-        def too_slow(manifest, filters, skips, targets, full, lib, timings, *rest):
+        def too_slow(manifest, filters, skips, targets, full, lib, timings, *rest, **kwargs):
             timings.append(('slow', 400, 'binary', 'ok'))
             return 0, ''
 

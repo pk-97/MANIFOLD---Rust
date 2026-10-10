@@ -46,7 +46,7 @@ use manifold_core::effect_graph_def::{
 };
 
 use manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
-use manifold_node_engine::water::fluid::{FluidDomainLayout, domain_layout};
+use manifold_node_engine::scene::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_node_engine::scene::transform::Transform;
 
 /// `node.render_scene`'s own type_id string (curated vocabulary anchor).
@@ -1575,7 +1575,7 @@ fn trace_scene_object(
                 own(value);
             }
         }
-        for index in 0..manifold_node_engine::water::fluid_role::MAX_FLUID_ROLES {
+        for index in 0..manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES {
             let role_port = format!("role_{index}");
             let Some((role_level, role_group, role, _)) =
                 resolve_producer_through_group(&domain_level, n.id, &role_port)

@@ -2,7 +2,7 @@
 # Ported from FLIP Fluids levelsetutils.cpp, pressuresolver.cpp and pcgsolver.h (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 # Multigrid after McAdams, Sifakis & Teran 2010.
 """The GPU FLIP pressure solve in f64: the oracle for the pinned residuals in
-crates/manifold-node-engine/src/water/primitives/gpu_flip_pressure_tests.rs.
+crates/manifold-nodes-water/src/primitives/gpu_flip_pressure_tests.rs.
 
 Multigrid-preconditioned conjugate gradient (McAdams, Sifakis & Teran 2010),
 step for step as the graph runs it (docs/GPU_FLIP_PRESSURE_SOLVE.md): the
@@ -22,7 +22,7 @@ prolongation and the V-cycle stays symmetric (--symmetry checks it). The atom
 graph runs `--depth 5 --coarse-sweeps 16`: five levels at every lattice, the
 coarsest smoothed by 16 rounds each way.
 
-Usage: scripts/mgpcg_reference.py crates/manifold-nodes/tests/fixtures/dambreak_pressure_problems.bin.zst
+Usage: scripts/mgpcg_reference.py crates/manifold-nodes-water/tests/fixtures/dambreak_pressure_problems.bin.zst
            [--refine 2 | --coarsen 2 | --side 25,37] [--iterations 4,6,8] [--tol 1e-5] [--symmetry]
            [--depth 5 --coarse-sweeps 16] [--box 0.5,0.25,0.5,0.12,0.12,0.12] [--solve-level 1]
        scripts/mgpcg_reference.py --frames DUMP.bin [...]

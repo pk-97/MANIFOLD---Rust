@@ -7,16 +7,16 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
 use manifold_nodes_image::node_graph::primitives::divide_by_value::DivideByValue;
-use manifold_node_engine::water::primitives::dot_products::DotProducts;
-use manifold_node_engine::water::primitives::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
-use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
-use manifold_node_engine::water::primitives::matter_face_component::MatterFaceComponent;
-use manifold_node_engine::water::primitives::gpu_flip_preset::WaterScene;
+use manifold_nodes_water::primitives::dot_products::DotProducts;
+use manifold_nodes_water::primitives::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
+use manifold_node_engine::testkit::array_harness::{Harness, params, read};
+use manifold_nodes_water::primitives::matter_face_component::MatterFaceComponent;
+use manifold_nodes_water::primitives::gpu_flip_preset::WaterScene;
 use crate::contracts::water::primitives::gpu_flip_scene_tests::Run;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::water::liquid::grid::{face_coords, face_dims, face_index, face_len};
-use manifold_node_engine::water::liquid::lattice::PADDING_NODES;
-use manifold_node_engine::water::matter::{MatterGridNode, MatterPoint};
+use manifold_nodes_water::liquid::grid::{face_coords, face_dims, face_index, face_len};
+use manifold_nodes_water::liquid::lattice::PADDING_NODES;
+use manifold_nodes_water::matter::{MatterGridNode, MatterPoint};
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId};
 use manifold_node_engine::runtime::preset_context::PresetContext;
@@ -127,7 +127,7 @@ impl MatterRun {
 
     /// Cells of the authored box holding a live point, x fastest.
     fn liquid_cells(&self) -> Vec<bool> {
-        let layout = manifold_node_engine::water::fluid::domain_layout(None, 4.0, CELLS[0]).expect("the preset's domain");
+        let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, 4.0, CELLS[0]).expect("the preset's domain");
         assert_eq!(layout.cells, CELLS);
         let points: Vec<MatterPoint> = self.read_all(self.output_of("node.matter_state", "out"));
         let mut liquid = vec![false; CELLS.iter().product::<u32>() as usize];

@@ -1,6 +1,6 @@
 # Renderer Crate Split — one engine crate, node families as leaves
 
-**Status:** IN PROGRESS · Tier 1 and post-T1 production cleanup shipped · P1 boundary landed; baseline measured · P5 authorized and pending. Section 5 (Phasing).
+**Status:** SHIPPED · 2026-10-10 · Tier 1 and the P5 water extraction landed; kept as the crate layering contract. Owed: none. Section 5 (Phasing).
 **Prerequisites:** none.
 **Work items:** epic BUG-hkbdp (renderer crate split epic); phases BUG-jo1qt (P0 census and seams), BUG-k452g (P1a ui-paint), BUG-9hndn (P1 carve manifold-node-engine), BUG-vnbdt (P2 leaves), BUG-uones (P3 catalog), BUG-l6ltu (P4 review and measurement), BUG-t2jwg (P5 water seam). Status is recorded only above.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before any phase. Lead: Opus 5.5. Lanes: Astra (Codex) for every mechanical phase (Peter, 2026-10-07: *"please use Astra agents for this work"*); this overrides `feedback_astra_review_only` for this campaign only. Lanes make one commit then stop; the lead lands.
@@ -149,7 +149,7 @@ Forbidden edges, normal and build dependencies (dev-deps may cross downward only
 
 | Crate | May depend on | Must never depend on |
 |---|---|---|
-| `manifold-node-engine` | foundation, core, gpu, native, playback, physics, fluids | ui, editing, io, media, app, any `manifold-nodes*`, compositor, ui-paint |
+| `manifold-node-engine` | foundation, core, gpu, native, playback | physics, fluids, ui, editing, io, media, app, any `manifold-nodes*`, compositor, ui-paint |
 | `manifold-nodes-{image,scene,water}` | graph + graph's allowed set | each other, `manifold-nodes`, ui, editing, io, app, compositor, ui-paint |
 | `manifold-nodes` | graph, the three families | ui, editing, io, app, compositor, ui-paint |
 | `manifold-compositor` | graph, core, gpu, playback, foundation | any `manifold-nodes*` (dev-dep on `manifold-nodes` allowed), ui, editing, io, app |
@@ -169,9 +169,9 @@ Forbidden edges, normal and build dependencies (dev-deps may cross downward only
 | INV-4 Emitted WGSL is byte-identical | `fused_wgsl_snapshot_unchanged` + `freeze/reference.rs` goldens, unmodified, green at every landing that touches `freeze/` or a primitive file (CPU test, seconds) |
 | INV-5 No test is lost in a move | `scripts/test_census.py` (P0 deliverable; `cargo nextest list --workspace --message-format json` → multiset of test names with the crate prefix stripped) equal before and after each landing, drift printed by name |
 | INV-6 Decomposed files do not regrow across the move | `godfile_regrowth.rs` CEILINGS rows re-pathed in the same landing; the test is green before push |
-| INV-7 Built-ins are exactly the D11 list | `builtins_match_registry` in `manifold-node-engine`: the engine crate's registered factories outside `water::primitives` equal the D11 list. |
+| INV-7 Built-ins are exactly the D11 list | `builtins_match_registry` in `manifold-node-engine`: the engine crate's production node factories equal the D11 list (system boundaries and test-only fixtures are separate). |
 | INV-8 Load migrations run in the committed order | `migration_order_matches_table` + LiveSchool round-trip |
-| INV-9 No per-frame change | Move phases: none needed (bodies unchanged, proven by INV-2). P5: `MANIFOLD_RENDER_TRACE=1` run on the water demo project, no frame > 20 ms |
+| INV-9 No per-frame change | Move phases: none needed (bodies unchanged, proven by INV-2). P5: `fluid_capture` frame timings on the bundled water presets match main within noise |
 
 ---
 
@@ -241,7 +241,22 @@ The P0 closure/seam census assumed the monolithic renderer layout and was retire
 - **Entry:** P4 landed; `PHYSICS_ENGINE_BOUNDARY` P1 landed (its transaction and deny rows); the findings file's P5 section (every hub→{liquid, fluid, physics, matter, whitewater, gpu_flip_*} site by file:line, from the compiler).
 - **What it decides (not decided here, by design):** the `PresetRuntime` extension seam for physics sources, the `substeps`↔`liquid` clock contract (owned by the live sim clock design — coordinate, don't amend), whether `scene_modifier_expand` follows. Mechanism constraint already fixed: registration through `inventory`, like D5; no new shared state; no trait object constructed per frame. The phase ends with `manifold-nodes-water` existing per D1, the hub free of `physics`/`fluids` dependencies (layering row flips), and INV-9's trace clean.
 - **Gate:** every invariant above plus `scripts/gpu_proofs_gate.py` with the water proof set (`fluid-perf-proofs` features on) and `scripts/rt_noise_gate.py` unchanged.
-- **Demo:** L2 — Peter's water demo project renders identically (pixel diff at threshold 0 on the three fixed frames the FLIP proofs already capture).
+- **Demo:** L2 — `fluid_capture` on `WaterDamBreakGpuFlip` and `WaterDamBreakMatter` through `gpu_queue.py`, stills pixel-diffed at threshold 0 against main. Bundled presets only, never a saved project.
+
+#### P5 as built — seam contracts
+
+The move plans live in `.claude/orchestration/crate-split/t2-*` (replay data, like Tier 1's). Each seam below is a contract the engine keeps; the code is authoritative for signatures.
+
+- **Graph preparation.** Water's two construction-time rewrites (`gpu_flip_surface::prepare`, `liquid::migration::wire_gpu_flip_grid`) register on the existing `GraphMigration` registry at the `BeforeSceneModifiers` and `BeforeBindingCapture` stages. No second registry, no document clone, no saved-graph migration. `migration_order_matches_table` covers the stages. `scene_modifier_expand` stays in the engine.
+- **Clock carrier.** `exec/substeps.rs::SubstepInterval` carries accepted `start`/`end` seconds and loop position only. Native `SimulationClock`, `StepInterval` and every acceptance, CFL and event rule stay in physics. The executor consumes accepted time; it never owns it. `LIVE_SIM_CLOCK` section 9 stays authoritative.
+- **CPU wire values.** `exec::cpu_values` holds family payloads (`RigidBody`, `FluidRole`, `FieldValue`, all registered by water) in typed inline containers found by `TypeId`. Duplicate or unregistered types fail loudly. Release and reset clear values so a recycled slot never leaks old data. Rejected: a box per write (frame allocations), `StateStore` (wrong identity model), byte buffers (unsafe layout).
+- **Native node interface.** The 15 native methods live on water's `PhysicsNode` trait, not on `Primitive`/`EffectNode`. Inventory registrations give checked borrows from `&dyn EffectNode`; nothing is constructed per frame.
+- **Paired scheduling.** The engine's `exec::node_pairs` owns pair order, liveness and resource lifetime through `NodePairBehavior`; water's `PhysicsPair` owns collider masks, capture and publication. Fluid runs first, rigid second. Pairs are installed by a `GraphInstantiationHook` after wires, before mesh-rule and budget installation.
+- **Authored impulses.** Recipient selections (`RigidImpulseTargets`, `ImpulseTarget`) are scene vocabulary in `scene::impulse`; one mask bound, `BODY_CAPACITY = u64::BITS`. Resolved fields, receipts and simulation stay in water. Shatter reads parent density from the registered body definition, never a copied constant.
+- **Mesh and field helpers.** Mesh selection, transforms and partitioning stay in `scene::physics_mesh`; collider cooking and `vector_field` are water. Water's `execute_physics_sample_frame` wraps the engine's `execute_cpu_sample_frame` with the native sample scope.
+- **Runtime state.** Water's per-graph state lives in `WaterRuntimeState`, created through inventory-backed `RuntimeRegistration` and driven by typed callbacks at the existing frame, reset, binding, modifier and rebuild boundaries. `runtime/` holds no water or native physics references, and water defines no inherent methods on `PresetRuntime`.
+- **Source identity.** Each crate's build script hashes only its own sources; water registers through `SourceImplementationIdentity`. The composed hash changed on purpose, invalidating old recorded results.
+- **Ownership moves beyond D1.** Image's native vector-field sources and its four particle-step/burst primitives, and scene's `smooth_surface_mesh` and `surface_mesh_normals`, moved to water because they use water's native policy. Their mixed-family tests live in the catalog.
 
 Phasing-completeness check: every D1 crate appears in exactly one phase's deliverables (ui-paint P1a, graph P1, image/scene/compositor P2, nodes P3, water P5); D5 P0; D6 P3; D7 P1/P2; D8 P4; D10 P0; D11 P0; D12 P1a; INV-5's script P0; measurement P4.
 

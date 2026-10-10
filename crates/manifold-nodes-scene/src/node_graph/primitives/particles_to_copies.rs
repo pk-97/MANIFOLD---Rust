@@ -8,7 +8,7 @@ use manifold_gpu::GpuBinding;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 

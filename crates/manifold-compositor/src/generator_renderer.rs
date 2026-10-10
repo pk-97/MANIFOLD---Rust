@@ -15,7 +15,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
-use manifold_node_engine::water::fluid::FluidDomainSnapshot;
+use manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot;
 use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportHostError};
 use manifold_node_engine::runtime::ModifierPreviewContext;
 
@@ -59,7 +59,7 @@ const WARMUP_FRAMES: usize = 45;
 
 pub struct GeneratorRenderer {
     next_physics_event: u64,
-    scene_impulse_diagnostics: manifold_node_engine::water::runtime::scene_impulses::SceneImpulseDiagnostics,
+    scene_impulse_diagnostics: manifold_node_engine::scene::impulse::SceneImpulseDiagnostics,
     /// Shared handle to the GpuDevice owned by ContentPipeline. An `Arc`
     /// clone instead of a cached raw pointer means this survives any future
     /// move of `ContentPipeline`/`ContentThread` (BUG-054).
@@ -991,7 +991,7 @@ impl GeneratorRenderer {
                     .generator
                     .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
                 layer_state.generator.set_project_tempo(project_tempo);
-                layer_state.generator.set_physics_source_instance(layer.gen_params());
+                layer_state.generator.set_source_instance(layer.gen_params());
                 let new_progress = layer_state.generator.render(
                     gpu,
                     &active.render_target.texture,
@@ -1001,16 +1001,9 @@ impl GeneratorRenderer {
                 active.anim_progress = new_progress;
                 // Acknowledge native tick-start receipts every rendered frame;
                 // otherwise completed clicks would fill the bounded event queue.
-                let diagnostics = &mut self.scene_impulse_diagnostics;
-                layer_state.generator.drain_scene_impulses(|_, event| {
-                    diagnostics.started = diagnostics.started.saturating_add(1);
-                    if event.lateness.0 > 0.0 {
-                        diagnostics.late = diagnostics.late.saturating_add(1);
-                    }
-                });
-                layer_state.generator.drain_discarded_scene_impulses(|_, _| {
-                    diagnostics.discarded = diagnostics.discarded.saturating_add(1);
-                });
+                layer_state.generator.drain_scene_impulse_diagnostics(
+                    &mut self.scene_impulse_diagnostics,
+                );
             }
         }
 
@@ -1367,7 +1360,7 @@ impl GeneratorRenderer {
         t.ready = false;
         t.runtime.set_string_params(string_params);
         t.runtime.set_project_tempo(None);
-        t.runtime.set_physics_source_instance(Some(gp));
+        t.runtime.set_source_instance(Some(gp));
         gpu.clear_texture(&t.rt.texture, 0.0, 0.0, 0.0, 0.0);
         for _ in 0..frames {
             let frame_count = t.frame_count;
@@ -1667,7 +1660,7 @@ impl ClipRenderer for GeneratorRenderer {
                     ls.generator.set_relight_params(&relight_params);
                     ls.generator.set_rt_quality(self.rt_quality);
                     ls.generator.set_project_tempo(None);
-                    ls.generator.set_physics_source_instance(layer.gen_params());
+                    ls.generator.set_source_instance(layer.gen_params());
                     let ctx = PresetContext {
                         time: frame as f64 * DT,
                         beat: 0.0,

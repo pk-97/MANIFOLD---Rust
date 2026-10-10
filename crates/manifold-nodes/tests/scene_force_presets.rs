@@ -9,7 +9,7 @@ use manifold_core::scene_modifier_preset::{
     validate_scene_modifier_schema,
 };
 use manifold_core::{Beats, Seconds};
-use manifold_physics::interaction::VectorField;
+use manifold_physics::{FieldValue, interaction::VectorField};
 use manifold_node_engine::persistence::EffectGraphDefExt;
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
@@ -404,7 +404,7 @@ impl EffectNode for FieldObserver {
     }
 
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(field) = ctx.inputs.vector_field("field") else {
+        let Some(field) = ctx.inputs.cpu_value::<FieldValue>("field") else {
             ctx.mark_outputs_pending();
             return;
         };

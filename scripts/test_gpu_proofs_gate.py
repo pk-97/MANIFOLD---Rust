@@ -54,6 +54,29 @@ class GpuProofsGateTests(unittest.TestCase):
         self.assertEqual(targets(commands[1]), {"gpu_proofs"})
         self.assertTrue(all("--no-run" in command and "--" not in command for command in commands))
 
+    def test_build_tests_resolves_relative_manifest_and_sets_workspace_cwd(self):
+        runs = [dict(package="catalog", targets=["gpu_proofs"], lib=False, full=False)]
+        manifest = Path("nested/worktree/Cargo.toml")
+        with patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as cargo:
+            self.assertEqual(gate.build_tests(manifest, runs), 0)
+        call = cargo.call_args
+        expected_manifest = (Path.cwd() / manifest).resolve()
+        self.assertEqual(call.kwargs["cwd"], expected_manifest.parent)
+        command = call.args[0]
+        self.assertEqual(command[command.index("--manifest-path") + 1], str(expected_manifest))
+
+    def test_run_gate_resolves_relative_manifest_and_sets_workspace_cwd(self):
+        process = FakeProcess()
+        manifest = Path("nested/worktree/Cargo.toml")
+        with patch.object(gate.subprocess, "Popen", return_value=process) as popen:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(gate.run_gate(manifest, [], [])[0], 0)
+        call = popen.call_args
+        expected_manifest = (Path.cwd() / manifest).resolve()
+        self.assertEqual(call.kwargs["cwd"], expected_manifest.parent)
+        command = call.args[0]
+        self.assertEqual(command[command.index("--manifest-path") + 1], str(expected_manifest))
+
     def test_full_package_build_subsumes_selected_targets_and_failure_stops_builds(self):
         runs = [dict(package="catalog", targets=["gpu_proofs"], lib=False, full=False),
                 dict(package="catalog", targets=None, lib=False, full=True),
@@ -87,6 +110,7 @@ class GpuProofsGateTests(unittest.TestCase):
     class Workspace:
         packages = {name: {"features": ["gpu-proofs"]} for name in
                     ("manifold-nodes", "manifold-node-engine", "manifold-ui-paint", "manifold-nodes-scene")}
+        packages["manifold-nodes"]["features"].append("fluid-perf-proofs")
 
         def __init__(self, repo=None):
             self.repo = Path(repo or Path.cwd()).resolve()
@@ -143,6 +167,27 @@ class GpuProofsGateTests(unittest.TestCase):
         self.assertEqual(command[command.index("--test") + 1], "gpu_proofs")
         self.assertIn("--no-fail-fast", command)
         self.assertEqual(command[command.index("--") + 1 :], ["--test-threads=1"])
+
+    def test_extra_features_match_for_build_and_run(self):
+        code, calls, _ = self.run_main([
+            "--package", "manifold-nodes", "--test", "gpu_proofs",
+            "--features", "fluid-perf-proofs",
+        ])
+        self.assertEqual(code, 0)
+        expected = "gpu-proofs fluid-perf-proofs"
+        commands = [command for kind, command in self.events if kind in {"build", "run"}]
+        self.assertTrue(commands)
+        self.assertEqual({command[command.index("--features") + 1] for command in commands}, {expected})
+        self.assertEqual(calls[0]["features"], ["gpu-proofs", "fluid-perf-proofs"])
+
+    def test_unsupported_extra_feature_is_rejected_before_build(self):
+        code, calls, output = self.run_main([
+            "--package", "manifold-nodes-scene", "--test", "gpu_proofs",
+            "--features", "fluid-perf-proofs",
+        ])
+        self.assertEqual(code, 2)
+        self.assertEqual(calls, [])
+        self.assertIn("does not support proof feature", output)
 
     def test_explicit_package_uses_metadata_owned_library(self):
         code, calls, _ = self.run_main(["--package", "manifold-ui-paint", "--filter", "paint"])
@@ -364,10 +409,11 @@ class GpuProofsGateTests(unittest.TestCase):
 
         def fake_run_gate(manifest, filters, skips, targets, full, lib, timings, hung=None,
                           hang_floor=None, package=None, target=None, budgeted=True,
-                          target_names=None):
+                          target_names=None, features=None):
             calls.append(dict(filters=filters, skips=skips, targets=targets, full=full,
-                              lib=lib, package=package, target=target, budgeted=budgeted))
-            events.append(("run", gate.cargo_test_cmd(manifest, targets, full, lib, package)))
+                              lib=lib, package=package, target=target, budgeted=budgeted,
+                              features=features))
+            events.append(("run", gate.cargo_test_cmd(manifest, targets, full, lib, package, features)))
             timings.extend(measured)
             if owned_proofs:
                 timings.extend(gate.timing_entry(package, target, name + "proof", 0, "ok", budgeted)
@@ -549,7 +595,7 @@ class GpuProofsGateTests(unittest.TestCase):
             code, calls, _ = self.run_main(["--filter", "m::slow"])
             self.assertEqual(calls[0]["skips"], [])
             code, calls, _ = self.run_main(
-                [], repo_changed=["crates/manifold-node-engine/src/water/primitives/matter_fill.rs"])
+                [], repo_changed=["crates/manifold-nodes-water/src/primitives/matter_fill.rs"])
             self.assertNotIn("m::slow", calls[0]["skips"])
             self.assertNotIn("m::fast", calls[0]["skips"])
 

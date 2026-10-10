@@ -46,6 +46,7 @@ required-features = ["gpu-proofs"]
 testkit = ["manifold-node-engine/testkit"]
 gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-node-engine/testkit"]
 rt-perf-proofs = ["gpu-proofs"]
+fluid-perf-proofs = ["gpu-proofs"]
 
 [lints]
 workspace = true

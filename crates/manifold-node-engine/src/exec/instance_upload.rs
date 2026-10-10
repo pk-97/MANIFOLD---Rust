@@ -27,7 +27,7 @@ const _: () = assert!(std::mem::size_of::<UploadParams>() < 4096);
 
 /// Version- and destination-aware upload state for immutable instance data.
 #[derive(Default)]
-pub(crate) struct InstanceSnapshotUpload {
+pub struct InstanceSnapshotUpload {
     pipeline: Option<GpuComputePipeline>,
     last_version: Option<u64>,
     last_destination: Option<usize>,
@@ -36,7 +36,7 @@ pub(crate) struct InstanceSnapshotUpload {
 
 impl InstanceSnapshotUpload {
     /// Populate the shared compute-pipeline cache before live rendering.
-    pub(crate) fn prewarm(device: &GpuDevice) {
+    pub fn prewarm(device: &GpuDevice) {
         device.create_compute_pipeline(
             INSTANCE_UPLOAD_WGSL,
             "cs_main",
@@ -45,7 +45,7 @@ impl InstanceSnapshotUpload {
     }
 
     /// Encode an immutable instance snapshot into `dst`.
-    pub(crate) fn upload(
+    pub fn upload(
         &mut self,
         gpu: &mut GpuEncoder<'_>,
         dst: &GpuBuffer,

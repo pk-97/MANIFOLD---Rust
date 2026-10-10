@@ -9,10 +9,10 @@ use std::borrow::Cow;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::water::fluid::domain_layout;
-use manifold_node_engine::water::liquid::lattice::LiquidLattice;
-use {manifold_node_engine::water::matter::reference, manifold_node_engine::water::matter::reference::Params, manifold_node_engine::water::matter::reference::Point};
-use manifold_node_engine::water::matter::{MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, block_sort_box, lattice_blocks, mass_unit, momentum_unit, rounding_hash, water_lambda};
+use manifold_node_engine::scene::fluid_domain::domain_layout;
+use manifold_nodes_water::liquid::lattice::LiquidLattice;
+use {manifold_nodes_water::matter::reference, manifold_nodes_water::matter::reference::Params, manifold_nodes_water::matter::reference::Point};
+use manifold_nodes_water::matter::{MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, block_sort_box, lattice_blocks, mass_unit, momentum_unit, rounding_hash, water_lambda};
 use manifold_node_engine::{ports::ArrayType, exec::backend::Backend, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, ports::KnownItem, exec::metal_backend::MetalBackend, ports::NodeInput, exec::effect_node::NodeInstanceId, ports::NodeOutput, ports::NodePort, parameters::ParamDef, parameters::ParamType, parameters::ParamValue, ports::PortKind, ports::PortType, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
 

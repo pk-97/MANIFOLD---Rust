@@ -1403,18 +1403,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-mod retired_cpu_flip_tests {
-    use super::PrimitiveRegistry;
-    use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
-
-    #[test]
-    fn retired_cpu_flip_is_reference_only() {
-        assert!(!PrimitiveRegistry::with_builtin().contains(FLIP_DOMAIN_TYPE_ID));
-        assert!(!crate::palette::palette_atoms().iter()
-            .any(|atom| atom.type_id == FLIP_DOMAIN_TYPE_ID));
-        #[cfg(feature = "gpu-proofs")]
-        assert!(PrimitiveRegistry::with_cpu_flip_reference().contains(FLIP_DOMAIN_TYPE_ID));
-    }
-}

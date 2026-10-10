@@ -9,8 +9,7 @@ use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 
 use crate::persistence::PrimitiveRegistry;
-use crate::water::physics::RigidImpulseTargets;
-use crate::water::physics_events::ImpulseTarget;
+use crate::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
 
 use super::SceneModifierExpandError;
 use super::acceleration::impulse_recipients_with_index;

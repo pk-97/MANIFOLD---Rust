@@ -214,7 +214,7 @@ pub trait Compositor: Send {
         &self,
         _output: &mut Vec<(
             NodeId,
-            manifold_node_engine::water::fluid::FluidDomainSnapshot,
+            manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot,
         )>,
     ) {
     }

@@ -3,6 +3,8 @@ pub mod boundary_nodes;
 pub mod camera;
 pub mod depth_rule;
 pub mod exposure_source;
+pub mod fluid_domain;
+pub mod impulse;
 pub mod light;
 pub mod live_extent;
 pub mod material;
@@ -17,7 +19,6 @@ pub mod scene_object;
 pub mod scene_viewport;
 pub mod source_asset;
 pub mod transform;
-pub mod vector_field;
 pub mod viewport_camera;
 
 pub mod viewport_outputs;

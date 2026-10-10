@@ -6,6 +6,10 @@
 //! The aliases [`NodeInput`] and [`NodeOutput`] document intent at the call site
 //! without changing the underlying type.
 
+/// The largest count a scalar wire carries exactly: wires are f32, and past
+/// 2^24 a count can round up past the storage sized from the true count.
+pub const EXACT_F32_COUNT: u32 = 1 << 24;
+
 /// What kind of data flows through a port.
 ///
 /// `Array` is the storage-buffer wire type used by particle, mesh, line, and

@@ -6,8 +6,8 @@
 /// fused-vs-unfused GPU proof covers the folded case.
 #[test]
 fn face_grid_fusion_in_host_graphs() {
-    use manifold_node_engine::water::primitives::face_grid_scenes::matter_dam_break_faces;
-    use manifold_node_engine::water::primitives::gpu_flip_preset::{FACE_NODES, WaterScene, water_def};
+    use manifold_nodes_water::primitives::face_grid_scenes::matter_dam_break_faces;
+    use manifold_nodes_water::primitives::gpu_flip_preset::{FACE_NODES, WaterScene, water_def};
     use manifold_node_engine::freeze::FusionReport;
     let mut registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes(&mut registry);
@@ -57,8 +57,9 @@ fn face_grid_fusion_in_host_graphs() {
 /// 64.
 #[test]
 fn matter_face_scene_covers_every_dispatch() {
-    use manifold_node_engine::water::primitives::face_grid_scenes::matter_dam_break_faces;
-    use manifold_node_engine::water::liquid::extent::{ExtentError, LiquidPreset};
+    use manifold_nodes_water::primitives::face_grid_scenes::matter_dam_break_faces;
+    use manifold_node_engine::exec::extent::{ExtentError};
+use manifold_nodes_water::liquid::extent::LiquidPreset;
     for collider in [false, true] {
         let mut preset = LiquidPreset::build(&matter_dam_break_faces(None, collider)).expect("the face scene builds");
         let mut ran = 0;

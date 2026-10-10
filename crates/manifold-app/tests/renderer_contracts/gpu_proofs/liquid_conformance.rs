@@ -20,17 +20,18 @@ use manifold_core::preset_def::PresetKind;
 use manifold_gpu::{FrameClock, GpuDevice, GpuEvent, GpuTextureFormat, RetireMark, RetireQueue};
 use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::water::fluid::TICK;
-use manifold_node_engine::water::fluid_particles::FluidParticle;
-use manifold_node_engine::water::liquid::bodies::LiquidBody;
-use manifold_node_engine::water::liquid::coupling::HANDOVER_BOUND;
-use manifold_node_engine::water::liquid::grid::{FACE_GRID_PORTS, face_len};
-use manifold_node_engine::water::liquid::conformance::{BoxScene, Check, FIXTURE_DENSITY, Fixture, LiquidSolverRow, LiquidTotals, STACK_HEIGHT, set_type_param};
-use manifold_node_engine::water::physics::{PhysicsStepScope, native_ticks_on_this_thread};
+use manifold_nodes_water::fluid::TICK;
+use manifold_node_engine::particles::FluidParticle;
+use manifold_nodes_water::liquid::bodies::LiquidBody;
+use manifold_nodes_water::liquid::coupling::HANDOVER_BOUND;
+use manifold_nodes_water::liquid::grid::{FACE_GRID_PORTS, face_len};
+use manifold_nodes_water::liquid::conformance::{BoxScene, Check, FIXTURE_DENSITY, Fixture, LiquidSolverRow, LiquidTotals, STACK_HEIGHT, set_type_param};
+use manifold_nodes_water::physics::{PhysicsStepScope, native_ticks_on_this_thread};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use {manifold_node_engine::ports::ArrayType, manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::exec::effect_node::EffectNodeContext, manifold_node_engine::exec::effect_node::EffectNodeType, manifold_node_engine::exec::effect_node::NodeErrorTap, manifold_node_engine::parameters::ParamDef, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes::bundled_presets::bundled_preset_type_ids};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_nodes_water::runtime::WaterRuntimeExt;
 use manifold_compositor::preset_thumbnail::{THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, render_preset_thumbnail};
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::json;
@@ -1571,7 +1572,7 @@ struct Push {
 /// iterations, capped solves (the `SOLVER_WORDS` tail of the capped array).
 fn solver_words(run: &LiquidRun) -> [u32; 3] {
     let words: Vec<u32> = run.read("node.gpu_flip_step", "capped");
-    let tail = &words[words.len() - manifold_node_engine::water::primitives::liquid_stats::SOLVER_WORDS as usize..];
+    let tail = &words[words.len() - manifold_nodes_water::primitives::liquid_stats::SOLVER_WORDS as usize..];
     [tail[0], tail[1], tail[2]]
 }
 
@@ -1852,19 +1853,19 @@ impl LiquidRun {
             delta: manifold_core::Seconds::ZERO,
             frame_count: i64::from(self.frame),
         };
-        let fired = self.runtime.fire_scene_impulse(param, source, sequence);
+        let fired = self.runtime.water().fire_scene_impulse(param, source, sequence);
         assert_eq!(fired, Ok(true), "{}: the impulse was not accepted", self.domain_type);
     }
 
     fn applied_receipts(&mut self) -> usize {
         let mut count = 0;
-        self.runtime.drain_scene_impulses(|_, _| count += 1);
+        self.runtime.water().drain_scene_impulses(|_, _| count += 1);
         count
     }
 
     fn discarded_receipts(&mut self) -> usize {
         let mut count = 0;
-        self.runtime.drain_discarded_scene_impulses(|_, _| count += 1);
+        self.runtime.water().drain_discarded_scene_impulses(|_, _| count += 1);
         count
     }
 }

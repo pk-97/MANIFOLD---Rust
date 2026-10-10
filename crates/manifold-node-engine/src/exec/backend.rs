@@ -3,22 +3,15 @@
 //! A [`Backend`] sits below the executor and decides what a [`Slot`] *physically*
 //! is: a `GpuTexture` in production, or an opaque integer in tests.
 //!
-//! Step 5 (this commit) introduces the trait and the [`MockBackend`] — the
-//! same slot-tracking logic that lived on `ResourcePool` in step 4, now
-//! reachable via dynamic dispatch. The executor takes a `Box<dyn Backend>`
-//! at construction; tests use `MockBackend`, future production code will
-//! use a `MetalBackend` that wraps `manifold_gpu::RenderTargetPool`.
-//!
-//! The trait is intentionally narrow. Typed resource accessors
-//! (`texture_2d`, `texture_3d`, `scalar`) land in step 6 alongside the real
-//! `MetalBackend` so the trait surface and its first non-trivial
-//! implementation are designed together.
+//! The executor owns a backend; nodes read its resources and queue CPU writes
+//! for publication after evaluation. Family payloads register typed storage
+//! through [`CpuWireValues`].
 
 use ahash::AHashMap;
-use manifold_physics::FieldValue;
 use manifold_gpu::{GpuBuffer, GpuTexture, GpuTextureFormat};
 
 use crate::bindings::Slot;
+use crate::exec::cpu_values::CpuWireValues;
 use crate::scene::camera::Camera;
 use crate::exec::execution_plan::ResourceId;
 use crate::scene::atmosphere::Atmosphere;
@@ -28,13 +21,15 @@ use crate::parameters::ParamValue;
 use crate::ports::PortType;
 use crate::scene::scene_object::SceneObject;
 use crate::scene::render_mode::RenderMode;
-use crate::water::physics::RigidBody;
 use crate::scene::transform::Transform;
-use crate::water::fluid_role::FluidRole;
 use crate::scene::mesh_source::MeshSource;
 
 /// Abstracts physical resource allocation behind the slot-based runtime.
 pub trait Backend: Send {
+    /// Registered family payloads, published after each node evaluates.
+    fn cpu_values(&self) -> &CpuWireValues;
+    fn cpu_values_mut(&mut self) -> &mut CpuWireValues;
+
     /// Acquire a slot for `id` of the given [`PortType`]. Backends are
     /// expected to recycle freed slots of the same `(type, format, dims)`
     /// tuple before allocating fresh ones.
@@ -254,25 +249,9 @@ pub trait Backend: Send {
         None
     }
 
-    fn rigid_body(&self, _slot: Slot) -> Option<RigidBody> {
-        None
-    }
-
     /// Write a [`RenderMode`] value into a slot. Drained from the per-step
     /// scratch by the executor, same shape as `set_atmosphere`.
     fn set_render_mode(&mut self, _slot: Slot, _value: RenderMode) {}
-
-    fn set_rigid_body(&mut self, _slot: Slot, _value: RigidBody) {}
-
-    /// [`FluidRole`] value bound to a slot. CPU-only prepared geometry and
-    /// authored controls never carry native simulation state.
-    fn fluid_role(&self, _slot: Slot) -> Option<FluidRole> {
-        None
-    }
-
-    /// Write a [`FluidRole`] value into a slot. Drained from the per-step
-    /// scratch by the executor, same shape as [`Backend::set_rigid_body`].
-    fn set_fluid_role(&mut self, _slot: Slot, _value: FluidRole) {}
 
     /// [`MeshSource`] value bound to a slot. CPU-only authored source
     /// geometry description; preparation and GPU resources stay elsewhere.
@@ -281,7 +260,7 @@ pub trait Backend: Send {
     }
 
     /// Write a [`MeshSource`] value into a slot. Drained from the per-step
-    /// scratch by the executor, same shape as [`Backend::set_fluid_role`].
+    /// scratch by the executor, same shape as [`Backend::set_transform`].
     fn set_mesh_source(&mut self, _slot: Slot, _value: MeshSource) {}
 
     /// [`LiveExtent`](crate::node_graph::live_extent::LiveExtent) published
@@ -293,16 +272,6 @@ pub trait Backend: Send {
     /// Publish an array slot's live extent. Drained from the per-step scratch
     /// by the executor, same shape as [`Backend::set_mesh_source`].
     fn set_live_extent(&mut self, _slot: Slot, _value: crate::scene::live_extent::LiveExtent) {}
-
-    /// [`FieldValue`] bound to a slot. CPU-only owned vector-field evaluator
-    /// for native physics inputs.
-    fn vector_field(&self, _slot: Slot) -> Option<FieldValue> {
-        None
-    }
-
-    /// Write a [`FieldValue`] into a slot. Drained from the per-step scratch
-    /// by the executor, same shape as [`Backend::set_mesh_source`].
-    fn set_vector_field(&mut self, _slot: Slot, _value: FieldValue) {}
 
     /// [`SceneObject`] value bound to a slot. Mirrors `atmosphere` for the
     /// [`PortType::Object`] wire shape — CPU-only struct payload set by
@@ -389,12 +358,7 @@ pub(crate) fn pool_key(
     }
 }
 
-/// In-memory backend with no real GPU resources. Tracks slot identity and
-/// per-type recycling — same logic as step 4's `ResourcePool`, now behind
-/// the [`Backend`] trait.
-///
-/// Used by every test in the `node_graph` module. Production code uses a
-/// future `MetalBackend` that wraps `manifold_gpu::RenderTargetPool`.
+/// CPU-only backend for graph tests, with slot recycling and typed wire values.
 pub struct MockBackend {
     free_by_type: AHashMap<PoolKey, Vec<Slot>>,
     bound: AHashMap<ResourceId, Slot>,
@@ -415,10 +379,8 @@ pub struct MockBackend {
     atmospheres: AHashMap<Slot, Atmosphere>,
     /// RenderMode values written via [`Backend::set_render_mode`] — same shape.
     render_modes: AHashMap<Slot, RenderMode>,
-    rigid_bodies: AHashMap<Slot, RigidBody>,
-    fluid_roles: AHashMap<Slot, FluidRole>,
+    cpu_values: CpuWireValues,
     mesh_sources: AHashMap<Slot, MeshSource>,
-    vector_fields: AHashMap<Slot, FieldValue>,
     /// SceneObject values written via [`Backend::set_object`] — same shape.
     objects: AHashMap<Slot, SceneObject>,
     /// Skip-passthrough aliases installed this frame via
@@ -441,10 +403,8 @@ impl MockBackend {
             transforms: AHashMap::default(),
             atmospheres: AHashMap::default(),
             render_modes: AHashMap::default(),
-            rigid_bodies: AHashMap::default(),
-            fluid_roles: AHashMap::default(),
+            cpu_values: CpuWireValues::default(),
             mesh_sources: AHashMap::default(),
-            vector_fields: AHashMap::default(),
             objects: AHashMap::default(),
             skip_aliases: Vec::new(),
         }
@@ -463,6 +423,14 @@ impl Default for MockBackend {
 }
 
 impl Backend for MockBackend {
+    fn cpu_values(&self) -> &CpuWireValues {
+        &self.cpu_values
+    }
+
+    fn cpu_values_mut(&mut self) -> &mut CpuWireValues {
+        &mut self.cpu_values
+    }
+
     fn acquire(
         &mut self,
         id: ResourceId,
@@ -493,9 +461,8 @@ impl Backend for MockBackend {
         dims: (u32, u32),
     ) {
         if let Some(slot) = self.bound.remove(&id) {
-            self.fluid_roles.remove(&slot);
+            self.cpu_values.remove(slot);
             self.mesh_sources.remove(&slot);
-            self.vector_fields.remove(&slot);
             let key = pool_key(ty, format, dims, false);
             self.free_by_type.entry(key).or_default().push(slot);
         }
@@ -512,9 +479,8 @@ impl Backend for MockBackend {
     fn clear(&mut self) {
         self.bound.clear();
         self.free_by_type.clear();
-        self.fluid_roles.clear();
+        self.cpu_values.clear();
         self.mesh_sources.clear();
-        self.vector_fields.clear();
     }
 
     fn texture_2d(&self, _slot: Slot) -> Option<&GpuTexture> {
@@ -577,24 +543,8 @@ impl Backend for MockBackend {
         self.render_modes.get(&slot).copied()
     }
 
-    fn rigid_body(&self, slot: Slot) -> Option<RigidBody> {
-        self.rigid_bodies.get(&slot).cloned()
-    }
-
     fn set_render_mode(&mut self, slot: Slot, value: RenderMode) {
         self.render_modes.insert(slot, value);
-    }
-
-    fn set_rigid_body(&mut self, slot: Slot, value: RigidBody) {
-        self.rigid_bodies.insert(slot, value);
-    }
-
-    fn fluid_role(&self, slot: Slot) -> Option<FluidRole> {
-        self.fluid_roles.get(&slot).cloned()
-    }
-
-    fn set_fluid_role(&mut self, slot: Slot, value: FluidRole) {
-        self.fluid_roles.insert(slot, value);
     }
 
     fn mesh_source(&self, slot: Slot) -> Option<MeshSource> {
@@ -603,14 +553,6 @@ impl Backend for MockBackend {
 
     fn set_mesh_source(&mut self, slot: Slot, value: MeshSource) {
         self.mesh_sources.insert(slot, value);
-    }
-
-    fn vector_field(&self, slot: Slot) -> Option<FieldValue> {
-        self.vector_fields.get(&slot).cloned()
-    }
-
-    fn set_vector_field(&mut self, slot: Slot, value: FieldValue) {
-        self.vector_fields.insert(slot, value);
     }
 
     fn object(&self, slot: Slot) -> Option<SceneObject> {

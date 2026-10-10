@@ -2151,11 +2151,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         );
         // Whether the previous frame was late decides if live physics may run
         // a second interval this frame.
-        let load = manifold_node_engine::water::physics::LiveLoad {
+        let load = manifold_nodes_water::physics::LiveLoad {
             previous: manifold_core::Seconds((self.last_render_work_ms + self.last_fence_wait_ms) / 1000.0),
             budget: manifold_core::Seconds(1.0 / f64::from(fps.max(1.0))),
         };
-        let _physics_scope = manifold_node_engine::water::physics::PhysicsStepScope::for_frame(
+        let _physics_scope = manifold_nodes_water::physics::PhysicsStepScope::for_frame(
             export_mode, physics, Some(load),
         );
         let _t_frame = std::time::Instant::now();
@@ -2972,7 +2972,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             // keep their physics evaluations out of the live HUD
                             // metrics accumulated around render_content().
                             let _physics_metrics_guard =
-                                manifold_node_engine::water::physics_metrics::suspend_recording();
+                                manifold_nodes_water::physics_metrics::suspend_recording();
                             let _ = gen_r.render_clip_thumbnail(
                                 &mut gpu_cold,
                                 cid_str,

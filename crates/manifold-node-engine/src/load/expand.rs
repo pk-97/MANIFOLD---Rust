@@ -6,7 +6,7 @@
 use manifold_core::scene_index::{FlatSceneIndex, SceneIndexError};
 
 mod acceleration;
-pub(crate) use acceleration::impulse_recipients;
+pub use acceleration::impulse_recipients;
 manifold_core::testkit_visible! {
 #[doc(hidden)]
 pub(crate) mod coupling;
@@ -37,7 +37,7 @@ pub(crate) use compiler::prepare_legacy_scene_modifier_math_view;
 pub use control_state::PreparedModifierControlState;
 mod frames;
 mod fragment_cuts;
-pub(crate) use fragment_cuts::contains_fragments;
+pub use fragment_cuts::contains_fragments;
 mod namespace;
 mod parameter_guards;
 pub(crate) use parameter_guards::PreparedModifierParameterGuards;

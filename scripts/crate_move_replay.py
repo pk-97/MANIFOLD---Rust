@@ -565,7 +565,7 @@ def mount_parent(path, inventory):
     return parents[0], name
 
 
-def mount_items(text, name):
+def mount_items(text, name, preserved=False):
     matches = []
     for start, end, header, scope in module_items(text):
         if scope: continue
@@ -573,20 +573,30 @@ def mount_items(text, name):
         if not re.match(VIS + r'mod ' + re.escape(name) + r'\b', head): continue
         if not re.fullmatch(VIS + r'mod ' + re.escape(name) + ';', head):
             raise ValueError(name + ': inline or unsupported module mount')
-        if _testkit_outer_span(text, start, end):
+        outer = _testkit_outer_span(text, start, end)
+        if outer and not preserved:
             raise ValueError(name + ': testkit_visible! module mounts require a separate reviewed fix')
+        if outer and preserved:
+            outer_text = code_mask(text[outer[0]:outer[1]])
+            declarations = re.findall(r'\bmod\s+(' + IDENT + r')\s*([;{])', outer_text)
+            if not declarations or any(item_name != name or terminator != ';'
+                                       for item_name, terminator in declarations):
+                raise ValueError(name + ': inline or unsupported module mount')
+            if re.search(r'\bpath\b|\binclude!\s*\(', outer_text):
+                raise ValueError(name + ': path/include module mounts are forbidden')
         attrs = text[start:header]
         if re.search(r'\bpath\b', code_mask(attrs)):
             raise ValueError(name + ': path module mounts are forbidden')
         first = text.rfind('\n', 0, start) + 1
         last = text.find('\n', end)
         last = len(text) if last < 0 else last + 1
-        if text[first:start].strip() or text[end:last].strip():
-            raise ValueError(name + ': module mount must occupy complete lines')
-        # Doc comments are attributes too; the lexer masks them, so fail closed.
-        previous = text[:first].rstrip()
-        if previous.endswith('*/') or (previous and previous.split('\n')[-1].lstrip().startswith('///')):
-            raise ValueError(name + ': comment-attached mount requires a separate reviewed fix')
+        if not preserved:
+            if text[first:start].strip() or text[end:last].strip():
+                raise ValueError(name + ': module mount must occupy complete lines')
+            # Doc comments are attributes too; the lexer masks them, so fail closed.
+            previous = text[:first].rstrip()
+            if previous.endswith('*/') or (previous and previous.split('\n')[-1].lstrip().startswith('///')):
+                raise ValueError(name + ': comment-attached mount requires a separate reviewed fix')
         matches.append((first, last, text[first:last]))
     if len(matches) == 2:
         predicates = []
@@ -620,8 +630,9 @@ def derive_mounts(source, templates, moves):
         if old in MODULES:
             raise ValueError(old + ': path/include module mounts are forbidden')
         parent, name = mount_parent(old, source)
-        items = mount_items(source[parent][1].decode('utf-8'), name)
         new_parent, new_name = mount_parent(new, final)
+        preserved = moves.get(parent) == new_parent and name == new_name
+        items = mount_items(source[parent][1].decode('utf-8'), name, preserved=preserved)
         # The move determines any identifier rename; visibility and attributes are bytes.
         renamed = []
         for _, _, item in items:

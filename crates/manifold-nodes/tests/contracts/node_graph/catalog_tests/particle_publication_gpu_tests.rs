@@ -1,12 +1,13 @@
 //! Device proofs against the pass-1 publication contract, and byte for byte
 //! against the transcribed 1-bit publisher (`particle_publication::reference`).
-use manifold_node_engine::water::primitives::liquid_stats::LIQUID_STATS_WORDS;
-use manifold_node_engine::testkit::liquid_surface::read;
+use manifold_nodes_water::primitives::liquid_stats::LIQUID_STATS_WORDS;
+use manifold_node_engine::testkit::array_harness::read;
 use crate::contracts::node_graph::catalog_tests::particle_frame_blend_tests::publication_contract::publish as reference;
-use manifold_node_engine::water::primitives::particle_identity::{BirthReservation, ParticleIdentity};
-use manifold_node_engine::water::primitives::particle_publication::reference::{live as live_radius, publish as oracle};
-use manifold_node_engine::water::primitives::particle_publication::{ParticlePublication, Publication, scratch_bytes};
-use manifold_node_engine::water::fluid_particles::{CellRange, FluidParticle};
+use manifold_nodes_water::primitives::particle_identity::{BirthReservation, ParticleIdentity};
+use manifold_nodes_water::primitives::particle_publication::reference::{live as live_radius, publish as oracle};
+use manifold_nodes_water::primitives::particle_publication::{ParticlePublication, Publication, scratch_bytes};
+use manifold_node_engine::particles::{FluidParticle};
+use manifold_nodes_water::fluid_particles::CellRange;
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
 fn shared<T: bytemuck::Pod>(device: &manifold_gpu::testkit::TestDevice, values: &[T]) -> GpuBuffer {
@@ -356,7 +357,7 @@ fn cases(rng: &mut Rng) -> Vec<Case> {
         let gate = cases.len() as u32;
         let mut stats = [0u32; LIQUID_STATS_WORDS as usize];
         stats[0] = u32::from(gate % 5 == 1);
-        stats[manifold_node_engine::water::primitives::liquid_stats::NARROW_BAND_SHORTAGE_WORD as usize] = u32::from(gate % 5 == 2);
+        stats[manifold_nodes_water::primitives::liquid_stats::NARROW_BAND_SHORTAGE_WORD as usize] = u32::from(gate % 5 == 2);
         let identity = [rng.next(), rng.next(), rng.next(), u32::from(gate % 5 == 3)];
         cases.push(Case { label: label.to_owned(), records, count, slots, identity, stats });
     };

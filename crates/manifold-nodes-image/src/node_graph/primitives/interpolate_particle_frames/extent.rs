@@ -1,6 +1,7 @@
 //! Buffer extent rule owned by this node.
-use manifold_node_engine::water::liquid::EXACT_F32_COUNT;
-use manifold_node_engine::water::liquid::extent::{AtomExtent, ExtentRule, PARTICLE, Verdict};
+use manifold_node_engine::ports::EXACT_F32_COUNT;
+use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_node_engine::particles::FluidParticle;
 
 fn interpolate_particle_frames(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // Output follows B's capacity, never A+B. Count tails are explicitly zeroed.
@@ -14,7 +15,7 @@ fn interpolate_particle_frames(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
             return Err(Verdict::Refused(format!("{count} must be a finite count (only count_b accepts -1)")));
         }
         // The shader truncates positive counts, it does not round them.
-        x.covers(port, value as u64 * PARTICLE)?;
+        x.covers(port, value as u64 * std::mem::size_of::<FluidParticle>() as u64)?;
     }
     Ok(())
 }

@@ -14,11 +14,12 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{readback_raw_halves, readback_to_srgb_png};
-use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, ports::NodeInput, ports::NodeOutput, ports::NodePort, parameters::ParamDef, parameters::ParamValue, ports::PortKind, ports::PortType, persistence::PrimitiveRegistry, water::physics::PhysicsStepScope};
+use {manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::exec::effect_node::EffectNodeContext, manifold_node_engine::exec::effect_node::EffectNodeType, manifold_node_engine::ports::NodeInput, manifold_node_engine::ports::NodeOutput, manifold_node_engine::ports::NodePort, manifold_node_engine::parameters::ParamDef, manifold_node_engine::parameters::ParamValue, manifold_node_engine::ports::PortKind, manifold_node_engine::ports::PortType, manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_water::physics::PhysicsStepScope};
 use manifold_node_engine::scene::depth_rule::DepthRule;
 use manifold_node_engine::scene::transform::Transform;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
+use manifold_nodes_water::runtime::WaterRuntimeExt;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
 
@@ -856,7 +857,7 @@ fn scene_physics_modifier_impulse_changes_rendered_liquid() {
     // after that step so this proof measures an impulse on existing liquid.
     render_frame(&mut resting, &target, &harness.device, 1);
     render_frame(&mut hit, &target, &harness.device, 1);
-    hit.fire_scene_impulse(&fire, FrameTime { seconds: Seconds(1.0 / 60.0), beats: Beats(1.0 / 60.0),
+    hit.water().fire_scene_impulse(&fire, FrameTime { seconds: Seconds(1.0 / 60.0), beats: Beats(1.0 / 60.0),
         delta: Seconds::ZERO, frame_count: 1 }, &mut 0).unwrap();
     let before = render_frame(&mut resting, &target, &harness.device, 8);
     std::fs::write("/tmp/scene_impulse_resting.png", readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
@@ -864,7 +865,7 @@ fn scene_physics_modifier_impulse_changes_rendered_liquid() {
     std::fs::write("/tmp/scene_impulse_fired.png", readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
     assert_finite_and_nonempty(&after, 8);
     let mut receipts = 0;
-    hit.drain_scene_impulses(|id, event| {
+    hit.water().drain_scene_impulses(|id, event| {
         assert_eq!(id.as_str(), "fluid_surface");
         assert_eq!(event.value.field.sample([0.0; 3]), [3.0, 0.0, 0.0]);
         receipts += 1;

@@ -135,16 +135,19 @@ def cargo_test_cmd(
     full_suite: bool = False,
     lib: bool = False,
     package: str | None = None,
+    features: list[str] | None = None,
 ) -> list[str]:
     """The `cargo test` command up to the libtest `--`, shared by the build
     and the run so the run finds every binary already built."""
     if full_suite and targets is not None:
         raise ValueError("full_suite and targets are mutually exclusive")
+    manifest_path = Path(manifest_path).resolve()
+    features = gate_passes.normalize_features(features)
     cmd = [
         "cargo",
         "test",
         "--features",
-        "gpu-proofs",
+        " ".join(features),
         "--no-fail-fast",
         "--manifest-path",
         str(manifest_path),
@@ -169,23 +172,27 @@ def build_tests(manifest_path: Path, runs: list[dict]) -> int:
     """Compile every run's test binaries with no GPU lock held, so the hold
     covers test time only: the run that follows re-checks fingerprints and
     starts testing. Returns the first nonzero cargo exit, else 0."""
+    manifest_path = Path(manifest_path).resolve()
     packages = {}
     for run in runs:
         package = run.get("package")
         if not package:
             raise ValueError("GPU proof run has no Cargo package owner")
-        build = packages.setdefault(package, {"targets": set(), "full": False, "lib": False})
+        features = tuple(gate_passes.normalize_features(run.get("features")))
+        build = packages.setdefault((package, features),
+                                    {"targets": set(), "full": False, "lib": False})
         build["full"] |= run["full"]
         build["lib"] |= run["lib"]
         build["targets"].update(run["targets"] or ([] if run["lib"] else ["gpu_proofs"]))
-    for package, build in packages.items():
+    for (package, features), build in packages.items():
         # Cargo can build a package's selected library and integration tests
         # together; execution and pass receipts remain scoped to each run.
         cmd = cargo_test_cmd(manifest_path,
                              None if build["full"] else sorted(build["targets"]),
-                             build["full"], build["lib"], package) + ["--no-run"]
+                             build["full"], build["lib"], package,
+                             list(features)) + ["--no-run"]
         print(f"$ {' '.join(cmd)}", flush=True)
-        code = subprocess.run(cmd, env=build_environment()).returncode
+        code = subprocess.run(cmd, cwd=manifest_path.parent, env=build_environment()).returncode
         if code:
             return code
     return 0
@@ -233,8 +240,10 @@ def run_gate(
     target: str | None = None,
     budgeted: bool = True,
     target_specs: list[dict] | None = None,
+    features: list[str] | None = None,
 ) -> tuple[int, str]:
-    cmd = cargo_test_cmd(manifest_path, targets, full_suite, lib, package)
+    manifest_path = Path(manifest_path).resolve()
+    cmd = cargo_test_cmd(manifest_path, targets, full_suite, lib, package, features)
     # Serial test threads, always: ~135 proofs share one Metal device, and
     # parallel execution corrupts VALUES, not just timing (BUG-m0c9 — red
     # sets rotate across identical binaries; the same tests pass serially).
@@ -273,7 +282,8 @@ def run_gate(
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            bufsize=0, start_new_session=True, env=build_environment(),
+            bufsize=0, start_new_session=True, cwd=manifest_path.parent,
+            env=build_environment(),
         )
         assert proc.stdout is not None
         pump_thread = threading.Thread(target=pump, daemon=True)
@@ -648,9 +658,16 @@ def unknown_target_timings(timings: list) -> list[dict]:
             if status == "ok" and package is not None and target == "unknown"]
 
 
-def measurement_command(finding: dict, manifest_path: Path) -> str:
+def feature_cli_args(features=None):
+    normalized = gate_passes.normalize_features(features)
+    return [] if normalized == [gate_passes.PROOF_FEATURE] else [
+        "--features", " ".join(normalized)
+    ]
+
+
+def measurement_command(finding: dict, manifest_path: Path, features=None) -> str:
     command = [str(Path(__file__).resolve()), "--manifest-path", str(manifest_path),
-               "--package", finding["package"]]
+               "--package", finding["package"], *feature_cli_args(features)]
     if finding["target"] != "lib":
         command.extend(["--test", finding["target"]])
     command.extend(["--filter", finding["test"], "--record-times",
@@ -660,7 +677,8 @@ def measurement_command(finding: dict, manifest_path: Path) -> str:
 
 
 def failure_rerun_commands(failed_tests: list[str], timings: list,
-                           manifest_path: Path | None = None) -> tuple[list[str], list[str]]:
+                           manifest_path: Path | None = None,
+                           features=None) -> tuple[list[str], list[str]]:
     """Build owner-qualified reruns from the identities observed by Cargo.
 
     A proof target name is not a package key: more than one gpu-proofs package
@@ -691,7 +709,8 @@ def failure_rerun_commands(failed_tests: list[str], timings: list,
             continue
         index, (_test, package, target) = match
         used.add(index)
-        command = [str(gate), *manifest, "--package", package]
+        command = [str(gate), *manifest, "--package", package,
+                   *feature_cli_args(features)]
         if target != "lib":
             command.extend(["--test", target])
         command.extend(["--filter", name])
@@ -728,6 +747,7 @@ def print_summary(
     manifest_path: Path | None = None,
     unmeasured: list[dict] | None = None,
     unknown_targets: list[dict] | None = None,
+    features=None,
 ) -> int:
     """Print the consolidated report; return the final exit code."""
     failed_tests = parse_failed_tests(output)
@@ -748,7 +768,7 @@ def print_summary(
         for name in failed_tests:
             print(f"  - {name}")
         # One focused run per failure, queued and recorded like the gate.
-        reruns, unresolved = failure_rerun_commands(failed_tests, timings, manifest_path)
+        reruns, unresolved = failure_rerun_commands(failed_tests, timings, manifest_path, features)
         for command in reruns:
             print(f"rerun: {command}")
         for name in unresolved:
@@ -788,7 +808,7 @@ def print_summary(
         print("GPU-PROOFS TIMING: FAIL (new heavy proof lacks a reviewed allowance)")
         for finding in unmeasured:
             print(f"  - {finding['key']}: {finding['seconds']:.1f}s")
-            print(f"    measure: {measurement_command(finding, manifest_path or default_manifest_path())}")
+            print(f"    measure: {measurement_command(finding, manifest_path or default_manifest_path(), features)}")
         return 5
     if unknown_targets:
         print("GPU-PROOFS TIMING: FAIL (Cargo emitted an unmapped proof target)")
@@ -926,6 +946,8 @@ def _main() -> int:
     )
     parser.add_argument("--package", default=None,
                         help="Cargo package to own an explicit proof run")
+    parser.add_argument("--features", action="append", default=[], metavar="FEATURE",
+                        help="extra Cargo feature(s) for the proof run; gpu-proofs is mandatory")
     parser.add_argument(
         "--filter",
         action="append",
@@ -997,12 +1019,17 @@ def _main() -> int:
         print(f"Forgot shared GPU timing: {args.forget}")
         return 0
 
-    manifest_path = args.manifest_path or default_manifest_path()
+    manifest_path = Path(args.manifest_path or default_manifest_path()).resolve()
     repo = manifest_path.parent
     try:
         workspace = Workspace(repo)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"GPU-PROOFS METADATA: FAIL - {error}")
+        return 2
+    try:
+        features = gate_passes.normalize_features(args.features)
+    except ValueError as error:
+        print(f"GPU-PROOFS SCOPE: FAIL - {error}")
         return 2
     explicit = bool(args.filter or args.skip or args.targets or args.package)
 
@@ -1048,6 +1075,9 @@ def _main() -> int:
 
     try:
         runs = normalize_runs(workspace, runs)
+        for run in runs:
+            run["features"] = gate_passes.validate_package_features(
+                workspace, run["package"], features)
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"GPU-PROOFS SCOPE: FAIL - {error}")
         return 2
@@ -1084,10 +1114,11 @@ def _main() -> int:
                 all_timings.extend(receipt_timings(passed, run))
                 continue
             run_timings: list = []
-            code, output = run_gate(manifest_path, run["filters"], run["skips"], run["targets"],
-                                    run["full"], run["lib"], run_timings, hung,
-                                    args.hang_allowance, run["package"], run["target"],
-                                    run["budgeted"], run.get("target_specs"))
+            run_args = (manifest_path, run["filters"], run["skips"], run["targets"],
+                        run["full"], run["lib"], run_timings, hung,
+                        args.hang_allowance, run["package"], run["target"],
+                        run["budgeted"], run.get("target_specs"))
+            code, output = run_gate(*run_args, features=run.get("features"))
             if code == INPUTS_CHANGED:
                 code = 1
             if (hung or parse_failed_tests(output) or parse_golden_mismatches(output)
@@ -1135,7 +1166,7 @@ def _main() -> int:
     timing_red = [] if args.all_tests or args.record_times else unmeasured_heavy(all_timings)
     unknown_red = unknown_target_timings(all_timings)
     verdict = print_summary(output, exit_code, all_timings, args.budget, hung, manifest_path,
-                            timing_red, unknown_red)
+                            timing_red, unknown_red, features=features)
     if args.learn_times:
         remember_times(recorded_timings, verdict, hung)
     if gate_passes.changed_passes([p for p in passes if p]):

@@ -858,11 +858,11 @@ pub(crate) fn reachable_from_liveness_roots(graph: &Graph) -> AHashSet<NodeInsta
         if !live.insert(id) {
             continue;
         }
-        for pair in graph.coupled_scenes() {
-            let sibling = if pair.fluid == id {
-                Some(pair.rigid)
-            } else if pair.rigid == id {
-                Some(pair.fluid)
+        for pair in graph.node_pairs() {
+            let sibling = if pair.first == id {
+                Some(pair.second)
+            } else if pair.second == id {
+                Some(pair.first)
             } else {
                 None
             };
@@ -1177,10 +1177,10 @@ mod tests {
             vec![input("velocity", PortType::Texture2D, true)],
             vec![],
         )));
-        live.add_coupled_scene(
+        live.add_node_pair(
             fluid,
             rigid,
-            crate::water::physics::RigidImpulseTargets::default(),
+            Box::new(crate::exec::node_pairs::tests::OrderingOnly),
         )
         .unwrap();
         assert!(matches!(
@@ -1205,10 +1205,10 @@ mod tests {
             vec![input("velocity", PortType::Texture2D, true)],
             vec![],
         )));
-        dead.add_coupled_scene(
+        dead.add_node_pair(
             dead_fluid,
             dead_rigid,
-            crate::water::physics::RigidImpulseTargets::default(),
+            Box::new(crate::exec::node_pairs::tests::OrderingOnly),
         )
         .unwrap();
         assert!(crate::exec::execution_plan::compile(&dead).is_ok());

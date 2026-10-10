@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from gate_policy import (
-    RENDERER_SRC, ENGINE_SRC, CONTRACT_TESTS_DIR, UI_PAINT_DIR, UI_PAINT_FILTERS,
+    RENDERER_SRC, ENGINE_SRC, WATER_SRC, CONTRACT_TESTS_DIR, UI_PAINT_DIR, UI_PAINT_FILTERS,
     PROOFS_DIR, CPU_FLIP_FIXTURES_DIR, CPU_FLIP_REFERENCE_FILTERS, LANDING_BUDGET_S,
     SMOKE_FILTERS, RUNTIME_FILTERS, BROAD_FILTERS, SLOW_THRESHOLD_S, TIMES_PATH,
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
@@ -42,6 +42,13 @@ from gate_policy import (
     GPU_FILTER_TARGETS, UI_PROJECTION_PATHS, is_inert_plan_path,
 )
 from gate_workspace import Workspace, module_mounts
+
+SOURCE_ROOTS = (ENGINE_SRC, WATER_SRC, RENDERER_SRC)
+
+
+def source_root(path):
+    return next((root for root in SOURCE_ROOTS if path.startswith(root)), RENDERER_SRC)
+
 
 def learned_times_path():
     repo = TIMES_PATH.parent.parent
@@ -131,7 +138,7 @@ def is_gpu_path(path, workspace=None):
             return True
     if path.endswith(".wgsl"):
         return True
-    if path.startswith((GPU_BACKEND_ROOT, UI_PAINT_DIR, ENGINE_SRC, *CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
+    if path.startswith((GPU_BACKEND_ROOT, UI_PAINT_DIR, ENGINE_SRC, WATER_SRC, *CONTRACT_TESTS_DIR, RENDERER_SRC + "node_graph/")):
         return True
     if "shaders/" in path or "gpu::gpu_encoder" in path:
         return True
@@ -284,7 +291,7 @@ class Plan:
 
 def module_filters(path, root=None):
     """Test module filters for a source file relative to its Cargo source root."""
-    root = root or (ENGINE_SRC if path.startswith(ENGINE_SRC) else RENDERER_SRC)
+    root = root or source_root(path)
     parts = path[len(root):].split("/")
     name = parts[-1]
     if not name.endswith(".rs"):
@@ -322,7 +329,7 @@ def path_attr_filters(path, repo):
     """
     if path.startswith(CONTRACT_TESTS_DIR):
         return contract_module_filters(path, repo)
-    root = ENGINE_SRC if path.startswith(ENGINE_SRC) else RENDERER_SRC
+    root = source_root(path)
     parts = path[len(root):].split("/")
     if len(parts) < 3 or parts[-2] != "tests":
         return None
@@ -407,7 +414,7 @@ def proof_module_prefix(path, repo, root=None):
 def changed_test_filters(path, repo, base, patch=None):
     """Promote changed test bodies; shared-helper edits retain module scope."""
     # Only renderer lib and proof paths have a derivable test-name prefix.
-    if not path.startswith((RENDERER_SRC, ENGINE_SRC, PROOFS_DIR)):
+    if not path.startswith((*SOURCE_ROOTS, PROOFS_DIR)):
         return set()
     source = Path(repo) / path
     if source.suffix != ".rs" or not source.exists():
@@ -472,7 +479,7 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
         retired.update(deleted.stdout.splitlines())
     test_paths = [p for p in paths if p.endswith('.rs') and (Path(repo) / p).is_file()
                   and '#[test]' in (Path(repo) / p).read_text()
-                  and p.startswith((RENDERER_SRC, ENGINE_SRC, PROOFS_DIR))]
+                  and p.startswith((*SOURCE_ROOTS, PROOFS_DIR))]
     patches = {}
     if test_paths:
         diff = subprocess.run(['git', '-C', str(repo), 'diff', '--no-ext-diff',
@@ -502,7 +509,8 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
                 for target in workspace.targets(owner, 'test')):
             plan.required_binaries.add((owner, GPU_CONTRACT_TARGETS[owner]))
             continue
-        if owner and path == workspace.roots[owner] + '/Cargo.toml':
+        if owner and (path == workspace.roots[owner] + '/Cargo.toml'
+                      or path == WATER_SRC + 'lib.rs'):
             plan.whole_packages.add(owner)
             continue
         if path.startswith(UI_PAINT_DIR):
@@ -568,7 +576,7 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
         if path.startswith(CPU_FLIP_FIXTURES_DIR):
             plan.filters.update(CPU_FLIP_REFERENCE_FILTERS)
             continue
-        if path.startswith((RENDERER_SRC, ENGINE_SRC)) and path.endswith(".rs"):
+        if path.startswith(SOURCE_ROOTS) and path.endswith(".rs"):
             plan.filters.update(path_attr_filters(path, repo) or module_filters(path))
             continue
         if path.startswith(CONTRACT_TESTS_DIR):
@@ -619,7 +627,7 @@ def _map_wgsl(plan, path, repo, shader_users):
         plan.broad.append((path, f"shared WGSL, {len(users)} users"))
         return
     for user in users:
-        if user.startswith((RENDERER_SRC, ENGINE_SRC)):
+        if user.startswith(SOURCE_ROOTS):
             plan.filters.update(LIB_PROOF_ROWS.get(user, module_filters(user)))
         else:
             owner = plan.workspace.owner(user)
