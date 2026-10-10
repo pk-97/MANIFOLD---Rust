@@ -389,6 +389,12 @@ def self_check():
             raise SystemExit(f'self-check {t}: candidates differ ({len(r["cand_hop"])} vs {len(rec["candidates"])})')
         cached = dict(f15=rec['features'], tail3=np.load(GOAL / f'tail_{t}.npy'), tmpl3=np.load(GOAL / f'tmpl_{t}.npy'),
                       prof32=np.load(GOAL / f'prof_{t}.npy'), low16=np.load(GOAL / f'low_{t}.npy'), f69=rec['f69'])
+        # The trained tail caches predate the causal past-4 s max (kick_goal_tail_features.py): pre_rel_db
+        # (tail column 1, f69 column 16) differs where that window reached before the song's start.
+        early = np.round(rec['onset_s'] / .001).astype(int) - 5 < 1999
+        for k, col in (('tail3', 1), ('f69', 16)):
+            cached[k] = cached[k].copy()
+            cached[k][early, col] = r[k][early, col]
         diffs = {k: float(np.max(np.abs(r[k] - v))) for k, v in cached.items()}
         spec = nnm.spectrum(x, SR)
         cache16 = np.load(GOAL / f'nnspec_{t}.npy').astype(np.float32)

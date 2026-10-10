@@ -34,7 +34,8 @@ def low_env_db(x, sr):
 
 def tail_features(x, sr, onset_s, deadline_s):
     e = low_env_db(x, sr)
-    past_max = maximum_filter1d(e, size=4000, origin=1999)  # max over the previous 4 s, inclusive
+    # Causal: before 4 s of history exist the window holds only the past (the default 'reflect' read up to 4 s ahead).
+    past_max = maximum_filter1d(e, size=4000, origin=1999, mode='constant', cval=-np.inf)  # max over the previous 4 s, inclusive
     out = np.zeros((len(onset_s), 3))
     tt = np.arange(-50, -4) * 1.0
     for n, (t0, t1) in enumerate(zip(onset_s, deadline_s)):
