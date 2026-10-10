@@ -31,7 +31,7 @@ use manifold_physics::input::{AppliedEvent, EventQueue, EventStamp};
 use manifold_physics::{FieldValue, TickStamp, VectorField};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use crate::fluid::TICK;
+use crate::clock::TICK;
 use crate::liquid::clock::{ClockFrame, LiquidClock, FIELD_RESERVE_INTERVALS};
 use crate::liquid::coupling::LiquidRigidOwner;
 use crate::liquid::lattice::LiquidLattice;

@@ -1,7 +1,7 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::liquid::bodies::LiquidBody;
 use crate::liquid::bodies::LiquidShape;
 use crate::liquid::clock::FIELD_RESERVE_INTERVALS;
@@ -9,7 +9,7 @@ use crate::liquid::fields::FieldFrame;
 use crate::liquid::fields::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use crate::liquid::coupling::REACTION_FLOATS;
 use crate::primitives::gpu_flip_domain::gpu_flip_geometry;
-use crate::fluid::TICK;
+use crate::clock::TICK;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

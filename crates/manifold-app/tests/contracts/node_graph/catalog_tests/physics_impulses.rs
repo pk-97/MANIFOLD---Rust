@@ -8,7 +8,7 @@ use manifold_node_engine::runtime::PresetRuntime;
 use manifold_nodes_water::runtime::WaterRuntimeExt;
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_nodes_water::node;
-use manifold_node_engine::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 use manifold_nodes_water::physics_events::ResolvedNodeImpulse;
 use manifold_node_engine::{parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry};
 
@@ -21,8 +21,6 @@ use std::{borrow::Cow, cell::Cell};
 
 mod source_tests;
 mod scene_routes_tests;
-#[cfg(feature = "gpu-proofs")]
-mod coupled_playback_tests;
 
 const DT: f64 = 1.0 / 60.0;
 thread_local! { static POSITIONS: Cell<[f32; 2]> = const { Cell::new([0.0; 2]) }; }
@@ -130,9 +128,6 @@ fn fixture() -> EffectGraphDef {
     })).unwrap()
 }
 fn registry() -> PrimitiveRegistry {
-    #[cfg(feature = "gpu-proofs")]
-    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
-    #[cfg(not(feature = "gpu-proofs"))]
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("node.render_scene", || {
         Box::new(CpuScene(
@@ -469,7 +464,7 @@ fn scene_impulse_rejects_stateful_ancestry_and_inactive_selections() {
 
 #[test]
 fn scene_impulse_partial_admission_retry_does_not_duplicate_successful_world() {
-    use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+    use manifold_core::scene_impulse::RigidImpulseTargets;
     let mut def = fixture();
     let mut control = runtime(&def);
     control.execute_frame(time(0.0));
@@ -580,44 +575,5 @@ fn scene_impulse_captures_spatial_shape_before_center_edits() {
     assert_eq!(
         second.test_field().unwrap().sample([0.0, 10.0, 0.0]),
         [-1.0, 0.0, 0.0]
-    );
-}
-
-#[cfg(feature = "gpu-proofs")]
-#[test]
-fn scene_impulse_selection_combines_body_slots_copies_and_fluid_domain() {
-    use manifold_node_engine::scene::impulse::RigidImpulseTargets;
-    let mut def = fixture();
-    def.nodes.push(
-        serde_json::from_value(serde_json::json!({
-            "id":14, "nodeId":"fluid", "typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID
-        }))
-        .unwrap(),
-    );
-    def.wires
-        .retain(|wire| !(matches!(wire.to_node, 8 | 9) && wire.to_port == "transform"));
-    for (from_node, from_port, to_node, to_port) in [
-        (4, "body", 6, "copies"),
-        (6, "instances", 8, "instances"),
-        (14, "vertices", 9, "vertices"),
-    ] {
-        def.wires
-            .push(manifold_core::effect_graph_def::EffectGraphWire {
-                from_node,
-                from_port: from_port.into(),
-                to_node,
-                to_port: to_port.into(),
-            });
-    }
-    let runtime = runtime(&def);
-    let binding = prepare(&runtime, &def, &["part_a", "part_a_2", "part_b"]);
-    assert_eq!(binding.test_recipient_count(), 1, "coupled participants share one native event owner");
-    assert_eq!(binding.test_recipient_id(0).as_str(), "fluid");
-    assert_eq!(
-        binding.test_recipient_target(0),
-        ImpulseTarget::FluidAndRigid(RigidImpulseTargets {
-            bodies: 1,
-            copies: true
-        })
     );
 }

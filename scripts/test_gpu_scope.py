@@ -265,6 +265,20 @@ class ScopeTests(unittest.TestCase):
                                               cpu_plan=None)
                     self.assertEqual([item[0] for item in result.unmapped], expected)
 
+    def test_deleted_contract_test_requires_confirmed_git_deletion(self):
+        path = "crates/manifold-nodes/tests/contracts/water/race_probe.rs"
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / '.git').touch()
+            workspace = fixture_workspace(repo)
+            for output, expected in [(path + '\n', []), ('', [path])]:
+                with self.subTest(deleted=bool(output)), mock.patch.object(
+                    g.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout=output, stderr='')
+                ):
+                    result = g.plan_for_paths([path], repo, shader_users=lambda _: [], workspace=workspace,
+                                              cpu_plan=None)
+                    self.assertEqual([item[0] for item in result.unmapped], expected)
+
     def test_path_attr_filter_finds_testkit_visible_mount(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
@@ -531,27 +545,6 @@ class ScopeTests(unittest.TestCase):
         path = "crates/manifold-nodes/tests/contracts/freeze/orphan.rs"
         result = plan([path], repo=self._repo_with(path))
         self.assertEqual([row[0] for row in result.unmapped], [path])
-
-    def test_cpu_flip_reference_inputs_select_consuming_proofs(self):
-        required = {
-            "liquid_conformance::", "water_basin::", "fluid_surface_perf::",
-            "contracts::node_graph::catalog_tests::whitewater_scene::",
-
-            "primitives::gpu_flip_preset::",
-            "load::expand::acceleration::",
-            "runtime::physics_carry::", "runtime::physics_sampling::",
-            "runtime::physics_impulses::tests::coupled_playback_tests::",
-        }
-        for path in (R + "testkit/reference_fixtures.rs", *(
-                g.CPU_FLIP_FIXTURES_DIR + name for name in (
-                    "WaterBasin.json", "WaterDamBreak.json", "WaterDamBreakGpu.json"))):
-            with self.subTest(path=path):
-                result = plan([path])
-                self.assertEqual(result.paths, [path])
-                self.assertEqual(result.filters, required)
-                self.assertFalse(result.unmapped)
-                self.assertFalse(result.broad)
-                self.assertTrue(set(g.SMOKE_FILTERS) <= set(result.final_filters()))
 
     def test_ui_paint_selects_own_lib_proofs_and_renderer_smoke(self):
         result = plan(["crates/manifold-ui-paint/src/native_text.rs"])

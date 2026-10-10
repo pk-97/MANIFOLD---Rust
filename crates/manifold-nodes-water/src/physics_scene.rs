@@ -5,7 +5,7 @@ use manifold_node_engine::exec::node_pairs::NodePairBehavior;
 use manifold_node_engine::graph::Graph;
 use manifold_node_engine::validation::GraphError;
 use crate::node;
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 
 pub(crate) struct PhysicsPair {
     colliders: RigidImpulseTargets,

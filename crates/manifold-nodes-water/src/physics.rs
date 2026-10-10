@@ -13,7 +13,7 @@ use manifold_physics::{
 use std::sync::Arc;
 
 use manifold_node_engine::scene::transform::Transform;
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_node_engine::platonic::platonic_points;
 
 #[cfg(test)]

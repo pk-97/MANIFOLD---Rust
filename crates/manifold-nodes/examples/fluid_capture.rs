@@ -19,11 +19,10 @@
 //! offline frame reads back the GPU mesh, fails on a non-finite vertex or an empty
 //! surface, and reports its live vertices as `vertex_count`. A preset with its own
 //! `node.tone_map` is always read back as `--linear` (sRGB of the graph output, what
-//! the app shows); otherwise defaults preserve the shipped Water Basin workflow.
+//! the app shows); otherwise the default preset is the shipped GPU FLIP Dam Break.
 //!
-//! A preset may run any liquid on the solver seam: the FLIP Fluids engine on the
-//! CPU (`node.fluid_surface`) or a GPU solver (GPU FLIP, MLS-MPM) that publishes
-//! through a frame node. The capture finds the liquid by the seam, not by solver:
+//! A preset may run any GPU liquid on the solver seam (GPU FLIP, MLS-MPM): its
+//! domain publishes through a frame node. The capture finds the liquid by the seam, not by solver:
 //! the one liquid domain and the one node whose outputs carry the particle frame.
 //! A GPU solver has no CPU mesh and reports its time in `gpu_ms`. `--look-metrics` records the particle look
 //! metrics of GPU_MPM_SOLVER_DESIGN.md section 7 (look gates) from each offline
@@ -40,14 +39,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use manifold_core::NodeId;
-use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, is_liquid_domain};
+use manifold_core::liquid_domain::is_liquid_domain;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, readback_srgb_rgba8, readback_tonemapped_rgba8};
-use manifold_node_engine::scene::fluid_domain::domain_layout;
+use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::particles::FluidParticle;
 use {manifold_nodes_water::matter, manifold_nodes_water::matter::look::Cells, manifold_nodes_water::matter::look::LookRecorder};
 use {manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::parameters::ParamValue, manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_water::physics::PhysicsStepScope};
@@ -70,19 +69,6 @@ const MAX_FRAMES: u32 = 900;
 const MAX_FPS: u32 = 60;
 const MAX_SECONDS: f64 = 3600.0;
 const CSV_HEADER: &str = "frame,authored_time,simulation_time,lag_seconds,render_cpu_ms,submit_wait_ms,gpu_ms,frame_ms,simulation_ms,meshing_ms,particle_count,vertex_count,capture_ms,presentation_interval_ms,foam_count,bubble_count,spray_count,upload_ms";
-const METRIC_NAMES: [&str; 10] = [
-    "simulation_time",
-    "lag_seconds",
-    "simulation_ms",
-    "meshing_ms",
-    "particle_count",
-    "vertex_count",
-    "foam_count",
-    "bubble_count",
-    "spray_count",
-    "upload_ms",
-];
-
 type CaptureResult<T> = Result<T, Box<dyn Error>>;
 
 #[derive(Clone, Debug)]
@@ -118,9 +104,6 @@ struct CaptureOptions {
 /// How the preset's liquid publishes its particle frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Solver {
-    /// The FLIP Fluids engine on the CPU (`node.fluid_surface`): the domain
-    /// publishes the frame itself, with the engine's timings, counts and mesh.
-    Flip,
     /// A GPU solver (GPU FLIP, MLS-MPM, any later one): the domain publishes
     /// through a frame node, and its time is in the frame's `gpu_ms`.
     Gpu,
@@ -260,10 +243,9 @@ struct Metadata {
 
 fn default_preset_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("cpu-flip")
-        .join("WaterBasin.json")
+        .join("assets")
+        .join("generator-presets")
+        .join("WaterDamBreakGpuFlip.json")
 }
 
 fn read_preset(path: &Path) -> CaptureResult<String> {
@@ -272,16 +254,6 @@ fn read_preset(path: &Path) -> CaptureResult<String> {
             error.kind(),
             format!("read preset {}: {error}", path.display()),
         )
-        .into()
-    })
-}
-
-fn preset_number(node: &serde_json::Value, name: &str) -> CaptureResult<f64> {
-    node["params"][name]["value"].as_f64().ok_or_else(|| {
-        io::Error::other(format!(
-            "{} parameter `{name}` is missing or non-numeric",
-            node["nodeId"]
-        ))
         .into()
     })
 }
@@ -328,11 +300,10 @@ fn find_preset_node<'a>(
 
 /// The preset's liquid, found through the solver seam: its one liquid domain
 /// (`is_liquid_domain`) and the one node whose outputs carry the particle
-/// frame. A domain that publishes the frame itself is the CPU engine; any
-/// other publishes through a frame node and is a GPU solver.
+/// frame, which must be a frame node apart from the domain.
 fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
     let document: serde_json::Value = serde_json::from_str(json)?;
-    let registry = PrimitiveRegistry::with_cpu_flip_reference();
+    let registry = PrimitiveRegistry::with_builtin();
     let built = |node: &serde_json::Value| node["typeId"].as_str().and_then(|type_id| registry.construct(type_id));
     let mut domains = Vec::new();
     find_preset_nodes(&document["nodes"], &|node| node["typeId"].as_str().is_some_and(is_liquid_domain), &mut domains);
@@ -375,63 +346,30 @@ fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
         .as_str()
         .ok_or_else(|| io::Error::other("the particle-frame publisher has no nodeId"))?
         .to_string();
-    if frame["id"] != domain["id"] || frame["nodeId"] != domain["nodeId"] {
-        // Shared names across domains (GPU_MPM_SOLVER_DESIGN.md D17).
-        let resolution = param_or_default(domain, domain_type.as_ref(), "resolution")?;
-        let domain_size = param_or_default(domain, domain_type.as_ref(), "domain_size")?;
-        if !(resolution.is_finite() && resolution >= 1.0 && domain_size.is_finite() && domain_size > 0.0) {
-            return Err(io::Error::other("preset liquid domain settings are invalid").into());
-        }
-        // The look metrics' sample spacing: MPM's Points Per Cell enum (0 is
-        // 2 per axis, 1 is 3); a solver without it seeds 8 a cell.
-        let points_per_cell = match domain["params"]["points_per_cell"]["value"].as_u64() {
-            Some(1) => 27,
-            _ => 8,
-        };
-        return Ok(PresetSettings {
-            solver: Solver::Gpu,
-            frame_node,
-            resolution: resolution.round() as u32,
-            domain_size,
-            surface_detail: 0,
-            viscosity: 0.0,
-            surface_tension: 0.0,
-            points_per_cell,
-            speed,
-        });
+    if frame["id"] == domain["id"] && frame["nodeId"] == domain["nodeId"] {
+        return Err(io::Error::other("the liquid domain publishes its own frame; only GPU solvers are captured").into());
     }
-    let fluid = domain;
-    let resolution = preset_number(fluid, "resolution")?;
-    let domain_size = preset_number(fluid, "domain_size")?;
-    let surface_detail = preset_number(fluid, "surface_subdivisions")?;
-    let optional_coefficient = |name: &str| -> CaptureResult<f64> {
-        if fluid["params"].get(name).is_none() {
-            return Ok(0.0);
-        }
-        let value = preset_number(fluid, name)?;
-        if !value.is_finite() || value < 0.0 {
-            return Err(io::Error::other(format!("invalid liquid coefficient {name}")).into());
-        }
-        Ok(value)
+    // Shared names across domains (GPU_MPM_SOLVER_DESIGN.md D17).
+    let resolution = param_or_default(domain, domain_type.as_ref(), "resolution")?;
+    let domain_size = param_or_default(domain, domain_type.as_ref(), "domain_size")?;
+    if !(resolution.is_finite() && resolution >= 1.0 && domain_size.is_finite() && domain_size > 0.0) {
+        return Err(io::Error::other("preset liquid domain settings are invalid").into());
+    }
+    // The look metrics' sample spacing: MPM's Points Per Cell enum (0 is
+    // 2 per axis, 1 is 3); a solver without it seeds 8 a cell.
+    let points_per_cell = match domain["params"]["points_per_cell"]["value"].as_u64() {
+        Some(1) => 27,
+        _ => 8,
     };
-    if !resolution.is_finite()
-        || !domain_size.is_finite()
-        || !surface_detail.is_finite()
-        || resolution < 1.0
-        || domain_size <= 0.0
-        || surface_detail < 0.0
-    {
-        return Err(io::Error::other("preset fluid settings are invalid").into());
-    }
     Ok(PresetSettings {
-        solver: Solver::Flip,
+        solver: Solver::Gpu,
         frame_node,
         resolution: resolution.round() as u32,
         domain_size,
-        surface_detail: surface_detail.round() as u32,
-        viscosity: optional_coefficient("viscosity")?,
-        surface_tension: optional_coefficient("surface_tension")?,
-        points_per_cell: 8,
+        surface_detail: 0,
+        viscosity: 0.0,
+        surface_tension: 0.0,
+        points_per_cell,
         speed,
     })
 }
@@ -440,8 +378,6 @@ fn instrument_preset(
     json: &str,
     cinematic: bool,
     supersample: u32,
-    solver: Solver,
-    frame_node: &str,
 ) -> CaptureResult<String> {
     let mut instrumented: serde_json::Value = serde_json::from_str(json)?;
     let mut nodes = instrumented["nodes"]
@@ -460,28 +396,6 @@ fn instrument_preset(
         .as_array()
         .cloned()
         .ok_or_else(|| io::Error::other("preset wires must be an array"))?;
-    // The engine's metric outputs get consumers so the CSV columns are
-    // computed; a GPU frame's count is already consumed by the surface.
-    if solver == Solver::Flip {
-        let fluid_id = nodes
-            .iter()
-            .find(|node| node["nodeId"] == frame_node)
-            .and_then(|node| node["id"].as_u64())
-            .ok_or_else(|| io::Error::other(format!("preset node {frame_node} is not at the top level")))?;
-        for (index, name) in METRIC_NAMES.iter().enumerate() {
-            nodes.push(serde_json::json!({
-                "id": next_id + index as u64,
-                "nodeId": format!("capture_metric_{name}"),
-                "typeId": "node.math",
-                "handle": format!("Capture {name}"),
-            }));
-            wires.push(serde_json::json!({
-                "fromNode": fluid_id, "fromPort": name,
-                "toNode": next_id + index as u64, "toPort": "a",
-            }));
-        }
-        next_id += METRIC_NAMES.len() as u64;
-    }
 
     if cinematic {
         let scene_id = nodes
@@ -557,7 +471,7 @@ fn build_runtime(
     height: u32,
     frame_node: &str,
 ) -> CaptureResult<PresetRuntime> {
-    let registry = PrimitiveRegistry::with_cpu_flip_reference();
+    let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         instrumented_json,
         &registry,
@@ -655,59 +569,31 @@ fn read_fluid_metrics(runtime: &PresetRuntime, solver: Solver) -> CaptureResult<
         });
     }
     let (inputs, outputs) = runtime.preview_scalar_io();
-    if solver == Solver::Gpu {
-        // The GPU solver's time is in the frame's gpu_ms; the engine's
-        // solve/mesh/upload columns and whitewater counts stay 0.
-        let read = |list: &[(String, f32)], port: &str| -> CaptureResult<f64> {
-            let value = list
-                .iter()
-                .find_map(|(name, value)| (name == port).then_some(*value))
-                .ok_or_else(|| io::Error::other(format!("the frame's `{port}` is missing")))?;
-            if !value.is_finite() {
-                return Err(io::Error::other(format!("the frame's `{port}` is non-finite: {value}")).into());
-            }
-            Ok(f64::from(value))
-        };
-        return Ok(FluidMetrics {
-            simulation_time: read(&inputs, "simulation_time")?,
-            lag_seconds: 0.0,
-            simulation_ms: 0.0,
-            meshing_ms: 0.0,
-            // The count of the frame the preset presents: B, or A for a
-            // coupled preset (frame A carries the display-time bodies).
-            particle_count: read(&outputs, "count_b").or_else(|_| read(&outputs, "count_a"))?,
-            vertex_count: 0.0,
-            foam_count: 0.0,
-            bubble_count: 0.0,
-            spray_count: 0.0,
-            upload_ms: 0.0,
-        });
-    }
-    let mut values = [0.0; METRIC_NAMES.len()];
-    for (index, name) in METRIC_NAMES.iter().enumerate() {
-        let value = outputs
+    // The GPU solver's time is in the frame's gpu_ms; the engine's
+    // solve/mesh/upload columns and whitewater counts stay 0.
+    let read = |list: &[(String, f32)], port: &str| -> CaptureResult<f64> {
+        let value = list
             .iter()
-            .find_map(|(port, value)| (port == name).then_some(*value))
-            .ok_or_else(|| io::Error::other(format!("fluid_surface output `{name}` is missing")))?;
+            .find_map(|(name, value)| (name == port).then_some(*value))
+            .ok_or_else(|| io::Error::other(format!("the frame's `{port}` is missing")))?;
         if !value.is_finite() {
-            return Err(io::Error::other(format!(
-                "fluid_surface output `{name}` is non-finite: {value}"
-            ))
-            .into());
+            return Err(io::Error::other(format!("the frame's `{port}` is non-finite: {value}")).into());
         }
-        values[index] = f64::from(value);
-    }
+        Ok(f64::from(value))
+    };
     Ok(FluidMetrics {
-        simulation_time: values[0],
-        lag_seconds: values[1],
-        simulation_ms: values[2],
-        meshing_ms: values[3],
-        particle_count: values[4],
-        vertex_count: values[5],
-        foam_count: values[6],
-        bubble_count: values[7],
-        spray_count: values[8],
-        upload_ms: values[9],
+        simulation_time: read(&inputs, "simulation_time")?,
+        lag_seconds: 0.0,
+        simulation_ms: 0.0,
+        meshing_ms: 0.0,
+        // The count of the frame the preset presents: B, or A for a
+        // coupled preset (frame A carries the display-time bodies).
+        particle_count: read(&outputs, "count_b").or_else(|_| read(&outputs, "count_a"))?,
+        vertex_count: 0.0,
+        foam_count: 0.0,
+        bubble_count: 0.0,
+        spray_count: 0.0,
+        upload_ms: 0.0,
     })
 }
 
@@ -872,15 +758,13 @@ fn gpu_surface_vertices(runtime: &PresetRuntime, device: &GpuDevice, frame: u32)
 }
 
 /// Writes the live vertices of every surface mesh in the graph: each GPU
-/// Liquid Surface (`gpu`, live = nonzero normal) and the fluid node's CPU mesh
-/// (`cpu`, live = its first `cpu_count` vertices). A GPU mesh node other than
+/// Liquid Surface (`gpu`, live = nonzero normal). A GPU mesh node other than
 /// the preset's `liquid_mesh` is tagged `gpu-<node id>`, so one run can mesh
 /// the same particles through several surface variants.
 fn dump_surface_meshes(
     runtime: &PresetRuntime,
     device: &GpuDevice,
     frame: u32,
-    cpu_count: usize,
     fluid: &FluidMetrics,
     frame_node: &str,
     dir: &Path,
@@ -893,7 +777,6 @@ fn dump_surface_meshes(
                     array.name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
                 format!("gpu-{name}")
             }
-            (FLIP_DOMAIN_TYPE_ID, "vertices") => "cpu".to_string(),
             (_, "particles_b") if array.name == frame_node => "particles".to_string(),
             _ => continue,
         };
@@ -912,10 +795,9 @@ fn dump_surface_meshes(
             continue;
         }
         let mut out = Vec::new();
-        for (index, chunk) in bytes.chunks_exact(std::mem::size_of::<MeshVertex>()).enumerate() {
+        for chunk in bytes.chunks_exact(std::mem::size_of::<MeshVertex>()) {
             let vertex: MeshVertex = bytemuck::pod_read_unaligned(chunk);
-            let live = if tag.starts_with("gpu") { vertex.normal != [0.0; 3] } else { index < cpu_count };
-            if live {
+            if vertex.normal != [0.0; 3] {
                 for value in vertex.position.iter().chain(&vertex.normal) {
                     out.extend_from_slice(&value.to_le_bytes());
                 }
@@ -1103,7 +985,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
         gpu_surface: false,
         dump_mesh: false,
         look_metrics: false,
-        solver: Solver::Flip,
+        solver: Solver::None,
         frame_node: String::new(),
     };
     while let Some(arg) = args.next() {
@@ -1249,7 +1131,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         return Err(io::Error::other("--gpu-surface, --look-metrics and --dump-mesh need a liquid in the preset").into());
     }
     let instrumented_json =
-        instrument_preset(&json, options.cinematic, options.supersample, options.solver, &options.frame_node)?;
+        instrument_preset(&json, options.cinematic, options.supersample)?;
     if options.cinematic {
         fs::write(
             options.output_dir.join("preset.instrumented.json"),
@@ -1336,7 +1218,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             frame_dt,
             options,
         )?;
-        let cpu_vertex_count = fluid.vertex_count as usize;
         if options.gpu_surface {
             if fluid.particle_count < 1.0 {
                 return Err(io::Error::other(format!(
@@ -1364,11 +1245,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
                 ))
                 .into());
             }
-        } else if options.solver == Solver::Flip && fluid.vertex_count < 3.0 {
-            return Err(io::Error::other(format!(
-                "offline frame {frame} produced an empty fluid mesh"
-            ))
-            .into());
         }
         if let Some(look) = look.as_mut() {
             let particles = published_particles(&offline_runtime, &device, &options.frame_node, fluid.particle_count)?;
@@ -1391,7 +1267,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
                 &offline_runtime,
                 &device,
                 frame,
-                cpu_vertex_count,
                 &fluid,
                 &options.frame_node,
                 &options.output_dir.join("mesh"),
@@ -1698,8 +1573,6 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(sea_wall.speed, 0.5);
-        let flip = preset_settings(include_str!("../tests/fixtures/cpu-flip/WaterDamBreak.json")).unwrap();
-        assert_eq!((flip.solver, flip.frame_node.as_str()), (Solver::Flip, "fluid_surface"));
         let ocean = preset_settings(include_str!("../assets/generator-presets/Ocean.json")).unwrap();
         assert_eq!((ocean.solver, ocean.frame_node.as_str()), (Solver::None, ""));
     }
@@ -1719,18 +1592,14 @@ mod tests {
     fn cinematic_graph_inserts_average_and_spatial_resolve() {
         let source = serde_json::json!({
             "nodes": [
-                {"id": 0, "nodeId": "fluid_surface", "typeId": FLIP_DOMAIN_TYPE_ID, "params": {
-                    "resolution": {"type": "Int", "value": 24},
-                    "domain_size": {"type": "Float", "value": 4.0},
-                    "surface_subdivisions": {"type": "Int", "value": 0}
-                }},
+                {"id": 0, "nodeId": "value", "typeId": "node.value"},
                 {"id": 1, "nodeId": "scene", "typeId": "node.render_scene"},
                 {"id": 2, "nodeId": "tone", "typeId": "node.tone_map"}
             ],
             "wires": [{"fromNode": 1, "fromPort": "color", "toNode": 2, "toPort": "in"}]
         });
         let instrumented = serde_json::from_str::<serde_json::Value>(
-            &instrument_preset(&source.to_string(), true, 2, Solver::Flip, "fluid_surface").unwrap(),
+            &instrument_preset(&source.to_string(), true, 2).unwrap(),
         )
         .unwrap();
         let nodes = instrumented["nodes"].as_array().unwrap();

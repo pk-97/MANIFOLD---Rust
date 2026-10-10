@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::scene::fluid_domain::domain_layout;
+use manifold_core::fluid_domain::domain_layout;
 use manifold_nodes_water::liquid::lattice::LiquidLattice;
 use {manifold_nodes_water::matter::reference, manifold_nodes_water::matter::reference::Params, manifold_nodes_water::matter::reference::Point};
 use manifold_nodes_water::matter::{MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, block_sort_box, lattice_blocks, mass_unit, momentum_unit, rounding_hash, water_lambda};

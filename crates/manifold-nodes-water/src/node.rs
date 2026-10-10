@@ -11,7 +11,7 @@ pub trait PhysicsNode: Send {
     /// Current accepted setup state for native fluid-domain bounds. Nodes that
     /// expose fluid-domain observations return `Some`; all other nodes return
     /// `None`.
-    fn fluid_domain_snapshot(&self) -> Option<manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot> {
+    fn fluid_domain_snapshot(&self) -> Option<manifold_core::fluid_domain::FluidDomainSnapshot> {
         None
     }
 
@@ -37,9 +37,6 @@ pub trait PhysicsNode: Send {
     /// coming tick's start, so its forces are evaluated per tick.
     fn request_physics_samples(&mut self, _from: f64, _until: f64, _out: &mut Vec<f64>) {}
 
-    /// Authored dependency identity, prepared before evaluating live controls.
-    fn set_physics_source_identity(&mut self, _identity: Result<[u8; 32], String>) {}
-
     /// Resolve the rigid participant before its paired liquid step. This must
     /// not construct or advance a second native world, or publish outputs.
     fn capture_coupled_rigid(
@@ -54,19 +51,19 @@ pub trait PhysicsNode: Send {
     fn set_coupled_rigid_inputs(
         &mut self,
         _observation: Option<&crate::physics::RigidSceneObservation>,
-        _colliders: manifold_node_engine::scene::impulse::RigidImpulseTargets,
+        _colliders: manifold_core::scene_impulse::RigidImpulseTargets,
         _error: Option<&str>,
     ) {
     }
 
-    fn coupled_rigid_frame(&self) -> Option<&crate::fluid::CoupledRigidFrame> {
+    fn coupled_rigid_frame(&self) -> Option<&crate::rigid_coupling::CoupledRigidFrame> {
         None
     }
 
     /// Latch the rigid result of the liquid step before any scene consumer runs.
     fn accept_coupled_rigid_frame(
         &mut self,
-        _frame: Option<&crate::fluid::CoupledRigidFrame>,
+        _frame: Option<&crate::rigid_coupling::CoupledRigidFrame>,
     ) {
     }
 

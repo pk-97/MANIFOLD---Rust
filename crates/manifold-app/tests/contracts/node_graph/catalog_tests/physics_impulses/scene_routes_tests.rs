@@ -145,7 +145,7 @@ fn scene_impulse_routes_acknowledged_receipts_allow_more_than_queue_capacity() {
     assert!(runtime.is_scene_impulse_param(&fire));
     assert!(!runtime.is_scene_impulse_param("ordinary-trigger"));
     let mut sequence = 0;
-    let mut diagnostics = manifold_node_engine::scene::impulse::SceneImpulseDiagnostics::default();
+    let mut diagnostics = manifold_core::scene_impulse::SceneImpulseDiagnostics::default();
     for frame in 0..300 {
         runtime
             .fire_scene_impulse(&fire, time(frame as f64 * DT), &mut sequence)
@@ -193,65 +193,6 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
     assert_eq!(receipts, 1);
 }
 
-#[cfg(feature = "gpu-proofs")]
-#[test]
-fn scene_impulse_routes_share_rigid_and_fluid_targets_and_wait_for_domain_edits() {
-    let (mut def, manifest) = scene_fixture(&["part_a", "part_b"]);
-    def.nodes.extend([
-        serde_json::from_value(serde_json::json!({"id":14,"nodeId":"fluid","typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,
-            "params":{"resolution":{"type":"Int","value":8},"fill_height":{"type":"Float","value":0.0},"emission":{"type":"Float","value":0.0}}})).unwrap(),
-        serde_json::from_value(serde_json::json!({"id":15,"nodeId":"domain","typeId":"node.transform_3d"})).unwrap(),
-    ]);
-    def.wires
-        .retain(|wire| !(wire.to_node == 9 && wire.to_port == "transform"));
-    def.wires.extend([
-        serde_json::from_value(
-            serde_json::json!({"fromNode":14,"fromPort":"vertices","toNode":9,"toPort":"vertices"}),
-        )
-        .unwrap(),
-        serde_json::from_value(
-            serde_json::json!({"fromNode":15,"fromPort":"transform","toNode":14,"toPort":"domain"}),
-        )
-        .unwrap(),
-    ]);
-    let fire = alias(&def, "fire");
-    let mut runtime =
-        PresetRuntime::from_def_for_render(def, &registry(), Some(&manifest), false).unwrap();
-    runtime.execute_frame(time(0.0));
-    let mut sequence = 0;
-    runtime
-        .fire_scene_impulse(&fire, time(0.0), &mut sequence)
-        .unwrap();
-    runtime.execute_frame(time(DT));
-    let mut recipients = Vec::new();
-    runtime.water().drain_scene_impulses(|id, event| {
-        assert_eq!(event.value.field.sample([0.0; 3]), [2.0, 0.0, 0.0]);
-        assert!(matches!(event.value.target, ImpulseTarget::FluidAndRigid(_)));
-        recipients.push(id.to_string());
-    });
-    recipients.sort();
-    assert_eq!(recipients, ["fluid"], "one shared owner admits the source hit once");
-    let mut domains = Vec::new();
-    runtime.write_fluid_domains_watched(&mut domains);
-    assert_eq!(domains.len(), 1);
-    assert_eq!(domains[0].0.as_str(), "fluid");
-    assert_eq!(domains[0].1.accepted_layout.unwrap().cells, [8; 3]);
-    edit(&mut runtime, "domain", "pos_x", 2.0);
-    assert!(
-        runtime
-            .fire_scene_impulse(&fire, time(DT), &mut sequence)
-            .unwrap_err()
-            .contains("changed scene setup")
-    );
-    assert_eq!(sequence, 1);
-    runtime.execute_frame(time(DT));
-    assert!(
-        runtime
-            .fire_scene_impulse(&fire, time(DT), &mut sequence)
-            .unwrap()
-    );
-}
-
 #[test]
 fn scene_impulse_routes_report_exhaustion_and_recover_after_native_reset() {
     let (def, manifest) = scene_fixture(&["part_a"]);
@@ -290,40 +231,27 @@ fn scene_impulse_routes_report_exhaustion_and_recover_after_native_reset() {
 
 /// Audio fires arrive stamped with the frame time the engine just ticked to,
 /// before that frame renders; manual Fire carries the last rendered time.
-/// Rigid and CPU water re-observe at the source time, so both shapes land
-/// once on the following ticks.
+/// The rigid world re-observes at the source time, so both shapes land once
+/// on the following ticks.
 #[test]
 fn scene_impulse_routes_accept_audio_hits_stamped_ahead_of_the_last_render() {
-    let check = |with_fluid| {
-        let (mut def, manifest) = scene_fixture(&["part_a", "part_b"]);
-        if with_fluid {
-            def.nodes.push(serde_json::from_value(serde_json::json!({"id":14,"nodeId":"fluid","typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,
-                "params":{"resolution":{"type":"Int","value":8},"fill_height":{"type":"Float","value":0.0},"emission":{"type":"Float","value":0.0}}})).unwrap());
-            def.wires.retain(|wire| !(wire.to_node == 9 && wire.to_port == "transform"));
-            def.wires.push(serde_json::from_value(
-                serde_json::json!({"fromNode":14,"fromPort":"vertices","toNode":9,"toPort":"vertices"}),
-            ).unwrap());
-        }
-        let fire = alias(&def, "fire");
-        let mut runtime =
-            PresetRuntime::from_def_for_render(def, &registry(), Some(&manifest), false).unwrap();
-        runtime.execute_frame(time(0.0));
-        runtime.execute_frame(time(DT));
-        let mut sequence = 0;
-        // Manual: the last rendered time.
-        runtime.fire_scene_impulse(&fire, time(DT), &mut sequence).unwrap();
-        // Audio: the next frame's time, before it renders.
-        runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).unwrap();
-        runtime.execute_frame(time(2.0 * DT));
-        runtime.execute_frame(time(3.0 * DT));
-        let mut sequences = Vec::new();
-        runtime.water().drain_scene_impulses(|_, event| sequences.push(event.source.sequence));
-        sequences.sort();
-        assert_eq!(sequences, [0, 1], "fluid {with_fluid}: each hit applies once");
-        // Older than the latest observation: stale, refused.
-        assert!(runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).is_err());
-    };
-    check(false);
-    #[cfg(feature = "gpu-proofs")]
-    check(true);
+    let (def, manifest) = scene_fixture(&["part_a", "part_b"]);
+    let fire = alias(&def, "fire");
+    let mut runtime =
+        PresetRuntime::from_def_for_render(def, &registry(), Some(&manifest), false).unwrap();
+    runtime.execute_frame(time(0.0));
+    runtime.execute_frame(time(DT));
+    let mut sequence = 0;
+    // Manual: the last rendered time.
+    runtime.fire_scene_impulse(&fire, time(DT), &mut sequence).unwrap();
+    // Audio: the next frame's time, before it renders.
+    runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).unwrap();
+    runtime.execute_frame(time(2.0 * DT));
+    runtime.execute_frame(time(3.0 * DT));
+    let mut sequences = Vec::new();
+    runtime.water().drain_scene_impulses(|_, event| sequences.push(event.source.sequence));
+    sequences.sort();
+    assert_eq!(sequences, [0, 1], "each hit applies once");
+    // Older than the latest observation: stale, refused.
+    assert!(runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).is_err());
 }

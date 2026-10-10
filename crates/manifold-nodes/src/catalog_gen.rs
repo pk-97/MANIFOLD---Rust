@@ -137,7 +137,7 @@ struct ParamRow {
 /// keeps the generated artifact identical whether produced by the bin
 /// (non-test) or the drift-guard test (cfg(test)).
 fn is_test_fixture(type_id: &str) -> bool {
-    type_id.starts_with("node.__") || type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID
+    type_id.starts_with("node.__")
 }
 
 /// Which bundled presets use each node `type_id` — the discoverable

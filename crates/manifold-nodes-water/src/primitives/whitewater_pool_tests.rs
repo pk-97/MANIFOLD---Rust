@@ -10,7 +10,7 @@ use super::sort_particles_into_cells::SortParticlesIntoCells;
 use super::retype_whitewater::RetypeWhitewater;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use super::whitewater_cpu::Rng;
-use manifold_node_engine::testkit::water_codegen::run;
+use crate::testkit::water_codegen::run;
 use super::whitewater_pool_cpu::fixture::{FACE_CELLS, NODES, faces, grid, pool, tank};
 use {crate::primitives::whitewater_pool_cpu as cpu, super::whitewater_pool_cpu::Advect, super::whitewater_pool_cpu::Age, super::whitewater_pool_cpu::DEAD, super::whitewater_pool_cpu::Fields, super::whitewater_pool_cpu::Preserve};
 use manifold_node_engine::bindings::Slot;

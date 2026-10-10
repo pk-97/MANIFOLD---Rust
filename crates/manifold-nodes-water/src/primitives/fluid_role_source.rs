@@ -15,7 +15,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::scene::physics_mesh::MeshSelection;
+use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use crate::physics_mesh::{PART_PORTS, parse_compound_materials};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::Transform;

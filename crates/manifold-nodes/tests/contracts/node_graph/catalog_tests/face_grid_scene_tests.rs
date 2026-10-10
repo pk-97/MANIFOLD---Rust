@@ -127,7 +127,7 @@ impl MatterRun {
 
     /// Cells of the authored box holding a live point, x fastest.
     fn liquid_cells(&self) -> Vec<bool> {
-        let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, 4.0, CELLS[0]).expect("the preset's domain");
+        let layout = manifold_core::fluid_domain::domain_layout(None, 4.0, CELLS[0]).expect("the preset's domain");
         assert_eq!(layout.cells, CELLS);
         let points: Vec<MatterPoint> = self.read_all(self.output_of("node.matter_state", "out"));
         let mut liquid = vec![false; CELLS.iter().product::<u32>() as usize];

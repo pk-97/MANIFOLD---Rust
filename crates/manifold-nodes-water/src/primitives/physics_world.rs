@@ -1,10 +1,10 @@
 use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use crate::fluid::CoupledRigidFrame;
+use crate::rigid_coupling::CoupledRigidFrame;
 use manifold_node_engine::exec::instance_upload::InstanceSnapshotUpload;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use crate::physics::{BODY_PORTS, MAX_BODIES, MAX_COPIES, POSE_PORTS, ResolvedRigidImpulse, RigidBody, RigidSceneInputs, RigidSceneObservation, RigidSimulation};
-use manifold_node_engine::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 use crate::physics_events::{map_rigid_receipt, ResolvedNodeImpulse};
 use crate::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_node_engine::primitive::Primitive;
@@ -769,7 +769,7 @@ mod tests {
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
     use manifold_node_engine::exec::effect_node::{EffectNode, FrameTime, ParamValues};
     use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+    use manifold_core::scene_impulse::RigidImpulseTargets;
     use crate::physics::RigidBody;
     use crate::physics::PhysicsAuthoredSampleScope;
     use crate::physics_events::ResolvedNodeImpulse;

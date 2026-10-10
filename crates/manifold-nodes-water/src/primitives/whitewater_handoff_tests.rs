@@ -17,7 +17,7 @@ use manifold_gpu::GpuBuffer;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use super::whitewater_lifecycle::{Frame, Report, WhitewaterLifecycle};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use crate::fluid::{TICK, whitewater_fade};
+use crate::clock::{TICK, whitewater_fade};
 use manifold_node_engine::particles::FluidParticle;
 use crate::liquid::grid::face_len;
 use crate::fluid_particles::WhitewaterSpawn;

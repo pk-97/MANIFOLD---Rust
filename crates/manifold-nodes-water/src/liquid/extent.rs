@@ -37,9 +37,8 @@ impl LiquidPreset {
         Self::build_with_registry(def, &registry)
     }
 
-    /// Build with an explicitly selected primitive registry. Product callers
-    /// use [`Self::build`], while reference proofs opt into the retired CPU
-    /// FLIP node through `PrimitiveRegistry::with_cpu_flip_reference`.
+    /// Build with an explicitly selected primitive registry, for proofs that
+    /// register their own probe nodes. Product callers use [`Self::build`].
     pub fn build_with_registry(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Result<Self, ExtentError> {
         let build = |error: String| ExtentError::Build(error);
         let expanded = manifold_node_engine::load::expand::expand_scene_modifiers(def, registry)
@@ -284,7 +283,7 @@ pub(crate) fn particle_values(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 mod tests {
     use super::*;
 
-    use manifold_node_engine::scene::fluid_domain::domain_layout;
+    use manifold_core::fluid_domain::domain_layout;
     use crate::matter::{block_sort_box, lattice_blocks};
 
     use crate::primitives::matter_domain::admit_lattice;

@@ -29,7 +29,7 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use super::surface_crossings::SurfaceCrossings;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::fluid::TICK;
+use crate::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
 use crate::fluid_particles::{FaceSample, MAX_BINS, bin_counts, bin_total};
 use crate::liquid::grid::face_len;

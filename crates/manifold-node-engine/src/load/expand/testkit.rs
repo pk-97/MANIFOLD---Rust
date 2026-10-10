@@ -4,7 +4,7 @@ use crate::{graph::Graph, persistence::PrimitiveRegistry};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
-use crate::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 
 #[cfg(feature = "gpu-proofs")]
 pub fn authoring_objects(owner: &EffectGraphDef, scene: &SceneNodeRef, registry: &PrimitiveRegistry) -> Result<Vec<SceneNodeRef>, SceneModifierExpandError> {

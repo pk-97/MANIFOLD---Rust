@@ -3,7 +3,7 @@ use manifold_node_engine::exec::extent::*;
 use manifold_nodes_water::liquid::lattice::LiquidLattice;
 use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_nodes::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
-    use manifold_node_engine::scene::fluid_domain::domain_layout;
+    use manifold_core::fluid_domain::domain_layout;
 
 
     use manifold_core::preset_def::PresetKind;
@@ -294,8 +294,6 @@ fn extent_rule_inventory_preserves_the_rule_table() {
         "node.push_out_of_solid",
         "node.mix_arrays",
         manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID,
-        #[cfg(feature = "gpu-proofs")]
-        manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,
         "node.matter_fill",
         "node.matter_state",
         "node.zero_array",

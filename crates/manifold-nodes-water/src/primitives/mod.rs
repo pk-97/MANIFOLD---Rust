@@ -13,7 +13,6 @@ mod extend_lattice;
 pub mod face_grid_scenes;
 manifold_core::testkit_visible! { pub(crate) mod face_sample_component; }
 #[cfg(feature = "gpu-proofs")]
-pub(crate) mod fluid_surface;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_atom_tests;
 manifold_core::testkit_visible! { pub(crate) mod gpu_flip_bodies; }
@@ -132,7 +131,7 @@ mod whitewater_handoff_tests;
 mod whitewater_influence;
 pub(crate) mod whitewater_lifecycle;
 mod whitewater_obstacle_source;
-#[cfg(any(test, feature = "testkit"))]
+#[cfg(any(test, all(feature = "testkit", feature = "gpu-proofs")))]
 mod whitewater_particle_cpu;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_particle_tests;

@@ -6,7 +6,6 @@
 
 // The GPU proofs (`whitewater_grid_tests`, feature gpu-proofs) call every
 // item here; a default test build compiles only the extrapolation check.
-#![cfg_attr(not(feature = "gpu-proofs"), allow(dead_code))]
 
 use crate::whitewater::{CELL_AIR, CELL_LIQUID, CELL_SOLID, KnownValue, NO_CROSSING, SurfaceCrossing};
 

@@ -14,7 +14,7 @@ use manifold_core::{GraphTarget, LayerId, NodeId, project::Project};
 use manifold_editing::command::Command;
 use manifold_editing::commands::effects::ChangeGraphParamCommand;
 use manifold_editing::commands::graph::SetGraphNodeParamCommand;
-use manifold_node_engine::scene::fluid_domain::{FluidDomainLayout, domain_layout};
+use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_nodes_scene::node_graph::scene_vm::{ParamAddr, SceneObjectVm, SceneVm, TransformVm};
 use {manifold_nodes_scene::node_graph::viewport_gizmo::GizmoAxis, manifold_nodes_scene::node_graph::viewport_gizmo::GizmoMode, manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTarget, manifold_nodes_scene::node_graph::viewport_gizmo::GizmoTargetKind, manifold_node_engine::parameters::ParamValue, manifold_node_engine::param_binding::convert_param_value, manifold_nodes_scene::node_graph::viewport_gizmo::drag_write, manifold_nodes_scene::node_graph::viewport_gizmo::gizmo_target_for};
 
@@ -109,9 +109,9 @@ pub(crate) fn project_authored_params(
 /// selectable, but can't write through stale authored transform values.
 pub(crate) fn apply_runtime_domains(
     scene: &mut SceneVm,
-    domains: &[(NodeId, manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot)],
+    domains: &[(NodeId, manifold_core::fluid_domain::FluidDomainSnapshot)],
 ) {
-    use manifold_node_engine::scene::fluid_domain::FluidDomainState;
+    use manifold_core::fluid_domain::FluidDomainState;
     for object in &mut scene.objects {
         let SceneObjectVm::Known(row) = object else { continue };
         let Some(domain) = &row.liquid_domain else { continue };
@@ -254,7 +254,7 @@ fn set_transform_scalar(transform: &mut TransformVm, mode: GizmoMode, axis: Gizm
 
 fn fluid_layout(resolution: u32, transform: &TransformVm) -> Result<FluidDomainLayout, String> {
     domain_layout(
-        Some(manifold_node_engine::scene::transform::Transform {
+        Some(manifold_core::fluid_domain::DomainBox {
             pos: [
                 transform.pos_value.0,
                 transform.pos_value.1,
@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn runtime_domain_bounds_hide_unaccepted_layouts_and_lock_driven_edits() {
-        use manifold_node_engine::scene::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
+        use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
         let (project, layer, object_id) = fluid_project(true);
         let def = authored_def(&project, &GraphTarget::Generator(layer)).unwrap();
         let authored = SceneVm::from_def(&def).unwrap();
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn runtime_domain_bounds_match_grouped_fluid_by_stable_identity() {
-        use manifold_node_engine::scene::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
+        use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
         let (project, layer, object_id) = added_fluid_project();
         let def = authored_def(&project, &GraphTarget::Generator(layer)).unwrap();
         let mut scene = SceneVm::from_def(&def).unwrap();

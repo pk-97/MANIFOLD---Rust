@@ -127,3 +127,41 @@ fn workspace_dependencies_obey_layering() {
         }
     }
 }
+
+/// Water vocabulary leaving the engine is a ratchet: this count may only go
+/// down. Lower it when a move lands; never raise it. Obsolete when the engine
+/// names no water words at all.
+const ENGINE_WATER_WORD_FILES: usize = 54;
+const ENGINE_WATER_WORD_EXEMPT: &[&str] = &["atomic/fluid_sim_2d", "param_tooltips", "trigger_shadow_lint"];
+
+fn engine_water_word_files(dir: &Path, root: &Path, hits: &mut Vec<String>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            engine_water_word_files(&path, root, hits);
+            continue;
+        }
+        let relative = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+        if ENGINE_WATER_WORD_EXEMPT.iter().any(|exempt| relative.contains(exempt)) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let text = text.to_lowercase();
+        if ["fluid", "liquid", "physics", "whitewater"].iter().any(|word| text.contains(word)) {
+            hits.push(relative);
+        }
+    }
+}
+
+#[test]
+fn engine_water_vocabulary_only_shrinks() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-node-engine/src");
+    let mut hits = Vec::new();
+    engine_water_word_files(&src, &src, &mut hits);
+    hits.sort();
+    assert!(hits.len() <= ENGINE_WATER_WORD_FILES,
+        "engine files naming water words rose to {} (ratchet {ENGINE_WATER_WORD_FILES}); move the water behaviour to manifold-nodes-water instead:\n{}",
+        hits.len(), hits.join("\n"));
+    assert!(hits.len() >= ENGINE_WATER_WORD_FILES,
+        "engine water-word files fell to {}; lower ENGINE_WATER_WORD_FILES to match", hits.len());
+}

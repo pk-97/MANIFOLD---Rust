@@ -7,7 +7,6 @@ mod generator_renderer_tests;
 mod generator_renderer_warmup_tests;
 mod layer_compositor;
 #[cfg(feature = "gpu-proofs")]
-mod physics_collection;
 mod physics_impulses;
 mod preset_thumbnail;
 mod registered_assets;

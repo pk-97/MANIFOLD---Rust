@@ -9,7 +9,7 @@ use crate::primitives::gpu_flip_step::face_bytes;
 use crate::primitives::matter_face_component::{MatterFaceComponent, matter_cells};
 use manifold_node_engine::exec::effect_node::ParamValues;
 use crate::fluid_particles::FaceSample;
-use manifold_node_engine::scene::fluid_domain::domain_layout;
+use manifold_core::fluid_domain::domain_layout;
 use crate::liquid::grid::{face_dims, face_len};
 use crate::liquid::lattice::{LiquidLattice, PADDING_NODES};
 use crate::matter::lattice_nodes;

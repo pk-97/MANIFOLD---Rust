@@ -1,4 +1,4 @@
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(test)]
 use super::FIXED_TICK;
 use manifold_core::Seconds;
 use manifold_physics::input::AppliedEvent;
@@ -58,55 +58,6 @@ pub struct RigidSceneObservation {
 }
 
 impl RigidSceneInputs {
-    /// Validate disk-owned inputs before they reach native code. Geometry is
-    /// cooked by the existing native adapter, which also checks hull validity.
-    #[cfg(feature = "gpu-proofs")]
-    pub(crate) fn validate_recording(&self) -> Result<(), String> {
-        super::validate_fragments(&self.bodies)?;
-        if self
-            .gravity
-            .iter()
-            .chain([
-                &self.copy_count,
-                &self.copy_spacing,
-                &self.copy_columns,
-                &self.layout,
-            ])
-            .any(|v| !v.is_finite())
-        {
-            return Err("Physics take: nonfinite rigid world controls".into());
-        }
-        for body in self.bodies.iter().flatten().chain(self.prototype.iter()) {
-            if body.transform.billboard
-                || body.kind > 2
-                || body
-                    .transform
-                    .pos
-                    .iter()
-                    .chain(&body.transform.rot_euler)
-                    .any(|v| !v.is_finite())
-                || body
-                    .transform
-                    .scale
-                    .iter()
-                    .any(|v| !v.is_finite() || *v <= 0.0)
-                || [body.density, body.friction, body.bounce, body.release_count]
-                    .iter()
-                    .any(|v| !v.is_finite())
-                || body.release_count < 0.0
-            {
-                return Err("Physics take: invalid rigid body controls".into());
-            }
-        }
-        if let Some(prototype) = &self.prototype {
-            super::validate_copy_prototype(prototype)?;
-            if prototype.fragment_parent.is_some() {
-                return Err("Physics take: copy prototype cannot be a fragment".into());
-            }
-        }
-        Ok(())
-    }
-
     /// Compare the parts that require native geometry to be rebuilt.
     ///
     /// Count, spacing, columns, and layout intentionally do not participate:
@@ -188,7 +139,7 @@ impl RigidSimulation {
     /// Consume one batch of events already assigned by the shared worker
     /// queue. The native queue advances its empty cursor, while these events
     /// retain their original source and applied metadata.
-    #[cfg(any(test, feature = "gpu-proofs"))]
+    #[cfg(test)]
     pub(crate) fn advance_worker_tick<C: StepCoupling>(
         &mut self,
         inputs: &RigidSceneInputs,
@@ -308,7 +259,7 @@ impl RigidSimulation {
             && same_topology_body(self.copy_description.as_ref(), inputs.prototype.as_ref())
     }
 
-    #[cfg(any(test, feature = "gpu-proofs"))]
+    #[cfg(test)]
     fn validate_assigned_impulses(
         &self,
         events: &[AppliedEvent<ResolvedRigidImpulse>],
@@ -349,7 +300,7 @@ impl RigidSimulation {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "gpu-proofs"))]
+    #[cfg(test)]
     fn ensure_worker_tick_is_owed(&self, now: Seconds) -> Result<(), String> {
         if !now.0.is_finite() {
             return Err("Physics worker tick clock must be finite".into());
@@ -415,7 +366,7 @@ impl RigidSimulation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+    use manifold_core::scene_impulse::RigidImpulseTargets;
     use crate::physics::{PhysicsAuthoredSampleScope, PhysicsStepScope, ResolvedRigidImpulse};
     use manifold_physics::input::{AppliedEvent, EventStamp};
     use manifold_physics::stepping::{FramePlan, Uncoupled};

@@ -557,7 +557,7 @@ mod tests {
         }))
     }
 
-    fn known_fluid(id: u32, domain: Option<manifold_node_engine::scene::fluid_domain::FluidDomainLayout>) -> SceneObjectVm {
+    fn known_fluid(id: u32, domain: Option<manifold_core::fluid_domain::FluidDomainLayout>) -> SceneObjectVm {
         let mut object = known_object(id, (0.0, 0.0, -5.0), (false, false, false));
         let SceneObjectVm::Known(row) = &mut object else { unreachable!() };
         row.transform = None;
@@ -585,7 +585,7 @@ mod tests {
 
     fn known_fluid_with_transform(
         id: u32,
-        domain: manifold_node_engine::scene::fluid_domain::FluidDomainLayout,
+        domain: manifold_core::fluid_domain::FluidDomainLayout,
         transform: TransformVm,
     ) -> SceneObjectVm {
         let mut object = known_fluid(id, Some(domain));
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn static_fluid_domain_center_is_pickable_and_targets_domain_transform() {
-        let domain = manifold_node_engine::scene::fluid_domain::FluidDomainLayout {
+        let domain = manifold_core::fluid_domain::FluidDomainLayout {
             min: [1.0, -1.0, -8.0],
             size: [4.0, 2.0, 4.0],
             cells: [8, 8, 8],
@@ -659,7 +659,7 @@ mod tests {
 
     #[test]
     fn static_fluid_domain_without_explicit_transform_is_unavailable() {
-        let domain = manifold_node_engine::scene::fluid_domain::FluidDomainLayout {
+        let domain = manifold_core::fluid_domain::FluidDomainLayout {
             min: [-2.0, 0.0, -2.0],
             size: [4.0, 4.0, 4.0],
             cells: [16, 16, 16],
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn fluid_domain_rotation_is_hidden_unpickable_and_unwritable() {
-        let domain = manifold_node_engine::scene::fluid_domain::FluidDomainLayout {
+        let domain = manifold_core::fluid_domain::FluidDomainLayout {
             min: [-2.0, 0.0, -7.0],
             size: [4.0, 4.0, 4.0],
             cells: [16, 16, 16],
@@ -742,7 +742,7 @@ mod tests {
 
     #[test]
     fn gizmo_constraints_reject_nonfinite_and_bound_scale() {
-        let domain = manifold_node_engine::scene::fluid_domain::FluidDomainLayout {
+        let domain = manifold_core::fluid_domain::FluidDomainLayout {
             min: [-2.0, 0.0, -7.0],
             size: [4.0, 4.0, 4.0],
             cells: [16, 16, 16],

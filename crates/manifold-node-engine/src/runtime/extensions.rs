@@ -6,6 +6,7 @@ use manifold_core::{
     NodeId, PresetTypeId, effect_graph_def::EffectGraphDef, effects::PresetInstance, id::EffectId,
 };
 
+use manifold_core::{fluid_domain::FluidDomainSnapshot, scene_impulse::SceneImpulseDiagnostics};
 use super::{PresetRuntime, core::EffectSlot, preset_context::ProjectTempo};
 use crate::{
     exec::{
@@ -17,7 +18,6 @@ use crate::{
     load::expand::{SceneModifierExpandError, SceneModifierImpulseRoute},
     param_binding::ResolvedBinding,
     persistence::PrimitiveRegistry,
-    scene::{fluid_domain::FluidDomainSnapshot, impulse::SceneImpulseDiagnostics},
     validation::GraphError,
 };
 
