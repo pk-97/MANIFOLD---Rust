@@ -472,14 +472,15 @@ impl Show {
         Frame { gpu_ms: result.total_ms, cpu_ms, whitewater_ms, untimed: result.overflow + result.invalid }
     }
 
-    /// The first frame, warm-up, then a trigger restart from the fill, as
-    /// the GPU FLIP smoke runs start: the next frame is the liquid's first and
-    /// counts as frame 1.
-    /// The simulation step every following frame runs under.
+    /// The simulation step every following frame runs under. Set it before
+    /// `restart` so warm-up and the restart frames run under it too.
     pub fn set_sim_step(&mut self, step: crate::physics::SimStep) {
         self.runtime.set_sim_step(step);
     }
 
+    /// The first frame, warm-up, then a trigger restart from the fill, as
+    /// the GPU FLIP smoke runs start: the next frame is the liquid's first and
+    /// counts as frame 1.
     pub fn restart(&mut self) {
         self.frame(false);
         let mut warmups = 0;
