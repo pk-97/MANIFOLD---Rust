@@ -45,9 +45,11 @@ struct VolumeUniforms {
     _pad1: u32,
 }
 
+manifold_core::testkit_visible! {
 /// Level-set nodes per axis: `(n − 1)·m + 1` over the solid lattice's box.
-pub fn refined_nodes(solid_nodes: [f32; 3], scale: u32) -> [u32; 3] {
+pub(crate) fn refined_nodes(solid_nodes: [f32; 3], scale: u32) -> [u32; 3] {
     solid_nodes.map(|n| (n.max(2.0) as u32 - 1) * scale + 1)
+}
 }
 
 /// Resolution Scale: level-set nodes per solid-lattice cell.
