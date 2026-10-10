@@ -179,10 +179,36 @@ def read_any(path, sr, load):
         return x if r == sr else resample_poly(x, sr // g, r // g)
 
 
-def clip_hits(rows, als_dir, sr, band=(150, 10000)):
+def warped_hits(c, x, sr, band, points):
+    """(loud, quiet) hits of one warped clip in arrangement seconds: each pass through the clip (the first from its
+    start marker, then loop_start..loop_end while it loops) read from the file through the warp markers and placed on
+    the tempo map. points: [(beat, bpm)]."""
+    from tools.audio_analysis.eval.als_extract import beat_seconds, warp_beats, warp_seconds
+    m = c['markers']
+    a, cb0 = c['start_beat'], c['clip_start_beat']
+    cb1 = c['loop_end'] if c['looped'] else cb0 + c['end_beat'] - c['start_beat']
+    loud, quiet = [], []
+    while a < c['end_beat'] - 1e-6 and cb1 > cb0:
+        cb1 = min(cb1, cb0 + c['end_beat'] - a)
+        f0, f1 = max(0.0, warp_seconds(m, cb0)), warp_seconds(m, cb1)
+        seg = x[int(f0 * sr):int(f1 * sr)]
+        if len(seg) >= sr // 50:
+            hl, hq = stem_hits(np.concatenate([np.zeros(sr // 10), seg]), sr, band)
+            for hits, out in ((hl, loud), (hq, quiet)):
+                out += [beat_seconds(points, a + warp_beats(m, f0 + h - .1) - cb0) for h in hits if h >= .1]
+        a += cb1 - cb0
+        if not c['looped']:
+            break
+        cb0, cb1 = c['loop_start'], c['loop_end']
+    return loud, quiet
+
+
+def clip_hits(rows, als_dir, sr, band=(150, 10000), points=None):
     """Hits inside the family's audio clips, in arrangement seconds: one-shots, frozen tracks and consolidated parts
     alike (each is that track rendered on its own, so stem_hits applies). Files missing at their stored path are looked
-    up by name under the project folder (read only). Assumes unwarped or 1:1 clips. Returns (loud, quiet)."""
+    up by name under the project folder (read only). With the tempo map (points: [(beat, bpm)]), warped clips are
+    placed through their warp markers and loops (warped_hits); without it, or for unwarped clips, file time runs 1:1
+    from the start marker. Returns (loud, quiet)."""
     from tools.audio_analysis.eval.kick_goal_eval import load
     loud, quiet, found, cache = [], [], {}, {}
     for c in rows:
@@ -198,6 +224,11 @@ def clip_hits(rows, als_dir, sr, band=(150, 10000)):
             continue
         if p not in cache:
             cache[p] = read_any(p, sr, load)
+        if points is not None and c['warped'] and len(c['markers']) >= 2:
+            h_loud, h_quiet = warped_hits(c, cache[p], sr, band, points)
+            loud += h_loud
+            quiet += h_quiet
+            continue
         a = int(max(0.0, c['file_start_s']) * sr)
         seg = cache[p][a:a + int((c['end_s'] - c['start_s']) * sr)]
         if len(seg) < sr // 50:
