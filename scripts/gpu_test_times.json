@@ -22,6 +22,7 @@
     "manifold-nodes/gpu_proofs/matter_look::matter_look_lattice_alignment": 104.6,
     "manifold-app/renderer_gpu_proofs/liquid_conformance::gpu_flip_body_reaction_matches_engine_substeps": 92.7,
     "manifold-nodes/main/contracts::node_graph::catalog_tests::gpu_flip_body::gpu_flip_body_step_sparse_matches_all_tiles": 69.6,
+    "manifold-nodes/gpu_proofs/node_error_status::node_error_fails_the_frame": 69.6,
     "manifold-nodes/main/contracts::node_graph::catalog_tests::liquid_prepare::liquid_prepare_pipelines_is_idempotent": 68.0,
     "manifold-nodes/main/contracts::water::primitives::gpu_flip_scene_tests::gpu_flip_density_projection_settled_column_depth_and_density": 62.6,
     "manifold-app/renderer_gpu_proofs/liquid_conformance::liquid_live_frames_never_wait": 62.1,
