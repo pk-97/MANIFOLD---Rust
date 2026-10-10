@@ -31,3 +31,35 @@ def rise_candidates(e, rise_db, lookback, refractory, deadline):
             last, armed = h, False
     cand = np.array(cand, int)
     return cand, cand + deadline
+
+
+def spectral_rise(spec, sr, lo, hi, lookback=10):
+    """Per hop: the mean over net bands in [lo, hi] Hz of how far each band's level (dB, the net spectrum on its 2 ms
+    grid) sits above its own mean over the previous `lookback` frames, clipped at 0. A new note lights up bands that
+    were quiet, so a pitch change scores even when the overall level does not rise. Hop h reads the last frame that
+    ends at or before the hop's end."""
+    from tools.audio_analysis.eval.kick_goal_nn import CENTRES, FRAME_S
+    sel = (CENTRES >= lo) & (CENTRES <= hi)
+    s = spec[:, sel].astype(np.float64)
+    c = np.cumsum(np.vstack([np.zeros((1, s.shape[1])), s]), axis=0)
+    past = np.full_like(s, np.inf)
+    past[lookback:] = (c[lookback:-1] - c[:-lookback - 1]) / lookback
+    rise = np.clip(s - past, 0, None).mean(1)
+    rise[:lookback] = 0
+    frame_hop = FRAME_S * sr
+    n_hops = int(len(s) * frame_hop // HOP)
+    f = np.floor((np.arange(n_hops) + 1) * HOP / frame_hop).astype(int)
+    return rise[np.clip(f, 0, len(rise) - 1)]
+
+
+def peak_candidates(v, thr, refractory, deadline):
+    """One candidate per excursion of v over thr: armed again once v falls under thr / 2, refractory hops apart."""
+    cand, last, armed = [], -100, True
+    for h in range(len(v)):
+        if v[h] < thr / 2:
+            armed = True
+        if armed and v[h] >= thr and h - last >= refractory:
+            cand.append(h)
+            last, armed = h, False
+    cand = np.array(cand, int)
+    return cand, cand + deadline

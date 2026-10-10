@@ -35,14 +35,19 @@ def nearest(a, b):
     return np.minimum(np.abs(a - b[j - 1]), np.abs(a - b[np.minimum(j, len(b) - 1)]))
 
 
-def rows(s, onset):
-    """(training mask, y, vouched-negative flag) per candidate onset (s) for one song's labels s."""
+def rows(s, onset, dense=False):
+    """(training mask, y, vouched-negative flag) per candidate onset (s) for one song's labels s. With dense, the
+    prominent events inside fast runs (s['dense_pos']) also train as positives; nothing else in a run trains."""
     pos, hard = np.array(s['positives']), np.array(s['hard_neg'])
     y = (nearest(onset, pos) <= LAB_TOL).astype(float)
     hard_near = nearest(onset, hard) <= LAB_TOL
     mask = ~inside(onset, s['unscored'])
     in_loop = inside(onset, s['loop_spans'])
     mask &= ~in_loop | (y == 1) | hard_near
+    if dense and s.get('dense_pos'):
+        run = nearest(onset, np.array(s['dense_pos'])) <= LAB_TOL
+        y[run] = 1.0
+        mask |= run
     if s['positives_only']:
         mask &= y == 1
     return mask, y, hard_near & (y == 0)
@@ -97,17 +102,34 @@ def choose(items, min_precision=None):
     return best[1]
 
 
-def held_out(lab, meta, held, min_precision=None, log=print):
+def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None):
     """Score every song with a cutoff chosen on the others. meta[t] = (labels, emit, avail, sr); held[t] = held-out
-    probabilities. Recall-only songs never choose a cutoff. Returns (caught, positives, false)."""
+    probabilities. Recall-only songs never choose a cutoff. Returns (caught, positives, false); fills cutoffs[t]
+    when given."""
     tm = tn = tf = 0
     songs = list(held)
     for t in songs:
         th = choose([(meta[u][0], meta[u][1], held[u], meta[u][2], meta[u][3]) for u in songs
                      if u != t and not lab[u]['positives_only']], min_precision)
+        if cutoffs is not None:
+            cutoffs[t] = th
         s, emit, avail, sr = meta[t]
         m, n, f = score(s, emit, held[t], avail, th, sr)
         tm, tn, tf = tm + m, tn + n, tf + f
         if log:
             log(f'  {t:14s} cutoff {th:.2f}: {m}/{n} caught, {f} false fires')
     return tm, tn, tf
+
+
+def dense_recall(lab, meta, held, cutoffs, key='dense_pos'):
+    """(caught, total) of the events inside fast runs (unscored in the main score), each song at its held-out cutoff."""
+    m = n = 0
+    for t in held:
+        d = np.array(lab[t].get(key) or [])
+        if not len(d):
+            continue
+        s, emit, avail, sr = meta[t]
+        f = emit[fires(held[t], avail, cutoffs[t], sr)]
+        m += int(np.sum(nearest(d, f) <= TOL)) if len(f) else 0
+        n += len(d)
+    return m, n

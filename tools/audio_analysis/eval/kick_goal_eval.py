@@ -41,7 +41,7 @@ from tools.audio_analysis.eval.kick_goal_project_kicks import PROJECT, confirmed
 from tools.audio_analysis.eval.kick_goal_recall_labels import RECALL
 from tools.audio_analysis.eval.kick_goal_rolls import kick_notes
 from tools.audio_analysis.eval.kick_goal_trigger_labels import TRIGGER
-from tools.audio_analysis.eval.kick_goal_wip_labels import WIP
+from tools.audio_analysis.eval.kick_goal_wip_labels import WIP, WIP2
 from tools.audio_analysis.eval.kick_night_common import NIGHT, TRACKS, Data
 from tools.audio_analysis.eval.live_kick_baseline import match_events, score_events
 from tools.audio_analysis.eval.master_kick_comparison import score_passage
@@ -118,10 +118,11 @@ TRUTH = os.environ.get('KICK_GOAL_TRUTH', 'strict')
 MORE_ON = os.environ.get('KICK_GOAL_MORE') == '1'
 TRIGGER_ON = os.environ.get('KICK_GOAL_TRIGGER') == '1'
 WIP_ON = os.environ.get('KICK_GOAL_WIP') == '1'
+WIP2_ON = os.environ.get('KICK_GOAL_WIP2') == '1'
 PROJECT_ON = os.environ.get('KICK_GOAL_PROJECT') == '1'
 RECALL_ON = os.environ.get('KICK_GOAL_RECALL') == '1'
 SUFFIX = (('' if TRUTH == 'strict' else f'_{TRUTH}') + ('_more' if MORE_ON else '') + ('_trig' if TRIGGER_ON else '')
-          + ('_wip' if WIP_ON else '') + ('_proj' if PROJECT_ON else '') + ('_rec' if RECALL_ON else ''))
+          + ('_wip' if WIP_ON else '') + ('_wip2' if WIP2_ON else '') + ('_proj' if PROJECT_ON else '') + ('_rec' if RECALL_ON else ''))
 NEW_SONGS = ('pattern', 'back_to_you', 'burn_stems', 'cold_remix')
 # KICK_GOAL_MORE=1 adds the campaign 2 training songs (kick_goal_labels.MORE, labels_more.json).
 MORE_SONGS = tuple(MORE) if MORE_ON else ()
@@ -130,6 +131,8 @@ STEM_CFG = {**NEW, **MORE}
 TRIGGER_SONGS = tuple(TRIGGER) if TRIGGER_ON else ()
 # KICK_GOAL_WIP=1 adds the section-scored WIP mixdowns (kick_goal_wip_labels, labels_wip.json).
 WIP_SONGS = WIP if WIP_ON else ()
+# KICK_GOAL_WIP2=1 adds the 2024/2025 section-scored WIP mixdowns (kick_goal_wip_2425, labels_wip2.json).
+WIP2_SONGS = WIP2 if WIP2_ON else ()
 # KICK_GOAL_RECALL=1 adds WIP mixdowns scored for recall only (kick_goal_recall_labels, labels_recall.json):
 # their kicks train and must be caught, nothing else in them is a non-kick. Precision summaries leave them out.
 RECALL_SONGS = RECALL if RECALL_ON else ()
@@ -199,10 +202,12 @@ class Goal:
             self.labels['new'].update(json.loads((GOAL / 'labels_trigger.json').read_text())['new'])
         if WIP_SONGS:
             self.labels['new'].update(json.loads((GOAL / 'labels_wip.json').read_text())['new'])
+        if WIP2_SONGS:
+            self.labels['new'].update(json.loads((GOAL / 'labels_wip2.json').read_text())['new'])
         if RECALL_SONGS:
             self.labels['new'].update(json.loads((GOAL / 'labels_recall.json').read_text())['new'])
         if with_new:
-            for name in NEW_SONGS + MORE_SONGS + TRIGGER_SONGS + WIP_SONGS + RECALL_SONGS:
+            for name in NEW_SONGS + MORE_SONGS + TRIGGER_SONGS + WIP_SONGS + WIP2_SONGS + RECALL_SONGS:
                 self.records[name] = self._new(name)
 
     def _new(self, name):

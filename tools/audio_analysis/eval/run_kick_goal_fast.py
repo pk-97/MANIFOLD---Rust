@@ -37,7 +37,7 @@ import numpy as np  # noqa: E402
 from scipy.special import expit, logit  # noqa: E402
 
 from tools.audio_analysis.eval.kick_goal_eval import (  # noqa: E402
-    DEV_STEMS, GOAL, MORE_SONGS, NEW_SONGS, OUT, RECALL_SONGS, SUFFIX, TRACKS, TRIGGER_SONGS, TRUTH, WIP_SONGS, Goal,
+    DEV_STEMS, GOAL, MORE_SONGS, NEW_SONGS, OUT, RECALL_SONGS, SUFFIX, TRACKS, TRIGGER_SONGS, TRUTH, WIP2_SONGS, WIP_SONGS, Goal,
     add_whole_song_truth, choose, counts, score)
 from tools.audio_analysis.eval.kick_goal_featsets import build, lowbank_cache, profile_cache  # noqa: E402
 from tools.audio_analysis.eval.kick_goal_melodic import add_melodic_negatives  # noqa: E402
@@ -70,7 +70,8 @@ def groups():
     """Fixed fold assignment: each kind's songs dealt round-robin across the folds in turn."""
     hand = [t for t in TRACKS if t not in DEV_STEMS]
     stems = [t for t in TRACKS if t in DEV_STEMS] + list(NEW_SONGS)
-    kinds = [hand, stems, list(MORE_SONGS), list(TRIGGER_SONGS), list(WIP_SONGS), list(RECALL_SONGS)]
+    # WIP2 comes last so adding it leaves every other song in its fold.
+    kinds = [hand, stems, list(MORE_SONGS), list(TRIGGER_SONGS), list(WIP_SONGS), list(RECALL_SONGS), list(WIP2_SONGS)]
     order = [t for k in kinds for t in sorted(k)]
     assert sorted(order) == sorted(ALL)
     out = [[] for _ in range(FOLDS)]

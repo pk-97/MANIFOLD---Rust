@@ -40,7 +40,8 @@ class Family:
     stem_neg: dict = field(default_factory=dict)
     stem_doubt: dict = field(default_factory=dict)
     recall_only: tuple = ()
-    wip: bool = True             # add the proven WIP songs (detector_wip)
+    wip: bool = True             # WIP songs take their proven offsets from detector_wip
+    add_wip: bool = True         # label every proven WIP song (detector_wip), not only the listed ones
     prominent_db: float = 9.0
     main_db: float = 6.0
     dense_s: float = .200
@@ -49,6 +50,7 @@ class Family:
     far_s: float = .070
     half: tuple = (-.07, .07)
     stem_band: tuple = (150, 10000)
+    kick_clash_s: float = 0.0   # events this close to a kick are unscored: the mix cannot tell them apart
 
 
 def env_db(x, sr, lo, hi):
@@ -163,6 +165,20 @@ def stem_hits(x, sr, band=(150, 10000)):
     return h[loud] * 1e-3, h[~loud] * 1e-3
 
 
+def read_any(path, sr, load):
+    """Mono audio at sr: the goal loader for wav, soundfile (mp3, flac, aiff) when it cannot read the file."""
+    try:
+        return load(path, sr)
+    except ValueError:
+        import math
+        import soundfile as sf
+        from scipy.signal import resample_poly
+        x, r = sf.read(path, dtype='float64', always_2d=True)
+        x = x.mean(axis=1)
+        g = math.gcd(sr, r)
+        return x if r == sr else resample_poly(x, sr // g, r // g)
+
+
 def clip_hits(rows, als_dir, sr, band=(150, 10000)):
     """Hits inside the family's audio clips, in arrangement seconds: one-shots, frozen tracks and consolidated parts
     alike (each is that track rendered on its own, so stem_hits applies). Files missing at their stored path are looked
@@ -181,7 +197,7 @@ def clip_hits(rows, als_dir, sr, band=(150, 10000)):
         if not p:
             continue
         if p not in cache:
-            cache[p] = load(p, sr)
+            cache[p] = read_any(p, sr, load)
         a = int(max(0.0, c['file_start_s']) * sr)
         seg = cache[p][a:a + int((c['end_s'] - c['start_s']) * sr)]
         if len(seg) < sr // 50:
@@ -220,10 +236,9 @@ def song(g, t, fam):
     """One song's labels dict (see the module doc)."""
     from tools.audio_analysis.eval.als_extract import extract
     from tools.audio_analysis.eval.kick_goal_eval import STEM_CFG, load
-    from tools.audio_analysis.eval.kick_goal_melodic import _source, melodic_onsets
+    from tools.audio_analysis.eval.kick_goal_melodic import _source
     from tools.audio_analysis.eval.detector_songs import audio, rate, wip
     W = wip() if fam.wip else {}
-    r = g.records.get(t, {})
     sr = rate(g, t)
     x = audio(g, t)
     dur = len(x) / sr
@@ -276,20 +291,20 @@ def song(g, t, fam):
         dropped = list(pos[~ok])
         unscored += [(u + h0, u + h1) for u in pos[~ok]]
         pos = pos[ok]
+    kicks, mel = vouched(g, t, W, src, res if t in W else None)
+    if fam.kick_clash_s and len(pos) and len(kicks):
+        from tools.audio_analysis.eval.detector_eval import nearest
+        clash = nearest(pos, kicks) <= fam.kick_clash_s
+        unscored += [(u + h0, u + h1) for u in pos[clash]]
+        pos = pos[~clash]
     dense = dense_spans(np.concatenate([pos, dropped]), fam)
+    # Events inside fast runs are not scored, but they are real: kept for training on runs (BUG-9ngk8.2.1).
+    every = np.sort(np.concatenate([pos, dropped]))
+    dense_all = every[inside(every, dense) & (every > .1) & (every < dur - .1)]
+    dense_pos = pos[inside(pos, dense) & (pos > .1) & (pos < dur - .1)]
     pos = pos[~inside(pos, dense)]
     unscored += dense
     pos = pos[(pos > .1) & (pos < dur - .1)]
-    if t in W:
-        # WIP songs: kicks and melodic notes straight from the project, shifted by the proven offset.
-        from tools.audio_analysis.eval.detector_wip import kick_beats
-        from tools.audio_analysis.eval.kick_goal_melodic import NOT_MELODIC
-        kicks = kick_beats(res) * 60 / W[t]['bpm'] + src[1]
-        mel = np.array([n['s'] for tr in res['tracks'] if tr.get('speaker_on', True) and not NOT_MELODIC.search(tr['name'])
-                        for c in tr['midi_clips'] for n in c['notes']]) + src[1]
-    else:
-        kicks = np.asarray(r.get('stem_kicks') if r.get('stem_kicks') is not None else r.get('all_labels', r.get('truth', [])), float)
-        mel = melodic_onsets(t) + r.get('lag', 0.0)
     neg = np.concatenate([kicks, mel, neg_own])
     if len(pos):
         j = np.clip(np.searchsorted(pos, neg), 1, len(pos) - 1) if len(pos) > 1 else np.zeros(len(neg), int)
@@ -298,13 +313,31 @@ def song(g, t, fam):
     return dict(kind=kind, duration_s=dur, positives=sorted(map(float, pos)), unscored=[list(map(float, u)) for u in unscored],
                 loop_spans=[list(map(float, u)) for u in loops], hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))),
                 positives_only=t in fam.recall_only, dropped=sorted(map(float, dropped)), dense=dense,
+                dense_pos=sorted(map(float, dense_pos)), dense_all=sorted(map(float, dense_all)),
                 timing_shift_ms=round(1000 * shift, 1) if kind == 'project' else 0.0, offset_s=float(src[1]) if src else None)
+
+
+def vouched(g, t, W, src, res):
+    """(kick times, melodic note starts) in mix time: WIP songs straight from the project, shifted by the proven
+    offset; goal songs from the kick labels and kick_goal_melodic."""
+    from tools.audio_analysis.eval.kick_goal_melodic import melodic_onsets
+    if t in W:
+        from tools.audio_analysis.eval.detector_wip import kick_beats
+        from tools.audio_analysis.eval.kick_goal_melodic import NOT_MELODIC
+        kicks = kick_beats(res) * 60 / W[t]['bpm'] + src[1]
+        mel = np.array([n['s'] for tr in res['tracks'] if tr.get('speaker_on', True) and not NOT_MELODIC.search(tr['name'])
+                        for c in tr['midi_clips'] for n in c['notes']]) + src[1]
+        return kicks, mel
+    r = g.records.get(t, {})
+    kicks = np.asarray(r.get('stem_kicks') if r.get('stem_kicks') is not None else r.get('all_labels', r.get('truth', [])), float)
+    return kicks, melodic_onsets(t) + r.get('lag', 0.0)
 
 
 def songs(fam):
     """Every song the family labels, in file order."""
     from tools.audio_analysis.eval.detector_songs import wip
-    return fam.midi_songs + fam.clip_songs + tuple(fam.stem_songs) + (tuple(wip()) if fam.wip else ())
+    listed = fam.midi_songs + fam.clip_songs + tuple(fam.stem_songs) + (tuple(wip()) if fam.wip and fam.add_wip else ())
+    return tuple(dict.fromkeys(listed))
 
 
 def write(fam, path, log=print):
