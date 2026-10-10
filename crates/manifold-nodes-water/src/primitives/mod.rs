@@ -37,8 +37,6 @@ mod gpu_flip_sheeting_tests;
 manifold_core::testkit_visible! { pub(crate) mod gpu_flip_step; }
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_step_tests;
-#[cfg(all(any(test, feature = "testkit"), feature = "water-race-probes"))]
-pub mod gpu_flip_still;
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub mod gpu_flip_volume;
