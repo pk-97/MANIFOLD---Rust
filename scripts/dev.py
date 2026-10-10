@@ -54,12 +54,6 @@ VERBS = [
     ("Landing and gates",
      "bridge-probe", "bridge_probe_gate.py", "presentation tear regression gate"),
     ("Landing and gates",
-     "crate-move", "crate_move_replay.py", "replay a reviewed crate move or verify full tree identity"),
-    ("Landing and gates",
-     "move-check", "move_identity_check.py", "prove a pure code move; --plan derives replay maps and reports template digests; --rewrite/--rewrites-file for explicit maps"),
-    ("Landing and gates",
-     "test-census", "test_census.py", "record and compare test identities across crate moves"),
-    ("Landing and gates",
      "docs-index", "gen_docs_index.py", "regenerate docs/README.md after adding or renaming a doc"),
     ("Landing and gates",
      "glb-status", "gen_glb_conformance_status.py", "regenerate the glTF conformance status doc"),
@@ -183,7 +177,7 @@ INTERNAL = {
 # Execution cost is declared, never inferred from render/snapshot words.
 # unit: cheap local work; focused: bounded checks/required landing orchestration;
 # broad: sweeps, app renders and GPU probes requiring a bounded Codex permit.
-# Explicit entries override test_*.py (test_census builds). Compiled targets
+# Explicit entries override test_*.py. Compiled targets
 # share the table so dev verbs and direct cargo runs agree.
 COST_CLASSES = {
     "agent-worktree.py": "unit",
@@ -199,7 +193,6 @@ COST_CLASSES = {
     "codex_regressions.py": "unit",
     "codex_usage.py": "unit",
     "cpu_scope.py": "unit",
-    "crate_move_replay.py": "unit",
     "depth_relight_sweep.py": "unit",
     "dev.py": "unit",
     "diff_scope.py": "unit",
@@ -233,7 +226,6 @@ COST_CLASSES = {
     "live_ui_generator_demo.py": "broad",
     "live_ui_safety_demo.py": "broad",
     "mgpcg_reference.py": "unit",
-    "move_identity_check.py": "unit",
     "narrow_band_grid_reference.py": "unit",
     "narrow_band_reference.py": "unit",
     "pick_probe_regions.py": "unit",
@@ -249,7 +241,6 @@ COST_CLASSES = {
     "run_ui_flows.py": "broad",
     "stale_beads.py": "unit",
     "storage_budget.py": "unit",
-    "test_census.py": "focused",
     "token_report.py": "unit",
     "trunk_health.py": "broad",
     "ui_flows_batch_proof.py": "broad",
