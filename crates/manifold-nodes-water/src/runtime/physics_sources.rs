@@ -17,7 +17,9 @@ use sha2::{Digest, Sha256};
 
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
-use manifold_node_engine::load::expand::{SceneModifierImpulseRoute, impulse_recipients, prepare_coupled_scenes};
+use manifold_node_engine::load::expand::SceneModifierImpulseRoute;
+use manifold_node_engine::load::expand::impulse_recipients;
+use crate::graph_install::coupling::prepare_coupled_scenes;
 
 /// Authored identity for one fluid source graph.
 pub(crate) struct PhysicsSourceGraph {

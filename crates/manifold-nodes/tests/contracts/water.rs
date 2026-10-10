@@ -5,3 +5,4 @@ mod race_probe;
 
 #[cfg(feature = "gpu-proofs")]
 mod physics_scene;
+mod coupling;

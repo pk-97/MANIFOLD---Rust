@@ -6,12 +6,7 @@
 use manifold_core::scene_index::{FlatSceneIndex, SceneIndexError};
 
 mod acceleration;
-pub use acceleration::impulse_recipients;
-manifold_core::testkit_visible! {
-#[doc(hidden)]
-pub(crate) mod coupling;
-}
-pub use coupling::{CoupledSceneBinding, prepare_coupled_scenes};
+pub use acceleration::{impulse_recipients, impulse_recipients_with_index};
 mod bindings;
 mod buffer_budget;
 mod event_state;

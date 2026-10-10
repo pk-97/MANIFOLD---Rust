@@ -4,10 +4,8 @@ mod tests {
     use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
     use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 
-    use manifold_node_engine::load::expand::{
-        coupling::{prepare_coupled_scenes, CoupledSceneBinding},
-        SceneModifierExpandError,
-    };
+    use manifold_node_engine::load::expand::SceneModifierExpandError;
+    use manifold_nodes_water::graph_install::coupling::{prepare_coupled_scenes, CoupledSceneBinding};
     use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_node_engine::scene::impulse::RigidImpulseTargets;
 

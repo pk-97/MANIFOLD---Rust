@@ -262,7 +262,7 @@ pub fn impulse_recipients(
     impulse_recipients_with_index(&index, scene, selection, registry)
 }
 
-pub(super) fn impulse_recipients_with_index(
+pub fn impulse_recipients_with_index(
     index: &FlatSceneIndex,
     scene: &SceneNodeRef,
     selection: &SceneTargetSelection,
