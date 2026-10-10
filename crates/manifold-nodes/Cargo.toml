@@ -8,9 +8,10 @@ autotests = false
 [dependencies]
 manifold-nodes-scene = { path = "../manifold-nodes-scene" }
 manifold-nodes-water = { path = "../manifold-nodes-water" }
-# Seam and Matter constants for the liquid conformance fixtures (src/testkit), testkit only.
+# Seam, Matter and whitewater constants for the liquid conformance fixtures (src/testkit), testkit only.
 manifold-water-liquid = { path = "../manifold-water-liquid", optional = true }
 manifold-water-gpu-mpm = { path = "../manifold-water-gpu-mpm", optional = true }
+manifold-water-whitewater = { path = "../manifold-water-whitewater", optional = true }
 manifold-nodes-image = { path = "../manifold-nodes-image" }
 manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-core = { path = "../manifold-core" }
@@ -29,6 +30,7 @@ manifold-water-rigid = { path = "../manifold-water-rigid", features = ["testkit"
 manifold-water-liquid = { path = "../manifold-water-liquid", features = ["testkit"] }
 manifold-water-gpu-flip = { path = "../manifold-water-gpu-flip", features = ["testkit"] }
 manifold-water-gpu-mpm = { path = "../manifold-water-gpu-mpm", features = ["testkit"] }
+manifold-water-whitewater = { path = "../manifold-water-whitewater", features = ["testkit"] }
 manifold-nodes-image = { path = "../manifold-nodes-image", features = ["testkit"] }
 manifold-gpu = { path = "../manifold-gpu", features = ["testkit"] }
 manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
@@ -100,7 +102,7 @@ required-features = ["gpu-proofs"]
 # glTF conformance is a module of gpu_proofs; select glb_conformance::.
 
 [features]
-testkit = ["manifold-node-engine/testkit", "manifold-nodes-image/testkit", "manifold-nodes-scene/testkit", "manifold-nodes-water/testkit", "dep:manifold-water-liquid", "manifold-water-liquid/testkit", "dep:manifold-water-gpu-mpm", "manifold-water-gpu-mpm/testkit"]
+testkit = ["manifold-node-engine/testkit", "manifold-nodes-image/testkit", "manifold-nodes-scene/testkit", "manifold-nodes-water/testkit", "dep:manifold-water-liquid", "manifold-water-liquid/testkit", "dep:manifold-water-gpu-mpm", "manifold-water-gpu-mpm/testkit", "dep:manifold-water-whitewater", "manifold-water-whitewater/testkit"]
 # GPU-proof tests: slow, flaky, and need a real Metal device with synchronous
 # readback. Off by default so the workspace test sweep stays fast and
 # deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,

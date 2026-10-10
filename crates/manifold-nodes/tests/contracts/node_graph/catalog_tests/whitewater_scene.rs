@@ -381,21 +381,21 @@ fn percentile(values: &[f64], p: f64) -> f64 {
 #[cfg(feature = "whitewater-oracle")]
 mod emitter_oracle {
     use manifold_nodes_water::testkit::conformance::json_node_mut;
-    use manifold_nodes_water::primitives::testkit::whitewater as whitewater_nodes;
+    use manifold_water_whitewater::primitives::testkit::whitewater as whitewater_nodes;
     use manifold_fluids::{
         WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle, WhitewaterParticle, WhitewaterSpawn,
         whitewater_oracle,
     };
     use manifold_gpu::GpuBuffer;
 
-    use manifold_nodes_water::primitives::emission_count::EmissionCount;
-    use manifold_nodes_water::primitives::jitter_particles::JitterParticles;
+    use manifold_water_whitewater::primitives::emission_count::EmissionCount;
+    use manifold_water_whitewater::primitives::jitter_particles::JitterParticles;
     use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-    use manifold_nodes_water::primitives::sample_faces_at_particles::SampleFacesAtParticles;
-    use manifold_nodes_water::primitives::spawn_whitewater::SpawnWhitewater;
+    use manifold_water_whitewater::primitives::sample_faces_at_particles::SampleFacesAtParticles;
+    use manifold_water_whitewater::primitives::spawn_whitewater::SpawnWhitewater;
     use manifold_nodes_water::presets::gpu_flip::REST_PER_CELL;
-    use manifold_nodes_water::primitives::wavecrest_potential::WavecrestPotential;
-    use manifold_nodes_water::primitives::whitewater_type::WhitewaterType;
+    use manifold_water_whitewater::primitives::wavecrest_potential::WavecrestPotential;
+    use manifold_water_whitewater::primitives::whitewater_type::WhitewaterType;
     use crate::contracts::node_graph::catalog_tests::whitewater_scene::*;
     use manifold_node_engine::bindings::Slot;
     use manifold_node_engine::particles::FluidParticle;

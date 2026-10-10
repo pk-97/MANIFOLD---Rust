@@ -360,9 +360,9 @@ impl Show {
         let mut registry = PrimitiveRegistry::with_builtin();
         if let Some(reference) = reference {
             registry.register("node.whitewater_step", if reference {
-                crate::primitives::whitewater_step::reference_proof_node
+                manifold_water_whitewater::primitives::whitewater_step::reference_proof_node
             } else {
-                crate::primitives::whitewater_step::fused_proof_node
+                manifold_water_whitewater::primitives::whitewater_step::fused_proof_node
             });
         }
         register_substep_test_nodes(&mut registry);

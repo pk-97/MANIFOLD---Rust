@@ -14,7 +14,7 @@ use manifold_nodes_water::testkit::face_grid_scenes::matter_dam_break_faces;
 use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use manifold_water_gpu_mpm::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use manifold_nodes_water::presets::gpu_flip::{SHIPPED_PRESET, WaterScene, render_def};
-use manifold_nodes_water::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
+use manifold_water_whitewater::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
 
 use manifold_nodes_water::testkit::conformance::*;
 

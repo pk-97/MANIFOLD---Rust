@@ -16,6 +16,7 @@ GPU_DEFAULT_CPU_ONLY = {
     "manifold-water-liquid": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
     "manifold-water-gpu-flip": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
     "manifold-water-gpu-mpm": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
+    "manifold-water-whitewater": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
     "manifold-nodes-scene": "Device proofs require gpu-proofs; ungated imported-graph validation lives in the catalog",
     "manifold-compositor": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     "manifold-nodes-image": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
@@ -44,7 +45,8 @@ PRIMITIVE_PATHS = ('crates/manifold-nodes-scene/src/node_graph/primitives/',
                    'crates/manifold-water-rigid/src/primitives/',
                    'crates/manifold-water-liquid/src/primitives/',
                    'crates/manifold-water-gpu-flip/src/primitives/',
-                   'crates/manifold-water-gpu-mpm/src/primitives/')
+                   'crates/manifold-water-gpu-mpm/src/primitives/',
+                   'crates/manifold-water-whitewater/src/primitives/')
 CATALOG_PATHS = (*PRIMITIVE_PATHS,
                  'crates/manifold-nodes/src/catalog_gen.rs',
                  'crates/manifold-node-engine/src/descriptor.rs',
@@ -57,8 +59,9 @@ RIGID_SRC = "crates/manifold-water-rigid/src/"
 LIQUID_SRC = "crates/manifold-water-liquid/src/"
 FLIP_SRC = "crates/manifold-water-gpu-flip/src/"
 MPM_SRC = "crates/manifold-water-gpu-mpm/src/"
+WW_SRC = "crates/manifold-water-whitewater/src/"
 WATER_SRC = "crates/manifold-nodes-water/src/"
-WATER_SRCS = (RIGID_SRC, LIQUID_SRC, FLIP_SRC, MPM_SRC, WATER_SRC)
+WATER_SRCS = (RIGID_SRC, LIQUID_SRC, FLIP_SRC, MPM_SRC, WW_SRC, WATER_SRC)
 # The seam files that lived under nodes-water liquid/ before the carve.
 LIQUID_SEAM_FILES = ("bodies.rs", "body_buffers.rs", "clock.rs", "coupling.rs", "display_cursor.rs",
                      "extent.rs", "fields.rs", "fields/", "frame_history.rs", "frame_ring.rs",
@@ -141,6 +144,11 @@ CS_GPU_FLIP_FILTERS = [
 # so the whole suite is Matter's member list. Its matter_ and substeps_ rows stay
 # path-keyed, so the narrow domain row holds.
 CS_GPU_MPM_FILTERS = ["liquid_conformance::", "face_grid_tests::"]
+# The whitewater leaf's seam conformance (section 6.3 row), keyed by its crate root:
+# its own whitewater_ rows (the golden fingerprints among them) and the catalog
+# scenes that drive the step on a live liquid frame.
+CS_WHITEWATER_FILTERS = ["whitewater_", "whitewater_golden_tests::",
+                         "catalog_tests::whitewater_scene::", "catalog_tests::whitewater_emitters::"]
 
 # Proofs over this duration require a reviewed measurement before landing.
 # The measurements live in scripts/gpu_test_times.json, written by
@@ -236,10 +244,10 @@ NARROW_ROWS = [
     ((FLIP_SRC + "primitives/gpu_flip_clock.rs",
       FLIP_SRC + "primitives/shaders/gpu_flip_clock.wgsl"),
      (["gpu_flip_clock::gpu_tests::"], [])),
-    ((WATER_SRC + "primitives/emission_count.rs",
-      WATER_SRC + "primitives/spawn_whitewater.rs",
-      WATER_SRC + "primitives/shaders/emission_count_body.wgsl",
-      WATER_SRC + "primitives/shaders/spawn_whitewater_body.wgsl"),
+    ((WW_SRC + "primitives/emission_count.rs",
+      WW_SRC + "primitives/spawn_whitewater.rs",
+      WW_SRC + "primitives/shaders/emission_count_body.wgsl",
+      WW_SRC + "primitives/shaders/spawn_whitewater_body.wgsl"),
      (["whitewater_particle_tests::"], [])),
     ((FLIP_SRC + "primitives/gpu_flip_narrow_band_tests.rs",
       FLIP_SRC + "primitives/gpu_flip_narrow_band.rs",
@@ -370,6 +378,7 @@ CONTRACT_ROOT_ROWS = [
     (LIQUID_SRC, WATER_BROAD_FILTERS),
     (FLIP_SRC, CS_GPU_FLIP_FILTERS),
     (MPM_SRC, CS_GPU_MPM_FILTERS),
+    (WW_SRC, CS_WHITEWATER_FILTERS),
 ]
 
 # Paths whose change affects every proof: BROAD.
@@ -406,7 +415,7 @@ LIB_PROOF_ROWS = {
     # The whitewater step's proofs (across frames, the pool passes, the
     # handoff, the golden fingerprints that prove its output unchanged) live
     # in sibling `_tests` modules the path filter alone misses.
-    WATER_SRC + "primitives/whitewater_step.rs": [
+    WW_SRC + "primitives/whitewater_step.rs": [
         "primitives::whitewater_step::",
         "contracts::water::primitives::whitewater_step::",
         "primitives::whitewater_step_tests::",
@@ -426,6 +435,8 @@ LIB_PROOF_ROWS[FLIP_SRC + "lib.rs"] = CS_GPU_FLIP_FILTERS
 LIB_PROOF_ROWS[FLIP_SRC + "primitives/mod.rs"] = CS_GPU_FLIP_FILTERS
 LIB_PROOF_ROWS[MPM_SRC + "lib.rs"] = CS_GPU_MPM_FILTERS
 LIB_PROOF_ROWS[MPM_SRC + "primitives/mod.rs"] = CS_GPU_MPM_FILTERS
+LIB_PROOF_ROWS[WW_SRC + "lib.rs"] = CS_WHITEWATER_FILTERS
+LIB_PROOF_ROWS[WW_SRC + "primitives/mod.rs"] = CS_WHITEWATER_FILTERS
 
 LIB_PROOF_ROWS[FLIP_SRC + "primitives/gpu_flip_step.rs"] = [
     "primitives::gpu_flip_step::",
@@ -439,7 +450,7 @@ for _whitewater_atom in (
     "dust_potential", "whitewater_emitter_dispatch", "whitewater_emitter_cpu",
     "whitewater_emitter_gpu_tests",
 ):
-    LIB_PROOF_ROWS[WATER_SRC + f"primitives/{_whitewater_atom}.rs"] = [
+    LIB_PROOF_ROWS[WW_SRC + f"primitives/{_whitewater_atom}.rs"] = [
         "primitives::whitewater_emitter_gpu_tests::",
         "primitives::whitewater_step_tests::",
     ]
@@ -447,12 +458,12 @@ del _whitewater_atom
 
 # BUG-g75v.7: engine distance, accepted MAC history, force and drain proofs.
 for _engine_path in (
-    "primitives/upwind_distance.rs", "primitives/whitewater_distance.rs",
-    "primitives/whitewater_engine_cpu.rs", "primitives/whitewater_engine_gpu_tests.rs",
-    "primitives/advect_whitewater.rs", "primitives/keep_whitewater.rs",
-    "liquid/substep_history.rs",
+    LIQUID_SRC + "primitives/upwind_distance.rs", LIQUID_SRC + "primitives/whitewater_distance.rs",
+    WW_SRC + "primitives/whitewater_engine_cpu.rs", WW_SRC + "primitives/whitewater_engine_gpu_tests.rs",
+    WW_SRC + "primitives/advect_whitewater.rs", WW_SRC + "primitives/keep_whitewater.rs",
+    LIQUID_SRC + "substep_history.rs",
 ):
-    LIB_PROOF_ROWS[WATER_SRC + _engine_path] = [
+    LIB_PROOF_ROWS[_engine_path] = [
         "primitives::whitewater_engine_gpu_tests::",
         "primitives::whitewater_pool_tests::",
         "primitives::whitewater_step_tests::",
@@ -546,6 +557,12 @@ PREFIX_ROWS += [
      ["contracts::water::primitives::face_grid_extent_tests",
       "contracts::node_graph::catalog_tests::liquid_extent",
       "contracts::node_graph::catalog_tests::liquid_lattice"], []),
+]
+
+# The whitewater leaf's CPU contract: the default-build tests outside it that build its nodes.
+PREFIX_ROWS += [
+    (WW_SRC, ".rs", "manifold-nodes-water", ["primitives::whitewater_extent_tests"], []),
+    (WW_SRC, ".rs", CATALOG_PACKAGE, ["contracts::water::primitives::whitewater_step"], []),
 ]
 
 # CS-liquid CPU suite: the seam contract plus CS-rigid, whenever liquid changes.
