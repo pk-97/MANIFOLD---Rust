@@ -3,7 +3,8 @@ note first; standout notes later). Same file layout as detector_labels, so detec
 
 Per song, from the project (read only through als_extract) shifted by the song's proven export offset:
 - Events: every note on the family's part (part_classes: track name, then groups innermost outward; drum-rack pads by
-  their own name) and every loud hit inside the family's audio clips. Layers and chords within layer_s are one event.
+  their own name) and every sharp hit inside the family's audio clips (detector_labels.stem_hits). Layers and chords
+  within layer_s are one event.
 - Audible: the part is sounding: the family band's mean level 10-100 ms after the note sits present_db over the
   song's quiet floor (5th percentile). Otherwise (muted, automated down) unscored, never negative. The bar only
   rejects silence: audible notes in a dense low end sit 6-10 dB over the floor, silenced ones under 0 (renew). An attack test
@@ -14,7 +15,10 @@ Per song, from the project (read only through als_extract) shifted by the song's
 - Runs under dense_s apart are unscored (the scorer cannot tell the hits apart).
 - Unscored parts (unknown tracks, and pads for synth): their notes are unscored windows.
 - Vouched negatives: kicks, and notes of every other known part more than far_s from any family note.
-- Loop spans: audio clips on unknown tracks or rendered from other parts.
+- Loop spans: audio clips on unknown tracks (they may hold anything) and on the family's own part: inside a bass or
+  synth recording only sharp hits are found, and a spectral-flux note finder marks a bass's sidechain pumping and
+  wobbles as notes (set_me_free: a start every 70 ms), so smooth notes there stay unlabelled and fires count as false
+  only on vouched negatives (2026-10-11).
 Each positive carries a kind for per-kind readouts: 'overlap' (starts while the previous note sounds: a held chord, or a glide on a mono synth), 'fast' (under
 200 ms after the previous event), 'short' (under a 16th), 'held' (a beat or more), else 'mid'; clip hits are 'clip'.
 """
@@ -25,7 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from tools.audio_analysis.eval.detector_eval import inside, nearest
-from tools.audio_analysis.eval.part_classes import RENDERED, classify
+from tools.audio_analysis.eval.part_classes import classify
 
 
 @dataclass(frozen=True)
@@ -42,14 +46,24 @@ class NoteFamily:
     far_s: float = .070
     present_db: float = 3.0
     half: tuple = (-.07, .07)
+    tol_s: float = .030             # hit window, matched at the candidate: notes come ~3 a second, so the shared
+                                    # 70 ms window would count firing anywhere as right
+
+
+def silent(res):
+    """Names of tracks that make no sound: their own speaker is off, or that of any group they sit in (a muted
+    reference group silences its full-length reference clips)."""
+    muted_groups = {tr['name'] for tr in res['tracks'] if tr['kind'] == 'GroupTrack' and not tr.get('speaker_on', True)}
+    return {tr['name'] for tr in res['tracks'] if not tr.get('speaker_on', True) or muted_groups & set(tr.get('groups') or ())}
 
 
 def project_notes(res):
     """[(seconds, beat, duration in beats, part, probability)] for every played note, parts by part_classes."""
     out = []
+    quiet = silent(res)
     for tr in res['tracks']:
         notes = [n for c in tr['midi_clips'] for n in c['notes']]
-        if not notes or not tr.get('speaker_on', True):
+        if not notes or tr['name'] in quiet:
             continue
         cls = classify(tr['name'], tr.get('groups') or ())
         pads = {}
@@ -67,9 +81,9 @@ def project_notes(res):
 
 
 def playing_clips(res):
-    """Audio clips that sound: not muted, on a track whose speaker is on."""
-    off = {tr['name'] for tr in res['tracks'] if tr['kind'] == 'AudioTrack' and not tr.get('speaker_on', True)}
-    return [c for c in res['audio_clips'] if not c['disabled'] and c.get('track') not in off]
+    """Audio clips that sound: not muted, on a track that is not silent."""
+    quiet = silent(res)
+    return [c for c in res['audio_clips'] if not c['disabled'] and c.get('track') not in quiet]
 
 
 def rise(env, t):
@@ -124,8 +138,7 @@ def song(g, t, fam):
     off = src[1]
     notes = project_notes(res)
     playing = playing_clips(res)
-    clips = [c for c in playing if classify(c.get('track') or '', c.get('groups') or ()) == fam.part
-             and not RENDERED.search((c.get('track') or '') + str(c.get('file') or ''))]
+    clips = [c for c in playing if classify(c.get('track') or '', c.get('groups') or (), c.get('file') or '') == fam.part]
     mine = [n for n in notes if n[3] == fam.part]
     if not mine and not clips:
         return None
@@ -195,10 +208,10 @@ def song(g, t, fam):
     neg = np.concatenate([kicks, others])
     neg = neg[nearest(neg, every) > fam.far_s] if len(every) else neg
     loops = [(c['start_s'] + off, c['end_s'] + off) for c in playing
-             if classify(c.get('track') or '', c.get('groups') or ()) == '?' or RENDERED.search((c.get('track') or '') + str(c.get('file') or ''))]
+             if classify(c.get('track') or '', c.get('groups') or (), c.get('file') or '') in ('?', fam.part)]
     return dict(kind='project', duration_s=dur, positives=list(map(float, pos)), kinds=list(map(str, kind)),
                 unscored=[list(map(float, u)) for u in unscored], loop_spans=[list(map(float, u)) for u in loops],
-                hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))), positives_only=False, counts=count,
+                hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))), positives_only=False, counts=count, tol_s=fam.tol_s,
                 timing_shift_ms=round(1000 * shift, 1), offset_s=float(off))
 
 

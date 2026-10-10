@@ -8,7 +8,7 @@ Rules every family shares:
 - Training rows: candidates within LAB_TOL of a positive are y = 1; rows inside unscored windows are dropped; inside
   loop spans only positives and vouched negatives train; recall-only songs train only on positives.
 - Fires: probability >= cutoff, at least REFR after the previous fire's emission.
-- Scoring at TOL: a positive is caught by any fire within TOL; a fire is false only outside unscored windows and, in
+- Scoring at TOL (or the labels' tol_s): a positive is caught by any fire within it; a fire is false only outside unscored windows and, in
   loop spans, only when it sits on a vouched negative.
 - The cutoff for a held-out song is chosen on the other songs' held-out predictions; never on the song itself.
 """
@@ -63,34 +63,45 @@ def fires(p, avail, th, sr, refr=REFR):
     return np.array(out, int)
 
 
+def tol(s):
+    """A song's hit window: its labels' tol_s (tight for dense families, matched at the candidate) or TOL."""
+    return s.get('tol_s', TOL)
+
+
+def judged(s, stamp, p, avail, th, sr):
+    """(caught, positives, false fire times, fire times) for one song at cutoff th; fires at stamp."""
+    f = stamp[fires(p, avail, th, sr)]
+    pos = np.array(s['positives'])
+    w = tol(s)
+    matched = int(np.sum(nearest(pos, f) <= w)) if len(f) else 0
+    if s['positives_only']:
+        return matched, len(pos), f[:0], f
+    false = f[nearest(f, pos) > w] if len(pos) else f
+    false = false[~inside(false, s['unscored'])]
+    false = false[~inside(false, s['loop_spans']) | (nearest(false, s['hard_neg']) <= LAB_TOL)]
+    return matched, len(pos), false, f
+
+
 def score(s, emit, p, avail, th, sr):
     """(caught, positives, false fires) for one song at cutoff th."""
-    f = emit[fires(p, avail, th, sr)]
-    pos = np.array(s['positives'])
-    matched = int(np.sum(nearest(pos, f) <= TOL)) if len(f) else 0
-    if s['positives_only']:
-        return matched, len(pos), 0
-    cand_false = f[nearest(f, pos) > TOL]
-    cand_false = cand_false[~inside(cand_false, s['unscored'])]
-    loop = inside(cand_false, s['loop_spans'])
-    false = int(np.sum(~loop) + np.sum(loop & (nearest(cand_false, s['hard_neg']) <= LAB_TOL)))
-    return matched, len(pos), false
+    m, n, false, _ = judged(s, emit, p, avail, th, sr)
+    return m, n, len(false)
 
 
 def song_result(s, emit, p, avail, th, sr, ahead=0.0):
-    """One song's scored result for comparisons (detector_compare): caught, positives, false fires, cutoff, scored
-    minutes (duration less unscored windows) and the lateness of each caught event's trigger in ms (the decision,
-    emission + ahead, minus the label)."""
-    m, n, f = score(s, emit, p, avail, th, sr)
-    fired = emit[fires(p, avail, th, sr)]
+    """One song's scored result for comparisons (detector_compare): caught, positives, false fires (and their times),
+    cutoff, scored minutes (duration less unscored windows) and the lateness of each caught event's trigger in ms
+    (the decision, stamp + ahead, minus the label)."""
+    m, n, false, fired = judged(s, emit, p, avail, th, sr)
     late = []
     for t in s['positives']:
         if len(fired):
             e = fired[np.argmin(np.abs(fired - t))]
-            if abs(e - t) <= TOL:
+            if abs(e - t) <= tol(s):
                 late.append(round(1000 * (e + ahead - t), 1))
     gone = sum(b - a for a, b in s['unscored'])
-    return dict(matched=m, labels=n, extra=f, cutoff=float(th), minutes=max(0.0, s['duration_s'] - gone) / 60, late_ms=late)
+    return dict(matched=m, labels=n, extra=len(false), cutoff=float(th), minutes=max(0.0, s['duration_s'] - gone) / 60,
+                late_ms=late, false_s=[round(float(v), 3) for v in false])
 
 
 def pooled(items, th):
@@ -121,7 +132,7 @@ def choose(items, min_precision=None):
 def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None, per_song=None, ahead=0.0):
     """Score every song with a cutoff chosen on the others. meta[t] = (labels, emit, avail, sr); held[t] = held-out
     probabilities. Recall-only songs never choose a cutoff. Returns (caught, positives, false); fills cutoffs[t]
-    and per_song[t] (song_result, decisions at emission + ahead) when given."""
+    and per_song[t] (song_result, decisions at stamp + ahead; ahead a number or one per song) when given."""
     tm = tn = tf = 0
     songs = list(held)
     for t in songs:
@@ -132,7 +143,7 @@ def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None, per_s
         s, emit, avail, sr = meta[t]
         m, n, f = score(s, emit, held[t], avail, th, sr)
         if per_song is not None:
-            per_song[t] = song_result(s, emit, held[t], avail, th, sr, ahead)
+            per_song[t] = song_result(s, emit, held[t], avail, th, sr, ahead[t] if isinstance(ahead, dict) else ahead)
         tm, tn, tf = tm + m, tn + n, tf + f
         if log:
             log(f'  {t:14s} cutoff {th:.2f}: {m}/{n} caught, {f} false fires')
@@ -148,7 +159,7 @@ def dense_recall(lab, meta, held, cutoffs, key='dense_pos'):
             continue
         s, emit, avail, sr = meta[t]
         f = emit[fires(held[t], avail, cutoffs[t], sr)]
-        m += int(np.sum(nearest(d, f) <= TOL)) if len(f) else 0
+        m += int(np.sum(nearest(d, f) <= tol(s))) if len(f) else 0
         n += len(d)
     return m, n
 

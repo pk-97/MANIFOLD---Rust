@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Candidate recall for a family's labels: what share of its events (overall and per kind) has a candidate within 35 ms, and how
-many candidates per second it costs. Two causal finders (detector_cands): 'rise' (band energy rises over the last
+many candidates per second it costs, against the recall of as many candidates placed at random and the F1 of
+firing on every candidate (60 ms apart, scored like a net's fires): the floor any net must beat. Two causal finders (detector_cands): 'rise' (band energy rises over the last
 4 hops' minimum) and 'change' (net bands in the family range rise over their own last-20 ms mean: catches pitch
 changes too), plus their union.
 Usage: family_cands.py FAMILY   (bass or synth; reads GOAL/{FAMILY}_labels.json)"""
@@ -27,13 +28,13 @@ def union(a, b, refractory=6):
 
 def main():
     from tools.audio_analysis.eval.detector_cands import HOP, band_hops, peak_candidates, rise_candidates, spectral_rise
-    from tools.audio_analysis.eval.detector_eval import LAB_TOL, nearest
+    from tools.audio_analysis.eval.detector_eval import LAB_TOL, nearest, prf, score
     from tools.audio_analysis.eval.detector_songs import audio, rate, spec
     from tools.audio_analysis.eval.kick_goal_eval import GOAL, Goal
     fam = importlib.import_module(f'tools.audio_analysis.eval.{sys.argv[1]}_labels').FAMILY
     lab = json.loads((GOAL / f'{fam.name}_labels.json').read_text())
     g = Goal(mode='v3')
-    rows, by_kind = {}, {}
+    rows, by_kind, everything = {}, {}, {}
     dur = 0.0
     for t, s in lab.items():
         if not s['positives']:
@@ -57,6 +58,9 @@ def main():
             got = nearest(pos, on) <= LAB_TOL if len(on) else np.zeros(len(pos), bool)
             a = rows.setdefault(k, [0, 0, 0])
             a[0], a[1], a[2] = a[0] + int(got.sum()), a[1] + len(pos), a[2] + len(cand)
+            m, _, f = score(s, on if 'tol_s' in s else (cand + 9) * HOP / sr, np.ones(len(cand)), cand + 8, .5, sr)
+            z = everything.setdefault(k, [0, 0])
+            z[0], z[1] = z[0] + m, z[1] + f
             for kk in np.unique(kind):
                 b = by_kind.setdefault(k, {}).setdefault(kk, [0, 0])
                 b[0], b[1] = b[0] + int(got[kind == kk].sum()), b[1] + int((kind == kk).sum())
@@ -65,7 +69,9 @@ def main():
     for k, (h, n, c) in rows.items():
         kinds = ' '.join(f'{kk} {a / max(1, b):.2f}' for kk, (a, b) in sorted(by_kind[k].items()))
         chance = 1 - np.exp(-c / dur * 2 * LAB_TOL)  # recall of the same number of candidates placed at random
-        print(f'{fam.name} {k:28s}: recall {h / n:.3f} ({h}/{n}), {c / dur:.1f} candidates/s, random {chance:.2f} | {kinds}', flush=True)
+        _, _, f1 = prf(everything[k][0], n, everything[k][1])
+        print(f'{fam.name} {k:28s}: recall {h / n:.3f} ({h}/{n}), {c / dur:.1f} candidates/s, random {chance:.2f}, '
+              f'firing on every one F1 {f1:.3f} | {kinds}', flush=True)
 
 
 if __name__ == '__main__':
