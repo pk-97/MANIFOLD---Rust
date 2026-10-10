@@ -709,7 +709,8 @@ class ScopeTests(unittest.TestCase):
     def test_rigid_sources_run_their_module_and_the_cs_rigid_suite(self):
         result = plan(["crates/manifold-water-rigid/src/physics.rs"])
         self.assertEqual(result.filters, {"physics::", "liquid_conformance::liquid_coupled_",
-                                          "physics_boxes::", "physics_solids::"})
+                                          "physics_boxes::", "physics_solids::",
+                                          "catalog_tests::physics_impulses::"})
         self.assertFalse(result.whole_packages)
         self.assertFalse(result.unmapped)
 
