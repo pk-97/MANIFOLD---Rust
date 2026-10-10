@@ -1,6 +1,6 @@
 # Kick Sweep-Event Detector — motion-based kick detection for the bass-heavy Low band
 
-**Status:** IN PROGRESS — P1/P2/P4/P5 + the scope kick lane (magenta bottom ticks on the Audio Setup scope, P3's tuning monitor) SHIPPED 2026-07-07; P3 (feel-pass, binds the Kick feature) owed to Peter. The live `reduce_send` reproduces the prototype's reference fire counts on all 10 mix/drums fixtures (post-P5 bit-exact outside the stream fade-in region); masked-novelty deleted. P5 reference: `--family ridge-one --drop 10 --win 6 --absfloor 0.005 --ridge-only`. Landing reports: `docs/landings/2026-07-07-kick-sweep-p2.md`, `…-kick-scope-lane.md`. · Opus 4.8 + Fable
+**Status:** SUPERSEDED 2026-10-10 by docs/KICK_REALTIME_DESIGN.md (the trained kick model); the ridge detector is deleted. Historical record, frozen.
 **Prerequisites:** none (the prototype and the 73-label corpus both exist).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 

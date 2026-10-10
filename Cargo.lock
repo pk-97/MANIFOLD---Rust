@@ -2327,6 +2327,7 @@ dependencies = [
  "manifold-spectral",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
+ "ringbuf 0.4.8",
  "rustfft",
 ]
 

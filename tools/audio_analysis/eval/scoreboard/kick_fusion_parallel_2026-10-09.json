@@ -1,0 +1,1396 @@
+{
+  "decision": "Neither replaces the prototype. Threshold calibration suppresses reviewed bass-core triggers but loses too many kicks. Adding six band-local spectral measurements improves the calibrated 70ms result, from 86 matches/44 unmatched to 98/41; original prototype is118/52. At50ms the bandwise result is66/73 versus calibrated base65/65 and prototype116/54. Continue treating fusion as exploratory.",
+  "protocol": "Nested song exclusion: outer test song excluded from all fits, normalisation and threshold choice. Each inner prediction uses the other seven songs. Fixed threshold grid .50 through .975 step .025 plus .99,.999,1.01. Select maximum inner70ms matches subject to aggregate wide-association-extra and kick-free-core-extra budgets no worse than inner prototype. Ties prefer fewer wide extras then higher cutoff. Refit on eight and apply selected threshold to outer song. Same candidate grid, 40ms horizon rounded up to hop boundary, 60ms refractory, frozen labels and all other fitting choices.",
+  "bandwise": "Exactly six added features: maximum relative positive flux and first15-minus-last15ms log-frequency centroid per30-140,140-1000,1000-8000Hz band, from the same trailing2048 Hann FFT. Original nine features preserved bitwise; no additional evidence wait. Offline extraction recomputes the FFT; this is not a runtime-optimised implementation.",
+  "validation": "Twelve new focused tests pass: five bandwise, seven calibration. Includes prefix causality, frozen-column/grid equality, band isolation, outer-song perturbation invariance, seven-song inner fits, threshold ties, output timing/refractory and original-five score-schema regression. Exact fixed0.5 output replay matches all nine prior songs. Lead independently checked every source/label/baseline hash, fold exclusion, chosen threshold, refractory interval and aggregate score. Initial base run failed in reporting because original-five strict scores omit pairs; repaired using missed-label set differences, regression tested, then repeated unchanged experiment.",
+  "limitations": "Nine previously explored songs and provisional labels; no untouched external validation. Wide association is diagnostic, not proof of source identity. Inner budgets do not guarantee outer or per-song budgets. The actual false-trigger counts differ; this is not an exactly matched-error comparison. At70ms the bandwise result improves versus calibrated nine-feature fusion; at50ms extra counts worsen. All four reviewed bass-only cores are clean, but positive passages retain many extra triggers. No native runtime, live audio or GPU changes.",
+  "reports": [
+    {
+      "variant": "nine_feature",
+      "feature_names": [
+        "low_log_rise",
+        "body_log_rise",
+        "upper_log_rise",
+        "relative_flux",
+        "centroid_drop",
+        "upper_log_decay",
+        "body_low_log_balance",
+        "low_log_evolution",
+        "peak_lag"
+      ],
+      "totals": {
+        "baseline": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 103,
+              "missed": 71,
+              "extra": 67
+            },
+            "50": {
+              "matched": 116,
+              "missed": 58,
+              "extra": 54
+            },
+            "70": {
+              "matched": 118,
+              "missed": 56,
+              "extra": 52
+            }
+          },
+          "association": {
+            "matched": 118,
+            "missed": 56,
+            "extra": 52
+          },
+          "association_delay": {
+            "median_ms": 18.84,
+            "p90_ms": 38.0
+          }
+        },
+        "fixed_05": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 82,
+              "missed": 92,
+              "extra": 317
+            },
+            "50": {
+              "matched": 139,
+              "missed": 35,
+              "extra": 260
+            },
+            "70": {
+              "matched": 164,
+              "missed": 10,
+              "extra": 236
+            }
+          },
+          "association": {
+            "matched": 168,
+            "missed": 6,
+            "extra": 232
+          },
+          "association_delay": {
+            "median_ms": 36.16,
+            "p90_ms": 54.0
+          }
+        },
+        "calibrated": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 20,
+              "missed": 154,
+              "extra": 110
+            },
+            "50": {
+              "matched": 65,
+              "missed": 109,
+              "extra": 65
+            },
+            "70": {
+              "matched": 86,
+              "missed": 88,
+              "extra": 44
+            }
+          },
+          "association": {
+            "matched": 85,
+            "missed": 89,
+            "extra": 45
+          },
+          "association_delay": {
+            "median_ms": 44.18,
+            "p90_ms": 55.0
+          }
+        }
+      },
+      "kick_free_core_totals": {
+        "baseline": {
+          "labels": 0,
+          "tolerance_ms": {
+            "35": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 5
+            },
+            "50": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 5
+            },
+            "70": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 5
+            }
+          },
+          "association": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 5
+          },
+          "association_delay": {
+            "median_ms": null,
+            "p90_ms": null
+          }
+        },
+        "fixed_05": {
+          "labels": 0,
+          "tolerance_ms": {
+            "35": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 34
+            },
+            "50": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 34
+            },
+            "70": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 34
+            }
+          },
+          "association": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 34
+          },
+          "association_delay": {
+            "median_ms": null,
+            "p90_ms": null
+          }
+        },
+        "calibrated": {
+          "labels": 0,
+          "tolerance_ms": {
+            "35": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 0
+            },
+            "50": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 0
+            },
+            "70": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 0
+            }
+          },
+          "association": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          },
+          "association_delay": {
+            "median_ms": null,
+            "p90_ms": null
+          }
+        }
+      },
+      "tracks": [
+        {
+          "track": "apricots_128bpm",
+          "selected_threshold": 0.925,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 14,
+                "missed": 0,
+                "extra": 0
+              },
+              "70": {
+                "matched": 14,
+                "missed": 0,
+                "extra": 0
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 12,
+                "missed": 2,
+                "extra": 3
+              },
+              "70": {
+                "matched": 14,
+                "missed": 0,
+                "extra": 1
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 3,
+                "missed": 11,
+                "extra": 3
+              },
+              "70": {
+                "matched": 6,
+                "missed": 8,
+                "extra": 0
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 11,
+            "70": 8,
+            "association": 8
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "bad_guy_128bpm",
+          "selected_threshold": 0.925,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 17
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 17
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 48
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 48
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 26
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 26
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "feel_the_vibration_174bpm",
+          "selected_threshold": 0.95,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 13,
+                "missed": 2,
+                "extra": 4
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 2
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 11,
+                "missed": 4,
+                "extra": 27
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 23
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 3,
+                "missed": 12,
+                "extra": 12
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 0
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 10,
+            "70": 0,
+            "association": 0
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "inhale_exhale_145bpm",
+          "selected_threshold": 0.975,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 11,
+                "missed": 1,
+                "extra": 14
+              },
+              "70": {
+                "matched": 11,
+                "missed": 1,
+                "extra": 14
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 10,
+                "missed": 2,
+                "extra": 20
+              },
+              "70": {
+                "matched": 12,
+                "missed": 0,
+                "extra": 18
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 7,
+                "missed": 5,
+                "extra": 2
+              },
+              "70": {
+                "matched": 7,
+                "missed": 5,
+                "extra": 2
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 4,
+            "70": 4,
+            "association": 4
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "tears_140bpm",
+          "selected_threshold": 0.95,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 10,
+                "missed": 0,
+                "extra": 7
+              },
+              "70": {
+                "matched": 10,
+                "missed": 0,
+                "extra": 7
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 10,
+                "missed": 0,
+                "extra": 46
+              },
+              "70": {
+                "matched": 10,
+                "missed": 0,
+                "extra": 46
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 8,
+                "missed": 2,
+                "extra": 7
+              },
+              "70": {
+                "matched": 8,
+                "missed": 2,
+                "extra": 7
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 2,
+            "70": 2,
+            "association": 2
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "late_night",
+          "selected_threshold": 0.925,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 23,
+                "missed": 6,
+                "extra": 8
+              },
+              "70": {
+                "matched": 23,
+                "missed": 6,
+                "extra": 8
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 23,
+                "missed": 6,
+                "extra": 31
+              },
+              "70": {
+                "matched": 29,
+                "missed": 0,
+                "extra": 26
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 7,
+                "missed": 22,
+                "extra": 1
+              },
+              "70": {
+                "matched": 8,
+                "missed": 21,
+                "extra": 0
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 16,
+            "70": 15,
+            "association": 15
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "midnight_patience",
+          "selected_threshold": 0.875,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 17,
+                "missed": 18,
+                "extra": 0
+              },
+              "70": {
+                "matched": 17,
+                "missed": 18,
+                "extra": 0
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 24,
+                "missed": 11,
+                "extra": 40
+              },
+              "70": {
+                "matched": 26,
+                "missed": 9,
+                "extra": 38
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 18,
+                "missed": 17,
+                "extra": 11
+              },
+              "70": {
+                "matched": 20,
+                "missed": 15,
+                "extra": 9
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 1,
+            "70": 1,
+            "association": 1
+          },
+          "recovered_baseline_labels": {
+            "50": 2,
+            "70": 4,
+            "association": 3
+          }
+        },
+        {
+          "track": "miracle",
+          "selected_threshold": 0.925,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 9,
+                "missed": 3,
+                "extra": 4
+              },
+              "70": {
+                "matched": 9,
+                "missed": 3,
+                "extra": 4
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 9,
+                "missed": 3,
+                "extra": 28
+              },
+              "70": {
+                "matched": 12,
+                "missed": 0,
+                "extra": 25
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 4,
+                "missed": 8,
+                "extra": 3
+              },
+              "70": {
+                "matched": 7,
+                "missed": 5,
+                "extra": 0
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 5,
+            "70": 2,
+            "association": 2
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "heavy_on_mind",
+          "selected_threshold": 0.9,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 4,
+                "missed": 28,
+                "extra": 0
+              },
+              "70": {
+                "matched": 4,
+                "missed": 28,
+                "extra": 0
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 25,
+                "missed": 7,
+                "extra": 17
+              },
+              "70": {
+                "matched": 31,
+                "missed": 1,
+                "extra": 11
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 0,
+                "missed": 32,
+                "extra": 0
+              },
+              "70": {
+                "matched": 0,
+                "missed": 32,
+                "extra": 0
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 4,
+            "70": 4,
+            "association": 4
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        }
+      ],
+      "source_sha256": {
+        "tools/audio_analysis/eval/kick_fusion_calibration.py": "b6c9db225f6629c0f12820763bd58269b23a5ecc645d2951c6dfe0088ac4abc6",
+        "tools/audio_analysis/eval/run_kick_fusion_calibration.py": "e2634d9ae28460fd2d6e9291d0e12a0250f2b01bc6069c13af5ce6216a1754bc",
+        "tools/audio_analysis/eval/run_kick_fusion_trial.py": "90084cbb0ddeeb5227188c68a1cc53f6370f183c282a1ccff9423b4fe85d42a2",
+        "tools/audio_analysis/eval/kick_fusion_features.py": "52455fa1b27feff2ade4b71a7772fb3598638ba4cb723f396d72f78061fac736",
+        "tools/audio_analysis/eval/kick_upper_cue.py": "3fa6c9e64ad8cc0a1a0dbe761a5ba6e5f59b4563c77882d3cbe1a0a77ac7830f",
+        "tools/audio_analysis/eval/kick_attack_rejection.py": "cb5e8ad261f64ae5b6e3bafce2f232e14ec99bb3fc54c0599f113dcfaed6a144",
+        "tools/audio_analysis/eval/kick_tonal_experiment.py": "ae6a66426616273ed9f33a460d5e5b8407f91b82681133108e235b01967d76f7",
+        "tools/audio_analysis/eval/kick_hybrid_experiment.py": "9f16149655e367952cab586b2e89d900d5ca3bcb07e0cf5cbead4fa2ecd42aa8",
+        "tools/audio_analysis/eval/run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615",
+        "tools/audio_analysis/eval/kick_excess_balance_trial.py": "e33fc56d6bbdfffa3008b20ba87fda98f0166cf427f543909ceb171e356f72c5",
+        "tools/audio_analysis/eval/live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2",
+        "tools/audio_analysis/eval/master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145"
+      },
+      "label_sha256": {
+        "inhale_exhale_145bpm.csv": "a29b9892456588294efbf6f506da912d4f2d996fc105f9551b1b9d6db4077f4e",
+        "bad_guy_128bpm.csv": "d657d298ad98bee09e048922b465de4b4a69386a1482d8327be3207a37444ef7",
+        "attack_review.csv": "b29e872c8a8ec9d05902c7f76bc68b5a16399fc9cf0fd1ef669c598c8711a9ae",
+        "heldout_passages_2026-10-09.json": "00a6865a1c60795bb7e74a4ffe9fe207bbe8d84d5ceb7b62aad9d4b64d627fab",
+        "feel_the_vibration_174bpm.csv": "922be87c9a6a9eb03002b68ce5f87915e1fec4652921795c20cf6975a2bc21e8",
+        "apricots_128bpm.csv": "fa38b535e88b55580df3f90956935420070d95fb89441b30e625b1cdce45b163",
+        "tears_140bpm.csv": "f3ce02e72f191bd53bc86c611fce2efe56a55db4cb19b6f1434bdba80ce28576",
+        "bad_guy_128bpm.repair.json": "0d9f007d02da46f93dff1168ff321379a57310ab97397626812080389d955f11",
+        "master_passages_2026-10-09.json": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c"
+      },
+      "baseline_sha256": "e348ed170ce59bd7017185669609b871c772ef1a7b21bd3fce7105fb1b3b1028",
+      "raw_report": "/Users/peterkiemann/.cache/manifold/kick-fusion-parallel-2026-10-09/calibration/trial.json",
+      "raw_report_sha256": "ef588712534cbba1d1429ba93c5baaa57fae6bb389743fda76abc623853f3458"
+    },
+    {
+      "variant": "bandwise_fifteen",
+      "feature_names": [
+        "low_log_rise",
+        "body_log_rise",
+        "upper_log_rise",
+        "relative_flux",
+        "centroid_drop",
+        "upper_log_decay",
+        "body_low_log_balance",
+        "low_log_evolution",
+        "peak_lag",
+        "low_relative_flux",
+        "low_centroid_drop",
+        "body_relative_flux",
+        "body_centroid_drop",
+        "upper_relative_flux",
+        "upper_centroid_drop"
+      ],
+      "totals": {
+        "baseline": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 103,
+              "missed": 71,
+              "extra": 67
+            },
+            "50": {
+              "matched": 116,
+              "missed": 58,
+              "extra": 54
+            },
+            "70": {
+              "matched": 118,
+              "missed": 56,
+              "extra": 52
+            }
+          },
+          "association": {
+            "matched": 118,
+            "missed": 56,
+            "extra": 52
+          },
+          "association_delay": {
+            "median_ms": 18.84,
+            "p90_ms": 38.0
+          }
+        },
+        "fixed_05": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 68,
+              "missed": 106,
+              "extra": 312
+            },
+            "50": {
+              "matched": 135,
+              "missed": 39,
+              "extra": 245
+            },
+            "70": {
+              "matched": 164,
+              "missed": 10,
+              "extra": 217
+            }
+          },
+          "association": {
+            "matched": 164,
+            "missed": 10,
+            "extra": 217
+          },
+          "association_delay": {
+            "median_ms": 39.3,
+            "p90_ms": 53.67
+          }
+        },
+        "calibrated": {
+          "labels": 174,
+          "tolerance_ms": {
+            "35": {
+              "matched": 16,
+              "missed": 158,
+              "extra": 123
+            },
+            "50": {
+              "matched": 66,
+              "missed": 108,
+              "extra": 73
+            },
+            "70": {
+              "matched": 98,
+              "missed": 76,
+              "extra": 41
+            }
+          },
+          "association": {
+            "matched": 97,
+            "missed": 77,
+            "extra": 42
+          },
+          "association_delay": {
+            "median_ms": 45.33,
+            "p90_ms": 55.0
+          }
+        }
+      },
+      "kick_free_core_totals": {
+        "baseline": {
+          "labels": 0,
+          "tolerance_ms": {
+            "35": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 5
+            },
+            "50": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 5
+            },
+            "70": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 5
+            }
+          },
+          "association": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 5
+          },
+          "association_delay": {
+            "median_ms": null,
+            "p90_ms": null
+          }
+        },
+        "fixed_05": {
+          "labels": 0,
+          "tolerance_ms": {
+            "35": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 33
+            },
+            "50": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 33
+            },
+            "70": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 33
+            }
+          },
+          "association": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 33
+          },
+          "association_delay": {
+            "median_ms": null,
+            "p90_ms": null
+          }
+        },
+        "calibrated": {
+          "labels": 0,
+          "tolerance_ms": {
+            "35": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 0
+            },
+            "50": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 0
+            },
+            "70": {
+              "matched": 0,
+              "missed": 0,
+              "extra": 0
+            }
+          },
+          "association": {
+            "matched": 0,
+            "missed": 0,
+            "extra": 0
+          },
+          "association_delay": {
+            "median_ms": null,
+            "p90_ms": null
+          }
+        }
+      },
+      "tracks": [
+        {
+          "track": "apricots_128bpm",
+          "selected_threshold": 0.925,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 14,
+                "missed": 0,
+                "extra": 0
+              },
+              "70": {
+                "matched": 14,
+                "missed": 0,
+                "extra": 0
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 12,
+                "missed": 2,
+                "extra": 3
+              },
+              "70": {
+                "matched": 14,
+                "missed": 0,
+                "extra": 1
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 3,
+                "missed": 11,
+                "extra": 2
+              },
+              "70": {
+                "matched": 5,
+                "missed": 9,
+                "extra": 0
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 11,
+            "70": 9,
+            "association": 9
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "bad_guy_128bpm",
+          "selected_threshold": 0.95,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 17
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 17
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 50
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 50
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 28
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 28
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "feel_the_vibration_174bpm",
+          "selected_threshold": 0.95,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 13,
+                "missed": 2,
+                "extra": 4
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 2
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 12,
+                "missed": 3,
+                "extra": 25
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 22
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 5,
+                "missed": 10,
+                "extra": 10
+              },
+              "70": {
+                "matched": 15,
+                "missed": 0,
+                "extra": 0
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 8,
+            "70": 0,
+            "association": 0
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "inhale_exhale_145bpm",
+          "selected_threshold": 0.975,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 11,
+                "missed": 1,
+                "extra": 14
+              },
+              "70": {
+                "matched": 11,
+                "missed": 1,
+                "extra": 14
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 10,
+                "missed": 2,
+                "extra": 18
+              },
+              "70": {
+                "matched": 12,
+                "missed": 0,
+                "extra": 16
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 7,
+                "missed": 5,
+                "extra": 2
+              },
+              "70": {
+                "matched": 7,
+                "missed": 5,
+                "extra": 2
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 4,
+            "70": 4,
+            "association": 4
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "tears_140bpm",
+          "selected_threshold": 0.99,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 10,
+                "missed": 0,
+                "extra": 7
+              },
+              "70": {
+                "matched": 10,
+                "missed": 0,
+                "extra": 7
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 10,
+                "missed": 0,
+                "extra": 32
+              },
+              "70": {
+                "matched": 10,
+                "missed": 0,
+                "extra": 32
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 7,
+                "missed": 3,
+                "extra": 1
+              },
+              "70": {
+                "matched": 7,
+                "missed": 3,
+                "extra": 1
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 3,
+            "70": 3,
+            "association": 3
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "late_night",
+          "selected_threshold": 0.925,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 23,
+                "missed": 6,
+                "extra": 8
+              },
+              "70": {
+                "matched": 23,
+                "missed": 6,
+                "extra": 8
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 20,
+                "missed": 9,
+                "extra": 40
+              },
+              "70": {
+                "matched": 29,
+                "missed": 0,
+                "extra": 32
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 7,
+                "missed": 22,
+                "extra": 8
+              },
+              "70": {
+                "matched": 15,
+                "missed": 14,
+                "extra": 0
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 17,
+            "70": 9,
+            "association": 9
+          },
+          "recovered_baseline_labels": {
+            "50": 1,
+            "70": 1,
+            "association": 1
+          }
+        },
+        {
+          "track": "midnight_patience",
+          "selected_threshold": 0.825,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 17,
+                "missed": 18,
+                "extra": 0
+              },
+              "70": {
+                "matched": 17,
+                "missed": 18,
+                "extra": 0
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 23,
+                "missed": 12,
+                "extra": 42
+              },
+              "70": {
+                "matched": 26,
+                "missed": 9,
+                "extra": 39
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 18,
+                "missed": 17,
+                "extra": 13
+              },
+              "70": {
+                "matched": 21,
+                "missed": 14,
+                "extra": 10
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 1,
+            "70": 1,
+            "association": 1
+          },
+          "recovered_baseline_labels": {
+            "50": 2,
+            "70": 5,
+            "association": 4
+          }
+        },
+        {
+          "track": "miracle",
+          "selected_threshold": 0.95,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 9,
+                "missed": 3,
+                "extra": 4
+              },
+              "70": {
+                "matched": 9,
+                "missed": 3,
+                "extra": 4
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 9,
+                "missed": 3,
+                "extra": 19
+              },
+              "70": {
+                "matched": 12,
+                "missed": 0,
+                "extra": 16
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 4,
+                "missed": 8,
+                "extra": 2
+              },
+              "70": {
+                "matched": 6,
+                "missed": 6,
+                "extra": 0
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 5,
+            "70": 3,
+            "association": 3
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 0,
+            "association": 0
+          }
+        },
+        {
+          "track": "heavy_on_mind",
+          "selected_threshold": 0.9,
+          "scores": {
+            "baseline": {
+              "50": {
+                "matched": 4,
+                "missed": 28,
+                "extra": 0
+              },
+              "70": {
+                "matched": 4,
+                "missed": 28,
+                "extra": 0
+              }
+            },
+            "fixed_05": {
+              "50": {
+                "matched": 24,
+                "missed": 8,
+                "extra": 16
+              },
+              "70": {
+                "matched": 31,
+                "missed": 1,
+                "extra": 9
+              }
+            },
+            "calibrated": {
+              "50": {
+                "matched": 0,
+                "missed": 32,
+                "extra": 7
+              },
+              "70": {
+                "matched": 7,
+                "missed": 25,
+                "extra": 0
+              }
+            }
+          },
+          "lost_baseline_labels": {
+            "50": 4,
+            "70": 2,
+            "association": 2
+          },
+          "recovered_baseline_labels": {
+            "50": 0,
+            "70": 5,
+            "association": 5
+          }
+        }
+      ],
+      "source_sha256": {
+        "tools/audio_analysis/eval/kick_fusion_calibration.py": "b6c9db225f6629c0f12820763bd58269b23a5ecc645d2951c6dfe0088ac4abc6",
+        "tools/audio_analysis/eval/run_kick_fusion_calibration.py": "e2634d9ae28460fd2d6e9291d0e12a0250f2b01bc6069c13af5ce6216a1754bc",
+        "tools/audio_analysis/eval/run_kick_fusion_trial.py": "90084cbb0ddeeb5227188c68a1cc53f6370f183c282a1ccff9423b4fe85d42a2",
+        "tools/audio_analysis/eval/kick_fusion_features.py": "52455fa1b27feff2ade4b71a7772fb3598638ba4cb723f396d72f78061fac736",
+        "tools/audio_analysis/eval/kick_upper_cue.py": "3fa6c9e64ad8cc0a1a0dbe761a5ba6e5f59b4563c77882d3cbe1a0a77ac7830f",
+        "tools/audio_analysis/eval/kick_attack_rejection.py": "cb5e8ad261f64ae5b6e3bafce2f232e14ec99bb3fc54c0599f113dcfaed6a144",
+        "tools/audio_analysis/eval/kick_tonal_experiment.py": "ae6a66426616273ed9f33a460d5e5b8407f91b82681133108e235b01967d76f7",
+        "tools/audio_analysis/eval/kick_hybrid_experiment.py": "9f16149655e367952cab586b2e89d900d5ca3bcb07e0cf5cbead4fa2ecd42aa8",
+        "tools/audio_analysis/eval/run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615",
+        "tools/audio_analysis/eval/kick_excess_balance_trial.py": "e33fc56d6bbdfffa3008b20ba87fda98f0166cf427f543909ceb171e356f72c5",
+        "tools/audio_analysis/eval/live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2",
+        "tools/audio_analysis/eval/master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145",
+        "tools/audio_analysis/eval/kick_fusion_bandwise.py": "d7ae7da4c039da7c86e3d1eb7ffd0c215d77d68e3f56eb8be5944dac8c3f29d8"
+      },
+      "label_sha256": {
+        "inhale_exhale_145bpm.csv": "a29b9892456588294efbf6f506da912d4f2d996fc105f9551b1b9d6db4077f4e",
+        "bad_guy_128bpm.csv": "d657d298ad98bee09e048922b465de4b4a69386a1482d8327be3207a37444ef7",
+        "attack_review.csv": "b29e872c8a8ec9d05902c7f76bc68b5a16399fc9cf0fd1ef669c598c8711a9ae",
+        "heldout_passages_2026-10-09.json": "00a6865a1c60795bb7e74a4ffe9fe207bbe8d84d5ceb7b62aad9d4b64d627fab",
+        "feel_the_vibration_174bpm.csv": "922be87c9a6a9eb03002b68ce5f87915e1fec4652921795c20cf6975a2bc21e8",
+        "apricots_128bpm.csv": "fa38b535e88b55580df3f90956935420070d95fb89441b30e625b1cdce45b163",
+        "tears_140bpm.csv": "f3ce02e72f191bd53bc86c611fce2efe56a55db4cb19b6f1434bdba80ce28576",
+        "bad_guy_128bpm.repair.json": "0d9f007d02da46f93dff1168ff321379a57310ab97397626812080389d955f11",
+        "master_passages_2026-10-09.json": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c"
+      },
+      "baseline_sha256": "e348ed170ce59bd7017185669609b871c772ef1a7b21bd3fce7105fb1b3b1028",
+      "raw_report": "/Users/peterkiemann/.cache/manifold/kick-fusion-parallel-2026-10-09/bandwise.json",
+      "raw_report_sha256": "ff6b10759f81c3ca8f7c84ce90258b09371a387773a17860e9a0b29f83ebeead"
+    }
+  ]
+}

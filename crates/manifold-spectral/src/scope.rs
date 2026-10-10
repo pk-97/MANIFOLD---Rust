@@ -15,12 +15,9 @@
 /// lane. [`Self::LANE_COLORS`] and [`Self::lanes`] follow the same order —
 /// both are length-checked against the field count at compile time.
 ///
-/// This struct is the scope's own tick-lane
-/// display only — the underlying ridge-only kick detector
-/// (`crates/manifold-audio/src/analysis.rs`'s `kick_ridges`/`KickRidges`,
-/// `AudioFeatureKind::Kick`, the drawer's Kick feature button) is completely
-/// untouched; only the scope's visual lane for it is gone. Not conditional —
-/// deleted outright, per Peter's "never sometimes there and sometimes not."
+/// The scope has no kick lane: the Kick feature (`AudioFeatureKind::Kick`, the
+/// drawer's Kick feature button) has no tick here, by Peter's "never sometimes
+/// there and sometimes not."
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScopeOnsets {

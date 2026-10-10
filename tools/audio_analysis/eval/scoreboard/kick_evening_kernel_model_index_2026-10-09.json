@@ -1,0 +1,2205 @@
+{
+  "purpose": "Immutable local research kernel cache index, not shipping model. Actual coefficients remain in these preserved local cache files. No reserved confirmation or live integration.",
+  "trial_compact": {
+    "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/trial_compact.json",
+    "sha256": "177d2712b67fdb780f41dfc3f684cdaa4f7e6cca974389f1e29353d5f5b81624"
+  },
+  "models": {
+    "dcc66319ea04f7b5c1d736b338b261438d550c775770973a860759d1ee6d307c": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/dcc66319ea04f7b5c1d736b338b261438d550c775770973a860759d1ee6d307c.json",
+      "sha256": "01f5a3f0d5b697d2831ef75f5534a1b2c11e43943b922aa5225687c079fd7d92",
+      "model_sha256": "12dc986044edaef3c6acf97ab18a15072d2038db0d7c88039317078c93ba1d2c",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 10093
+    },
+    "dafa73ee07ab686d17412c00900249fa58c2f386559cf2e127f6293a398bc8aa": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/dafa73ee07ab686d17412c00900249fa58c2f386559cf2e127f6293a398bc8aa.json",
+      "sha256": "69cde591be5e09ea871d44544bd64757e38d85ab28188a43f5348fb28c16892f",
+      "model_sha256": "bae79e462185c0d208553ddf95be7cbaa4dea1f4e05a501033d4eb686385dfff",
+      "training_tracks": [
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9761
+    },
+    "5b6b186eda5f7d9116ecc125ffe2cfc2d7c511f862446188cafe7284d243c79a": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/5b6b186eda5f7d9116ecc125ffe2cfc2d7c511f862446188cafe7284d243c79a.json",
+      "sha256": "c98b992861cb31e5c2fdc22f36bd239b24bc78d822181dc6924d9edffe3dbe17",
+      "model_sha256": "df88e1a5e088c9b44456ebcb030d4c47c0d514d6f12f3770517e4784da513102",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9554
+    },
+    "7eff7ee1aa3e505806df484404d4030a6ed5bf8f8016c2429a71e09f664f0894": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/7eff7ee1aa3e505806df484404d4030a6ed5bf8f8016c2429a71e09f664f0894.json",
+      "sha256": "6e353c4200705edfb5a63ef83cc21576bc2f1c7bf5643e62ad7b7030e4bdf529",
+      "model_sha256": "ff7c4d6c2edf31410d2021593d686657cd86626cc59bac4fe7febd6586e93e78",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9967
+    },
+    "84289156c3cda17a4ae5d981f056fff765ed5fbda3eb2ac8c7bae7e195720825": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/84289156c3cda17a4ae5d981f056fff765ed5fbda3eb2ac8c7bae7e195720825.json",
+      "sha256": "a085084309960ea27403b6d63c1a7ae29f26254e6334b7eab5e2d56be1850057",
+      "model_sha256": "5413f5e40a42cdf0c427ef0d5f385edee6102e714665ed236d6b334e399292b9",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9793
+    },
+    "ae61b8cc110e650163b3d5eb755a0241392a3cfad2b755d679316ce580174ebd": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/ae61b8cc110e650163b3d5eb755a0241392a3cfad2b755d679316ce580174ebd.json",
+      "sha256": "5c1dcb6921d725ed5ceff877d2633c40ae10f50ef5358ff8bb320002369b4753",
+      "model_sha256": "bbac238ba03ef2327c1af5bea0338ae474a2a96b9de2c9326286ad58712a283e",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9374
+    },
+    "8c7badf24f1dc8f8e1b2f26e5408152b927c6c6ebb762fa6670ab4f908503a62": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/8c7badf24f1dc8f8e1b2f26e5408152b927c6c6ebb762fa6670ab4f908503a62.json",
+      "sha256": "1aedeb6dc34253376839fc6556ce30a84c1e2aea2a0219928284506649654cdb",
+      "model_sha256": "d90938761bfd0913b2e88a50cf475d299112410c5a2ef33bd264fa091b9fbd5b",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 8055
+    },
+    "e8e18a32fad70b8d7783fa639afbd33495da681a343b581709c952f08813f21d": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/e8e18a32fad70b8d7783fa639afbd33495da681a343b581709c952f08813f21d.json",
+      "sha256": "8736c1b15f7b6e75ff99c0551e892716e3acca3d721965be057c10e43e1ed391",
+      "model_sha256": "70c59fd03ca10555cdf9105b4a830130f881a65066128502a5ecbd36c2f0943c",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 6767
+    },
+    "be8c0a254c93edc3aff32145417cd3aeb1a4b44b41797aca36829c663d4c88e5": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/be8c0a254c93edc3aff32145417cd3aeb1a4b44b41797aca36829c663d4c88e5.json",
+      "sha256": "74683defc9d6959ce5f9aba1513319cd15927aaf5960ddda31104e5cd19b243e",
+      "model_sha256": "5f8964a6c6d36a986fd00a82e83e3b83c9937cad78182112190229af61463061",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7386
+    },
+    "59fea9f0678f588366a4e0643271bf695c987767dad48e6dff417ce58a1bd7a3": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/59fea9f0678f588366a4e0643271bf695c987767dad48e6dff417ce58a1bd7a3.json",
+      "sha256": "36da03a2f3d620b669705518bf7f23bb36a2c1f7b7faae31037ab508dfa8efb7",
+      "model_sha256": "beb16789cdd50e3fa045b774ee75027331e1cf9c85181112e18ff95af0a5c0a5",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9971
+    },
+    "a8741c8e4d36e6b94eb342fd399ef51777c8ba2a461835f2b78dbd92d815fa77": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/a8741c8e4d36e6b94eb342fd399ef51777c8ba2a461835f2b78dbd92d815fa77.json",
+      "sha256": "98ebaa97f7eab591d8fc0a03d49c4bf130bd266c169cab43c1c7dc4d3d940e11",
+      "model_sha256": "67fddf46b6c311af27a8b22ca7d7d14d86f9635edb4a0c7d807fe7cb46210d78",
+      "training_tracks": [
+        "apricots_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9317
+    },
+    "d75405798a51ef29fd5864e54b094cf0a7b38740638200a356e80135d55b0637": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/d75405798a51ef29fd5864e54b094cf0a7b38740638200a356e80135d55b0637.json",
+      "sha256": "549a9fee7f3a994b431f161bd2dd57b77851d617a092a22b613f38ae502f450f",
+      "model_sha256": "4effad24162c634fd8deef48e0ef5e435319b4aec93d1a10ab92d62984e2bac8",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9750
+    },
+    "a963a353f1271ca47fe9299f2dd48f7bd878d45eadf32b3672fe9ee9d175ecf2": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/a963a353f1271ca47fe9299f2dd48f7bd878d45eadf32b3672fe9ee9d175ecf2.json",
+      "sha256": "665fb1363f877ed56e572c15617c584fa1a73711e32ee22ca9d208587bf91666",
+      "model_sha256": "e6c240aee3e6eb899d6108e310af78c151275c6c42dff8dfb8620b31f592a696",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9603
+    },
+    "03fda88b26422c84ca251947563ef50d7d295dbe860b624c733c407e0d43944f": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/03fda88b26422c84ca251947563ef50d7d295dbe860b624c733c407e0d43944f.json",
+      "sha256": "1ae4e5e13a995f9d069f3c1e163e3596921704c5593e438b00a120646058fcb1",
+      "model_sha256": "ea2afeec686022653e21bf003bbc12b76e7a662ee60147e29cda37ccc534c6fc",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9358
+    },
+    "86f3f71f0491646b49887142764c70874d6eac0b60c47ebbc00210c81c4700d4": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/86f3f71f0491646b49887142764c70874d6eac0b60c47ebbc00210c81c4700d4.json",
+      "sha256": "8ec3cf8664118d3c51033800caef55cbbe0d322fa44f85d4ac4addfb556dc9fc",
+      "model_sha256": "b2978ab320332cde10ac0fc6db4c06424d21dd9e5e815e7cd9b80657e25d674e",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7863
+    },
+    "d381eac271aab1ea0e2e3f804c560ad0e9486a040f8e5d8e3b5a41da59c13ad6": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/d381eac271aab1ea0e2e3f804c560ad0e9486a040f8e5d8e3b5a41da59c13ad6.json",
+      "sha256": "06d5c92a0ceeed0160b7313e5af9f7838ac264e44014421d793699131cd0b250",
+      "model_sha256": "82f0b8f9329b1e36a1d95962d762614e053d958ce8d8d4fe6aee9f0eb2428958",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 6875
+    },
+    "76a91190b4c4c3b2ee2ef86ebbe8900e041f6ad596817b7cf8945c1500aece8d": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/76a91190b4c4c3b2ee2ef86ebbe8900e041f6ad596817b7cf8945c1500aece8d.json",
+      "sha256": "67ccbfe4ae254d46f52230997dd6a98898bfc2c9484173ab4ddf5cc7f0002cde",
+      "model_sha256": "c284f1ab07d987d4f894ddec27df4f23bcd98fa42f7e57165d7d16e6b3d6083b",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7294
+    },
+    "93faf543285e962952c015ede6263e82d4f10a26d1ae6c020b2d7fd348a4e48b": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/93faf543285e962952c015ede6263e82d4f10a26d1ae6c020b2d7fd348a4e48b.json",
+      "sha256": "fff883588e34e7cbf98c4472cf45ac5609e77144f54bbf20f9eb3f40f79d1968",
+      "model_sha256": "0d765ba5e7decae1b27998a2de0279f1299d6fb1a215a1eb074b83643728423e",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9836
+    },
+    "9e9685925155924d91ab3114b7fc7cbb659bb526bd96c9b3608b334203e23cd4": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/9e9685925155924d91ab3114b7fc7cbb659bb526bd96c9b3608b334203e23cd4.json",
+      "sha256": "bf110a664b6a61e04cb90c9fbcae42a2256060f42266025c05ca518aa7713a2c",
+      "model_sha256": "12ee4265bd4b89098733f85246913ea93fc085d30d2f76885485e5d03ae56ce2",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9516
+    },
+    "e42e161e28060f5200670dfc92680ca0e8806360150fd7cd276fcaf875271173": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/e42e161e28060f5200670dfc92680ca0e8806360150fd7cd276fcaf875271173.json",
+      "sha256": "7339085ea739a9d08b12e6162d5d095d8c1411082150f5889c32301cf0c63799",
+      "model_sha256": "77df2a08cc78fd7188157cd2907c7a9411f4b836f102a139cbea640c52d6f26f",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9473
+    },
+    "9ec3c9c2992cf6645d93f89091f1b69835dad59c168b2aaad9a3f6944d733546": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/9ec3c9c2992cf6645d93f89091f1b69835dad59c168b2aaad9a3f6944d733546.json",
+      "sha256": "b5a9313efde23b73259f478b9a0708c01b1b2fb5e78dce053bb8fa26ab81838b",
+      "model_sha256": "1c17d32380d1cb070ac76dcc425f4c723437ca58c5ddd6845b9c24b82ba87299",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9144
+    },
+    "2040fbac46473c12b217e6587d14e8538a7c935c03c7a81ef320fb199b3b27bd": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/2040fbac46473c12b217e6587d14e8538a7c935c03c7a81ef320fb199b3b27bd.json",
+      "sha256": "15ea57b9ba7613bf55c622df3dc0b87fdc5604113e0e74b2d7277baa8377f612",
+      "model_sha256": "bcc40f8ebd278c88d115d57d7aebcb12b574ec42244305475f6ac31eaf11e514",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7659
+    },
+    "66f2fde828b24469422e44a09f499447912d9bafa5746037d23cf807a512b26f": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/66f2fde828b24469422e44a09f499447912d9bafa5746037d23cf807a512b26f.json",
+      "sha256": "70b50c9a47a1b3317848b44173f0e52433b0d22786159c3fc278b21a3e9c5897",
+      "model_sha256": "e88545152813503d5f2e30dd912bd7d968985a542aa2ca13a55997b06cfd0a55",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 6659
+    },
+    "ebc0d2398b28116566e46304227944e43d4275af14310c7ee10b147b5d2d41d2": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/ebc0d2398b28116566e46304227944e43d4275af14310c7ee10b147b5d2d41d2.json",
+      "sha256": "87cb4b7fd2739bc8cf1023402c156e83d104e3fcc7266c63c79262e3199ef7ec",
+      "model_sha256": "9e1239b3105f9a012d154408291a8e01310028f4c763e7dc817fb45f18780d71",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7105
+    },
+    "469fb227df04e0f19579383436067fa42d6a39d1b14806a199567d49fd6ffd03": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/469fb227df04e0f19579383436067fa42d6a39d1b14806a199567d49fd6ffd03.json",
+      "sha256": "e9db358b8c05c4cdd77096f771bbbc8c9fe1dca08c22216c8ab5ff2fc22e3af5",
+      "model_sha256": "c4835bd9fae98bb32bd88df4c6c0a583da4b867141fad2ce5040de4ee0689462",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 10184
+    },
+    "44ec15ce2a6942f12803d025a44072e2ea13340e5a256dced2e19a5aae5f096d": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/44ec15ce2a6942f12803d025a44072e2ea13340e5a256dced2e19a5aae5f096d.json",
+      "sha256": "c3af55d55d9197357c5899a58429de179f844c78c4a19e76c80db9db5d6c4351",
+      "model_sha256": "958394e4859b8cd76ba47c908c4c48ef38101d31435e7646ece0f62be1005a0f",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9750
+    },
+    "9243f033cc85b7cecdf8bae98d9b225b840810553602fb5056708ba084522bce": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/9243f033cc85b7cecdf8bae98d9b225b840810553602fb5056708ba084522bce.json",
+      "sha256": "dcd4a5f14f65af4b417278c3ee86bc127a1c543b4afcc324b8bd34adc7578b9b",
+      "model_sha256": "40d9f098caf4ccfc77556a69771da70964accb18cc550d7434af80857fa7f120",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9518
+    },
+    "52fa355f030c1cd85dbac6c70a1d85ee73bc39209230698054f82de551818fcf": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/52fa355f030c1cd85dbac6c70a1d85ee73bc39209230698054f82de551818fcf.json",
+      "sha256": "a0069b67674160f43f4318b1ce4171fadeeff0e76c02df3c11986f2488855d2e",
+      "model_sha256": "e20db2cf4ddb0f4b63c56b0a12d2fc07d4a314f7d2ee9bb3d70e2e82d930a367",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7996
+    },
+    "3f6f06b2996500d8703ac063b11861ca03b3b747e666cd2f105e39c072c4a1d1": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/3f6f06b2996500d8703ac063b11861ca03b3b747e666cd2f105e39c072c4a1d1.json",
+      "sha256": "48379c38c504f3c97157215f1f326bd11cb1c8aa12e94842e11fbc6a8a61a88f",
+      "model_sha256": "20fdb0ef2c3f4dcb6f0b36ec32c6b78d15964ab040911dc27e42fd4d57089c8b",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7010
+    },
+    "37a0c6df826357ff693907adcd824705005c5dd93f52eb2ffa17005ad9452492": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/37a0c6df826357ff693907adcd824705005c5dd93f52eb2ffa17005ad9452492.json",
+      "sha256": "c85ded9acf042370bf6fa4aa4359eb76e4d11b88248e08555cd83fa1219dd898",
+      "model_sha256": "12e8d64b331e2babbd95caf8a47bb8d2fa1575edb7c6712be7a28d76f382b761",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7430
+    },
+    "900b6811e1990943d33a1da9004acec8f7e0198d16467cb3dab98387e5c1dd81": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/900b6811e1990943d33a1da9004acec8f7e0198d16467cb3dab98387e5c1dd81.json",
+      "sha256": "3810050c7abbb227dba9c4442d27f9704dbe4a35e7c24e05cfd6d970d1b55d38",
+      "model_sha256": "8a992990221f3173163e38c77a2a327002bc28a605721ae48814f1b23b8c9a82",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 10058
+    },
+    "63ddf7abfa0f659e1f50f42c3175db958c050341da307b538d9be657b8413ca3": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/63ddf7abfa0f659e1f50f42c3175db958c050341da307b538d9be657b8413ca3.json",
+      "sha256": "d1a4671a07d73018021c38a6391d2ea595c099d3134fa9f5b4829c867d63045c",
+      "model_sha256": "51e415d7e8eb091be6b4e784cdf9cf2329d0ad967fb06bb45d8b4669c72fb9ad",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9492
+    },
+    "9ce6affd0dd7ef38f237538e8dcc1b0bb88d1b76bf85e8a95e96965071fd2a18": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/9ce6affd0dd7ef38f237538e8dcc1b0bb88d1b76bf85e8a95e96965071fd2a18.json",
+      "sha256": "5a892c1dcdeb966151ea3c28eaad2bb48ac35b9ef47abeea71fc00be2fb96cab",
+      "model_sha256": "645088d5774b205395c98753eab87083da2ea153671144f9af6595559ae51490",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7968
+    },
+    "fbd64a1843fe58c3f83598ab22260707a8c04fb3d9a9f6f749110e3e1b07c522": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/fbd64a1843fe58c3f83598ab22260707a8c04fb3d9a9f6f749110e3e1b07c522.json",
+      "sha256": "658ff1d765d380f1600b98bc94369502f24dd5c820a3c3dcde0b038449036232",
+      "model_sha256": "0259bc6217b4934e939bf0f819aec5874bf9e3f95a1d1c8cb5089543c742a083",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 6894
+    },
+    "b8c7210690320ccd6dcb01e6d123a8bdd8ff54665306c41ddffcac50e75e9362": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/b8c7210690320ccd6dcb01e6d123a8bdd8ff54665306c41ddffcac50e75e9362.json",
+      "sha256": "0f54dc2abb2f74676151afac60f01949bb7e484162228e3fd682bfa0aba398e1",
+      "model_sha256": "202902f146ddbd98d96b7310f621c2486d8b066762b325bc47324c93727061de",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7353
+    },
+    "2dd723ee8ca814564a81b7e40476bdf3e5ded5bf75f1eed15f64a4f0b941bff4": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/2dd723ee8ca814564a81b7e40476bdf3e5ded5bf75f1eed15f64a4f0b941bff4.json",
+      "sha256": "d7b5f6dfcd86099fe50b3e97a2abc47a3126dbb21e21e873493ca912fcdd5878",
+      "model_sha256": "f914dfdc430d76ea52c80e7e21c0beb5a3115eb61ea6158081615040f642ec23",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 9763
+    },
+    "4958dd5e8f58ed2875edd09f0a3394a69185958af77cb3c33f4b648d338c7a8c": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/4958dd5e8f58ed2875edd09f0a3394a69185958af77cb3c33f4b648d338c7a8c.json",
+      "sha256": "0f938c37e16145b148f69bc20e5e0ce8e1487d7684b5ecc8c4f8ccf487d90820",
+      "model_sha256": "531da61857bae6b711cb2153b0584a297a881edbd61c26d5942d110d790ca6e4",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7580
+    },
+    "5a5027951671ee7e790c5d19249ee4edfef2ce4f83e41fb3927e3d2d0931490b": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/5a5027951671ee7e790c5d19249ee4edfef2ce4f83e41fb3927e3d2d0931490b.json",
+      "sha256": "7c57849deb4a6c8311d6e7743cb12e5b3c62d20eee76c420c71115ccfac7197f",
+      "model_sha256": "677e5964aef1cc6ec874a9a478e62eea6434076ae3e1335b31df7d78cea160a1",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 6232
+    },
+    "e1374ca0cb991931f34c39f24519578c5c623a926b55b1315b07e4a91ae00a00": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/e1374ca0cb991931f34c39f24519578c5c623a926b55b1315b07e4a91ae00a00.json",
+      "sha256": "d69b1303cc5acf3190c51e7549723659201c993549c9d6901571f58e728b29dc",
+      "model_sha256": "8446efa8846ad249f80a3ea61d434f3c4e2b1d183220c175234f5914e6d9b8b1",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7008
+    },
+    "5796bd347cd282af677fc4df5819b4e509950204ea81cf02a51c02e585d763c4": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/5796bd347cd282af677fc4df5819b4e509950204ea81cf02a51c02e585d763c4.json",
+      "sha256": "018c85bb53cfea4bc69769460a77fbf0d4b36bdd6936501e1f4b799ebbcd6644",
+      "model_sha256": "589d83d3804fd6aa927ef8737f479d014d7dbadee26c4b568afdb0017c847db9",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 8226
+    },
+    "efca1213685b1f48b52be3694fcb487264af977026c670ec9f531d1ba808d2cb": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/efca1213685b1f48b52be3694fcb487264af977026c670ec9f531d1ba808d2cb.json",
+      "sha256": "689952c2413f0f40d79521ddc594a2224c6588f582c0f1ba5a39899755bc3190",
+      "model_sha256": "dc85347a11fecfe2ea5e13f0463ef1a3188b962d1e0a9154839261a99933de9e",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 4852
+    },
+    "6c5096638c37fa320e058154470de4b761e174f048202002f244e488b2bead53": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/6c5096638c37fa320e058154470de4b761e174f048202002f244e488b2bead53.json",
+      "sha256": "25f86fd85929fd45c0b41d99330a567baffa3172ac1f3db4f019c56373e9fb2f",
+      "model_sha256": "d7e3ce88b9109bd6e0adbc71deaeac5b628cde0ca316a1b50cebbc5b39ea6147",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 5464
+    },
+    "14279dba9fe3c3e194c51fd7841e562243839d38a74f9ec9a7b83a7279cd4c9b": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/14279dba9fe3c3e194c51fd7841e562243839d38a74f9ec9a7b83a7279cd4c9b.json",
+      "sha256": "c89ae8aacaf36f0481c8c10c7f8e22c0ff81c60c3feea01dcd73514e1eaa2710",
+      "model_sha256": "fef6d4ca70d3c7b8a68f99f5418fc55879d45123e35947321d8adc1e42bafa2e",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7128
+    },
+    "37dd02b136bed90c0d701d9b0b40a85361acb626d82a4dc49a424a9d5f33939a": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/37dd02b136bed90c0d701d9b0b40a85361acb626d82a4dc49a424a9d5f33939a.json",
+      "sha256": "f2954e4d4b29cb585462bb2f84b48b4e79c2a00cbb3a400f08f908569a3f18b5",
+      "model_sha256": "32372a9b4565bf09985d7a608bcd6b68402fb6a050ecd6775e7f8021ad992a23",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 4523
+    },
+    "48ccbbf78e5160852408fa746cbc1a91f90ab388dbef9d0fe5dd7b5835d254bb": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/48ccbbf78e5160852408fa746cbc1a91f90ab388dbef9d0fe5dd7b5835d254bb.json",
+      "sha256": "71eb9271c93baef5fa7a101dc898c640f2e610fb8bfba10ffe2b61d91576aaaf",
+      "model_sha256": "2a4e6e6ed6764195d054b060f1eebc9eaa71473ec7668eacd500c326634ac8b2",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.016666666666666666,
+      "support_count": 7680
+    },
+    "363ae867ccb9be0fdc8cadfe7f7b603ec788c7e2af6a34612be8ba6ca3e6e28f": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/363ae867ccb9be0fdc8cadfe7f7b603ec788c7e2af6a34612be8ba6ca3e6e28f.json",
+      "sha256": "bd3b14bf7e03d149bfa46daaacb1b4f862b4664c01edf5c0a2acc3ee37ed7c21",
+      "model_sha256": "2683c098ef2dfba11290e99ee7eb547878994ee34d508a61c2ff1ff728a66e3a",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8807
+    },
+    "09a0513fb50e396d7a9e87afffb14af5e8b53fe9bd4c963707976779771f686e": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/09a0513fb50e396d7a9e87afffb14af5e8b53fe9bd4c963707976779771f686e.json",
+      "sha256": "73877d8579bfb5b724b76008fe3765e8ce71c21928eccf202ce1696b4fdc25c0",
+      "model_sha256": "f51d577299e49cc260745d58e0e15f0ed421cc48cf5767917e878c87e1aeb41b",
+      "training_tracks": [
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8507
+    },
+    "2b0c4c324997d47eaa1d1637eade8167fa599434ad16bd8258eda5c5f4efdc51": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/2b0c4c324997d47eaa1d1637eade8167fa599434ad16bd8258eda5c5f4efdc51.json",
+      "sha256": "c71142acaab357bdfc64bd093d54b132040dc0dac14f118bde8e8eb1bda2014a",
+      "model_sha256": "08975a619f8e8054ed647112fcd7ef62407f38a93b79018f98d79047749fc68f",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8223
+    },
+    "ecf9c2d8baff613dc7692bbabcfafefd47c1f018955bc0be425f1b6797807a4b": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/ecf9c2d8baff613dc7692bbabcfafefd47c1f018955bc0be425f1b6797807a4b.json",
+      "sha256": "d7f98d8530707426ec59ae3856019da5dc921056f61fd8cc728f090fa051731c",
+      "model_sha256": "eba37897175bbe3874b4b6b825bc84664960137ffccb7dd1069be0bf9d450f8c",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8673
+    },
+    "a9aa69cf1c227769ce6b14f1fbd01101e45417f1b2dd413b5eee7c0ae8d46f8f": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/a9aa69cf1c227769ce6b14f1fbd01101e45417f1b2dd413b5eee7c0ae8d46f8f.json",
+      "sha256": "5fcc715fb52adebb04544276de7436b498c8165b7567e5d9daed87347cf9f23d",
+      "model_sha256": "a62cc2f2d46449d21173cc4932ea85070b2408eae1a6bc2702e86878fba8e900",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8478
+    },
+    "8a341b4c8199b44167ca0d8c7c3589bf3019881b8015e64cbd1e1f0a916bdc12": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/8a341b4c8199b44167ca0d8c7c3589bf3019881b8015e64cbd1e1f0a916bdc12.json",
+      "sha256": "91f1b5318fdb0f4fe049d7dbfc0bc62c28abe5128e5525092eb3cc88ff89268f",
+      "model_sha256": "92351822a86d46020c40db00bd4dec3f5c2ea018839af22c841528686b8314fe",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8235
+    },
+    "f4ccff14c3a8f5c71d1ee6cd530ecd7b7cb7f5384c22901d1bdda1c033ceacb7": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/f4ccff14c3a8f5c71d1ee6cd530ecd7b7cb7f5384c22901d1bdda1c033ceacb7.json",
+      "sha256": "c9cd99241e61a7f13944de1315806113529e3bb5b92e070c9313dcf6b581dd33",
+      "model_sha256": "fccd14055dbdfec7fd0049df7680af066acbfcfa2e3738e743a791e37d36d571",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6988
+    },
+    "1a5f6f14b46714806bebe794a53d392d58bf0402488b58402a15ae868e3c1d8c": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/1a5f6f14b46714806bebe794a53d392d58bf0402488b58402a15ae868e3c1d8c.json",
+      "sha256": "b7af0207090d3a97cd7b3c0788ab71eb79f7ae61b817a74c8b8f031ba475e1e2",
+      "model_sha256": "90e294a4e06ba18e0f01ff7aaff95bd28cedb9f6d7bcd1a6695bd054dd345483",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6136
+    },
+    "35c2bf94d818421716dd672797d08cd00dc9db1f2f565a1b3bdc86780add4f62": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/35c2bf94d818421716dd672797d08cd00dc9db1f2f565a1b3bdc86780add4f62.json",
+      "sha256": "635bb08203257540030d2f44ccb54db0e62548cc6c6096f0fb9222ccd034d5c2",
+      "model_sha256": "84fa35cfb8d52717b64c2154ccf6761b93cdba04e025caabcc032d6453432905",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6252
+    },
+    "eb5b03d5dc43753c9744c0c7248e36b94783f8d772486b99e84a71869c3c2e58": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/eb5b03d5dc43753c9744c0c7248e36b94783f8d772486b99e84a71869c3c2e58.json",
+      "sha256": "992a46912d92ab26aa70e0717f7c6fcfe6e258ac54772171a65bc84104328b83",
+      "model_sha256": "4f829da28f6bb75a179feee2775e5ed76ceda743db6796929ef69bff8b4d5a69",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8725
+    },
+    "474f469e3936af0c09fd6b03a15187c23b29a2b6ce3fb66f42796066bbd96d1d": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/474f469e3936af0c09fd6b03a15187c23b29a2b6ce3fb66f42796066bbd96d1d.json",
+      "sha256": "b3c9285e81324991d07a1f26a6be8914ae3ee31aad4bf6bc374918eb33122c8c",
+      "model_sha256": "84e18e2b4380ebe3836f2db134cceb2ae0c8de545c864bfbebb6884911d3de32",
+      "training_tracks": [
+        "apricots_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8078
+    },
+    "3abfc7de8482e52483ee4ff495259b2dc686e07b129659c062592cadc35431dc": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/3abfc7de8482e52483ee4ff495259b2dc686e07b129659c062592cadc35431dc.json",
+      "sha256": "7b2e28a1fa06c74a3c7b8dea0eada07be6ab5767bd6cd745447de7acc143abb7",
+      "model_sha256": "53eb301434fb77779d91af3e69bb535f57ab129e5d2c393c0202e0ea51465a9f",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8483
+    },
+    "77ea8bb614797734508fa0e46981606812ee53978acf9e02311ea3afeb54a181": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/77ea8bb614797734508fa0e46981606812ee53978acf9e02311ea3afeb54a181.json",
+      "sha256": "af6e7ba23702ebc6ffc3a919a49f2c2ebcee6a8cacad050d4835b6d1c82ea517",
+      "model_sha256": "8e81fcda8dfde035059cf39077d6083d22581f3b5c871850ee2163718c78f482",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8333
+    },
+    "48c2e4d4068564e3463552f622d1a397b151a23a8f57882508f5fe090e28c80f": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/48c2e4d4068564e3463552f622d1a397b151a23a8f57882508f5fe090e28c80f.json",
+      "sha256": "fd4e124443ad058174a3a28102e2d7a0bdea136aa993620048eec9f01afb447a",
+      "model_sha256": "7880d5c90857f8425165b5563b500486eecb194f6854c000e594796d9c1af0c8",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8235
+    },
+    "0c3fc5cce873570f39084c3ee2ee4b64a9d8e7b0659c4a159fc7797fa5feaca0": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/0c3fc5cce873570f39084c3ee2ee4b64a9d8e7b0659c4a159fc7797fa5feaca0.json",
+      "sha256": "5a12131a2d5bd2b932d3b5386d23c5d44dd50e22c67a8015a63dc8766debdc4d",
+      "model_sha256": "2cdd795bb0a9bdb9f53b0ba80a7d85f2973444d4747c751766e8cbbf55f2ce2a",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6870
+    },
+    "683e31d3b6703bec017d2113ffa13817b24cf33520e4a406e38b48678a7a05f3": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/683e31d3b6703bec017d2113ffa13817b24cf33520e4a406e38b48678a7a05f3.json",
+      "sha256": "19af2f118da90b3c3db16bc66a37fe118ca705988ecd9a9fed1b8e7d49d91572",
+      "model_sha256": "90e2f6d3a78b67db55b1c18c446d2839d9c69f3729518bd7d4bb312c0fd0b2c2",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6202
+    },
+    "be9132f394b4ada1de7bccc0cb26be9ee6af2896f52294ca30e23ded7eebd7ae": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/be9132f394b4ada1de7bccc0cb26be9ee6af2896f52294ca30e23ded7eebd7ae.json",
+      "sha256": "40dd95ab29b0f73de2f1f0fc6151c22cc407225d09548faecc1d6a25ae7e3c37",
+      "model_sha256": "3ab1527ab52dff480db14df5e57429588a7e04de64b58df57e9ade613cecb093",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6248
+    },
+    "2c5dd8f7e5de1ca0fc761ae69f5f70889776901b4b5146197c903e973176a766": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/2c5dd8f7e5de1ca0fc761ae69f5f70889776901b4b5146197c903e973176a766.json",
+      "sha256": "221c8c92f39d66aae229a39087b5d2217bbd6981eb5b94d99f883e0a82f088d5",
+      "model_sha256": "a84885500e5c84be1d76632325e7e12a5dc5d2c325b122ce6966c6e31ca58f97",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8527
+    },
+    "0a49e9744195842227f626da14cba08199bac3456112e4912c494533767eade6": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/0a49e9744195842227f626da14cba08199bac3456112e4912c494533767eade6.json",
+      "sha256": "b196535f205209d941af734ad76ceae2192c9ce43402d139400c51be43503720",
+      "model_sha256": "e8bfe773dc6d5c435c1044eb8f1002c6a115b266996145c0c956e9463d187b36",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8279
+    },
+    "30f85d5993413b0c26e511948cd50e154039e942c76b6e43c397e23f3a5cd857": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/30f85d5993413b0c26e511948cd50e154039e942c76b6e43c397e23f3a5cd857.json",
+      "sha256": "4fcd398daed196293be749d208d9168ffce4de5c5bce2eed2645bd3053265de7",
+      "model_sha256": "477265ec969c5d37ccf2475dee3f6364508aa5f9cf9b6fa0c2ad2f80dceba08a",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8157
+    },
+    "9b19a081f4551b7437311128659f47259c7a93b03864be2388ca8843bf87b976": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/9b19a081f4551b7437311128659f47259c7a93b03864be2388ca8843bf87b976.json",
+      "sha256": "ff328bc5ad7f11e7b5d8372cce27477e1d4588824d66299e314868cd5711f75c",
+      "model_sha256": "458c5198f801fd0c27ac25e497a78711b73b77be30d573d1ffb08c3e425f448b",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 7987
+    },
+    "da4938784183696b1dbf7a98af4835d1315d878d03da7f7068e1ab32c792706b": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/da4938784183696b1dbf7a98af4835d1315d878d03da7f7068e1ab32c792706b.json",
+      "sha256": "03e86046c085ec1a70725c734c82200b733394686c6babb17e0b564fab3cd57c",
+      "model_sha256": "f393f7733645d8373da98f67715906fea2199ae5d21a1ae3fc0a54a31269c3f1",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6636
+    },
+    "c8935ff092a1806c0cc79832ba12d907c1ab8335fb904c679282e10ae56a7678": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/c8935ff092a1806c0cc79832ba12d907c1ab8335fb904c679282e10ae56a7678.json",
+      "sha256": "a8a4533a67ca41b405b900cdc69dcf71973c466039e03c18ec833601df93b0a7",
+      "model_sha256": "535730cc523804485866b75b79a9e0804da2b14c12edf1361dab7d49b79c6427",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 5940
+    },
+    "b7bb17b1851a78a03774912e45685d862a683da3f7ce8b3dae72f197bf00afe9": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/b7bb17b1851a78a03774912e45685d862a683da3f7ce8b3dae72f197bf00afe9.json",
+      "sha256": "214a239089bd35cc0027b08e7977a53f765ee277f653105092fbddfb9f311953",
+      "model_sha256": "5b1e314196c1be56b54b61ce7571a63270051e3ec0ea516c71410a2defdf3b13",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6036
+    },
+    "33f3b2c3ca834eaae41441c88fa532126d35a676d21da18ba9739dfb03c6998c": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/33f3b2c3ca834eaae41441c88fa532126d35a676d21da18ba9739dfb03c6998c.json",
+      "sha256": "55478e3c34214e08d8cf8c8a7743a02071550c8d8f9f4e0521807671b454da8b",
+      "model_sha256": "4847502943c07d40443b6bac89f4f1c86c5e7786a512b0eb5c3e15db57f8f55e",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8886
+    },
+    "6950356dcc38f9bd887e8c7eb45da8bde6ca6d82ea24a58cca8b16276f5d4f5a": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/6950356dcc38f9bd887e8c7eb45da8bde6ca6d82ea24a58cca8b16276f5d4f5a.json",
+      "sha256": "3dafe8b89e989b3d25460658a2d8eb9de6da175de47fb2274da54202b7c269da",
+      "model_sha256": "92c247314541835c55c203738b26045c8b0cb8b637f0880386d21db6d19d6e9d",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8495
+    },
+    "dd9d883be892a1e3a7b73d5fce987f996375a91fde1f910a4bb6e6d59b776288": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/dd9d883be892a1e3a7b73d5fce987f996375a91fde1f910a4bb6e6d59b776288.json",
+      "sha256": "52f14c3c3772097977cc424890b6f284d1722b594ea0e91d15acacbb122aa62f",
+      "model_sha256": "12b418528e5569ba35aedb8cd02c5ce2da525ac5f9d7fb4d0f8e70fab6ff80b1",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8362
+    },
+    "2faea1ec36d445ed0dba6b8058d713e1f437b6ab772b582d93125aaede9e790c": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/2faea1ec36d445ed0dba6b8058d713e1f437b6ab772b582d93125aaede9e790c.json",
+      "sha256": "d902efbbe3227d8523d19b979781e9591c8291b4e45ba510ed4136a229accd0f",
+      "model_sha256": "f68064c97247a941fdf5b7a3ae3196ee3054f013f621a2ced2a8e784dad87ace",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6945
+    },
+    "f0909187334107509972444e7936e6a54fb63497514651228f35c5366efe9f5b": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/f0909187334107509972444e7936e6a54fb63497514651228f35c5366efe9f5b.json",
+      "sha256": "c646de9161d3ed0ff83d700bf3891b9a53ae17eb38b7ecbd356d42fb6130c250",
+      "model_sha256": "f288da56740a46097b8e90cfee7f5b135b144033e6e1e388f7043c18470151d2",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6320
+    },
+    "ca6a2f6d1fd20d3f5b226d85663695f0cc56aab02311b1b1d4bb12c59cd0cc3c": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/ca6a2f6d1fd20d3f5b226d85663695f0cc56aab02311b1b1d4bb12c59cd0cc3c.json",
+      "sha256": "2f1fc00d3972e0a2f820808823ae02f3d57c4df866adac997124c38471f287f4",
+      "model_sha256": "f67835e0cd58c6f947eff826012dc5bf227d784e26fd418774b992090435d698",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6335
+    },
+    "2aa7f74e51363b43dc8d98ceaf939e0e34350c69eb1bb1485797100cbaf8915e": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/2aa7f74e51363b43dc8d98ceaf939e0e34350c69eb1bb1485797100cbaf8915e.json",
+      "sha256": "658c5156a8de74c661dd216ffd955a8d709efe055e1b466e6f74f92f689f3b36",
+      "model_sha256": "de4c5ce911020dda6d6069e8163e3f5bc5eac540d59cca25bcafa141ba0a0874",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8737
+    },
+    "fc2c5cd2a1021cb4562dac8524068367ff2fc4701f712d5a90ed5f0c7744cecd": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/fc2c5cd2a1021cb4562dac8524068367ff2fc4701f712d5a90ed5f0c7744cecd.json",
+      "sha256": "5d2a0d72d606500cb3064049bc9d9ac539685dcffa94cb246a2069144ea12f92",
+      "model_sha256": "101ea67595622e692fd989dabc76cec1ea7f15a6e2dc52a389f179bf0c467687",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8272
+    },
+    "5a369e033ba01a00950e2479fd1e17f32d57fb566e7e87f76732f11aeab03078": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/5a369e033ba01a00950e2479fd1e17f32d57fb566e7e87f76732f11aeab03078.json",
+      "sha256": "2192ad2be9e37a63315c848c36f288e4b11ad63e5c480223167b3bac6e9e03b8",
+      "model_sha256": "57595aa96963473e1e25169be625f3028d53fee5c8050cb4e22ad1f19e3048a1",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6883
+    },
+    "ff36bb9288a932008dc5567b9d61ed93d1c4516183103f2360624057ba2c9aec": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/ff36bb9288a932008dc5567b9d61ed93d1c4516183103f2360624057ba2c9aec.json",
+      "sha256": "19cd86952d827a9cd36b27a44046cf25891732f063623f6179265767c5883208",
+      "model_sha256": "f6b61e6d55de6b709691dac8f6c3c0a2ebc6ce4a1be2902af132a66a2af7a07a",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6203
+    },
+    "622f06b157405df982f6ac072f9995674d7519c999269aa2e832ff699a39ec77": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/622f06b157405df982f6ac072f9995674d7519c999269aa2e832ff699a39ec77.json",
+      "sha256": "413f66f508e64c5ba3af7385d596443476d60ab2ae7d7513016f7e0d10f744ba",
+      "model_sha256": "691c2a867c34d8115d806f408a4dcfa9290a0234acfa3d5bd34a635bed889a14",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6235
+    },
+    "17bfd0a60052931d9315e12b9be9987b523e1e71c2fe54935a03cadb8f401484": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/17bfd0a60052931d9315e12b9be9987b523e1e71c2fe54935a03cadb8f401484.json",
+      "sha256": "2cc012f7407b59e4f42633c3293e84b77ed99838f9d9548345206fdae9a2b0e6",
+      "model_sha256": "e3779021902cf9c5175f592924747520afb567c769912dc13bbd1be047d10e88",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 8512
+    },
+    "d8c13e0e460df10d3db3e96a84e4380d52cb8b5a316ec5113de9ab7598522a58": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/d8c13e0e460df10d3db3e96a84e4380d52cb8b5a316ec5113de9ab7598522a58.json",
+      "sha256": "83dbd16bd07f7ed6c894be3278dff1e336277e0cb4cda20a2318233c0f2e508d",
+      "model_sha256": "23f405cceafec8bbe9c340cc924e7537445a31c8e7e328c2ef6bec48d9078ac4",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6655
+    },
+    "20206e42f27415d6fd495cfe45a756bc1eb0c345b34b0d8cf8ea5e33cb2d9a8a": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/20206e42f27415d6fd495cfe45a756bc1eb0c345b34b0d8cf8ea5e33cb2d9a8a.json",
+      "sha256": "1d7cf29a42c4acf4cc6c5b0eccbb4c6d2857943dbce59a5930eac1d08dbb70aa",
+      "model_sha256": "50a9d0d419d6bfcb36b9d1dfff9a123dde6d2566be332dd5a6b639746dccb626",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 5690
+    },
+    "d71640463242ec0da206de9ef310c041becb32cc49cfc0d5eff86caf9d295aee": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/d71640463242ec0da206de9ef310c041becb32cc49cfc0d5eff86caf9d295aee.json",
+      "sha256": "7ec3ed2dac6c6f57fe4c469eff7d00c4a64f13e8b015cb9bd506ed47ef202f9f",
+      "model_sha256": "6025873b9bb5faf352b615acbd30e37d7c790c776ef7579937e2654a22e7b8fe",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 5888
+    },
+    "be8d74363e0db90f16d0b1d80894ab00d121f471d8abcd0b300f5492606969ab": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/be8d74363e0db90f16d0b1d80894ab00d121f471d8abcd0b300f5492606969ab.json",
+      "sha256": "03a570880d44bae9678d90e6c669c8fabbedc4e2d56316a399b61d296e29690a",
+      "model_sha256": "07318293a5d4c8b9582625eeb6ce38fd2e54ea309122d25a047eb4807d3f204a",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 7165
+    },
+    "af728b144d8e721485ceb2f0b11af3405f34064f709d6aa6e6df10c4a670fd33": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/af728b144d8e721485ceb2f0b11af3405f34064f709d6aa6e6df10c4a670fd33.json",
+      "sha256": "d2ca0bb8e41ff5a3acd8b0c16026fc2cdf6a79863c3a9815830cb429dfca6802",
+      "model_sha256": "c1d8ba7bb650d7b161709409f16b17b25e4503f037d59d2226059f5f75e06a83",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 4350
+    },
+    "9c3971c81fdff0cd97b5f29af67af082d19ed3cdfcc3c5a56b6076645709a4b7": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/9c3971c81fdff0cd97b5f29af67af082d19ed3cdfcc3c5a56b6076645709a4b7.json",
+      "sha256": "c1860d8d481fc450e2d3a5152744af55fc2aa9288fcc2dd0ff7bf8156ec8eb0e",
+      "model_sha256": "6cb2713792a19872ebfb9111a46bedb130ee7caef20d0a40556395ce942cbc37",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 4583
+    },
+    "5d3e97c4679fce0a9fa146e4592850607d3051398732a801c586546f2c3f44ff": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/5d3e97c4679fce0a9fa146e4592850607d3051398732a801c586546f2c3f44ff.json",
+      "sha256": "6c8612c12ccb5eceb272b71d8ad0d539b27552f91468fb13ef98b930f54b3920",
+      "model_sha256": "0c1d7f7e48fc3b5b8272a0fd86370aac3fdcdf06a274f7ae919f83811a6928e0",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6400
+    },
+    "ce7ede61cf8b05523f866518211d5ad1fa02e35f83823836d275b75785fde860": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/ce7ede61cf8b05523f866518211d5ad1fa02e35f83823836d275b75785fde860.json",
+      "sha256": "7be8a56242ed14771f3ffd6026f1a799c22eaddf592dbd3c5ca5434abda04441",
+      "model_sha256": "9683ca93759854ea7d3156ae83a73ae9c0c2e089427747b94884f54cd6bdc4a9",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 4064
+    },
+    "5be1f2c13b2d24592dd4e2a93f09d9bf4c6fbfdb13b32cdc9ee03bd36945bf49": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/5be1f2c13b2d24592dd4e2a93f09d9bf4c6fbfdb13b32cdc9ee03bd36945bf49.json",
+      "sha256": "2a6b99d6c9d8d4babea910c8d9fc5d9c99b506de6edfb47bf354a8c60852f6a7",
+      "model_sha256": "6e1c85ffd008a0a292e463dbc8137c63a3c3775750e4fc6ea6a5b60f9ea15126",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.03333333333333333,
+      "support_count": 6520
+    },
+    "d2545a50007ba3636d39b08feebf2026061811f123e93891ad4bcbdcd3f972c9": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/d2545a50007ba3636d39b08feebf2026061811f123e93891ad4bcbdcd3f972c9.json",
+      "sha256": "9efdb82e04dc055b96d6d5e8bfaf503834d02d226036ce8ead30d5d004cc849f",
+      "model_sha256": "9336573d0444e5dc759404871893b6a6856720657ec8000d04cbc7a26dd162fd",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7951
+    },
+    "2c46aca9c132928915f2955ba309de962f8313e982798f1ac0be8d05e0c6fd13": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/2c46aca9c132928915f2955ba309de962f8313e982798f1ac0be8d05e0c6fd13.json",
+      "sha256": "8b1674db98cef2ac91678eb02f1f0a9788a563cc547e80d60d2eb51fc886af49",
+      "model_sha256": "742d8446006a55a96b2c332e55a3480580438b6c32f6a2f75a33a5cd812d6533",
+      "training_tracks": [
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7755
+    },
+    "4d0d30928de695bc992dea4345802820d7c03a98831769a62486ba48752e3172": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/4d0d30928de695bc992dea4345802820d7c03a98831769a62486ba48752e3172.json",
+      "sha256": "758341ef3575afe35de3562e83d8a620e8cc071e6a082f645d052042873f9003",
+      "model_sha256": "f09ce5d1a15b011649d57dc2852579d1b0f4715b1266ea39dca66ae7adb65ba1",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7362
+    },
+    "ad471495c1cdf58f276a9d8d96dea4b9ed220c47a2fd25782999064e5e7e1ff5": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/ad471495c1cdf58f276a9d8d96dea4b9ed220c47a2fd25782999064e5e7e1ff5.json",
+      "sha256": "c556a4d36c4cb3a53089b24b2e2e99d397a1a6fdbd1a406f7113a7c4c2bd720d",
+      "model_sha256": "7527055a69c3173cf6558db8347a52b26ecb3f1a351325ceae9013d1789b0708",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7810
+    },
+    "0e098a704c6784ebb0048558578bbf514ee94e369f4feb89291646a11a03d394": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/0e098a704c6784ebb0048558578bbf514ee94e369f4feb89291646a11a03d394.json",
+      "sha256": "df37dd941db7be5518fef76b968ac452e85ccfe30118690b9b0f004d073d1be3",
+      "model_sha256": "81836023857cb5c9334002ab7b11f74fd8e429396834233762a50476c0164a03",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7722
+    },
+    "8b1ccaaaf8fb88f09ef991b45513cbd8a01d1b7cb99ff6ed449f1566aec81569": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/8b1ccaaaf8fb88f09ef991b45513cbd8a01d1b7cb99ff6ed449f1566aec81569.json",
+      "sha256": "9aaac6a6f0415ab396b6b73778c0786fa454e7e061a75665e876f16b279235f5",
+      "model_sha256": "d7eb70607aadfe42a50e0b77213412e4806a5eacf37bfa89461d5925e07ec757",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7400
+    },
+    "a663ca5e76742f3ee6cfce2a6969bb6638ad2b1b11fbced9dcc2110dc8ec1a24": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/a663ca5e76742f3ee6cfce2a6969bb6638ad2b1b11fbced9dcc2110dc8ec1a24.json",
+      "sha256": "819a8bc14aae63991c06f04d7bf493d2bfb5f25937ec2ee8d25199eb85e53e37",
+      "model_sha256": "32341d4709993f1f95dd048ddda8219ce28f29284928a1830ddcdf0348686f52",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 6221
+    },
+    "b89f479aba222a5b6b1ba8eec03ebdef9c5c830eca3d7078be07292565215646": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/b89f479aba222a5b6b1ba8eec03ebdef9c5c830eca3d7078be07292565215646.json",
+      "sha256": "34bce4492e87a1043cd16ee0d145f4f9181746a20f0950e7e42541606858a3e1",
+      "model_sha256": "638d2e5d038148cba847a0945c18aa974845ab84314b83d4090ece1f371f446a",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5733
+    },
+    "0d8d463e5af598dd2915a96a48675f8a28b6d3a57b62da8ba9c995dc6f70ce48": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/0d8d463e5af598dd2915a96a48675f8a28b6d3a57b62da8ba9c995dc6f70ce48.json",
+      "sha256": "e33de53a6658e088c884f9d156acef384bbb371392d227eb7561a8bd04c87a0b",
+      "model_sha256": "cfea40f2aada1580c8843dada4054b4ea6f0ba0b7c4e866793db684803a3ca19",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5524
+    },
+    "51227a5d3736e324b317ff2c45d7684eccc136fd70b66c45054b61bcf01f1d45": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/51227a5d3736e324b317ff2c45d7684eccc136fd70b66c45054b61bcf01f1d45.json",
+      "sha256": "7770b291365b31788cb63b557fdf3e2c9bfdfe0123d5b551c3c26da4c0b65a8f",
+      "model_sha256": "a0f75c107cc2eee75f94d1d0aad2cfaebf48e3cd4a656a330ee92c4e10156c04",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7972
+    },
+    "5156d061741e6e590f1bdafae25e5ccadbf42a2f5f00e4aca3b8d68926546cb8": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/5156d061741e6e590f1bdafae25e5ccadbf42a2f5f00e4aca3b8d68926546cb8.json",
+      "sha256": "b181dd5072f3ad6c6d357d3da28f35876e8e9e5be428a64bb8142b9dc6b0d003",
+      "model_sha256": "9fc874d9ad0fb3769ac5efb0d17c2eae4eb374b34a6299bae0af7075d2d57216",
+      "training_tracks": [
+        "apricots_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7386
+    },
+    "250d146482aa253da12985925160269b59f3659adbbcabc8b165ab7ea6638c9c": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/250d146482aa253da12985925160269b59f3659adbbcabc8b165ab7ea6638c9c.json",
+      "sha256": "5b1a677b99c66bae4f86b3e50e6b582f81af664fc08785241c5938198ed97c24",
+      "model_sha256": "97241ee2206ae026bee36cbb4228b6c466857e416bc5c93ea76d01463856ff55",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7816
+    },
+    "1ef57145a828bfd298ced6babdff5dd2dfea0ba467af0e580427f984fc12b0e8": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/1ef57145a828bfd298ced6babdff5dd2dfea0ba467af0e580427f984fc12b0e8.json",
+      "sha256": "e69a3c0a11afc8aa76a5858e46d8f25d9057c0c0a0a7e109ecc291a51535eeab",
+      "model_sha256": "97b32a435f10f304630d9f54d59fc5a75f0fe4a4c9ec8594485183c912c5fa8a",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7665
+    },
+    "26bc9bb5a6a10383387f67e7993050b23455a95650a76d955f25e09b10f0aeda": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/26bc9bb5a6a10383387f67e7993050b23455a95650a76d955f25e09b10f0aeda.json",
+      "sha256": "ae4d78a4203a452a7fb4cac049c5fa91c2adcce4cac130bd28b4f448fd79f9ca",
+      "model_sha256": "a7a409f79da8220c921d73661b91f3ce4b94ad5628ed6069475a41ca2f2446a7",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7468
+    },
+    "c6ea74296e10d6953e252a58ddd57084a4f0290339e2a6b15aece98b665c5e0d": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/c6ea74296e10d6953e252a58ddd57084a4f0290339e2a6b15aece98b665c5e0d.json",
+      "sha256": "9091f1f0c8af898c093e9662918415aadaae9a00677fdfb67cc3b2de2bd37162",
+      "model_sha256": "140c4320a5889f782654da19e36848c2f47ee7c6a66c7c0bc9614309027cf3bc",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 6215
+    },
+    "0064b5ebfd1b6b871f1401ffa70f10036ae18495029c64253d7b926fa85b58cd": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/0064b5ebfd1b6b871f1401ffa70f10036ae18495029c64253d7b926fa85b58cd.json",
+      "sha256": "52595f44f78f7e6f81c83dd3f093c8eb23c375256c6d239e03db2eac7e6aab15",
+      "model_sha256": "523b673b89c8d6fd590ba759de3c86ff74531ac747e5143b3a678b9c3ab07ac0",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5839
+    },
+    "51291a0f88b390a66864aa505c84f58f16f8637ebbcc7f7af22885cb8b0987f8": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/51291a0f88b390a66864aa505c84f58f16f8637ebbcc7f7af22885cb8b0987f8.json",
+      "sha256": "62b7a8d5873023d1ac0375deb7a0fa8dd8f647df8db272adad760d10d3550464",
+      "model_sha256": "4d0ab40955bf005fbe9bca87166ff15b8976bb96d2e608125ab392fcd0758748",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5579
+    },
+    "7bf2898a16f8d868c59d379343ce0b8ec5af1bc72c5e418e5e8565428a11216d": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/7bf2898a16f8d868c59d379343ce0b8ec5af1bc72c5e418e5e8565428a11216d.json",
+      "sha256": "1c0ecc7a9d28fa46e1fc6537d60706f082b050b0e5e3e1a883fa6dce1aa7f5ad",
+      "model_sha256": "a56faecfdfcb1cafa113aacbac96237b88b117e23d33de442db35f0b602a8004",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7681
+    },
+    "5c26c8f70eab719b455aa2941668572fdf02e19298137fd8ccb4afd637357eb0": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/5c26c8f70eab719b455aa2941668572fdf02e19298137fd8ccb4afd637357eb0.json",
+      "sha256": "e552c7a750b1969321c1be86d0eee6fc17db4302753b0c226de7085084b23ee7",
+      "model_sha256": "cbda044c77127c41f463c05812e651917f29bf1c1304073c8d49898f101d8f7c",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7489
+    },
+    "60b76ef3fbf90660cdf7dafe4d6e8861832c6415164994fdbb844b757692e4c2": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/60b76ef3fbf90660cdf7dafe4d6e8861832c6415164994fdbb844b757692e4c2.json",
+      "sha256": "98661882156b6a497d2fb88c869700b92201622cad5301bbc09d3cd7f822568a",
+      "model_sha256": "30a8a0891aac44366964211a807b6485f7c7aadc2ca64a4e7c7d5333f4e68827",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7377
+    },
+    "3286d544502e864da52a77fce0190cbbe4f7d4bee80e1c2737f00bb5211d75d0": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/3286d544502e864da52a77fce0190cbbe4f7d4bee80e1c2737f00bb5211d75d0.json",
+      "sha256": "919e5b000236b758dcc07f41615296ba8c783be3dab9384ac1117a003530bc05",
+      "model_sha256": "a3df167210685758536da20fdb7d893a20f7c462a9768f7f1fb82b3800f10705",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7154
+    },
+    "571756a4aeded61ec5649789374636aaef3b1700b5fc9e4baf80cc19286512c1": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/571756a4aeded61ec5649789374636aaef3b1700b5fc9e4baf80cc19286512c1.json",
+      "sha256": "8a28f6038777a475e301aef87f112aae2de0b06e5a4743ca65749567adeaa735",
+      "model_sha256": "c4d177b0f18b9aef0e54e2fd280d6afed712a2bb448337f061b3fe62162240ea",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5895
+    },
+    "92f9f70e93fa2e88dad350a4e89444a5eb7c140539e39985d66d8fadb8443223": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/92f9f70e93fa2e88dad350a4e89444a5eb7c140539e39985d66d8fadb8443223.json",
+      "sha256": "c98365b749985223947496f9288cab4b1816846c976b3d56759703554db37b43",
+      "model_sha256": "0faa5143c9e35e6bdade742fe31f6a851854055ccbe67fcf8a8a40c6a9e5c394",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5507
+    },
+    "5a0c454dbe6b70e506d68db86194a8375203ffbb70a881d73d8ef2e54379972d": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/5a0c454dbe6b70e506d68db86194a8375203ffbb70a881d73d8ef2e54379972d.json",
+      "sha256": "8f316385b5f1a70b61ac29e6330d3d6f899483bc3db62a65a6fa29b21c403792",
+      "model_sha256": "3513ab55111a210efd85c3b5946b78e2b3505e5a27102cacbe7d41980706db8f",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5321
+    },
+    "38c49164559f0258a973dfa4c5998902fbe7e552e72c73dbd7ed23a0a0a23acb": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/38c49164559f0258a973dfa4c5998902fbe7e552e72c73dbd7ed23a0a0a23acb.json",
+      "sha256": "95ff55d19e72c691dcb1501be834f394ebd2a8622d88fdfa6a72721639f6893b",
+      "model_sha256": "6087cbc341f9676ed23e4585989d88d10e1a48bb9d3a0ca20af4e8e9842dc913",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 8067
+    },
+    "7031c26cea280a17ec52051c6737bc29cfcd69caf4c3411031df7cb8302b434b": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/7031c26cea280a17ec52051c6737bc29cfcd69caf4c3411031df7cb8302b434b.json",
+      "sha256": "abcb7c3e7ccb0b33ba652102603b5bf4c0eca332e1b4ba4200115187181a6eba",
+      "model_sha256": "5b48394e6a224ca4238ca9955e601636e5ef8e1478e1880b6f94919458a86dc7",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7815
+    },
+    "29fe532e481e8697180531603caace177b439fe2bfca2ab82e18bcc0bd32dab8": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/29fe532e481e8697180531603caace177b439fe2bfca2ab82e18bcc0bd32dab8.json",
+      "sha256": "af0bbf96f3ae17ebcaecc2ff0b3b4bc9fdf9fc4ba6d749c4e463530911e97dc9",
+      "model_sha256": "1581ef02f805b28bc1767cf73ca3caea36493b7c504c62389f430333d2d3216e",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7538
+    },
+    "d89d594075dd181acb3ccead365d1da242bedff9e890a27d3f33acff927d07e2": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/d89d594075dd181acb3ccead365d1da242bedff9e890a27d3f33acff927d07e2.json",
+      "sha256": "d451f723ad3bdd07bc0154356954bb5041ff7f0a6617882d9978cea56381ba6b",
+      "model_sha256": "7d794eb06d5742fdc10496f2811f9a58991b116e4bb33b3aa107c9e8e77ecc65",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 6240
+    },
+    "1e88e932376aa8e0628fb3005b2793635e9564f4433dd590f11e4d8e12c2d866": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/1e88e932376aa8e0628fb3005b2793635e9564f4433dd590f11e4d8e12c2d866.json",
+      "sha256": "125e95959546d4392bd3f815adccec681f6b770141eb96c7fd9c9e1019c5a749",
+      "model_sha256": "2c711bb2981527013923e01caeae69256d879a9afde360cab4d6d3d281e6ea0f",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5935
+    },
+    "e21f8370a9ad5b3170eff4c1294949958cd63647994ac92f6bff1224d8a57472": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/e21f8370a9ad5b3170eff4c1294949958cd63647994ac92f6bff1224d8a57472.json",
+      "sha256": "05a2582a6c3540cc496859e6401d34c828376228362e088ce47990b6ed62fcd0",
+      "model_sha256": "03d30becdad2a94947170ffeabba66ad5147964de35ecce3cde8c1f1f40479d9",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5637
+    },
+    "1c9b572a3b9e03f9fb86f6f1afa57621a93495e0b35f020b806253542153c663": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/1c9b572a3b9e03f9fb86f6f1afa57621a93495e0b35f020b806253542153c663.json",
+      "sha256": "4aced67113ca753a5474712c61a9bec566b5bd87d7630646d89d58319d1d9ba9",
+      "model_sha256": "e1c4c17a86670aa26f3eb81b2a85b1e8f1bdc73e6f5b260f56091b62238f931e",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7986
+    },
+    "147f0ee6491a9012411f3c3f9c69de6f1dee6d052289d93b05732ce55d85e690": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/147f0ee6491a9012411f3c3f9c69de6f1dee6d052289d93b05732ce55d85e690.json",
+      "sha256": "ca303416ac57b39619dbc269960d7108f1e85cd1072a857f687c1064903e90e5",
+      "model_sha256": "cfc8a43109e534a02d04978cbfb8b66409f99a4f7e9db74bb27c1653a96596e9",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7549
+    },
+    "9da990257fa550d8399d1117b2f5041d4516ff886337aa09ab76c6879928f144": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/9da990257fa550d8399d1117b2f5041d4516ff886337aa09ab76c6879928f144.json",
+      "sha256": "93ceb649cda5ba54b83444b8b07e4661fabfdd0ca7da44cf521a5b9eb2f8edee",
+      "model_sha256": "4db49e03f281f4abe4128db2f91bd683194180fa4b0ffa690c7470be9034f1c1",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 6221
+    },
+    "b70a3b21194e7e37ed79fdc4dc4af6e8ee1d2230c3d69cfb2fa2dc60af016db4": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/b70a3b21194e7e37ed79fdc4dc4af6e8ee1d2230c3d69cfb2fa2dc60af016db4.json",
+      "sha256": "52fc812e116f3d7dc0428a23d0a71148c5783f0decc8acea36309ab8610b5dc5",
+      "model_sha256": "deb34537670e5c2fad0ef5550b0b0c42e76cfbd9e2cb666cef81fe97c06f2d44",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5847
+    },
+    "bdb4b88d40754630f78ac1f06ffd1f616e86c786ede277230237b9edfd340b37": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/bdb4b88d40754630f78ac1f06ffd1f616e86c786ede277230237b9edfd340b37.json",
+      "sha256": "c7bdaaf5e21b311c833d2b357e195976fdedbbc89db17fb7e4a081347f3f3a0b",
+      "model_sha256": "3ecb3a396f15313a350d556028fa2fe60d8b22b5f80c914ac52a10f3ee7721fb",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5564
+    },
+    "48616066ef21f2d67413fb0fafa68a6fd407eb4333825032ebddce93f4077906": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/48616066ef21f2d67413fb0fafa68a6fd407eb4333825032ebddce93f4077906.json",
+      "sha256": "3bc5df47ea3b81a6c9d85484214842bd34a1d59962e6eae45b85da2f7f5a8b0a",
+      "model_sha256": "7100c238f9bb5b69e6252bd4a401927457b0cacf8867d326e137a30f844a719a",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 7677
+    },
+    "81cb61ce2bb521e96941e615ca100495bd256ad5a2b6bf93d47ee214705865f1": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/81cb61ce2bb521e96941e615ca100495bd256ad5a2b6bf93d47ee214705865f1.json",
+      "sha256": "73dc5a933fae7e37afc41d9f58f1fdead299fbe770175957367143bbde3be4f9",
+      "model_sha256": "d5b4a60800022490736b857b4b946bfba041d0e56253c6aa49632e7229d54008",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 6007
+    },
+    "d1c04aa4b6d69bd76da3f55bb6585206a9d85507f8ea0feac753bb0e28c5bc47": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/d1c04aa4b6d69bd76da3f55bb6585206a9d85507f8ea0feac753bb0e28c5bc47.json",
+      "sha256": "74726a622eab795a059c0be91c554b08d5b074b50789697af2374b0a7ce2b1d9",
+      "model_sha256": "8d68e5f4284bc17204ae06e00fc77d4b02da26324b0d596f627703213730d471",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5321
+    },
+    "995aad3b264b25ffc85e57a94807890197d05c335fdbf989359d7fe16357f2b1": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/995aad3b264b25ffc85e57a94807890197d05c335fdbf989359d7fe16357f2b1.json",
+      "sha256": "6b6fa09ba0616aecc34e30ff5c573b007ad34f86ccd480353f4076c032357b4f",
+      "model_sha256": "fe7aa06e87193cb151ca83431fff36dd5f9f264f1f726b1bbc144f84050c93a1",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5253
+    },
+    "277108a689129d2dfe7fd60d27d4d1029e744903e2135abcb0329a14ad7135ab": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/277108a689129d2dfe7fd60d27d4d1029e744903e2135abcb0329a14ad7135ab.json",
+      "sha256": "75ec51f26c5db7c41075cf306a9d70bed5ceccb29efec57158ddc0204e6ec60e",
+      "model_sha256": "e751d7df4c75e19cad1c354736b41e99b5aaf16d8329b26f546dd5b45c86df06",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 6431
+    },
+    "33c5a38fc58078a35a8c340bf3e08895860fda439b7f5f307ead7aac6cea31ad": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/33c5a38fc58078a35a8c340bf3e08895860fda439b7f5f307ead7aac6cea31ad.json",
+      "sha256": "141bbde91d62696eda283485d2a920c0d9a22a977c23fce8f42eaa03e08b722a",
+      "model_sha256": "3280df5b8f788af50d752c561d7cd8745e197dc9e6fea4f13d7fe338e50a7afb",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 4126
+    },
+    "b4524aeca70ab39346a31ee2aa815deb1ddfd61ae3b7f45712c14be89178db8e": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/b4524aeca70ab39346a31ee2aa815deb1ddfd61ae3b7f45712c14be89178db8e.json",
+      "sha256": "0cd7b03683f6d0a05b531794c7884aaf151650bc1572aa93272f663dc0984688",
+      "model_sha256": "5d55e7bc71c966a62652e463766ee8974f45396e60bfac173818a2a5882b4ff9",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "miracle"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 4036
+    },
+    "0ce20371d5d5644d628a7508f49437a1ddd3a64f75873be2f1622ec305c2cc14": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/0ce20371d5d5644d628a7508f49437a1ddd3a64f75873be2f1622ec305c2cc14.json",
+      "sha256": "112a3ef5ad87ded80102c0bd5f0fb454dfc58c9224d13c79981eeccda7786a1f",
+      "model_sha256": "c8c427f59adf715974ab6b7e7a82d54f953dc7b1f4997c9cd90b144676b90330",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "heavy_on_mind"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 6008
+    },
+    "2e64b3b781a62cdb44e14747aa140aa96a25d742561b4843560f841c6829d116": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/2e64b3b781a62cdb44e14747aa140aa96a25d742561b4843560f841c6829d116.json",
+      "sha256": "46277ed44d5f40e8f595de1e7365b81f7f34d2ce3d7375a571bdf685a07fb0c7",
+      "model_sha256": "89c5648576e1f0a1835f2e57ba5ba25a31e146ef18fedd6ac030f0b610a46f50",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 3808
+    },
+    "f56e9dbd76028b84355f62cc960d78959a85d10e97c7dc7d0087afbfb4d36a43": {
+      "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/h16/models/f56e9dbd76028b84355f62cc960d78959a85d10e97c7dc7d0087afbfb4d36a43.json",
+      "sha256": "946e4ad9242451d79a56ef4d1be453eac590154097b87b0be8087551ac8ec00c",
+      "model_sha256": "5c8f94fed13944a9280d4355767119566001e1c26f870a147e5f9b49eefec0e6",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "tears_140bpm",
+        "late_night",
+        "midnight_patience",
+        "miracle"
+      ],
+      "gamma": 0.06666666666666667,
+      "support_count": 5832
+    }
+  },
+  "global_Pattern_models": {
+    "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/kernel_frozen_models.json",
+    "sha256": "5fe08115589b4e06b0698e19738ec954a72b25ca127e37bc9bce142b142b746d"
+  },
+  "source_sha256": {
+    "kick_kernel_score.py": "6abed3c85611dace41a18ed3d9d028dce71aca187df7d22586c3d66a63c1ee37",
+    "run_kick_kernel_trial.py": "1d692b2b0437173b655dc9013c4f767db19d92b297fbe768576b621c1196d910",
+    "test_kick_kernel_score.py": "6e8ecd8360c3d432b9135e05dda9c66151447ed4323f400442b0253562828d21"
+  }
+}
