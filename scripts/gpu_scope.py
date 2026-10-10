@@ -236,10 +236,13 @@ class Plan:
             if has_lib:
                 runs.append({'package': package, 'targets': [], 'lib': True, 'target': 'lib',
                              'filters': [] if package in self.whole_packages else filters,
-                             'skips': self.final_skips(), 'budgeted': True})
+                             'skips': (sorted(s for s in REPORTER_SKIPS if not any(s in f for f in self.filters))
+                                       if package in self.whole_packages else self.final_skips()),
+                             'budgeted': True})
             for target in targets:
                 whole = package in self.whole_packages or (package, target) in self.required_binaries
-                skips = [] if whole else self.final_skips()
+                skips = self.final_skips() if not whole else sorted(
+                    s for s in REPORTER_SKIPS if not any(s in f for f in self.filters))
                 if route and route[:2] == (package, target) and route[2]:
                     # The folded sweep retains its separate, unbudgeted run.
                     skips = sorted(set(skips) | {route[2]})
