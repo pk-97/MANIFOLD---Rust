@@ -329,6 +329,7 @@ pub fn lattice_nodes(nodes: [u32; 3]) -> u64 {
 
 /// Lattice-wide node kernels read the accumulator and grid through the node
 /// count; P2G's word index is an i32 node index times four.
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub fn node_extent(
     x: &manifold_node_engine::exec::extent::AtomExtent<'_>,
     lattice: &LiquidLattice,
