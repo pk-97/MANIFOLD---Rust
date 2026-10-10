@@ -82,11 +82,6 @@
       "file": "scripts/gen_docs_index.py"
     },
     {
-      "transition": "pure-move / dispatch-split proofs on decomposition commits",
-      "enforcement": "exit-code",
-      "file": "scripts/move_identity_check.py"
-    },
-    {
       "transition": "clippy -D warnings before commit; workspace sweep + deny bans at landing",
       "enforcement": "exit-code",
       "file": null

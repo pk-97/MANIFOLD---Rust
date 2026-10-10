@@ -153,7 +153,7 @@ def is_gltf_path(path):
 
 def glb_conformance_route(workspace):
     """Discover the standalone target or its module in a folded GPU test root."""
-    from crate_move_replay import module_items
+    from gate_workspace import module_items
     routes = set()
     for package in workspace.feature_packages('gpu-proofs'):
         for target in workspace.targets(package, 'test'):
@@ -338,7 +338,7 @@ def path_attr_filters(path, repo):
         text = (Path(repo) / root / "/".join(dirs) / "mod.rs").read_text()
     except OSError:
         text = ""
-    from crate_move_replay import module_items
+    from gate_workspace import module_items
     for start, end, head, scope in module_items(text):
         declaration = re.fullmatch(r'(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;', text[head:end])
         attrs = re.findall(r'#\[path\s*=\s*"tests/([^"\n]+)"\]', text[start:head])
@@ -400,7 +400,7 @@ def proof_module_prefix(path, repo, root=None):
     """Honor explicit catalog-proof mounts before deriving a path prefix."""
     root = Path(root) if root is not None else Path(repo) / PROOFS_DIR / 'main.rs'
     if root.is_file():
-        from crate_move_replay import module_items
+        from gate_workspace import module_items
         text = root.read_text()
         for start, end, head, scope in module_items(text):
             declaration = re.fullmatch(r'(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;', text[head:end])
@@ -419,7 +419,7 @@ def changed_test_filters(path, repo, base, patch=None):
     source = Path(repo) / path
     if source.suffix != ".rs" or not source.exists():
         return set()
-    from crate_move_replay import production_text
+    from gate_workspace import production_text
     text = production_text(source.read_text())
     if "#[test]" not in text:
         return set()
