@@ -12,7 +12,6 @@ pub mod trees;
 pub(crate) mod golden {
     use super::container::Container;
 
-    #[expect(dead_code, reason = "un-suppressed when the P2 lanes add their parity tests")]
     /// A parity golden from `tests/fixtures/kick/` (written by `tools/audio_analysis/kick_release.py`).
     pub fn load(name: &str) -> Container {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/kick").join(name);
