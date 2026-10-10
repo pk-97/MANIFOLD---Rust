@@ -20,6 +20,8 @@ LT = "crates/manifold-water-liquid/src/"
 LW = LT + "primitives/"
 FT = "crates/manifold-water-gpu-flip/src/"
 FW = FT + "primitives/"
+MT = "crates/manifold-water-gpu-mpm/src/"
+MW = MT + "primitives/"
 P = E + "primitives/"
 
 
@@ -44,6 +46,7 @@ def fixture_workspace(repo):
         "manifold-water-rigid": ("crates/manifold-water-rigid", True, []),
         "manifold-water-liquid": ("crates/manifold-water-liquid", True, []),
         "manifold-water-gpu-flip": ("crates/manifold-water-gpu-flip", True, []),
+        "manifold-water-gpu-mpm": ("crates/manifold-water-gpu-mpm", True, []),
         "manifold-ui-paint": ("crates/manifold-ui-paint", True, ["main"]),
         "manifold-gpu": ("crates/manifold-gpu", False, []),
     }
@@ -133,7 +136,7 @@ class ScopeTests(unittest.TestCase):
         result = g.Plan(paths=["synthetic"], workspace=workspace,
                         filters=set(g.SMOKE_FILTERS) | {"future::filter"})
         runs = result.runs()
-        self.assertEqual(len(runs), 17)
+        self.assertEqual(len(runs), 18)
         self.assertTrue(all(run["filters"] == result.final_filters() for run in runs))
 
     def test_whole_package_override_survives_filter_pruning(self):
@@ -511,7 +514,7 @@ class ScopeTests(unittest.TestCase):
         repo = Path(__file__).resolve().parent.parent
         # Reviewed allowances are a timing sample, not a complete test inventory.
         names = set()
-        for source in [*(repo / W).rglob("*.rs"), *(repo / FW).rglob("*.rs")]:
+        for source in [*(repo / W).rglob("*.rs"), *(repo / FW).rglob("*.rs"), *(repo / MW).rglob("*.rs")]:
             lines = len(source.read_text().splitlines())
             names.update(g.changed_test_filters(source.relative_to(repo).as_posix(), repo,
                          "HEAD", patch=f"@@ -0,0 +1,{lines} @@"))
@@ -530,7 +533,8 @@ class ScopeTests(unittest.TestCase):
         for prefix, owning in cases.items():
             paths = [*(repo / W / "shaders").glob(prefix + "*.wgsl"),
                      *(repo / LW / "shaders").glob(prefix + "*.wgsl"),
-                     *(repo / FW / "shaders").glob(prefix + "*.wgsl")]
+                     *(repo / FW / "shaders").glob(prefix + "*.wgsl"),
+                     *(repo / MW / "shaders").glob(prefix + "*.wgsl")]
             self.assertTrue(paths, prefix)
             relevant = [name for name in names if owning in name]
             self.assertTrue(relevant, f"{prefix}: owning proof inventory is empty")
@@ -797,7 +801,7 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(sorted(set(p.final_skips()) - {n for n, _ in g.slow_tests()}), [])
 
     def test_matter_row(self):
-        p = plan([W + 'matter_fill.rs'])
+        p = plan([MW + 'matter_fill.rs'])
         self.assertTrue({"matter_", "substeps_"} <= p.filters)
 
     def test_gpu_flip_row_reaches_the_scene_proofs(self):
@@ -816,7 +820,7 @@ class ScopeTests(unittest.TestCase):
             self.assertFalse(any(f.startswith("gpu_flip_body") for f in p.filters), path)
 
     def test_domain_nodes_are_narrow(self):
-        p = plan([FW + 'gpu_flip_domain.rs', W + 'matter_domain.rs'])
+        p = plan([FW + 'gpu_flip_domain.rs', MW + 'matter_domain.rs'])
         self.assertIn("gpu_flip_domain_", p.filters)
         self.assertIn("matter_scene::", p.filters)
         self.assertNotIn("gpu_flip_", p.filters)
@@ -858,8 +862,8 @@ class ScopeTests(unittest.TestCase):
     def test_long_proofs_skip_unless_their_own_test_is_named(self):
         for name in g.REPORTER_SKIPS:
             self.assertIn(name, plan([FW + 'gpu_flip_step.rs']).final_skips() +
-                          plan([W + 'matter_fill.rs']).final_skips())
-        own = plan([W + 'matter_fill.rs'])
+                          plan([MW + 'matter_fill.rs']).final_skips())
+        own = plan([MW + 'matter_fill.rs'])
         own.filters.add("matter_look::matter_look_volume_drift")
         self.assertNotIn("matter_look_volume_drift", own.final_skips())
 
@@ -874,7 +878,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_over_threshold_measured_test_is_skipped_and_reported(self):
         self.with_times({"a::slow": 61.0, "a::fast": 59.0, "a::exact": 60.0})
-        p = plan([W + 'matter_fill.rs'])
+        p = plan([MW + 'matter_fill.rs'])
         # Timing is a warning only; an owning filter is never dropped.
         self.assertNotIn("a::slow", p.final_skips())
         self.assertNotIn("a::fast", p.final_skips())
@@ -894,7 +898,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_test_missing_from_times_file_runs(self):
         self.with_times({"a::slow": 500.0})
-        self.assertNotIn("brand::new_test", plan([W + 'matter_fill.rs']).final_skips())
+        self.assertNotIn("brand::new_test", plan([MW + 'matter_fill.rs']).final_skips())
 
     def test_no_row_names_a_measured_slow_test(self):
         # A name in a row selects past the deferral; slow proofs are nightly

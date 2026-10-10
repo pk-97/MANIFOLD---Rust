@@ -11,7 +11,7 @@ use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::{FluidParticle};
 use manifold_water_liquid::fluid_particles::CellRange;
 use manifold_water_liquid::lattice::LiquidLattice;
-use manifold_nodes_water::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
+use manifold_water_gpu_mpm::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
 use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, scene::transform::Transform, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
 
@@ -568,7 +568,7 @@ fn matter_deterministic_under_seed() {
 /// fixed-point unit when export groups both into one display frame.
 #[test]
 fn matter_variable_speed_export_grouping_matches_raw_points() {
-    use manifold_nodes_water::matter::{MAX_SUBSTEPS, WATER_DENSITY, free_fall_speed, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
+    use manifold_water_gpu_mpm::matter::{MAX_SUBSTEPS, WATER_DENSITY, free_fall_speed, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
 
     let settings = SceneSettings { resolution: 16, domain_size: 1.0, stiffness: 1.0, ..SceneSettings::default() };
     let dx = settings.domain_size / settings.resolution as f32;

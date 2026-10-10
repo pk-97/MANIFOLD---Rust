@@ -9,10 +9,10 @@ use manifold_core::liquid_domain::{MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_I
 
 use crate::bundled_presets::bundled_preset_def;
 use manifold_node_engine::particles::FluidParticle;
-use manifold_nodes_water::matter::{MatterPoint, STATS_WORDS};
+use manifold_water_gpu_mpm::matter::{MatterPoint, STATS_WORDS};
 use manifold_nodes_water::testkit::face_grid_scenes::matter_dam_break_faces;
 use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
-use manifold_nodes_water::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
+use manifold_water_gpu_mpm::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use manifold_nodes_water::presets::gpu_flip::{SHIPPED_PRESET, WaterScene, render_def};
 use manifold_nodes_water::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
 
