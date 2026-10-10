@@ -36,6 +36,7 @@ from scipy.special import expit, logit
 from tools.audio_analysis.eval.kick_attack_rejection import read_audio
 from tools.audio_analysis.eval.kick_fusion_bandwise import fusion_features
 from tools.audio_analysis.eval.kick_goal_labels import DEV_STEMS, GOAL, MORE, NEW, drum_kicks, fresh_onsets, kick_env_db, load
+from tools.audio_analysis.eval.kick_goal_melodic import HARD_W
 from tools.audio_analysis.eval.kick_goal_project_kicks import PROJECT, confirmed, doubtful, other_drum_stems
 from tools.audio_analysis.eval.kick_goal_recall_labels import RECALL
 from tools.audio_analysis.eval.kick_goal_rolls import kick_notes
@@ -321,7 +322,10 @@ def training_set(g, tracks, whole=False, feats='features'):
         if r.get('positives_only'):
             m = m & (y_all == 1)
         y = y_all[m]
-        w = np.where(y == 1, .5 / max(1, y.sum()), .5 / max(1, (1 - y).sum()))
+        # Project-vouched non-kicks (kick_goal_melodic) weigh more; negatives still total .5 per song.
+        neg = np.where(r['hard_neg'][m], HARD_W, 1.0) if 'hard_neg' in r else np.ones(len(y))
+        neg = np.where(y == 0, neg, 0.0)
+        w = np.where(y == 1, .5 / max(1, y.sum()), .5 * neg / max(1e-9, neg.sum()))
         xs.append(r[feats][m]); ys.append(y); ws.append(w)
     return np.concatenate(xs), np.concatenate(ys), np.concatenate(ws)
 

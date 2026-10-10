@@ -37,9 +37,11 @@ import numpy as np  # noqa: E402
 from scipy.special import expit, logit  # noqa: E402
 
 from tools.audio_analysis.eval.kick_goal_eval import (  # noqa: E402
-    DEV_STEMS, MORE_SONGS, NEW_SONGS, OUT, RECALL_SONGS, SUFFIX, TRACKS, TRIGGER_SONGS, TRUTH, WIP_SONGS, Goal,
+    DEV_STEMS, GOAL, MORE_SONGS, NEW_SONGS, OUT, RECALL_SONGS, SUFFIX, TRACKS, TRIGGER_SONGS, TRUTH, WIP_SONGS, Goal,
     add_whole_song_truth, choose, counts, score)
 from tools.audio_analysis.eval.kick_goal_featsets import build, lowbank_cache, profile_cache  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_melodic import add_melodic_negatives  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_nn import INPUT_TAG  # noqa: E402
 from tools.audio_analysis.eval.kick_goal_selfsim import self_features  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_data import ALL, gbt  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_selfsim import fit2  # noqa: E402
@@ -48,7 +50,19 @@ FOLDS = int(os.environ.get('KICK_GOAL_FOLDS', '9'))
 NETS = int(os.environ.get('KICK_GOAL_NN_ENSEMBLE', '1'))
 WORKERS = int(os.environ.get('KICK_GOAL_JOBS', '10'))
 FEATS = 'f69'
-STAGE_COLS = list(range(5))
+# The stage's memory: 8 s (R3_self8). Longer memories are vetoed (decision log, Oct 2026).
+WINDOWS = [8.0]
+# KICK_GOAL_AHEAD_MS: every decision waits this much longer after the attack (all fires are timed later);
+# KICK_GOAL_NN_SEED shifts every net's seed. The net's input settings tag the output (kick_goal_nn.INPUT_TAG).
+AHEAD_MS = int(os.environ.get('KICK_GOAL_AHEAD_MS', '0'))
+SEED = int(os.environ.get('KICK_GOAL_NN_SEED', '0'))
+TAG = INPUT_TAG + (f'_a{AHEAD_MS}' if AHEAD_MS else '') + (f'_s{SEED}' if SEED else '')
+# KICK_GOAL_NN_SYNTH=1: the nets also train on the kick-swap clips that involve no held-out song.
+SYNTH_ON = os.environ.get('KICK_GOAL_NN_SYNTH') == '1'
+TAG += '_syn' if SYNTH_ON else ''
+# KICK_GOAL_MELODIC=1: project melodic note starts weigh as certain non-kicks (kick_goal_melodic).
+MELODIC_ON = os.environ.get('KICK_GOAL_MELODIC') == '1'
+TAG += '_mel' if MELODIC_ON else ''
 OUTSIDE = {'apricots_128bpm', 'bad_guy_128bpm', 'feel_the_vibration_174bpm', 'inhale_exhale_145bpm', 'tears_140bpm',
            'lh', 'eat_sleep', 'business', 'worship', 'gerrit', 'cold_remix'}
 STATE = {}
@@ -70,6 +84,10 @@ def groups():
 def setup():
     g = Goal(mode=TRUTH)
     add_whole_song_truth(g)
+    if MELODIC_ON:
+        add_melodic_negatives(g)
+    for r in g.records.values():
+        r['emit_s'] = r['emit_s'] + AHEAD_MS / 1000
     build(g, FEATS)
     STATE['g'] = g
     STATE['fit'], STATE['pred'] = gbt(g, True, FEATS)
@@ -91,18 +109,25 @@ def nets(g, folds):
     from tools.audio_analysis.eval.kick_goal_nn import Song, device, predict, train
     dev = device()
     data = {t: Song.real(g, t).to(dev) for t in ALL}
+    # Kick-swap clips (kick_goal_synth). Midnight Patience donors are left out: they were cut from its old
+    # labels, which counted delay echoes as kicks.
+    clips = [c for c in (Song.synth(p).to(dev) for p in sorted((GOAL / 'synth').glob('*.npz')))
+             if c.sources[1] != 'midnight_patience'] if SYNTH_ON else []
     out = {}
     for k, f in enumerate(folds):
         t0 = time.time()
-        fitted = [train([data[u] for u in ALL if u not in f], 1000 * k + 7 * e) for e in range(NETS)]
+        usable = [c for c in clips if not set(c.sources) & set(f)]
+        fitted = [train([data[u] for u in ALL if u not in f], 1000 * k + 7 * e + 100000 * SEED, usable) for e in range(NETS)]
         out[k] = {t: np.mean([predict(net, data[t]) for net in fitted], axis=0) for t in f}
         print(f'nets group {k} ({time.time() - t0:.0f} s)', flush=True)
     return out
 
 
 def stage_matrix(g, shape, t, p):
+    """The self features for each memory; lp (column 0) once."""
     r = g.records[t]
-    return self_features(p, shape[t], r['features'][:, 0], r['emit_s'], 8.0)
+    parts = [self_features(p, shape[t], r['features'][:, 0], r['emit_s'], w) for w in WINDOWS]
+    return np.hstack([parts[0]] + [x[:, 1:] for x in parts[1:]])
 
 
 def stage_task(task):
@@ -115,11 +140,11 @@ def stage_task(task):
     for j, h in enumerate(folds):
         if j == k:
             continue
-        m = fit2(g, train, [u for u in train if u not in h], STAGE_COLS)
-        inner.update({u: m.predict_proba(train[u][:, STAGE_COLS])[:, 1] for u in h if u not in RECALL_SONGS})
+        m = fit2(g, train, [u for u in train if u not in h], slice(None))
+        inner.update({u: m.predict_proba(train[u])[:, 1] for u in h if u not in RECALL_SONGS})
     th, _ = choose(g, inner)
-    m = fit2(g, train, list(train), STAGE_COLS)
-    return {o: m.predict_proba(stage_matrix(g, shape, o, p)[:, STAGE_COLS])[:, 1] for o, p in base_out.items()}, th
+    m = fit2(g, train, list(train), slice(None))
+    return {o: m.predict_proba(stage_matrix(g, shape, o, p))[:, 1] for o, p in base_out.items()}, th
 
 
 def report(g, name, preds, cuts):
@@ -165,18 +190,29 @@ def main():
             keys.append((i, j))
     tree_out, tree_in = {}, {}  # tree_out[k][song]; tree_in[(k, j)][song]: song in group j, trees without k and j
     os.environ.update(OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', VECLIB_MAXIMUM_THREADS='1', MKL_NUM_THREADS='1')
+    # Trees depend only on the labels and their weights, not on the net's input or the decision delay: cached.
+    tree_path = OUT / f'fast_trees{SUFFIX}{"_mel" if MELODIC_ON else ""}.npz'
     with ProcessPoolExecutor(WORKERS, mp_context=get_context('spawn'), initializer=setup) as ex:
-        futures = [ex.submit(tree_task, (tuple(u for f in out for u in f), scored)) for out, scored in tasks]
+        cached = tree_path.exists()
+        futures = [] if cached else [ex.submit(tree_task, (tuple(u for f in out for u in f), scored)) for out, scored in tasks]
         net_p = nets(g, folds)
         print(f'nets done at {time.time() - t_start:.0f} s', flush=True)
-        for (i, j), fut in zip(keys, futures):
-            p = fut.result()
-            if j is None:
-                tree_out[i] = p
-            else:
-                tree_in[(i, j)] = {u: p[u] for u in folds[j]}
-                tree_in[(j, i)] = {u: p[u] for u in folds[i]}
-        print(f'trees done at {time.time() - t_start:.0f} s', flush=True)
+        if cached:
+            with np.load(tree_path) as z:
+                for key in z.files:
+                    i, j, u = key.split('|')
+                    (tree_out.setdefault(int(i), {}) if j == '' else tree_in.setdefault((int(i), int(j)), {}))[u] = z[key]
+        else:
+            for (i, j), fut in zip(keys, futures):
+                p = fut.result()
+                if j is None:
+                    tree_out[i] = p
+                else:
+                    tree_in[(i, j)] = {u: p[u] for u in folds[j]}
+                    tree_in[(j, i)] = {u: p[u] for u in folds[i]}
+            np.savez(tree_path, **{f'{i}||{u}': v for i, d in tree_out.items() for u, v in d.items()},
+                     **{f'{i}|{j}|{u}': v for (i, j), d in tree_in.items() for u, v in d.items()})
+        print(f'trees {"loaded" if cached else "done"} at {time.time() - t_start:.0f} s', flush=True)
 
         net_of = {t: net_p[k][t] for k, f in enumerate(folds) for t in f}
         bases = {'trees': lambda k, j, t: tree_in[(k, j)][t] if j is not None else tree_out[k][t],
@@ -196,11 +232,11 @@ def main():
                 staged.update(p)
                 cuts.update({t: th for t in folds[k]})
             results[name + '+stage'] = report(g, name + '+stage', staged, cuts)
-            np.savez(OUT / f'fast_{name}{SUFFIX}.npz', **staged)
+            np.savez(OUT / f'fast_{name}{SUFFIX}{TAG}.npz', **staged)
     for name, r in results.items():
         bad = sorted(r['per_song'].items(), key=lambda kv: kv[1]['matched'] / max(1, kv[1]['labels']) - kv[1]['extra'] / max(1, kv[1]['labels']))[:6]
         print(f'{name} hardest:', ', '.join(f"{t} {v['matched']}/{v['labels']}+{v['extra']}" for t, v in bad), flush=True)
-    (OUT / f'results_fast{SUFFIX}.json').write_text(json.dumps(dict(groups=folds, results=results), indent=1, default=float))
+    (OUT / f'results_fast{SUFFIX}{TAG}.json').write_text(json.dumps(dict(groups=folds, results=results), indent=1, default=float))
     print(f'total {time.time() - t_start:.0f} s', flush=True)
 
 

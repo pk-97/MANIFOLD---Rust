@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import numpy as np  # noqa: E402
 
 from tools.audio_analysis.eval.kick_goal_eval import GOAL, OUT, SUFFIX, TRUTH, Goal, add_whole_song_truth, fast_counts, jobs, run_tasks, score  # noqa: E402
-from tools.audio_analysis.eval.kick_goal_nn import Song, device, predict, spectrum_cache, train  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_nn import Song, device, extra_caches, predict, spectrum_cache, train  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_data import ALL  # noqa: E402
 
 STATE = {}
@@ -41,7 +41,7 @@ def _init():
 
 
 def _prep(t):
-    spectrum_cache(STATE['g'], t)
+    extra_caches(STATE['g'], t, spectrum_cache(STATE['g'], t))
     return t
 
 
