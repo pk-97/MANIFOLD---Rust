@@ -937,6 +937,19 @@ class LandingTests(unittest.TestCase):
                 finally:
                     landing_gate.RAN_EVERY_CHECK.reset(token)
 
+    def test_timing_only_red_after_rerun_is_a_check_that_ran(self):
+        output = ('GPU-PROOFS TIMING: FAIL (new heavy proof lacks a reviewed allowance)\n'
+                  'GPU-PROOFS TIMING: ONLY (every test passed; the timing finding stands)')
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(landing_gate, 'run_cmd', return_value=(5, output, '', 1)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            token = landing_gate.RAN_EVERY_CHECK.set(True)
+            try:
+                landing_gate.run_check('proof', ['tool'], Path(d), 60)
+                self.assertTrue(landing_gate.RAN_EVERY_CHECK.get())
+            finally:
+                landing_gate.RAN_EVERY_CHECK.reset(token)
+
     def test_nightly_keeps_full_renderer_coverage(self):
         with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
             output = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
