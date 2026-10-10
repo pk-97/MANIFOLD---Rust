@@ -1,13 +1,12 @@
 # Water Crates — one crate per water subsystem, the compiler holds the lines
 
-**Status:** ACCEPTED · 2026-10-10 · Peter (GPU MPM crate named manifold-water-gpu-mpm) · five stages, stage 1 next · Section 9 (Phasing).
-**Prerequisites:** BUG-hkbdp.6.8 (explicit step context) lands before stage 2; the T2 batch it also needed landed 2026-10-10.
-**Work items:** BUG-hkbdp.6.12 (water subsystem boundaries the compiler enforces), under the epic BUG-hkbdp (renderer crate split epic). Stage beads are drafted beside this doc and created by the lead.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before any stage. Lead: Opus. Lanes make one commit then stop; the lead lands with `scripts/land_branch.py`.
+**Status:** SHIPPED · 2026-10-11 · six water crates on main, S1–S5 (BUG-hkbdp.6.12 (water subsystem boundaries)). Owed: the S5 render-trace gate, run by the lead at landing. This doc is the water crate contract; edit-rebuild numbers in section 1.1 (The crate today).
+**Follow-ups:** BUG-hkbdp.6.7 (water god-file split) and BUG-hkbdp.6.9 (proofs consolidation) run per crate; BUG-hkbdp.6.10 (water map doc) runs the water design-doc lifecycle sweep.
+Lifecycle: contract
 
 <!-- index: Split manifold-nodes-water into rigid, liquid, gpu-flip, gpu-mpm, whitewater and surface crates under a thin registration crate, so a water edit runs its own tests plus the contract suite at its seam. -->
 
-**The governing insight: the water crate already has a layering, it just is not enforced.** Every solver (GPU FLIP, Matter, whitewater, the mesher) reaches down into one shared contract, the liquid seam (`crates/manifold-nodes-water/src/liquid/`, `docs/LIQUID_SOLVER_SEAM_DESIGN.md`), and the seam reaches down into the Box3D rigid adapter (`physics.rs`). The cycles the lead's census found are not architecture; they are eleven misplaced items listed in section 1.2 (the coupling census), plus test harnesses and migrations that know every solver sitting inside the shared module. Move those and the layering is a tree. Cargo then refuses the next upward reach at compile time, and the landing gate's crate-to-test mapping scopes a water landing for free.
+**The governing insight: the water crate already has a layering, it just is not enforced.** Every solver (GPU FLIP, Matter, whitewater, the mesher) reaches down into one shared contract, the liquid seam (`crates/manifold-water-liquid/src/`, `docs/LIQUID_SOLVER_SEAM_DESIGN.md`), and the seam reaches down into the Box3D rigid adapter (`physics.rs`). The cycles the lead's census found are not architecture; they are eleven misplaced items listed in section 1.2 (the coupling census), plus test harnesses and migrations that know every solver sitting inside the shared module. Move those and the layering is a tree. Cargo then refuses the next upward reach at compile time, and the landing gate's crate-to-test mapping scopes a water landing for free.
 
 Peter, 2026-10-10 (the bead for this design): *"a water change must not need unrelated tests, so boundaries and interfaces must be rock solid and the compiler must stop small changes rippling into unexpected areas."* And the stage-2 call: *"crate split approved (stage 2 decided: each water subsystem becomes its own crate)."*
 
@@ -43,6 +42,21 @@ Companion docs: `docs/RENDERER_CRATE_SPLIT_DESIGN.md` (the precedent: D4 no faca
 | WGSL and ABI roots | `crates/manifold-nodes/src/testkit/source_roots.rs` `PRIMITIVE_SOURCE_ROOTS`, `WGSL_SRC_ROOTS` ("a crate move must update the proof") | One line per new crate |
 | Water tests outside the crate | `manifold-nodes/tests/contracts/water/*` (10 files), `contracts/node_graph/catalog_tests/{gpu_flip_*,liquid_*,physics_*,whitewater_*,particle_*}`, `gpu_proofs/{matter_*,physics_*,fluid_array_growth,liquid_indexed,gpu_flip_frame_perf}`, `manifold-app/tests/renderer_contracts/gpu_proofs/{liquid_conformance,water_basin*,physics_solids}` | Stay where the registry they need lives (D8); paths into water modules are re-pointed per stage |
 | Precedents | RENDERER_CRATE_SPLIT P2 (three leaves carved in parallel, landing order fixed, shared-file conflicts named), P5 (the water seam as built); `manifold-physics` / `manifold-fluids` below the water crate | Shape every new crate like `manifold-nodes-water` today |
+
+Edit-rebuild cost, before and after the split (2026-10-11, slot-3). Method as RENDERER_CRATE_SPLIT_DESIGN.md's post-T1 baseline: one `let _warm_edit = 0u8;` added inside one production function, each configuration warmed first, serial, `CARGO_BUILD_JOBS=4`, `CARGO_INCREMENTAL=0`, configured sccache, default features; the file restored afterwards. Commands: `cargo build -p <crate> --lib`, `cargo test -p <crate> --lib --no-run`, `cargo build -p manifold-app --bin manifold`. Before is `eac0ccd31` (S1 on main, one water crate); after is S5 (`16a63b185`). Records: the S5 lane scratchpad, `s5/before.json` and `s5/after.json`.
+
+| Edited file | Crate | lib | lib test binary | app |
+|---|---|---|---|---|
+| before: `physics_events.rs` | manifold-nodes-water | 3.9s | 9.4s | 9.0s |
+| before: `primitives/age_whitewater.rs` | manifold-nodes-water | 4.0s | 9.6s | 8.9s |
+| `physics_events.rs` | manifold-water-rigid | 0.9s | 3.8s | 9.0s |
+| `grid.rs` | manifold-water-liquid | 1.2s | 3.9s | 8.1s |
+| `primitives/gpu_flip_clock.rs` | manifold-water-gpu-flip | 1.3s | 3.9s | 6.8s |
+| `primitives/matter_stats.rs` | manifold-water-gpu-mpm | 0.9s | 2.3s | 6.6s |
+| `primitives/age_whitewater.rs` | manifold-water-whitewater | 1.1s | 3.7s | 7.0s |
+| `primitives/count_surface_triangles.rs` | manifold-water-surface | 0.7s | 2.2s | 6.5s |
+
+A leaf edit now rebuilds its crate in about a second instead of four, and its test binary in 2–4s instead of 9–10s. The app relink barely moves (6.5–9s against 9s): the app links everything either way.
 
 ### 1.2 The coupling census, re-run with the proposed assignment
 
